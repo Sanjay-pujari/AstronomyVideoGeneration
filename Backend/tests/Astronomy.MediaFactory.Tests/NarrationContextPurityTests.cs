@@ -43,7 +43,7 @@ public sealed class NarrationContextPurityTests
         """).RootElement;
         var cards = new SceneFactCardSet("v", "o", "long", "en", [new SceneFactCard("scene-001", 1, "long", [], [], [], [], [], [], [], [], [], 10, "scene-001", "frame-001")]);
 
-        var context = NarrationContextBuilder.Build(contract, contract, null, null, null, null, new DocumentaryPerformerSceneFactCards(cards, cards), "calm", "test");
+        var context = NarrationContextBuilder.Build(contract, contract, null, null, null, null, new DocumentaryPerformerSceneFactCards(cards, cards), null, "calm", "test");
         var beat = context.Formats.First().Beats.Single();
 
         Assert.Equal("Explain why Jupiter and Venus appear close together from Earth.", beat.KnowledgeGoal);

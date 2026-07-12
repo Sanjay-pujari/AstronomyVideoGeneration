@@ -93,5 +93,5 @@ public sealed class Rc2NarrationGeneratorV5PreflightTests
         => new(2026, "IN", Language: language, UseProductionPipeline: true, StartPhaseNo: 7, EndPhaseNo: 7);
 
     private static BatchGenerateFromPlansResponse Response(string root)
-        => new(true, false, 1, 1, 1, [], [], [], true, Title: "Moon and Jupiter Close Approach", OutputRoot: root);
+        => new(true, false, 1, 1, 1, [], [], [], [], UseProductionPipeline: true, Title: "Moon and Jupiter Close Approach", OutputRoot: root);
 }
