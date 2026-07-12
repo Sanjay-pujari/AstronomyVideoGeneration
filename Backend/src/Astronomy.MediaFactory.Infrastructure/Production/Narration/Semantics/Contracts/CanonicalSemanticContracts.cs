@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
@@ -74,7 +76,7 @@ public sealed record SemanticCapabilityDefinition
     /// <summary>Canonical stable capability identifier.</summary>
     public string CapabilityId { get; init; }
     /// <summary>Accepted stable aliases for deserializing or matching equivalent facts.</summary>
-    public IReadOnlyList<string> AcceptedAliases { get; init; }
+    public ImmutableArray<string> AcceptedAliases { get; init; }
     /// <summary>Minimum source strength required before a candidate may satisfy the capability.</summary>
     public int MinimumStrength { get; init; }
     /// <summary>Strictness policy used by resolvers.</summary>
@@ -84,13 +86,44 @@ public sealed record SemanticCapabilityDefinition
     /// <summary>Whether the selected value is safe for narration.</summary>
     public bool Narratable { get; init; }
     /// <summary>Approved source adapter identifiers.</summary>
-    public IReadOnlyList<string> ApprovedSourceAdapterIds { get; init; }
+    public ImmutableArray<string> ApprovedSourceAdapterIds { get; init; }
     /// <summary>Approved deterministic derivation rule identifiers.</summary>
-    public IReadOnlyList<string> ApprovedDerivationRuleIds { get; init; }
+    public ImmutableArray<string> ApprovedDerivationRuleIds { get; init; }
     /// <summary>Approved domain knowledge fact types.</summary>
-    public IReadOnlyList<string> ApprovedDomainKnowledgeFactTypes { get; init; }
+    public ImmutableArray<string> ApprovedDomainKnowledgeFactTypes { get; init; }
     /// <summary>Whether the capability applies only to matching event families.</summary>
     public bool EventSpecific { get; init; }
+
+    /// <inheritdoc />
+    public bool Equals(SemanticCapabilityDefinition? other) =>
+        other is not null &&
+        CapabilityId == other.CapabilityId &&
+        AcceptedAliases.SequenceEqual(other.AcceptedAliases) &&
+        MinimumStrength == other.MinimumStrength &&
+        Strictness == other.Strictness &&
+        Localizable == other.Localizable &&
+        Narratable == other.Narratable &&
+        ApprovedSourceAdapterIds.SequenceEqual(other.ApprovedSourceAdapterIds) &&
+        ApprovedDerivationRuleIds.SequenceEqual(other.ApprovedDerivationRuleIds) &&
+        ApprovedDomainKnowledgeFactTypes.SequenceEqual(other.ApprovedDomainKnowledgeFactTypes) &&
+        EventSpecific == other.EventSpecific;
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(CapabilityId);
+        SemanticContractValidation.AddRangeHash(ref hash, AcceptedAliases);
+        hash.Add(MinimumStrength);
+        hash.Add(Strictness);
+        hash.Add(Localizable);
+        hash.Add(Narratable);
+        SemanticContractValidation.AddRangeHash(ref hash, ApprovedSourceAdapterIds);
+        SemanticContractValidation.AddRangeHash(ref hash, ApprovedDerivationRuleIds);
+        SemanticContractValidation.AddRangeHash(ref hash, ApprovedDomainKnowledgeFactTypes);
+        hash.Add(EventSpecific);
+        return hash.ToHashCode();
+    }
 }
 
 /// <summary>Represents a candidate value extracted for a semantic capability.</summary>
@@ -113,6 +146,25 @@ public sealed record SemanticCapabilityCandidate
     public object Value { get; init; }
     /// <summary>Candidate strength classification.</summary>
     public string Strength { get; init; }
+
+    /// <inheritdoc />
+    public bool Equals(SemanticCapabilityCandidate? other) =>
+        other is not null &&
+        Source == other.Source &&
+        SourceField == other.SourceField &&
+        SemanticContractValidation.ObjectEquals(Value, other.Value) &&
+        Strength == other.Strength;
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Source);
+        hash.Add(SourceField);
+        hash.Add(SemanticContractValidation.ObjectHash(Value));
+        hash.Add(Strength);
+        return hash.ToHashCode();
+    }
 }
 
 /// <summary>Represents a rejected semantic capability source.</summary>
@@ -164,17 +216,50 @@ public sealed record SemanticCapabilityResolution
     /// <summary>Speakable resolved value, when available.</summary>
     public string? SpeakableValue { get; init; }
     /// <summary>Alternative values considered during resolution.</summary>
-    public IReadOnlyList<string> AlternativesConsidered { get; init; }
+    public ImmutableArray<string> AlternativesConsidered { get; init; }
     /// <summary>Non-blocking warnings produced during resolution.</summary>
-    public IReadOnlyList<string> Warnings { get; init; }
+    public ImmutableArray<string> Warnings { get; init; }
     /// <summary>Selected capability strength.</summary>
     public string CapabilityStrength { get; init; }
     /// <summary>All accepted candidates considered by the resolver.</summary>
-    public IReadOnlyList<SemanticCapabilityCandidate> Candidates { get; init; }
+    public ImmutableArray<SemanticCapabilityCandidate> Candidates { get; init; }
     /// <summary>Rejected sources considered by the resolver.</summary>
-    public IReadOnlyList<SemanticCapabilityRejection> RejectedSources { get; init; }
+    public ImmutableArray<SemanticCapabilityRejection> RejectedSources { get; init; }
     /// <summary>Substitutions applied during resolution.</summary>
-    public IReadOnlyList<string> SubstitutionsApplied { get; init; }
+    public ImmutableArray<string> SubstitutionsApplied { get; init; }
+
+    /// <inheritdoc />
+    public bool Equals(SemanticCapabilityResolution? other) =>
+        other is not null &&
+        Capability == other.Capability &&
+        Status == other.Status &&
+        SelectedSource == other.SelectedSource &&
+        SemanticContractValidation.ObjectEquals(CanonicalValue, other.CanonicalValue) &&
+        SpeakableValue == other.SpeakableValue &&
+        AlternativesConsidered.SequenceEqual(other.AlternativesConsidered) &&
+        Warnings.SequenceEqual(other.Warnings) &&
+        CapabilityStrength == other.CapabilityStrength &&
+        Candidates.SequenceEqual(other.Candidates) &&
+        RejectedSources.SequenceEqual(other.RejectedSources) &&
+        SubstitutionsApplied.SequenceEqual(other.SubstitutionsApplied);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Capability);
+        hash.Add(Status);
+        hash.Add(SelectedSource);
+        hash.Add(SemanticContractValidation.ObjectHash(CanonicalValue));
+        hash.Add(SpeakableValue);
+        SemanticContractValidation.AddRangeHash(ref hash, AlternativesConsidered);
+        SemanticContractValidation.AddRangeHash(ref hash, Warnings);
+        hash.Add(CapabilityStrength);
+        SemanticContractValidation.AddRangeHash(ref hash, Candidates);
+        SemanticContractValidation.AddRangeHash(ref hash, RejectedSources);
+        SemanticContractValidation.AddRangeHash(ref hash, SubstitutionsApplied);
+        return hash.ToHashCode();
+    }
 }
 
 /// <summary>Represents a resolved canonical semantic fact for narration.</summary>
@@ -238,7 +323,54 @@ public sealed record ResolvedSemanticFact
     /// <summary>Derivation rule identifier, when the fact was derived.</summary>
     public string? DerivationRuleId { get; init; }
     /// <summary>Source input identifiers used for derivation.</summary>
-    public IReadOnlyList<string>? SourceInputs { get; init; }
+    public ImmutableArray<string>? SourceInputs { get; init; }
+
+    /// <inheritdoc />
+    public bool Equals(ResolvedSemanticFact? other) =>
+        other is not null &&
+        FactType == other.FactType &&
+        FactKey == other.FactKey &&
+        SemanticContractValidation.ObjectEquals(CanonicalValue, other.CanonicalValue) &&
+        Unit == other.Unit &&
+        SemanticMeaning == other.SemanticMeaning &&
+        SourceArtifact == other.SourceArtifact &&
+        SourceField == other.SourceField &&
+        SourceBeatId == other.SourceBeatId &&
+        VerificationStatus == other.VerificationStatus &&
+        Confidence == other.Confidence &&
+        Requiredness == other.Requiredness &&
+        LocalizedDisplayValue == other.LocalizedDisplayValue &&
+        SpeakableValue == other.SpeakableValue &&
+        Language == other.Language &&
+        SafeForNarration == other.SafeForNarration &&
+        FactOrigin == other.FactOrigin &&
+        DerivationRuleId == other.DerivationRuleId &&
+        SemanticContractValidation.NullableSequenceEqual(SourceInputs, other.SourceInputs);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(FactType);
+        hash.Add(FactKey);
+        hash.Add(SemanticContractValidation.ObjectHash(CanonicalValue));
+        hash.Add(Unit);
+        hash.Add(SemanticMeaning);
+        hash.Add(SourceArtifact);
+        hash.Add(SourceField);
+        hash.Add(SourceBeatId);
+        hash.Add(VerificationStatus);
+        hash.Add(Confidence);
+        hash.Add(Requiredness);
+        hash.Add(LocalizedDisplayValue);
+        hash.Add(SpeakableValue);
+        hash.Add(Language);
+        hash.Add(SafeForNarration);
+        hash.Add(FactOrigin);
+        hash.Add(DerivationRuleId);
+        SemanticContractValidation.AddNullableRangeHash(ref hash, SourceInputs);
+        return hash.ToHashCode();
+    }
 }
 
 /// <summary>Represents semantic facts resolved for one narration beat.</summary>
@@ -257,7 +389,24 @@ public sealed record ResolvedBeatFacts
     /// <summary>Semantic beat role.</summary>
     public string BeatRole { get; init; }
     /// <summary>Resolved facts for the beat.</summary>
-    public IReadOnlyList<ResolvedSemanticFact> Facts { get; init; }
+    public ImmutableArray<ResolvedSemanticFact> Facts { get; init; }
+
+    /// <inheritdoc />
+    public bool Equals(ResolvedBeatFacts? other) =>
+        other is not null &&
+        BeatId == other.BeatId &&
+        BeatRole == other.BeatRole &&
+        Facts.SequenceEqual(other.Facts);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(BeatId);
+        hash.Add(BeatRole);
+        SemanticContractValidation.AddRangeHash(ref hash, Facts);
+        return hash.ToHashCode();
+    }
 }
 
 /// <summary>Represents the full required semantic fact resolution output.</summary>
@@ -271,9 +420,24 @@ public sealed record RequiredSemanticFactResolutionResult
         Diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
     }
     /// <summary>Resolved beat facts.</summary>
-    public IReadOnlyList<ResolvedBeatFacts> Beats { get; init; }
+    public ImmutableArray<ResolvedBeatFacts> Beats { get; init; }
     /// <summary>Serialization-safe diagnostics payload.</summary>
     public object Diagnostics { get; init; }
+
+    /// <inheritdoc />
+    public bool Equals(RequiredSemanticFactResolutionResult? other) =>
+        other is not null &&
+        Beats.SequenceEqual(other.Beats) &&
+        SemanticContractValidation.ObjectEquals(Diagnostics, other.Diagnostics);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        SemanticContractValidation.AddRangeHash(ref hash, Beats);
+        hash.Add(SemanticContractValidation.ObjectHash(Diagnostics));
+        return hash.ToHashCode();
+    }
 }
 
 /// <summary>Represents coverage validation for one family, format, beat role, and capability.</summary>
@@ -308,15 +472,48 @@ public sealed record SemanticCapabilityCoverageRecord
     /// <summary>Whether catalog registration exists.</summary>
     public bool CatalogRegistrationFound { get; init; }
     /// <summary>Registered adapter identifiers.</summary>
-    public IReadOnlyList<string> RegisteredAdapterIds { get; init; }
+    public ImmutableArray<string> RegisteredAdapterIds { get; init; }
     /// <summary>Approved derivation rule identifiers.</summary>
-    public IReadOnlyList<string> ApprovedDerivationRuleIds { get; init; }
+    public ImmutableArray<string> ApprovedDerivationRuleIds { get; init; }
     /// <summary>Approved domain provider identifiers.</summary>
-    public IReadOnlyList<string> ApprovedDomainProviderIds { get; init; }
+    public ImmutableArray<string> ApprovedDomainProviderIds { get; init; }
     /// <summary>Whether a resolution path exists.</summary>
     public bool ResolutionPathValid { get; init; }
     /// <summary>Failure reason, when invalid.</summary>
     public string? FailureReason { get; init; }
+
+    /// <inheritdoc />
+    public bool Equals(SemanticCapabilityCoverageRecord? other) =>
+        other is not null &&
+        FamilyProfile == other.FamilyProfile &&
+        Format == other.Format &&
+        BeatRole == other.BeatRole &&
+        Capability == other.Capability &&
+        Required == other.Required &&
+        CatalogRegistrationFound == other.CatalogRegistrationFound &&
+        RegisteredAdapterIds.SequenceEqual(other.RegisteredAdapterIds) &&
+        ApprovedDerivationRuleIds.SequenceEqual(other.ApprovedDerivationRuleIds) &&
+        ApprovedDomainProviderIds.SequenceEqual(other.ApprovedDomainProviderIds) &&
+        ResolutionPathValid == other.ResolutionPathValid &&
+        FailureReason == other.FailureReason;
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(FamilyProfile);
+        hash.Add(Format);
+        hash.Add(BeatRole);
+        hash.Add(Capability);
+        hash.Add(Required);
+        hash.Add(CatalogRegistrationFound);
+        SemanticContractValidation.AddRangeHash(ref hash, RegisteredAdapterIds);
+        SemanticContractValidation.AddRangeHash(ref hash, ApprovedDerivationRuleIds);
+        SemanticContractValidation.AddRangeHash(ref hash, ApprovedDomainProviderIds);
+        hash.Add(ResolutionPathValid);
+        hash.Add(FailureReason);
+        return hash.ToHashCode();
+    }
 }
 
 /// <summary>Validation helpers shared by immutable semantic contracts.</summary>
@@ -325,13 +522,46 @@ internal static class SemanticContractValidation
     /// <summary>Requires a non-empty text value.</summary>
     internal static string RequireText(string? value, string parameterName) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value must not be null, empty, or whitespace.", parameterName) : value;
     /// <summary>Copies a required list into an immutable array snapshot.</summary>
-    internal static IReadOnlyList<T> Copy<T>(IReadOnlyList<T>? values, string parameterName) => values?.ToArray() ?? throw new ArgumentNullException(parameterName);
+    internal static ImmutableArray<T> Copy<T>(IReadOnlyList<T>? values, string parameterName) => values is null ? throw new ArgumentNullException(parameterName) : [.. values];
     /// <summary>Copies a required non-empty string list into an immutable array snapshot.</summary>
-    internal static IReadOnlyList<string> CopyNonEmpty(IReadOnlyList<string>? values, string parameterName)
+    internal static ImmutableArray<string> CopyNonEmpty(IReadOnlyList<string>? values, string parameterName)
     {
         var copy = Copy(values, parameterName);
         if (copy.Count == 0) throw new ArgumentException("At least one value is required.", parameterName);
         if (copy.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("Values must not contain null, empty, or whitespace entries.", parameterName);
         return copy;
     }
+
+    internal static bool NullableSequenceEqual<T>(ImmutableArray<T>? left, ImmutableArray<T>? right) =>
+        left.HasValue == right.HasValue && (!left.HasValue || left.Value.SequenceEqual(right!.Value));
+
+    internal static void AddRangeHash<T>(ref HashCode hash, ImmutableArray<T> values)
+    {
+        hash.Add(values.Length);
+        foreach (var value in values)
+        {
+            hash.Add(value);
+        }
+    }
+
+    internal static void AddNullableRangeHash<T>(ref HashCode hash, ImmutableArray<T>? values)
+    {
+        hash.Add(values.HasValue);
+        if (values.HasValue)
+        {
+            AddRangeHash(ref hash, values.Value);
+        }
+    }
+
+    internal static bool ObjectEquals(object? left, object? right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left is null || right is null) return false;
+        return NormalizeJsonComparable(left).Equals(NormalizeJsonComparable(right), StringComparison.Ordinal);
+    }
+
+    internal static int ObjectHash(object? value) => value is null ? 0 : StringComparer.Ordinal.GetHashCode(NormalizeJsonComparable(value));
+
+    private static string NormalizeJsonComparable(object value) =>
+        value is JsonElement element ? element.GetRawText() : JsonSerializer.Serialize(value, value.GetType());
 }
