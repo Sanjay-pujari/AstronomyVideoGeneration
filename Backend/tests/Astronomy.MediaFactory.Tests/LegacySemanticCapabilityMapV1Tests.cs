@@ -45,7 +45,7 @@ public sealed class LegacySemanticCapabilityMapV1Tests
     public void Every_Legacy_Normalized_Term_Is_Unique()
     {
         static string Normalize(string value) => value.Trim().Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
-        Assert.All(LegacySemanticCapabilityMapV1.Entries.GroupBy(e => Normalize(e.LegacyTerm)), Assert.Single);
+        Assert.All(LegacySemanticCapabilityMapV1.Entries.GroupBy(e => Normalize(e.LegacyTerm)), g => Assert.Single(g));
     }
 
     [Fact]
