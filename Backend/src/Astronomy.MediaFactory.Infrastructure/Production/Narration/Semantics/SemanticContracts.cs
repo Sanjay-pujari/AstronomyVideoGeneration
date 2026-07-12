@@ -38,7 +38,7 @@ public interface ISemanticCapabilityResolver
     SemanticCapabilityResolution Resolve(string capabilityId, SemanticCapabilitySourceContext context, LanguageProfile languageProfile);
 }
 
-public sealed record SemanticCapabilityDefinition(string CapabilityId, IReadOnlyList<string> AcceptedAliases, int MinimumStrength, string Strictness, bool Localizable, bool Narratable, IReadOnlyList<string> ApprovedSourceAdapterIds, IReadOnlyList<string> ApprovedDerivationRuleIds, IReadOnlyList<string> ApprovedDomainKnowledgeFactTypes);
+public sealed record SemanticCapabilityDefinition(string CapabilityId, IReadOnlyList<string> AcceptedAliases, int MinimumStrength, string Strictness, bool Localizable, bool Narratable, IReadOnlyList<string> ApprovedSourceAdapterIds, IReadOnlyList<string> ApprovedDerivationRuleIds, IReadOnlyList<string> ApprovedDomainKnowledgeFactTypes, bool EventSpecific = false);
 public sealed record SemanticCapabilitySourceContext(string? FamilyProfileId, string? Format, JsonElement? ProductionRequest, JsonElement? LongDocumentaryContract, JsonElement? ShortDocumentaryContract, JsonElement? EditorialContract, JsonElement? StoryGraph, JsonElement? ProductionEventIntelligence, JsonElement? ObservationMetadata, JsonElement? QuestionAnswerSet);
 
 public sealed record SemanticCapabilityCoverageRecord(string FamilyProfile, string Format, string BeatRole, string Capability, bool Required, bool CatalogRegistrationFound, IReadOnlyList<string> RegisteredAdapterIds, IReadOnlyList<string> ApprovedDerivationRuleIds, IReadOnlyList<string> ApprovedDomainProviderIds, bool ResolutionPathValid, string? FailureReason);

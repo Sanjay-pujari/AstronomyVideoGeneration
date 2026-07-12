@@ -20,7 +20,7 @@ public sealed class SemanticCapabilityResolver(ISemanticCapabilityCatalog catalo
         var valid = candidates.Where(c => c.Adapter.Strength >= def.MinimumStrength).OrderBy(c => c.Adapter.Precedence).ThenByDescending(c => c.Adapter.Strength).ToArray();
         if (valid.Length == 0)
         {
-            var reason = adapters.Length == 0 ? "NoAdapterRegistered" : candidates.Count == 0 ? string.Join(";", rejections.Select(r => r.Reason).Distinct()) : "VerificationFailed";
+            var reason = adapters.Length == 0 ? "NoApprovedSourceAvailable" : candidates.Count == 0 ? string.Join(";", rejections.Select(r => r.Reason).Distinct()) : "VerificationFailed";
             return new(def.CapabilityId, "Unresolved", null, null, null, [], [$"Capability {def.CapabilityId} unresolved: {reason}."], "Missing", candidates.Select(c => c.Candidate).ToArray(), rejections.ToArray(), []);
         }
         var best = valid[0];

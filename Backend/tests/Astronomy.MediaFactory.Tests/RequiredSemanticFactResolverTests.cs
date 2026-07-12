@@ -195,6 +195,42 @@ public sealed class RequiredSemanticFactResolverTests
     }
 
 
+
+    [Fact]
+    public void OptionalZhrWithNoSourceValueDoesNotBlockMeteorShower()
+    {
+        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"MeteorShower\"}"), null);
+        var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Geminids Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Geminids\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
+
+        Assert.False(result.Blocking);
+        Assert.Contains("Zhr", result.Beats[0].OmittedOptionalFacts);
+        var zhr = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.Capability == "Zhr");
+        Assert.Null(zhr.SelectedSource);
+        Assert.Contains(zhr.RejectedSources, r => r.Reason == "SourceValueMissing");
+    }
+
+    [Fact]
+    public void VerifiedUpstreamZhrResolvesWhenPresent()
+    {
+        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"MeteorShower\"}"), null);
+        var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Radiant\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventType\":\"MeteorShower\",\"zhr\":{\"value\":120,\"unit\":\"meteors/hour\",\"qualifier\":\"under ideal dark skies\",\"source\":\"verified upstream feed\",\"confidence\":0.95}}"), profile: profile);
+
+        Assert.False(result.Blocking);
+        var fact = Assert.Single(result.Beats[0].OptionalFacts, f => f.FactType == "Zhr");
+        Assert.Equal("Production Event Intelligence", fact.SourceArtifact);
+        Assert.Contains("zhr", fact.SourceField, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ZhrIsNotFabricatedFromGeminidsTitle()
+    {
+        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"MeteorShower\"}"), null);
+        var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Geminids Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Geminids\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
+
+        Assert.DoesNotContain(result.Beats[0].OptionalFacts, f => f.FactType == "Zhr");
+        Assert.Contains("Zhr", result.Beats[0].OmittedOptionalFacts);
+    }
+
     [Theory]
     [InlineData("PlanetPairing", "PlanetPairing")]
     [InlineData("SolarEclipse", "Eclipse")]

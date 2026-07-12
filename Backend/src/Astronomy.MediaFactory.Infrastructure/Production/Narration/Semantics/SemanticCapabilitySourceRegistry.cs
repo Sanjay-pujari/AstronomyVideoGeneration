@@ -10,7 +10,7 @@ public sealed class SemanticCapabilitySourceRegistry(ISemanticCapabilityCatalog 
     public IReadOnlyList<ISemanticCapabilitySourceAdapter> GetAdapters(string capabilityId)
     {
         var def = catalog.GetRequired(capabilityId);
-        return Adapters.Where(a => a.SupportedCapabilityId.Equals(def.CapabilityId, StringComparison.OrdinalIgnoreCase) || def.ApprovedSourceAdapterIds.Contains(a.AdapterId, StringComparer.OrdinalIgnoreCase)).OrderBy(a => a.Precedence).ThenByDescending(a => a.Strength).ToArray();
+        return Adapters.Where(a => def.ApprovedSourceAdapterIds.Contains(a.AdapterId, StringComparer.OrdinalIgnoreCase)).OrderBy(a => a.Precedence).ThenByDescending(a => a.Strength).ToArray();
     }
     public void Validate()
     {
@@ -43,8 +43,8 @@ public sealed class SemanticCapabilitySourceRegistry(ISemanticCapabilityCatalog 
                 var rules = found ? def!.ApprovedDerivationRuleIds : [];
                 var domain = found ? def!.ApprovedDomainKnowledgeFactTypes : [];
                 var hasPath = found && (adapters.Length > 0 || rules.Count > 0 || domain.Count > 0);
-                var valid = !cap.Required || hasPath;
-                rows.Add(new(p.FamilyId, format, role, cap.Capability, cap.Required, found, adapters, rules, domain, valid, valid ? null : !found ? "CatalogRegistrationMissing" : "NoResolutionPath"));
+                var valid = found && (!cap.Required || hasPath);
+                rows.Add(new(p.FamilyId, format, role, found ? def!.CapabilityId : cap.Capability, cap.Required, found, adapters, rules, domain, valid, valid ? null : !found ? "CapabilityNotRegistered" : "NoApprovedSourceAvailable"));
             }
         }
         return rows;
@@ -81,6 +81,7 @@ public sealed class SemanticCapabilitySourceRegistry(ISemanticCapabilityCatalog 
         new GenericAdapter("ObservationLocationAdapter","ObservationLocation","Observation Metadata","location/region/timezone",80,1, ["observationLocation","location","region","visibilityRegion","timezone"]),
         new GenericAdapter("AngularSeparationAdapter","AngularSeparation","Production Event Intelligence","angularSeparation/angularRelationship",80,1, ["angularSeparation","angularRelationship","separation"]),
         new GenericAdapter("VisibilityMethodAdapter","VisibilityMethod","Observation Metadata","visibilityMethod/observationMode",75,1, ["visibilityMethod","observationMode","nakedEye","binocularGuidance","telescopeGuidance","visibilityConditions"]),
+        new ZhrAdapter(),
         new GenericAdapter("DomainKnowledgeApparentAlignmentAdapter","ApparentAlignmentExplanation","Astronomy Domain Knowledge Provider","PlanetPairingKnowledgeProfile",80,2, ["apparentAlignmentExplanation","physicalProximityClarification","perspectiveExplanation","whyPlanetsAppearClose","apparentPairingScience"])
     ];
 }
@@ -119,4 +120,45 @@ public sealed class UtcAdapter() : GenericAdapter("UtcEventIntervalObservationTi
         if (!TryFind(context.ObservationMetadata, ["timezone","timeZone","verifiedTimezone"], out _, out var tz) || string.IsNullOrWhiteSpace(tz?.ToString())) { candidate=default!; rejection=new(SourceArtifact, SourcePath, "VerificationFailed"); return false; }
         return base.TryExtract(context, out candidate, out rejection);
     }
+}
+
+public sealed class ZhrAdapter() : GenericAdapter("ProductionEventIntelligenceZhrAdapter", "Zhr", "Production Event Intelligence", "zhr/zenithalHourlyRate/expectedZhr/activityRate/peakRate", 90, 1, ["zhr", "zenithalHourlyRate", "expectedZhr", "activityRate", "peakRate"])
+{
+    public override bool TryExtract(SemanticCapabilitySourceContext context, out SemanticCapabilityCandidate candidate, out SemanticCapabilityRejection? rejection)
+    {
+        if (!TryFindZhr(context.ProductionEventIntelligence, out var field, out var value))
+        {
+            candidate = default!;
+            rejection = new(SourceArtifact, SourcePath, "SourceValueMissing");
+            return false;
+        }
+        candidate = new(SourceArtifact, field, value, "Strong");
+        rejection = null;
+        return true;
+    }
+    private static bool TryFindZhr(JsonElement? e, out string field, out object value, string prefix = "")
+    {
+        field = ""; value = "";
+        if (e is not { } el) return false;
+        if (el.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var p in el.EnumerateObject())
+            {
+                var path = string.IsNullOrWhiteSpace(prefix) ? p.Name : prefix + "." + p.Name;
+                if (new[] { "zhr", "zenithalHourlyRate", "expectedZhr", "activityRate", "peakRate" }.Any(n => p.Name.Equals(n, StringComparison.OrdinalIgnoreCase)))
+                {
+                    if (p.Value.ValueKind == JsonValueKind.Object)
+                    {
+                        var payload = JsonSerializer.Deserialize<Dictionary<string, object?>>(p.Value.GetRawText()) ?? [];
+                        field = path; value = payload; return true;
+                    }
+                    if (ToValue(p.Value) is { } scalar) { field = path; value = scalar; return true; }
+                }
+                if (TryFindZhr(p.Value, out field, out value, path)) return true;
+            }
+        }
+        if (el.ValueKind == JsonValueKind.Array) foreach (var item in el.EnumerateArray()) if (TryFindZhr(item, out field, out value, prefix)) return true;
+        return false;
+    }
+
 }
