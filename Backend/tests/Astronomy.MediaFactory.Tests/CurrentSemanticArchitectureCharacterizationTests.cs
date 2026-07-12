@@ -209,12 +209,19 @@ public sealed class CurrentSemanticPolicyCharacterizationTests
     }
 
     [Fact]
-    public void CurrentBehavior_EclipseCoverageMarksRequiredCapabilitiesValidWithoutRegisteredPath()
+    public void CurrentBehavior_EclipseRequiredCapabilitiesAreMarkedValidUsingUnrelatedPrimaryObjectAdapters()
     {
         var registry = new SemanticCapabilitySourceRegistry(new SemanticCapabilityCatalog());
         var profile = AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"Eclipse\"}"), null);
         var rows = registry.ValidateCoverageDetailed([profile]);
+        string[] expectedAdapterIds =
+        [
+            "ProductionEventIntelligencePrimaryObjectsAdapter",
+            "EditorialContractPrimaryObjectsAdapter",
+            "DocumentaryContractPrimaryObjectsAdapter"
+        ];
 
+        // This test characterizes current false-positive semantic coverage and is expected to change during the canonical capability/source-policy migration.
         foreach (var capability in new[] { "EclipseType", "SafetyGuidance", "Mechanism" })
         {
             var capabilityRows = rows.Where(r => r.Required && r.Capability == capability).ToArray();
@@ -222,23 +229,26 @@ public sealed class CurrentSemanticPolicyCharacterizationTests
             Assert.All(capabilityRows, row =>
             {
                 Assert.True(row.ResolutionPathValid);
-                Assert.Empty(row.RegisteredAdapterIds);
+                Assert.Equal(expectedAdapterIds, row.RegisteredAdapterIds);
                 Assert.Empty(row.ApprovedDerivationRuleIds);
                 Assert.Empty(row.ApprovedDomainProviderIds);
                 Assert.Null(row.FailureReason);
             });
+
+            var adapters = registry.GetAdapters(capability).Where(adapter => expectedAdapterIds.Contains(adapter.AdapterId)).ToArray();
+            Assert.Equal(expectedAdapterIds, adapters.Select(adapter => adapter.AdapterId).ToArray());
+            Assert.All(adapters, adapter => Assert.Equal("PrimaryObjects", adapter.SupportedCapabilityId));
         }
     }
 
     [Fact]
-    public void CurrentBehavior_RawJsonScannerCanSupplyEclipseFactsOutsideCertifiedAdapters()
+    public void CurrentBehavior_CompleteEclipseResolutionStopsAtMissingOptionalMagnitudeCatalogRegistration()
     {
         var profile = AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"Eclipse\"}"), null);
-        var resolution = TestResolver.Resolve(profile, eventIntel: "{\"eventType\":\"Eclipse\",\"eclipseType\":\"partial solar eclipse\",\"visibilityRegion\":\"Americas\",\"safetyGuidance\":\"Use certified filters\",\"mechanism\":\"Moon shadow crosses Earth\",\"eventDateOrWindow\":\"2026-08-12\"}");
 
-        Assert.Contains(resolution.Beats, b => b.RequiredFacts.Any(f => f.FactType == "EclipseType"));
-        Assert.Contains(resolution.Beats, b => b.RequiredFacts.Any(f => f.FactType == "SafetyGuidance"));
-        Assert.Contains(resolution.Beats, b => b.RequiredFacts.Any(f => f.FactType == "Mechanism"));
+        Assert.Equal("Eclipse", profile.FamilyId);
+        var ex = Assert.Throws<InvalidOperationException>(() => TestResolver.Resolve(profile, eventIntel: "{\"eventType\":\"Eclipse\",\"eclipseType\":\"partial solar eclipse\",\"visibilityRegion\":\"Americas\",\"safetyGuidance\":\"Use certified filters\",\"mechanism\":\"Moon shadow crosses Earth\",\"eventDateOrWindow\":\"2026-08-12\"}"));
+        Assert.Contains("Capability registration invalid: Capability = Magnitude", ex.Message);
     }
 
     [Fact]
@@ -294,13 +304,24 @@ public sealed class CurrentKnownSemanticFailureCharacterizationTests
     }
 
     [Fact]
-    public void CurrentBehavior_SolarEclipseMapsToGenericEclipseAndGenericEclipseHasSourceGaps()
+    public void CurrentBehavior_SolarEclipseMapsToGenericEclipseAndRequiredCapabilitiesReceiveUnrelatedObjectAdapters()
     {
-        Assert.Equal("Eclipse", AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"SolarEclipse\"}"), null).FamilyId);
-        var rows = new SemanticCapabilitySourceRegistry(new SemanticCapabilityCatalog()).ValidateCoverageDetailed([AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"Eclipse\"}"), null)]);
-        Assert.Contains(rows, r => r.Capability == "EclipseType" && r.ResolutionPathValid && r.RegisteredAdapterIds.Count == 0 && r.ApprovedDerivationRuleIds.Count == 0 && r.ApprovedDomainProviderIds.Count == 0);
-        Assert.Contains(rows, r => r.Capability == "SafetyGuidance" && r.ResolutionPathValid && r.RegisteredAdapterIds.Count == 0 && r.ApprovedDerivationRuleIds.Count == 0 && r.ApprovedDomainProviderIds.Count == 0);
-        Assert.Contains(rows, r => r.Capability == "Mechanism" && r.ResolutionPathValid && r.RegisteredAdapterIds.Count == 0 && r.ApprovedDerivationRuleIds.Count == 0 && r.ApprovedDomainProviderIds.Count == 0);
+        var profile = AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"SolarEclipse\"}"), null);
+        var registry = new SemanticCapabilitySourceRegistry(new SemanticCapabilityCatalog());
+        var rows = registry.ValidateCoverageDetailed([profile]);
+        string[] expectedAdapterIds =
+        [
+            "ProductionEventIntelligencePrimaryObjectsAdapter",
+            "EditorialContractPrimaryObjectsAdapter",
+            "DocumentaryContractPrimaryObjectsAdapter"
+        ];
+
+        Assert.Equal("Eclipse", profile.FamilyId);
+        foreach (var capability in new[] { "EclipseType", "SafetyGuidance", "Mechanism" })
+        {
+            Assert.Contains(rows, r => r.Capability == capability && r.ResolutionPathValid && r.RegisteredAdapterIds.SequenceEqual(expectedAdapterIds) && r.ApprovedDerivationRuleIds.Count == 0 && r.ApprovedDomainProviderIds.Count == 0 && r.FailureReason is null);
+            Assert.All(registry.GetAdapters(capability).Where(adapter => expectedAdapterIds.Contains(adapter.AdapterId)), adapter => Assert.Equal("PrimaryObjects", adapter.SupportedCapabilityId));
+        }
     }
 }
 
@@ -324,7 +345,7 @@ public sealed class CurrentRequiredSemanticFactCrossFamilyCharacterizationTests
         Assert.Empty(issues);
         if (eventType == "MeteorShower")
         {
-            Assert.Contains(resolution.Beats.SelectMany(b => b.RequiredFacts), f => f.FactType == "ObservationTiming" && (f.SourceField.Contains("bestViewingWindowLocal", StringComparison.OrdinalIgnoreCase) || f.SourceField.Contains("localPeakTime", StringComparison.OrdinalIgnoreCase) || f.SourceField.Contains("peakWindow", StringComparison.OrdinalIgnoreCase)));
+            Assert.Contains(resolution.Beats.SelectMany(b => b.RequiredFacts), f => f.FactType == "PeakWindow" && f.SourceArtifact == "Observation Metadata" && f.SourceField.Contains("bestViewingWindowLocal", StringComparison.OrdinalIgnoreCase));
         }
         Assert.Equal(resolution.Beats.Count, resolution.Beats.Select(b => (b.Format, b.DocumentaryBeatId)).Distinct().Count());
     }
