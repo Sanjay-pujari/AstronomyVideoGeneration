@@ -58,18 +58,24 @@ public enum SemanticCapabilityStrictness
 public sealed record SemanticCapabilityDefinition
 {
     /// <summary>Creates an immutable semantic capability definition.</summary>
-    [JsonConstructor]
     public SemanticCapabilityDefinition(string capabilityId, IReadOnlyList<string> acceptedAliases, int minimumStrength, SemanticCapabilityStrictness strictness, bool localizable, bool narratable, IReadOnlyList<string> approvedSourceAdapterIds, IReadOnlyList<string> approvedDerivationRuleIds, IReadOnlyList<string> approvedDomainKnowledgeFactTypes, bool eventSpecific = false)
+        : this(capabilityId, SemanticContractValidation.CopyNonEmpty(acceptedAliases, nameof(acceptedAliases)), minimumStrength, strictness, localizable, narratable, SemanticContractValidation.Copy(approvedSourceAdapterIds, nameof(approvedSourceAdapterIds)), SemanticContractValidation.Copy(approvedDerivationRuleIds, nameof(approvedDerivationRuleIds)), SemanticContractValidation.Copy(approvedDomainKnowledgeFactTypes, nameof(approvedDomainKnowledgeFactTypes)), eventSpecific)
+    {
+    }
+
+    /// <summary>Creates an immutable semantic capability definition from JSON-bound immutable collections.</summary>
+    [JsonConstructor]
+    public SemanticCapabilityDefinition(string capabilityId, ImmutableArray<string> acceptedAliases, int minimumStrength, SemanticCapabilityStrictness strictness, bool localizable, bool narratable, ImmutableArray<string> approvedSourceAdapterIds, ImmutableArray<string> approvedDerivationRuleIds, ImmutableArray<string> approvedDomainKnowledgeFactTypes, bool eventSpecific = false)
     {
         CapabilityId = SemanticContractValidation.RequireText(capabilityId, nameof(capabilityId));
-        AcceptedAliases = SemanticContractValidation.CopyNonEmpty(acceptedAliases, nameof(acceptedAliases));
+        AcceptedAliases = SemanticContractValidation.RequireNonEmpty(acceptedAliases, nameof(acceptedAliases));
         MinimumStrength = minimumStrength >= 0 ? minimumStrength : throw new ArgumentOutOfRangeException(nameof(minimumStrength), "Minimum strength must be non-negative.");
         Strictness = strictness;
         Localizable = localizable;
         Narratable = narratable;
-        ApprovedSourceAdapterIds = SemanticContractValidation.Copy(approvedSourceAdapterIds, nameof(approvedSourceAdapterIds));
-        ApprovedDerivationRuleIds = SemanticContractValidation.Copy(approvedDerivationRuleIds, nameof(approvedDerivationRuleIds));
-        ApprovedDomainKnowledgeFactTypes = SemanticContractValidation.Copy(approvedDomainKnowledgeFactTypes, nameof(approvedDomainKnowledgeFactTypes));
+        ApprovedSourceAdapterIds = SemanticContractValidation.RequireInitialized(approvedSourceAdapterIds, nameof(approvedSourceAdapterIds));
+        ApprovedDerivationRuleIds = SemanticContractValidation.RequireInitialized(approvedDerivationRuleIds, nameof(approvedDerivationRuleIds));
+        ApprovedDomainKnowledgeFactTypes = SemanticContractValidation.RequireInitialized(approvedDomainKnowledgeFactTypes, nameof(approvedDomainKnowledgeFactTypes));
         EventSpecific = eventSpecific;
     }
 
@@ -190,20 +196,26 @@ public sealed record SemanticCapabilityRejection
 public sealed record SemanticCapabilityResolution
 {
     /// <summary>Creates an immutable semantic capability resolution result.</summary>
-    [JsonConstructor]
     public SemanticCapabilityResolution(string capability, SemanticCapabilityResolutionStatus status, string? selectedSource, object? canonicalValue, string? speakableValue, IReadOnlyList<string> alternativesConsidered, IReadOnlyList<string> warnings, string capabilityStrength, IReadOnlyList<SemanticCapabilityCandidate> candidates, IReadOnlyList<SemanticCapabilityRejection> rejectedSources, IReadOnlyList<string> substitutionsApplied)
+        : this(capability, status, selectedSource, canonicalValue, speakableValue, SemanticContractValidation.Copy(alternativesConsidered, nameof(alternativesConsidered)), SemanticContractValidation.Copy(warnings, nameof(warnings)), capabilityStrength, SemanticContractValidation.Copy(candidates, nameof(candidates)), SemanticContractValidation.Copy(rejectedSources, nameof(rejectedSources)), SemanticContractValidation.Copy(substitutionsApplied, nameof(substitutionsApplied)))
+    {
+    }
+
+    /// <summary>Creates an immutable semantic capability resolution result from JSON-bound immutable collections.</summary>
+    [JsonConstructor]
+    public SemanticCapabilityResolution(string capability, SemanticCapabilityResolutionStatus status, string? selectedSource, object? canonicalValue, string? speakableValue, ImmutableArray<string> alternativesConsidered, ImmutableArray<string> warnings, string capabilityStrength, ImmutableArray<SemanticCapabilityCandidate> candidates, ImmutableArray<SemanticCapabilityRejection> rejectedSources, ImmutableArray<string> substitutionsApplied)
     {
         Capability = SemanticContractValidation.RequireText(capability, nameof(capability));
         Status = status;
         SelectedSource = selectedSource;
         CanonicalValue = canonicalValue;
         SpeakableValue = speakableValue;
-        AlternativesConsidered = SemanticContractValidation.Copy(alternativesConsidered, nameof(alternativesConsidered));
-        Warnings = SemanticContractValidation.Copy(warnings, nameof(warnings));
+        AlternativesConsidered = SemanticContractValidation.RequireInitialized(alternativesConsidered, nameof(alternativesConsidered));
+        Warnings = SemanticContractValidation.RequireInitialized(warnings, nameof(warnings));
         CapabilityStrength = SemanticContractValidation.RequireText(capabilityStrength, nameof(capabilityStrength));
-        Candidates = SemanticContractValidation.Copy(candidates, nameof(candidates));
-        RejectedSources = SemanticContractValidation.Copy(rejectedSources, nameof(rejectedSources));
-        SubstitutionsApplied = SemanticContractValidation.Copy(substitutionsApplied, nameof(substitutionsApplied));
+        Candidates = SemanticContractValidation.RequireInitialized(candidates, nameof(candidates));
+        RejectedSources = SemanticContractValidation.RequireInitialized(rejectedSources, nameof(rejectedSources));
+        SubstitutionsApplied = SemanticContractValidation.RequireInitialized(substitutionsApplied, nameof(substitutionsApplied));
     }
     /// <summary>Canonical capability identifier.</summary>
     public string Capability { get; init; }
@@ -266,8 +278,14 @@ public sealed record SemanticCapabilityResolution
 public sealed record ResolvedSemanticFact
 {
     /// <summary>Creates an immutable resolved semantic fact.</summary>
-    [JsonConstructor]
     public ResolvedSemanticFact(string factType, string factKey, object canonicalValue, string? unit, string semanticMeaning, string sourceArtifact, string sourceField, string? sourceBeatId, SemanticVerificationStatus verificationStatus, decimal confidence, SemanticFactRequiredness requiredness, string? localizedDisplayValue, string? speakableValue, string language, bool safeForNarration, string factOrigin = "Source", string? derivationRuleId = null, IReadOnlyList<string>? sourceInputs = null)
+        : this(factType, factKey, canonicalValue, unit, semanticMeaning, sourceArtifact, sourceField, sourceBeatId, verificationStatus, confidence, requiredness, localizedDisplayValue, speakableValue, language, safeForNarration, factOrigin, derivationRuleId, sourceInputs is null ? null : SemanticContractValidation.Copy(sourceInputs, nameof(sourceInputs)))
+    {
+    }
+
+    /// <summary>Creates an immutable resolved semantic fact from JSON-bound immutable collections.</summary>
+    [JsonConstructor]
+    public ResolvedSemanticFact(string factType, string factKey, object canonicalValue, string? unit, string semanticMeaning, string sourceArtifact, string sourceField, string? sourceBeatId, SemanticVerificationStatus verificationStatus, decimal confidence, SemanticFactRequiredness requiredness, string? localizedDisplayValue, string? speakableValue, string language, bool safeForNarration, string factOrigin = "Source", string? derivationRuleId = null, ImmutableArray<string>? sourceInputs = null)
     {
         FactType = SemanticContractValidation.RequireText(factType, nameof(factType));
         FactKey = SemanticContractValidation.RequireText(factKey, nameof(factKey));
@@ -286,7 +304,7 @@ public sealed record ResolvedSemanticFact
         SafeForNarration = safeForNarration;
         FactOrigin = SemanticContractValidation.RequireText(factOrigin, nameof(factOrigin));
         DerivationRuleId = derivationRuleId;
-        SourceInputs = sourceInputs is null ? null : SemanticContractValidation.Copy(sourceInputs, nameof(sourceInputs));
+        SourceInputs = sourceInputs is null ? null : SemanticContractValidation.RequireInitialized(sourceInputs.Value, nameof(sourceInputs));
     }
     /// <summary>Canonical fact type.</summary>
     public string FactType { get; init; }
@@ -377,12 +395,18 @@ public sealed record ResolvedSemanticFact
 public sealed record ResolvedBeatFacts
 {
     /// <summary>Creates immutable resolved beat facts.</summary>
-    [JsonConstructor]
     public ResolvedBeatFacts(string beatId, string beatRole, IReadOnlyList<ResolvedSemanticFact> facts)
+        : this(beatId, beatRole, SemanticContractValidation.Copy(facts, nameof(facts)))
+    {
+    }
+
+    /// <summary>Creates immutable resolved beat facts from a JSON-bound immutable collection.</summary>
+    [JsonConstructor]
+    public ResolvedBeatFacts(string beatId, string beatRole, ImmutableArray<ResolvedSemanticFact> facts)
     {
         BeatId = SemanticContractValidation.RequireText(beatId, nameof(beatId));
         BeatRole = SemanticContractValidation.RequireText(beatRole, nameof(beatRole));
-        Facts = SemanticContractValidation.Copy(facts, nameof(facts));
+        Facts = SemanticContractValidation.RequireInitialized(facts, nameof(facts));
     }
     /// <summary>Stable beat identifier.</summary>
     public string BeatId { get; init; }
@@ -413,29 +437,79 @@ public sealed record ResolvedBeatFacts
 public sealed record RequiredSemanticFactResolutionResult
 {
     /// <summary>Creates an immutable required semantic fact resolution result.</summary>
-    [JsonConstructor]
-    public RequiredSemanticFactResolutionResult(IReadOnlyList<ResolvedBeatFacts> beats, object diagnostics)
+    public RequiredSemanticFactResolutionResult(IReadOnlyList<ResolvedBeatFacts> beats, SemanticResolutionDiagnostics diagnostics)
+        : this(SemanticContractValidation.Copy(beats, nameof(beats)), diagnostics)
     {
-        Beats = SemanticContractValidation.Copy(beats, nameof(beats));
+    }
+
+    /// <summary>Creates an immutable required semantic fact resolution result from a JSON-bound immutable collection.</summary>
+    [JsonConstructor]
+    public RequiredSemanticFactResolutionResult(ImmutableArray<ResolvedBeatFacts> beats, SemanticResolutionDiagnostics diagnostics)
+    {
+        Beats = SemanticContractValidation.RequireInitialized(beats, nameof(beats));
         Diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
     }
     /// <summary>Resolved beat facts.</summary>
     public ImmutableArray<ResolvedBeatFacts> Beats { get; init; }
     /// <summary>Serialization-safe diagnostics payload.</summary>
-    public object Diagnostics { get; init; }
+    public SemanticResolutionDiagnostics Diagnostics { get; init; }
 
     /// <inheritdoc />
     public bool Equals(RequiredSemanticFactResolutionResult? other) =>
         other is not null &&
         Beats.SequenceEqual(other.Beats) &&
-        SemanticContractValidation.ObjectEquals(Diagnostics, other.Diagnostics);
+        Diagnostics == other.Diagnostics;
 
     /// <inheritdoc />
     public override int GetHashCode()
     {
         var hash = new HashCode();
         SemanticContractValidation.AddRangeHash(ref hash, Beats);
-        hash.Add(SemanticContractValidation.ObjectHash(Diagnostics));
+        hash.Add(Diagnostics);
+        return hash.ToHashCode();
+    }
+}
+
+
+/// <summary>Represents stable diagnostics for semantic resolution output.</summary>
+public sealed record SemanticResolutionDiagnostics
+{
+    /// <summary>Creates immutable semantic resolution diagnostics.</summary>
+    public SemanticResolutionDiagnostics(int warningCount, int missingRequiredCount, IReadOnlyList<string> warnings)
+        : this(warningCount, missingRequiredCount, SemanticContractValidation.Copy(warnings, nameof(warnings)))
+    {
+    }
+
+    /// <summary>Creates immutable semantic resolution diagnostics from a JSON-bound immutable collection.</summary>
+    [JsonConstructor]
+    public SemanticResolutionDiagnostics(int warningCount, int missingRequiredCount, ImmutableArray<string> warnings)
+    {
+        WarningCount = warningCount >= 0 ? warningCount : throw new ArgumentOutOfRangeException(nameof(warningCount), "Warning count must be non-negative.");
+        MissingRequiredCount = missingRequiredCount >= 0 ? missingRequiredCount : throw new ArgumentOutOfRangeException(nameof(missingRequiredCount), "Missing required count must be non-negative.");
+        Warnings = SemanticContractValidation.RequireInitialized(warnings, nameof(warnings));
+    }
+
+    /// <summary>Number of warnings produced during resolution.</summary>
+    public int WarningCount { get; init; }
+    /// <summary>Number of required facts that could not be resolved.</summary>
+    public int MissingRequiredCount { get; init; }
+    /// <summary>Diagnostics warning messages.</summary>
+    public ImmutableArray<string> Warnings { get; init; }
+
+    /// <inheritdoc />
+    public bool Equals(SemanticResolutionDiagnostics? other) =>
+        other is not null &&
+        WarningCount == other.WarningCount &&
+        MissingRequiredCount == other.MissingRequiredCount &&
+        Warnings.SequenceEqual(other.Warnings);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(WarningCount);
+        hash.Add(MissingRequiredCount);
+        SemanticContractValidation.AddRangeHash(ref hash, Warnings);
         return hash.ToHashCode();
     }
 }
@@ -444,8 +518,14 @@ public sealed record RequiredSemanticFactResolutionResult
 public sealed record SemanticCapabilityCoverageRecord
 {
     /// <summary>Creates an immutable semantic capability coverage record.</summary>
-    [JsonConstructor]
     public SemanticCapabilityCoverageRecord(string familyProfile, string format, string beatRole, string capability, bool required, bool catalogRegistrationFound, IReadOnlyList<string> registeredAdapterIds, IReadOnlyList<string> approvedDerivationRuleIds, IReadOnlyList<string> approvedDomainProviderIds, bool resolutionPathValid, string? failureReason)
+        : this(familyProfile, format, beatRole, capability, required, catalogRegistrationFound, SemanticContractValidation.Copy(registeredAdapterIds, nameof(registeredAdapterIds)), SemanticContractValidation.Copy(approvedDerivationRuleIds, nameof(approvedDerivationRuleIds)), SemanticContractValidation.Copy(approvedDomainProviderIds, nameof(approvedDomainProviderIds)), resolutionPathValid, failureReason)
+    {
+    }
+
+    /// <summary>Creates an immutable semantic capability coverage record from JSON-bound immutable collections.</summary>
+    [JsonConstructor]
+    public SemanticCapabilityCoverageRecord(string familyProfile, string format, string beatRole, string capability, bool required, bool catalogRegistrationFound, ImmutableArray<string> registeredAdapterIds, ImmutableArray<string> approvedDerivationRuleIds, ImmutableArray<string> approvedDomainProviderIds, bool resolutionPathValid, string? failureReason)
     {
         FamilyProfile = SemanticContractValidation.RequireText(familyProfile, nameof(familyProfile));
         Format = SemanticContractValidation.RequireText(format, nameof(format));
@@ -453,9 +533,9 @@ public sealed record SemanticCapabilityCoverageRecord
         Capability = SemanticContractValidation.RequireText(capability, nameof(capability));
         Required = required;
         CatalogRegistrationFound = catalogRegistrationFound;
-        RegisteredAdapterIds = SemanticContractValidation.Copy(registeredAdapterIds, nameof(registeredAdapterIds));
-        ApprovedDerivationRuleIds = SemanticContractValidation.Copy(approvedDerivationRuleIds, nameof(approvedDerivationRuleIds));
-        ApprovedDomainProviderIds = SemanticContractValidation.Copy(approvedDomainProviderIds, nameof(approvedDomainProviderIds));
+        RegisteredAdapterIds = SemanticContractValidation.RequireInitialized(registeredAdapterIds, nameof(registeredAdapterIds));
+        ApprovedDerivationRuleIds = SemanticContractValidation.RequireInitialized(approvedDerivationRuleIds, nameof(approvedDerivationRuleIds));
+        ApprovedDomainProviderIds = SemanticContractValidation.RequireInitialized(approvedDomainProviderIds, nameof(approvedDomainProviderIds));
         ResolutionPathValid = resolutionPathValid;
         FailureReason = failureReason;
     }
@@ -523,6 +603,17 @@ internal static class SemanticContractValidation
     internal static string RequireText(string? value, string parameterName) => string.IsNullOrWhiteSpace(value) ? throw new ArgumentException("Value must not be null, empty, or whitespace.", parameterName) : value;
     /// <summary>Copies a required list into an immutable array snapshot.</summary>
     internal static ImmutableArray<T> Copy<T>(IReadOnlyList<T>? values, string parameterName) => values is null ? throw new ArgumentNullException(parameterName) : [.. values];
+    /// <summary>Requires an initialized immutable array.</summary>
+    internal static ImmutableArray<T> RequireInitialized<T>(ImmutableArray<T> values, string parameterName) => values.IsDefault ? throw new ArgumentNullException(parameterName) : values;
+    /// <summary>Requires an initialized, non-empty string immutable array.</summary>
+    internal static ImmutableArray<string> RequireNonEmpty(ImmutableArray<string> values, string parameterName)
+    {
+        var initialized = RequireInitialized(values, parameterName);
+        if (initialized.Length == 0) throw new ArgumentException("At least one value is required.", parameterName);
+        if (initialized.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("Values must not contain null, empty, or whitespace entries.", parameterName);
+        return initialized;
+    }
+
     /// <summary>Copies a required non-empty string list into an immutable array snapshot.</summary>
     internal static ImmutableArray<string> CopyNonEmpty(IReadOnlyList<string>? values, string parameterName)
     {
