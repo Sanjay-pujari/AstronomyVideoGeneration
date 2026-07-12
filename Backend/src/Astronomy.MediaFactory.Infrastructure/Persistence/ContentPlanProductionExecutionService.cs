@@ -226,6 +226,9 @@ public sealed class ContentPlanProductionExecutionService(
             && request.EndPhaseNo == 12
             && IsRequestedOutput(productionRequest, "Thumbnail");
 
+    private static bool IsRequestedOutput(ContentPlanProductionPipelineRequest productionRequest, string outputType)
+        => productionRequest.RequestedOutputs.Any(output => string.Equals(output, outputType, StringComparison.OrdinalIgnoreCase));
+
     private async Task ObserveVisualIntelligenceAsync(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence, ContentPlanProductionPipelineRequest productionRequest, string outputRoot, CancellationToken cancellationToken)
     {
         logger.LogInformation("VISUAL_INTELLIGENCE_TOUCHPOINT_ENTERED PlanId={ContentGenerationPlanId} AstronomyEventIntelligenceId={AstronomyEventIntelligenceId}", plan.Id, intelligence.Id);
