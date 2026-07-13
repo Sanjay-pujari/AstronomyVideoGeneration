@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility;
@@ -25,8 +26,12 @@ public sealed class AstronomyFamilyProfileResolver : IAstronomyFamilyProfileReso
 
     public AstronomyFamilyProfileResolutionResult ResolveFamilyProfile(AstronomyFamilyProfileResolutionInput input)
     {
-        var v1Identity = _identityResolver.Resolve(input.EventType, nameof(AstronomyFamilyProfileResolutionInput));
-        return ResolveFamilyProfile(v1Identity, input.EventType);
+        var bridge = ResolveAuthoritativeEventType(input);
+        if (string.IsNullOrWhiteSpace(bridge.EventType))
+            throw new InvalidOperationException("Canonical astronomy event identity input is missing. Inspected source fields: " + string.Join("; ", bridge.InspectedSources.Select(s => $"{s.Key}={(string.IsNullOrWhiteSpace(s.Value) ? "<missing>" : s.Value)}")));
+
+        var v1Identity = _identityResolver.Resolve(bridge.EventType, bridge.Source);
+        return ResolveFamilyProfile(v1Identity, bridge.EventType);
     }
 
     public AstronomyFamilyProfileResolutionResult ResolveFamilyProfile(CanonicalEventIdentity identity)
@@ -41,21 +46,58 @@ public sealed class AstronomyFamilyProfileResolver : IAstronomyFamilyProfileReso
     private AstronomyFamilyProfileResolutionResult ResolveFamilyProfile(CanonicalAstronomyEventIdentity v1Identity, string? sourceEventType)
     {
         if (!v1Identity.Supported || string.IsNullOrWhiteSpace(v1Identity.CanonicalProfile))
-            throw new InvalidOperationException($"Unsupported astronomy event type: {v1Identity.InputEventType}. V1 diagnostic: {string.Join("; ", v1Identity.DiagnosticMessages)}");
+            throw new InvalidOperationException($"Unsupported astronomy event type: {v1Identity.InputEventType}");
 
         var familyResolution = _familyCatalog.ResolveEventType(v1Identity.CanonicalProfile);
         if (familyResolution.Status == AstronomyFamilyResolutionStatusV1.FutureFamily)
             throw new InvalidOperationException($"Future astronomy family is not active in current runtime: {familyResolution.CanonicalFamilyId}");
         if (familyResolution.Status != AstronomyFamilyResolutionStatusV1.Resolved || string.IsNullOrWhiteSpace(familyResolution.ProfileId))
-            throw new InvalidOperationException($"Unsupported astronomy event type: {v1Identity.InputEventType}. {familyResolution.Diagnostic}");
+            throw new InvalidOperationException($"V1 astronomy family profile not found: {v1Identity.CanonicalFamily}");
         if (!_familyCatalog.TryGet(familyResolution.ProfileId, out var v1Profile))
-            throw new InvalidOperationException($"V1 astronomy family profile '{familyResolution.ProfileId}' was not registered.");
+            throw new InvalidOperationException($"V1 astronomy family profile not found: {familyResolution.CanonicalFamilyId}");
 
         var compatibility = _compatibilityAdapter.Convert(v1Profile, new(sourceEventType ?? v1Identity.InputEventType, v1Identity.CanonicalEventType, familyResolution.CanonicalFamilyId, v1Identity.AppliedAliases.Count > 0 || familyResolution.AliasApplied));
         if (!compatibility.Succeeded || compatibility.LegacyProfile is null)
-            throw new InvalidOperationException("Astronomy family V1 compatibility failed: " + string.Join("; ", compatibility.BlockingErrors));
+            throw new InvalidOperationException($"Unable to convert V1 family profile '{v1Profile.FamilyId}' to legacy runtime profile:\n{string.Join("; ", compatibility.BlockingErrors)}");
 
         var resolved = new ResolvedFamilyProfile(familyResolution.CanonicalFamilyId!, familyResolution.ProfileId, $"{v1Identity.ResolutionSource}+V1", compatibility.Diagnostics.AliasApplied, compatibility.Diagnostics.AliasApplied ? $"Normalized {compatibility.Diagnostics.InputEventType} to {compatibility.Diagnostics.CanonicalEventType}." : null, v1Profile.ProfileVersion);
         return new AstronomyFamilyProfileResolutionResult(compatibility.LegacyProfile, resolved, compatibility.Diagnostics);
     }
+
+    private static FamilyProfileInputBridgeResult ResolveAuthoritativeEventType(AstronomyFamilyProfileResolutionInput input)
+    {
+        var inspected = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            [nameof(AstronomyFamilyProfileResolutionInput.EventType)] = Clean(input.EventType),
+            ["ProductionEventIntelligence.eventType"] = Clean(GetString(input.ProductionEventIntelligence, "eventType")),
+            ["EditorialContract.eventType"] = Clean(GetString(input.EditorialContract, "eventType")),
+            ["CreativeStoryboard.eventType"] = Clean(GetString(input.CreativeStoryboard, "eventType")),
+            ["LongDocumentaryContract.eventType"] = Clean(GetString(input.LongDocumentaryContract, "eventType")),
+            ["ShortDocumentaryContract.eventType"] = Clean(GetString(input.ShortDocumentaryContract, "eventType")),
+            ["EditorialContract.family"] = Clean(GetString(input.EditorialContract, "family")),
+            [nameof(AstronomyFamilyProfileResolutionInput.ContentCategory)] = Clean(input.ContentCategory),
+            [nameof(AstronomyFamilyProfileResolutionInput.DocumentaryArchetype)] = Clean(input.DocumentaryArchetype),
+            [nameof(AstronomyFamilyProfileResolutionInput.ObservationMode)] = Clean(input.ObservationMode)
+        };
+
+        foreach (var key in new[] { nameof(AstronomyFamilyProfileResolutionInput.EventType), "ProductionEventIntelligence.eventType", "EditorialContract.eventType", "CreativeStoryboard.eventType", "LongDocumentaryContract.eventType", "ShortDocumentaryContract.eventType", "EditorialContract.family", nameof(AstronomyFamilyProfileResolutionInput.ContentCategory), nameof(AstronomyFamilyProfileResolutionInput.DocumentaryArchetype), nameof(AstronomyFamilyProfileResolutionInput.ObservationMode) })
+        {
+            if (!string.IsNullOrWhiteSpace(inspected[key]))
+                return new(inspected[key], key, inspected);
+        }
+
+        return new(null, "Missing", inspected);
+    }
+
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string? GetString(JsonElement? element, string name)
+    {
+        if (element is not { ValueKind: JsonValueKind.Object } e) return null;
+        foreach (var p in e.EnumerateObject())
+            if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                return p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() : p.Value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False ? p.Value.GetRawText() : null;
+        return null;
+    }
+
+    private sealed record FamilyProfileInputBridgeResult(string? EventType, string Source, IReadOnlyDictionary<string, string?> InspectedSources);
 }
