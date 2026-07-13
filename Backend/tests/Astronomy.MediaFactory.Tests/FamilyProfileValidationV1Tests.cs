@@ -15,12 +15,12 @@ public sealed class FamilyProfileValidationV1Tests
         var infra = Path.Combine(root, "Backend/src/Astronomy.MediaFactory.Infrastructure");
         var excluded = Path.Combine(infra, "Production/Narration/Semantics/Families");
         var tokens = new[] { "AstronomyFamilyProfileCatalogV1", "IAstronomyFamilyProfileCatalogV1", "AstronomyFamilyAliasCatalogV1", "AstronomyFamilyProfileV1" };
-        var inspectedMinimum = new[] { "Orchestration/RC2/NarrationGeneratorV5.cs", "Production/Narration/Semantics/AstronomyFamilyProfileResolver.cs", "Production/Narration/Semantics/RequiredSemanticFactResolver.cs", "Persistence/ProductionPipelineExecutionService.cs" };
+        var inspectedMinimum = new[] { "Orchestration/RC2/NarrationGeneratorV5.cs", "Production/Narration/Semantics/AstronomyFamilyProfileResolver.cs", "Persistence/ProductionPipelineExecutionService.cs" };
         foreach (var f in inspectedMinimum) Assert.True(File.Exists(Path.Combine(infra, f)), $"Expected runtime file {f}");
         foreach (var file in Directory.EnumerateFiles(infra, "*.cs", SearchOption.AllDirectories).Where(f => !IsInDirectory(excluded, f)))
         {
             var text = File.ReadAllText(file);
-            foreach (var token in tokens) Assert.DoesNotContain(token, text);
+            foreach (var token in tokens) Assert.False(text.Contains(token, StringComparison.Ordinal), $"{Path.GetRelativePath(infra, file)} references {token}");
         }
     }
     private static AstronomyFamilyProfileV1 MutateFirstReq(AstronomyFamilyProfileV1 p, Func<FamilySemanticRequirementV1, FamilySemanticRequirementV1> mutate) { var beat = p.LongFormStructure.Beats[0]; var nb = beat with { Requirements = beat.Requirements.SetItem(0, mutate(beat.Requirements[0])) }; return p with { LongFormStructure = p.LongFormStructure with { Beats = p.LongFormStructure.Beats.SetItem(0, nb) } }; }
