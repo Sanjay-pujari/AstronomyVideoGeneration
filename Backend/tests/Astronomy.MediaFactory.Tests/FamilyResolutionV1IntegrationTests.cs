@@ -5,7 +5,6 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Identity;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -132,9 +131,9 @@ public sealed class FamilyResolutionV1IntegrationTests
     }
 
     [Fact]
-    public void ApplicationServiceCollectionHasExactlyOneEffectiveV1CatalogRegistration()
+    public void SemanticRuntimeServiceCollectionHasExactlyOneEffectiveV1CatalogRegistration()
     {
-        var services = BuildApplicationServices();
+        var services = BuildSemanticRuntimeServices();
         var registrations = services.Where(d => d.ServiceType == typeof(IAstronomyFamilyProfileCatalogV1)).ToArray();
 
         var registration = Assert.Single(registrations);
@@ -143,14 +142,27 @@ public sealed class FamilyResolutionV1IntegrationTests
     }
 
     [Fact]
-    public void ApplicationV1FamilyRegistrationsHaveExpectedEffectiveLifetimes()
+    public void SemanticRuntimeV1FamilyRegistrationsHaveExpectedEffectiveLifetimes()
     {
-        var services = BuildApplicationServices();
+        var services = BuildSemanticRuntimeServices();
 
         AssertEffectiveLifetime<ICanonicalAstronomyEventIdentityResolverV1>(services, ServiceLifetime.Singleton);
         AssertEffectiveLifetime<IAstronomyFamilyProfileCatalogV1>(services, ServiceLifetime.Singleton);
         AssertEffectiveLifetime<IAstronomyFamilyProfileV1CompatibilityAdapter>(services, ServiceLifetime.Singleton);
         AssertEffectiveLifetime<IAstronomyFamilyProfileResolver>(services, ServiceLifetime.Scoped);
+    }
+
+    [Fact]
+    public void SemanticRuntimeRegistersOnlyV1SemanticRuntimeServices()
+    {
+        var services = BuildSemanticRuntimeServices();
+
+        Assert.Collection(
+            services.Select(d => d.ServiceType).OrderBy(t => t.Name),
+            serviceType => Assert.Equal(typeof(IAstronomyFamilyProfileCatalogV1), serviceType),
+            serviceType => Assert.Equal(typeof(IAstronomyFamilyProfileResolver), serviceType),
+            serviceType => Assert.Equal(typeof(IAstronomyFamilyProfileV1CompatibilityAdapter), serviceType),
+            serviceType => Assert.Equal(typeof(ICanonicalAstronomyEventIdentityResolverV1), serviceType));
     }
 
     [Fact]
@@ -305,13 +317,12 @@ public sealed class FamilyResolutionV1IntegrationTests
         Assert.DoesNotContain("Unsupported astronomy family", ex.Message);
     }
 
-    private static ServiceProvider BuildServiceProvider() => BuildApplicationServices().BuildServiceProvider(validateScopes: true);
+    private static ServiceProvider BuildServiceProvider() => BuildSemanticRuntimeServices().BuildServiceProvider(validateScopes: true);
 
-    private static ServiceCollection BuildApplicationServices()
+    private static ServiceCollection BuildSemanticRuntimeServices()
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
         var services = new ServiceCollection();
-        services.AddMediaFactory(configuration);
+        services.AddSemanticRuntime();
         return services;
     }
 
