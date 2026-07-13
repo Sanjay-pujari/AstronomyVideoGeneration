@@ -1,0 +1,3 @@
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
+namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Certification;
+public interface ISemanticSourcePolicyCertifierV1 { SemanticSourcePolicyCertificationReportV1 Certify(AstronomyFamilyProfileV1 profile); }
