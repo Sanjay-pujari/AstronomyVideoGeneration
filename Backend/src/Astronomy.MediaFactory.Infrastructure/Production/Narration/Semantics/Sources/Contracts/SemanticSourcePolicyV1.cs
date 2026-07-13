@@ -68,5 +68,28 @@ public sealed record SemanticSourcePolicyV1
     public bool ActiveInV1 { get; init; }
     public SemanticSourceDiagnosticMetadataV1 DiagnosticMetadata { get; init; }
     public bool Equals(SemanticSourcePolicyV1? other) => other is not null && SemanticCapabilityId.Equals(other.SemanticCapabilityId) && PolicyVersion==other.PolicyVersion && AllowedEvidenceCategories.SequenceEqual(other.AllowedEvidenceCategories) && ApprovedSources.SequenceEqual(other.ApprovedSources) && MinimumEvidenceStrength==other.MinimumEvidenceStrength && EventSpecificVerificationRequired==other.EventSpecificVerificationRequired && DomainKnowledgeAllowed==other.DomainKnowledgeAllowed && CulturalContextAllowed==other.CulturalContextAllowed && EditorialContextAllowed==other.EditorialContextAllowed && RawJsonCompatibilityAllowed==other.RawJsonCompatibilityAllowed && MultipleCandidatePolicy==other.MultipleCandidatePolicy && ConflictPolicy==other.ConflictPolicy && MissingRequiredBehavior==other.MissingRequiredBehavior && MissingOptionalBehavior==other.MissingOptionalBehavior && AllowDerivedValues==other.AllowDerivedValues && ApprovedDerivationRuleIds.SequenceEqual(other.ApprovedDerivationRuleIds) && DeprecatedSourceIds.SequenceEqual(other.DeprecatedSourceIds) && ActiveInV1==other.ActiveInV1 && Equals(DiagnosticMetadata, other.DiagnosticMetadata);
-    public override int GetHashCode() { var h=HashCode.Combine(SemanticCapabilityId,PolicyVersion,MinimumEvidenceStrength,EventSpecificVerificationRequired,DomainKnowledgeAllowed,CulturalContextAllowed,EditorialContextAllowed,RawJsonCompatibilityAllowed,MultipleCandidatePolicy,ConflictPolicy,MissingRequiredBehavior,MissingOptionalBehavior,AllowDerivedValues,ActiveInV1,DiagnosticMetadata); foreach(var x in AllowedEvidenceCategories) h=HashCode.Combine(h,x); foreach(var x in ApprovedSources) h=HashCode.Combine(h,x); foreach(var x in ApprovedDerivationRuleIds) h=HashCode.Combine(h,x); foreach(var x in DeprecatedSourceIds) h=HashCode.Combine(h,x); return h; }
+    public override int GetHashCode()
+    {
+        var hashCode = new HashCode();
+        hashCode.Add(SemanticCapabilityId);
+        hashCode.Add(PolicyVersion);
+        hashCode.Add(MinimumEvidenceStrength);
+        hashCode.Add(EventSpecificVerificationRequired);
+        hashCode.Add(DomainKnowledgeAllowed);
+        hashCode.Add(CulturalContextAllowed);
+        hashCode.Add(EditorialContextAllowed);
+        hashCode.Add(RawJsonCompatibilityAllowed);
+        hashCode.Add(MultipleCandidatePolicy);
+        hashCode.Add(ConflictPolicy);
+        hashCode.Add(MissingRequiredBehavior);
+        hashCode.Add(MissingOptionalBehavior);
+        hashCode.Add(AllowDerivedValues);
+        hashCode.Add(ActiveInV1);
+        hashCode.Add(DiagnosticMetadata);
+        foreach (var x in AllowedEvidenceCategories) hashCode.Add(x);
+        foreach (var x in ApprovedSources) hashCode.Add(x);
+        foreach (var x in ApprovedDerivationRuleIds) hashCode.Add(x);
+        foreach (var x in DeprecatedSourceIds) hashCode.Add(x);
+        return hashCode.ToHashCode();
+    }
 }
