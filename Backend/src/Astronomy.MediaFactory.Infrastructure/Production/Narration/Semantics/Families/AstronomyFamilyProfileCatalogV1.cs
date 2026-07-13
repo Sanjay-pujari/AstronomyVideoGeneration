@@ -9,7 +9,8 @@ public sealed class AstronomyFamilyProfileCatalogV1 : IAstronomyFamilyProfileCat
     private readonly ImmutableArray<AstronomyFamilyProfileV1> _profiles;
     private readonly AstronomyFamilyAliasCatalogV1 _aliases;
     public AstronomyFamilyProfileCatalogV1() : this(CreateProfiles(), new AstronomyFamilyAliasCatalogV1()) { }
-    public AstronomyFamilyProfileCatalogV1(IEnumerable<AstronomyFamilyProfileV1> profiles, AstronomyFamilyAliasCatalogV1? aliases = null) { _profiles = profiles.ToImmutableArray(); _aliases = aliases ?? new(); Profiles = _profiles; }
+    private AstronomyFamilyProfileCatalogV1(IEnumerable<AstronomyFamilyProfileV1> profiles, AstronomyFamilyAliasCatalogV1? aliases = null) { _profiles = profiles.ToImmutableArray(); _aliases = aliases ?? new(); Profiles = _profiles; }
+    public static AstronomyFamilyProfileCatalogV1 CreateForValidation(IEnumerable<AstronomyFamilyProfileV1> profiles, AstronomyFamilyAliasCatalogV1? aliases = null) => new(profiles, aliases);
     public IReadOnlyCollection<AstronomyFamilyProfileV1> Profiles { get; }
     public bool TryGet(string familyId, out AstronomyFamilyProfileV1 profile) { profile = _profiles.FirstOrDefault(p => p.FamilyId.Equals(familyId, StringComparison.OrdinalIgnoreCase))!; return profile is not null; }
     public AstronomyFamilyProfileV1 GetRequired(string familyId) => TryGet(familyId, out var p) ? p : throw new KeyNotFoundException($"Family profile '{familyId}' was not registered.");

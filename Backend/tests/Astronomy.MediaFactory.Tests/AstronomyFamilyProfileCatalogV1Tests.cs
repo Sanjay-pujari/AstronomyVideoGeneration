@@ -31,4 +31,16 @@ public sealed class AstronomyFamilyProfileCatalogV1Tests
     [Fact] public void ContractsJsonRoundTrip() { var p = _catalog.Profiles.First(); Assert.Equal(p, JsonSerializer.Deserialize<AstronomyFamilyProfileV1>(JsonSerializer.Serialize(p))); var r = _catalog.ResolveEventType("DeepSky"); Assert.Equal(r, JsonSerializer.Deserialize<AstronomyFamilyResolutionV1>(JsonSerializer.Serialize(r))); }
     [Fact] public void CollectionsAreImmutableAndStructurallyEqual() { Assert.IsAssignableFrom<IReadOnlyCollection<AstronomyFamilyProfileV1>>(_catalog.Profiles); Assert.False(_catalog.Profiles is ICollection<AstronomyFamilyProfileV1> { IsReadOnly: false }); Assert.Equal(new AstronomyFamilyProfileCatalogV1().Profiles.ToArray(), _catalog.Profiles.ToArray()); }
     [Fact] public void BothLongAndShortStructuresExistForEveryActiveProfile() { foreach (var p in _catalog.Profiles) { Assert.NotEmpty(p.LongFormStructure.Beats); Assert.NotEmpty(p.ShortFormStructure.Beats); } }
+
+    [Fact]
+    public void SyntheticCustomCatalogCanBeCreatedExplicitlyForValidationTests()
+    {
+        var profile = _catalog.Profiles.Single(p => p.FamilyId == AstronomyFamilyVocabularyV1.FullMoon);
+        var aliases = new AstronomyFamilyAliasCatalogV1([new("Synthetic Moon", AstronomyFamilyVocabularyV1.FullMoon)]);
+
+        var synthetic = AstronomyFamilyProfileCatalogV1.CreateForValidation([profile], aliases);
+
+        Assert.Single(synthetic.Profiles);
+        Assert.Equal(AstronomyFamilyVocabularyV1.FullMoon, synthetic.ResolveEventType("Synthetic Moon").ProfileId);
+    }
 }
