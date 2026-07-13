@@ -37,8 +37,20 @@ namespace Astronomy.MediaFactory.Infrastructure.Extensions;
 
 public static class ServiceCollectionExtensions
 {
+    public static IServiceCollection AddSemanticRuntime(this IServiceCollection services)
+    {
+        services.AddSingleton<ICanonicalAstronomyEventIdentityResolverV1, CanonicalAstronomyEventIdentityResolverV1>();
+        services.AddSingleton<IAstronomyFamilyProfileCatalogV1>(_ => new AstronomyFamilyProfileCatalogV1());
+        services.AddSingleton<IAstronomyFamilyProfileV1CompatibilityAdapter, AstronomyFamilyProfileV1CompatibilityAdapter>();
+        services.AddScoped<IAstronomyFamilyProfileResolver, AstronomyFamilyProfileResolver>();
+
+        return services;
+    }
+
     public static IServiceCollection AddMediaFactory(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddSemanticRuntime();
+
         services.AddOptions<VisualIntelligenceOptions>()
             .Bind(configuration.GetSection(VisualIntelligenceOptions.SectionName));
         services.AddOptions<EditorialIntelligenceOptions>()
@@ -549,10 +561,6 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISemanticCapabilityResolver, SemanticCapabilityResolver>();
         services.AddScoped<IRequiredSemanticFactResolver, RequiredSemanticFactResolver>();
         services.AddScoped<INarrationRealizer, NarrationRealizer>();
-        services.AddSingleton<ICanonicalAstronomyEventIdentityResolverV1, CanonicalAstronomyEventIdentityResolverV1>();
-        services.AddSingleton<IAstronomyFamilyProfileCatalogV1>(_ => new AstronomyFamilyProfileCatalogV1());
-        services.AddSingleton<IAstronomyFamilyProfileV1CompatibilityAdapter, AstronomyFamilyProfileV1CompatibilityAdapter>();
-        services.AddScoped<IAstronomyFamilyProfileResolver, AstronomyFamilyProfileResolver>();
         services.AddSingleton<IAstronomyDomainKnowledgeProvider, AstronomyDomainKnowledgeProvider>();
         services.AddScoped<NarrationGeneratorV5>();
         services.AddScoped<Rc2ContentPlanningBatchOrchestrator>();
