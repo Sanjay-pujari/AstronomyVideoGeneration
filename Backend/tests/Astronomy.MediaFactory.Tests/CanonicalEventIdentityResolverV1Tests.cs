@@ -99,13 +99,56 @@ public sealed class CanonicalEventIdentityResolverV1Tests
     [Fact]
     public void CurrentRuntimeDoesNotReferenceV1ResolverOrAliasCatalog()
     {
-        var root = Path.Combine("..", "..", "..", "..", "src", "Astronomy.MediaFactory.Infrastructure");
-        var runtimeFiles = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.Contains(Path.Combine("Production", "Narration", "Semantics", "Identity")))
-            .ToArray();
-        var source = string.Join('\n', runtimeFiles.Select(File.ReadAllText));
+        var repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+        var root = Path.Combine(repositoryRoot.FullName, "Backend", "src", "Astronomy.MediaFactory.Infrastructure");
 
-        Assert.DoesNotContain("CanonicalAstronomyEventIdentityResolverV1", source);
-        Assert.DoesNotContain("AstronomyEventAliasCatalogV1", source);
+        Assert.True(Directory.Exists(root), $"Expected infrastructure source root to exist at '{root}'.");
+
+        var identityImplementationRoot = Path.Combine(root, "Production", "Narration", "Semantics", "Identity");
+        var runtimeFiles = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(f => !IsInDirectory(identityImplementationRoot, f))
+            .ToArray();
+
+        foreach (var runtimeFile in runtimeFiles)
+        {
+            var source = File.ReadAllText(runtimeFile);
+            var relativePath = Path.GetRelativePath(root, runtimeFile);
+
+            Assert.False(
+                source.Contains("CanonicalAstronomyEventIdentityResolverV1", StringComparison.Ordinal),
+                $"Production source file '{relativePath}' must not reference CanonicalAstronomyEventIdentityResolverV1.");
+            Assert.False(
+                source.Contains("AstronomyEventAliasCatalogV1", StringComparison.Ordinal),
+                $"Production source file '{relativePath}' must not reference AstronomyEventAliasCatalogV1.");
+        }
+    }
+
+    private static bool IsInDirectory(string directory, string file)
+    {
+        var relativePath = Path.GetRelativePath(directory, file);
+
+        return relativePath == "."
+            || (!relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                && !relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)
+                && relativePath != "..");
+    }
+
+    private static DirectoryInfo FindRepositoryRoot(string startDirectory)
+    {
+        var directory = new DirectoryInfo(startDirectory);
+
+        while (directory is not null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, "Backend", "src"))
+                && Directory.Exists(Path.Combine(directory.FullName, "Backend", "tests")))
+            {
+                return directory;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException(
+            $"Could not find repository root from '{startDirectory}' containing both Backend/src and Backend/tests.");
     }
 }
