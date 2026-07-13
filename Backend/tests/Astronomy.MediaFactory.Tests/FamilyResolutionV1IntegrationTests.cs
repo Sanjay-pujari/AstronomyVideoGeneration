@@ -1,8 +1,11 @@
+using System.Reflection;
+using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Identity;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -47,6 +50,122 @@ public sealed class FamilyResolutionV1IntegrationTests
         Assert.Equal("NamedFullMoon", r.Profile.FamilyId);
         var diagnostics = Assert.IsType<FamilyProfileCompatibilityDiagnostics>(r.Diagnostics);
         Assert.Equal("V1", diagnostics.ResolutionAuthority);
+    }
+
+    [Fact]
+    public void DiCreatedCatalogContainsExactly10ActiveProfiles()
+    {
+        using var provider = BuildServiceProvider();
+
+        var catalog = provider.GetRequiredService<IAstronomyFamilyProfileCatalogV1>();
+
+        Assert.Equal(10, catalog.Profiles.Count(p => p.ActiveInV1));
+    }
+
+    [Theory]
+    [MemberData(nameof(ActiveV1Families))]
+    public void DiCreatedCatalogResolvesEveryActiveV1Family(string inputEventType, string expectedFamily)
+    {
+        using var provider = BuildServiceProvider();
+
+        var result = provider.GetRequiredService<IAstronomyFamilyProfileCatalogV1>().ResolveEventType(inputEventType);
+
+        Assert.Equal(AstronomyFamilyResolutionStatusV1.Resolved, result.Status);
+        Assert.Equal(expectedFamily, result.ProfileId);
+    }
+
+    [Fact]
+    public void DirectAndDiDefaultCatalogsContainSameProfileIdsInOrder()
+    {
+        using var provider = BuildServiceProvider();
+        var direct = new AstronomyFamilyProfileCatalogV1();
+        var fromDi = provider.GetRequiredService<IAstronomyFamilyProfileCatalogV1>();
+
+        Assert.Equal(direct.Profiles.Select(p => p.FamilyId), fromDi.Profiles.Select(p => p.FamilyId));
+    }
+
+    [Theory]
+    [MemberData(nameof(V1Aliases))]
+    public void DirectAndDiDefaultCatalogsHaveSameAliasBehavior(string alias, string expectedFamily)
+    {
+        using var provider = BuildServiceProvider();
+        var direct = new AstronomyFamilyProfileCatalogV1();
+        var fromDi = provider.GetRequiredService<IAstronomyFamilyProfileCatalogV1>();
+
+        Assert.Equal(direct.ResolveEventType(alias), fromDi.ResolveEventType(alias));
+        Assert.Equal(expectedFamily, fromDi.ResolveEventType(alias).ProfileId);
+    }
+
+    [Fact]
+    public void DiCreatedCatalogValidationSucceeds()
+    {
+        using var provider = BuildServiceProvider();
+
+        var validation = provider.GetRequiredService<IAstronomyFamilyProfileCatalogV1>().Validate();
+
+        Assert.True(validation.IsValid, string.Join("; ", validation.Errors));
+    }
+
+    [Fact]
+    public void ScopedResolverResolvesAllActiveV1FamiliesUsingSingletonCatalog()
+    {
+        using var provider = BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var catalog = scope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileCatalogV1>();
+        var resolver = scope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileResolver>();
+
+        foreach (var family in ActiveV1Families().Select(row => (string)row[0]))
+        {
+            var result = resolver.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput(family, null, null, null));
+            Assert.Equal(family, result.Profile.FamilyId);
+            Assert.Same(catalog, scope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileCatalogV1>());
+        }
+    }
+
+    [Fact]
+    public void NoPublicConstructorCanBeSelectedByDiToCreateEmptyCatalog()
+    {
+        var publicConstructors = typeof(AstronomyFamilyProfileCatalogV1).GetConstructors(BindingFlags.Instance | BindingFlags.Public);
+
+        var constructor = Assert.Single(publicConstructors);
+        Assert.Empty(constructor.GetParameters());
+    }
+
+    [Fact]
+    public void ApplicationServiceCollectionHasExactlyOneEffectiveV1CatalogRegistration()
+    {
+        var services = BuildApplicationServices();
+        var registrations = services.Where(d => d.ServiceType == typeof(IAstronomyFamilyProfileCatalogV1)).ToArray();
+
+        var registration = Assert.Single(registrations);
+        Assert.Equal(ServiceLifetime.Singleton, registration.Lifetime);
+        Assert.NotNull(registration.ImplementationFactory);
+    }
+
+    [Fact]
+    public void ApplicationV1FamilyRegistrationsHaveExpectedEffectiveLifetimes()
+    {
+        var services = BuildApplicationServices();
+
+        AssertEffectiveLifetime<ICanonicalAstronomyEventIdentityResolverV1>(services, ServiceLifetime.Singleton);
+        AssertEffectiveLifetime<IAstronomyFamilyProfileCatalogV1>(services, ServiceLifetime.Singleton);
+        AssertEffectiveLifetime<IAstronomyFamilyProfileV1CompatibilityAdapter>(services, ServiceLifetime.Singleton);
+        AssertEffectiveLifetime<IAstronomyFamilyProfileResolver>(services, ServiceLifetime.Scoped);
+    }
+
+    [Fact]
+    public void NoOldFamilyCatalogFallbackOccursInProductionDi()
+    {
+        using var provider = BuildServiceProvider();
+        using var scope = provider.CreateScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileResolver>();
+
+        foreach (var family in ActiveV1Families().Select(row => (string)row[0]))
+        {
+            var result = resolver.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput(family, null, null, null));
+            var diagnostics = Assert.IsType<FamilyProfileCompatibilityDiagnostics>(result.Diagnostics);
+            Assert.Equal("V1", diagnostics.ResolutionAuthority);
+        }
     }
 
     [Fact]
@@ -186,14 +305,20 @@ public sealed class FamilyResolutionV1IntegrationTests
         Assert.DoesNotContain("Unsupported astronomy family", ex.Message);
     }
 
-    private static ServiceProvider BuildServiceProvider()
+    private static ServiceProvider BuildServiceProvider() => BuildApplicationServices().BuildServiceProvider(validateScopes: true);
+
+    private static ServiceCollection BuildApplicationServices()
     {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
         var services = new ServiceCollection();
-        services.AddSingleton<ICanonicalAstronomyEventIdentityResolverV1, CanonicalAstronomyEventIdentityResolverV1>();
-        services.AddSingleton<IAstronomyFamilyProfileCatalogV1, AstronomyFamilyProfileCatalogV1>();
-        services.AddSingleton<IAstronomyFamilyProfileV1CompatibilityAdapter, AstronomyFamilyProfileV1CompatibilityAdapter>();
-        services.AddScoped<IAstronomyFamilyProfileResolver, AstronomyFamilyProfileResolver>();
-        return services.BuildServiceProvider(validateScopes: true);
+        services.AddMediaFactory(configuration);
+        return services;
+    }
+
+    private static void AssertEffectiveLifetime<TService>(IServiceCollection services, ServiceLifetime expectedLifetime)
+    {
+        var registration = Assert.Single(services.Where(d => d.ServiceType == typeof(TService)));
+        Assert.Equal(expectedLifetime, registration.Lifetime);
     }
 
     private sealed class CountingIdentityResolver : ICanonicalAstronomyEventIdentityResolverV1

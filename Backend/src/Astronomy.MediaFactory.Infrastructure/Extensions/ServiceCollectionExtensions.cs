@@ -550,7 +550,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRequiredSemanticFactResolver, RequiredSemanticFactResolver>();
         services.AddScoped<INarrationRealizer, NarrationRealizer>();
         services.AddSingleton<ICanonicalAstronomyEventIdentityResolverV1, CanonicalAstronomyEventIdentityResolverV1>();
-        services.AddSingleton<IAstronomyFamilyProfileCatalogV1, AstronomyFamilyProfileCatalogV1>();
+        services.AddSingleton<IAstronomyFamilyProfileCatalogV1>(_ => new AstronomyFamilyProfileCatalogV1());
         services.AddSingleton<IAstronomyFamilyProfileV1CompatibilityAdapter, AstronomyFamilyProfileV1CompatibilityAdapter>();
         services.AddScoped<IAstronomyFamilyProfileResolver, AstronomyFamilyProfileResolver>();
         services.AddSingleton<IAstronomyDomainKnowledgeProvider, AstronomyDomainKnowledgeProvider>();
