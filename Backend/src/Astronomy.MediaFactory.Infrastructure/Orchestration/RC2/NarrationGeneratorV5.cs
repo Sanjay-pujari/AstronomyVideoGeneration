@@ -87,6 +87,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var narrationRealizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-realization-diagnostics.json");
         var narrationInputNormalizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-input-normalization-diagnostics.json");
         var eventIdentityDiagnosticsPath = Path.Combine(narrationRoot, "event-identity-diagnostics.json");
+        var familyProfileV1CompatibilityDiagnosticsPath = Path.Combine(narrationRoot, "family-profile-v1-compatibility-diagnostics.json");
         var validationPath = Path.Combine(narrationRoot, "generator-preflight-diagnostics.json");
         var narrationValidationDiagnosticsPath = Path.Combine(narrationRoot, "narration-validation-diagnostics.json");
         var promptPreviewPath = Path.Combine(narrationRoot, "prompt-preview.md");
@@ -189,6 +190,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var familyProfileResolution = familyProfileResolver.ResolveFamilyProfile(canonicalEventIdentity);
         var familyProfile = familyProfileResolution.Profile;
         await WriteAllTextUtf8Async(eventIdentityDiagnosticsPath, JsonSerializer.Serialize(CanonicalEventIdentityDiagnosticsBuilder.Build(canonicalEventIdentity, familyProfileResolution), JsonOptions), cancellationToken);
+        await WriteAllTextUtf8Async(familyProfileV1CompatibilityDiagnosticsPath, JsonSerializer.Serialize(familyProfileResolution.Diagnostics, JsonOptions), cancellationToken);
         var semanticRegistryValidationReportPath = Path.Combine(narrationRoot, "semantic-registry-validation-report.json");
         var semanticRegistryCoverage = SemanticDefaults.SemanticCapabilitySourceRegistry.ValidateCoverageDetailed([familyProfile]);
         var invalidSemanticRegistrations = semanticRegistryCoverage.Where(r => !r.ResolutionPathValid).Select(r => new
