@@ -25,8 +25,8 @@ public sealed class AstronomyFamilyProfileResolver : IAstronomyFamilyProfileReso
 
     public AstronomyFamilyProfileResolutionResult ResolveFamilyProfile(AstronomyFamilyProfileResolutionInput input)
     {
-        var identity = _identityResolver.Resolve(input.EventType, nameof(AstronomyFamilyProfileResolutionInput));
-        return ResolveFamilyProfile(identity);
+        var v1Identity = _identityResolver.Resolve(input.EventType, nameof(AstronomyFamilyProfileResolutionInput));
+        return ResolveFamilyProfile(v1Identity, input.EventType);
     }
 
     public AstronomyFamilyProfileResolutionResult ResolveFamilyProfile(CanonicalEventIdentity identity)
@@ -35,18 +35,23 @@ public sealed class AstronomyFamilyProfileResolver : IAstronomyFamilyProfileReso
             throw new InvalidOperationException("Canonical event identity missing. " + string.Join("; ", identity.BlockingErrors.DefaultIfEmpty("No event type was present in inspected sources.")));
 
         var v1Identity = _identityResolver.Resolve(identity.EventType, identity.ResolutionSource);
-        if (!v1Identity.Supported || string.IsNullOrWhiteSpace(v1Identity.ProfileId))
-            throw new InvalidOperationException($"Unsupported astronomy event type: {identity.EventType}. V1 diagnostic: {string.Join("; ", v1Identity.BlockingErrors)}");
+        return ResolveFamilyProfile(v1Identity, identity.SourceEventType ?? identity.EventType);
+    }
 
-        var familyResolution = _familyCatalog.ResolveEventType(v1Identity.ProfileId);
+    private AstronomyFamilyProfileResolutionResult ResolveFamilyProfile(CanonicalAstronomyEventIdentity v1Identity, string? sourceEventType)
+    {
+        if (!v1Identity.Supported || string.IsNullOrWhiteSpace(v1Identity.CanonicalProfile))
+            throw new InvalidOperationException($"Unsupported astronomy event type: {v1Identity.InputEventType}. V1 diagnostic: {string.Join("; ", v1Identity.DiagnosticMessages)}");
+
+        var familyResolution = _familyCatalog.ResolveEventType(v1Identity.CanonicalProfile);
         if (familyResolution.Status == AstronomyFamilyResolutionStatusV1.FutureFamily)
             throw new InvalidOperationException($"Future astronomy family is not active in current runtime: {familyResolution.CanonicalFamilyId}");
         if (familyResolution.Status != AstronomyFamilyResolutionStatusV1.Resolved || string.IsNullOrWhiteSpace(familyResolution.ProfileId))
-            throw new InvalidOperationException($"Unsupported astronomy event type: {identity.EventType}. {familyResolution.Diagnostic}");
+            throw new InvalidOperationException($"Unsupported astronomy event type: {v1Identity.InputEventType}. {familyResolution.Diagnostic}");
         if (!_familyCatalog.TryGet(familyResolution.ProfileId, out var v1Profile))
             throw new InvalidOperationException($"V1 astronomy family profile '{familyResolution.ProfileId}' was not registered.");
 
-        var compatibility = _compatibilityAdapter.Convert(v1Profile, new(identity.SourceEventType ?? identity.EventType, v1Identity.EventType, familyResolution.CanonicalFamilyId, v1Identity.AliasApplied || familyResolution.AliasApplied));
+        var compatibility = _compatibilityAdapter.Convert(v1Profile, new(sourceEventType ?? v1Identity.InputEventType, v1Identity.CanonicalEventType, familyResolution.CanonicalFamilyId, v1Identity.AppliedAliases.Count > 0 || familyResolution.AliasApplied));
         if (!compatibility.Succeeded || compatibility.LegacyProfile is null)
             throw new InvalidOperationException("Astronomy family V1 compatibility failed: " + string.Join("; ", compatibility.BlockingErrors));
 
