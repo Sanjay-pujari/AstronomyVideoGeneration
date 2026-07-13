@@ -59,7 +59,11 @@ public sealed class AstronomyFamilyProfileCatalogV1 : IAstronomyFamilyProfileCat
     private static IEnumerable<FamilySemanticRequirementV1> Reqs(AstronomyFamilyProfileV1 p) => p.LongFormStructure.Beats.Concat(p.ShortFormStructure.Beats).SelectMany(b=>b.Requirements);
     private static FamilySemanticRequirementV1 Req(string id) => new(new SemanticCapabilityId(id), FamilyRequirementLevelV1.Required, FamilyMissingValueBehaviorV1.Block, ["Canonical", "Derived"], 80, false, true);
     private static FamilySemanticRequirementV1 Opt(string id) => new(new SemanticCapabilityId(id), FamilyRequirementLevelV1.Optional, FamilyMissingValueBehaviorV1.OmitCapability, ["Canonical", "Editorial"], 40, true, false);
-    private static FamilyNarrativeStructureV1 Struct(string format, string[] roles, IEnumerable<FamilySemanticRequirementV1> reqs) => new(format, roles.Select((r,i)=> new FamilyNarrativeBeatV1($"{format}-{i+1}-{r}", r, i+1, $"{r} beat for {format} family narration.", reqs, r is "Closing" ? "Resolve the viewer promise." : null, false)).ToArray());
+    private static FamilyNarrativeStructureV1 Struct(string format, string[] roles, IEnumerable<FamilySemanticRequirementV1> reqs)
+    {
+        var requirements = reqs.ToArray();
+        return new(format, roles.Select((r, i) => new FamilyNarrativeBeatV1($"{format}-{i + 1}-{r}", r, i + 1, $"{r} beat for {format} family narration.", requirements, r is "Closing" ? "Resolve the viewer promise." : null, false)).ToArray());
+    }
     private static AstronomyFamilyProfileV1 Profile(string id, string nature, string[] roles, string[] req, string[] opt, int? min=null, bool eventTiming=true) { var rs=req.Select(Req).Concat(opt.Select(Opt)).ToArray(); return new(id,"V1",nature,[id],["Long","Short"],Struct("Long",roles,rs),Struct("Short",roles,rs),new(min,eventTiming),AstronomyFamilyAliasCatalogV1.DefaultAliases.Where(a=>a.CanonicalFamilyId==id).Select(a=>a.Alias).ToArray(),true,new("Sprint2B","ApprovedV1")); }
     private static AstronomyFamilyProfileV1[] CreateProfiles() =>
     [
