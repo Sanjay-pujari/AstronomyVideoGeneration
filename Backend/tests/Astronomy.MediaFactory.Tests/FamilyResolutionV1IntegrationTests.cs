@@ -37,14 +37,73 @@ public sealed class FamilyResolutionV1IntegrationTests
     [Fact]
     public void ProductionFamilyResolverUsesV1DependenciesFromDi()
     {
-        using var sp = BuildServiceProvider();
-        var resolver = sp.GetRequiredService<IAstronomyFamilyProfileResolver>();
+        using var provider = BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var resolver = scope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileResolver>();
 
         var r = resolver.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput("NamedFullMoon", null, null, null));
 
         Assert.Equal("NamedFullMoon", r.Profile.FamilyId);
         var diagnostics = Assert.IsType<FamilyProfileCompatibilityDiagnostics>(r.Diagnostics);
         Assert.Equal("V1", diagnostics.ResolutionAuthority);
+    }
+
+    [Fact]
+    public void ScopedFamilyResolverResolvesInsideScope()
+    {
+        using var provider = BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        var resolver = scope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileResolver>();
+
+        Assert.NotNull(resolver);
+    }
+
+    [Fact]
+    public void ScopedFamilyResolverThrowsWhenResolvedFromRootProvider()
+    {
+        using var provider = BuildServiceProvider();
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => provider.GetRequiredService<IAstronomyFamilyProfileResolver>());
+
+        Assert.Contains("Cannot resolve scoped service", ex.Message);
+        Assert.Contains(nameof(IAstronomyFamilyProfileResolver), ex.Message);
+    }
+
+    [Fact]
+    public void ScopedFamilyResolverResolvesInSeparateScopes()
+    {
+        using var provider = BuildServiceProvider();
+        using var firstScope = provider.CreateScope();
+        using var secondScope = provider.CreateScope();
+
+        var firstResolver = firstScope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileResolver>();
+        var secondResolver = secondScope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileResolver>();
+
+        Assert.NotNull(firstResolver);
+        Assert.NotNull(secondResolver);
+        Assert.NotSame(firstResolver, secondResolver);
+    }
+
+    [Fact]
+    public void SingletonV1DependenciesAreSharedAcrossScopes()
+    {
+        using var provider = BuildServiceProvider();
+        using var firstScope = provider.CreateScope();
+        using var secondScope = provider.CreateScope();
+
+        var firstIdentity = firstScope.ServiceProvider.GetRequiredService<ICanonicalAstronomyEventIdentityResolverV1>();
+        var secondIdentity = secondScope.ServiceProvider.GetRequiredService<ICanonicalAstronomyEventIdentityResolverV1>();
+        var firstCatalog = firstScope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileCatalogV1>();
+        var secondCatalog = secondScope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileCatalogV1>();
+        var firstAdapter = firstScope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileV1CompatibilityAdapter>();
+        var secondAdapter = secondScope.ServiceProvider.GetRequiredService<IAstronomyFamilyProfileV1CompatibilityAdapter>();
+
+        Assert.Same(firstIdentity, secondIdentity);
+        Assert.Same(firstCatalog, secondCatalog);
+        Assert.Same(firstAdapter, secondAdapter);
     }
 
     [Theory]
