@@ -559,6 +559,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISemanticCapabilityCatalog, SemanticCapabilityCatalog>();
         services.AddSingleton<ISemanticCapabilitySourceRegistry, SemanticCapabilitySourceRegistry>();
         services.AddScoped<ISemanticCapabilityResolver, SemanticCapabilityResolver>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.ISemanticSourcePolicyCatalogV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry.ISemanticSourceAdapterRegistryV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry.SemanticSourceAdapterRegistryV1>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.ISemanticCandidateCollectorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.SemanticCandidateCollectorV1>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.ISemanticCandidateEvaluatorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.SemanticCandidateEvaluatorV1>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Selection.ISemanticConflictAnalyzerV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Selection.SemanticConflictAnalyzerV1>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Selection.ISemanticCandidateSelectorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Selection.SemanticCandidateSelectorV1>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine.ISemanticResolutionEngineV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine.SemanticResolutionEngineV1>();
         services.AddScoped<IRequiredSemanticFactResolver, RequiredSemanticFactResolver>();
         services.AddScoped<INarrationRealizer, NarrationRealizer>();
         services.AddSingleton<IAstronomyDomainKnowledgeProvider, AstronomyDomainKnowledgeProvider>();

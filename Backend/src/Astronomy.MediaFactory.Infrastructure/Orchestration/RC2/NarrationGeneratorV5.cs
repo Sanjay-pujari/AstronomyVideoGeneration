@@ -8,6 +8,12 @@ using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptComposer;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Directors;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries;
 using Microsoft.Extensions.Logging;
@@ -2192,21 +2198,15 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 {
     private readonly IAstronomyDomainKnowledgeProvider _domainKnowledgeProvider;
     private readonly ISemanticCapabilityResolver _capabilityResolver;
+    private readonly ISemanticResolutionEngineV1 _semanticResolutionEngine;
 
-    public RequiredSemanticFactResolver() : this(SemanticDefaults.SemanticCapabilityResolver, SemanticDefaults.DomainKnowledgeProvider) { }
-    public RequiredSemanticFactResolver(IAstronomyDomainKnowledgeProvider domainKnowledgeProvider) : this(SemanticDefaults.SemanticCapabilityResolver, domainKnowledgeProvider) { }
-    public RequiredSemanticFactResolver(ISemanticCapabilityResolver capabilityResolver, IAstronomyDomainKnowledgeProvider domainKnowledgeProvider) { _capabilityResolver = capabilityResolver; _domainKnowledgeProvider = domainKnowledgeProvider; }
+    public RequiredSemanticFactResolver() : this(SemanticDefaults.SemanticCapabilityResolver, SemanticDefaults.DomainKnowledgeProvider, SemanticDefaults.SemanticResolutionEngineV1) { }
+    public RequiredSemanticFactResolver(IAstronomyDomainKnowledgeProvider domainKnowledgeProvider) : this(SemanticDefaults.SemanticCapabilityResolver, domainKnowledgeProvider, SemanticDefaults.SemanticResolutionEngineV1) { }
+    public RequiredSemanticFactResolver(ISemanticCapabilityResolver capabilityResolver, IAstronomyDomainKnowledgeProvider domainKnowledgeProvider, ISemanticResolutionEngineV1 semanticResolutionEngine) { _capabilityResolver = capabilityResolver; _domainKnowledgeProvider = domainKnowledgeProvider; _semanticResolutionEngine = semanticResolutionEngine; }
 
     public RequiredSemanticFactResolutionResult Resolve(RequiredSemanticFactResolutionInput input)
     {
         var all = new List<CandidateFact>();
-        AddDocumentary(all, input.LongDocumentaryContract, "long");
-        AddDocumentary(all, input.ShortDocumentaryContract, "short");
-        AddJsonFacts(all, input.EditorialContract, "Editorial Contract", null);
-        AddJsonFacts(all, input.ObservationMetadata, "Observation Metadata", null);
-        AddJsonFacts(all, input.ProductionEventIntelligence, "Production Event Intelligence", null);
-        AddJsonFacts(all, input.QuestionAnswerSet, "Question Answer Set", null);
-        AddJsonFacts(all, input.StoryGraph, "Story Graph", null);
         var beats = new List<ResolvedBeatFacts>();
         foreach (var (format, contract) in new[] { ("long", input.LongDocumentaryContract), ("short", input.ShortDocumentaryContract) })
         foreach (var (beat, index) in ReadArray(contract, "beats").OrderBy(e => GetInt(e, "beatOrder") ?? 0).Select((b, i) => (b, i)))
@@ -2258,21 +2258,40 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 
     private ResolvedSemanticFact? ResolveType(string type, List<CandidateFact> all, RequiredSemanticFactResolutionInput input, string format, string beatId, string req, SemanticCapabilityResolution capability)
     {
-        if (capability.Status.Equals("Resolved", StringComparison.OrdinalIgnoreCase) && capability.SelectedSource is not null && capability.CanonicalValue is not null)
-        {
-            var selected = capability.Candidates.FirstOrDefault(c => capability.SelectedSource.EndsWith(c.SourceField, StringComparison.OrdinalIgnoreCase) || capability.SelectedSource.StartsWith(c.Source, StringComparison.OrdinalIgnoreCase));
-            var parts = capability.SelectedSource.Split('.', 2);
-            return new ResolvedSemanticFact(type, type, capability.CanonicalValue, null, type, selected?.Source ?? parts[0], selected?.SourceField ?? (parts.Length > 1 ? parts[1] : capability.SelectedSource), beatId, "Verified", capability.CapabilityStrength == "Strong" ? .95m : .8m, req, capability.SpeakableValue, capability.SpeakableValue, input.LanguageProfile.LanguageCode, true, "Source", null, capability.AlternativesConsidered);
-        }
-        var candidates = all.Where(c => (c.Format is null || c.Format == format) && Matches(type, c.Type)).OrderByDescending(c => c.Confidence).ToArray();
-        var best = candidates.FirstOrDefault();
-        if (best is null && TryDerive(type, all, input.FamilyProfile.FamilyId, out var derived)) best = derived;
-        if (best is not null) return ToResolved(type, best, beatId, req, input.LanguageProfile.LanguageCode);
-        var context = new AstronomyKnowledgeContext(input.FamilyProfile.FamilyId, all.Where(c => c.Format is null || c.Format == format).Select(c => new AstronomyKnowledgeContextFact(c.Type, c.Value, c.SourceArtifact, c.SourceField)).ToArray(), input.LanguageProfile.LanguageCode);
-        return _domainKnowledgeProvider.TryResolve(input.FamilyProfile.FamilyId, type, context, out var domainFact) ? domainFact with { Requiredness = req, SourceBeatId = beatId, Language = input.LanguageProfile.LanguageCode } : null;
+        var map = LegacySemanticCapabilityMapV1.Entries.FirstOrDefault(e => e.LegacyTerm.Equals(type, StringComparison.OrdinalIgnoreCase));
+        var capabilityId = map.CanonicalCapabilityId ?? new SemanticCapabilityId(type);
+        var required = req.Equals("Required", StringComparison.OrdinalIgnoreCase);
+        var request = new SemanticResolutionRequestV1(
+            capabilityId,
+            required,
+            required ? SemanticRequirementLevelV1.Required : SemanticRequirementLevelV1.Optional,
+            required ? SemanticMissingValueBehaviorV1.BlockRequired : SemanticMissingValueBehaviorV1.OmitOptional,
+            SemanticEvidenceStrengthV1.Weak,
+            Enum.GetValues<SemanticEvidenceCategoryV1>(),
+            CreateAdapterContext(input),
+            input.FamilyProfile.FamilyId,
+            format,
+            beatId);
+
+        var resolved = _semanticResolutionEngine.Resolve(request).Fact;
+        return LegacyRequiredSemanticFactCompatibilityMapper.Map(resolved, type, beatId, req, input.LanguageProfile.LanguageCode);
     }
+
+    private static SemanticSourceAdapterContextV1 CreateAdapterContext(RequiredSemanticFactResolutionInput input)
+    {
+        var eventType = TryGetRootString(input.ProductionEventIntelligence, "eventType") ?? input.FamilyProfile.FamilyId;
+        var identity = new CanonicalAstronomyEventIdentity(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, eventType, "RequiredSemanticFactResolver.LegacyInput");
+        var eventSource = new ProductionEventIntelligenceSourceV1(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId);
+        var observationSource = new ObservationMetadataSourceV1();
+        return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, Language: input.LanguageProfile.LanguageCode);
+    }
+
+    private static string? TryGetRootString(JsonElement? element, string name) => element is { ValueKind: JsonValueKind.Object } e ? GetString(e, name) : null;
+
+    [Obsolete("Legacy rollback-only path. Sprint 4B runtime resolution must use SemanticResolutionEngineV1.")]
     private static ResolvedSemanticFact ToResolved(string type, CandidateFact best, string beatId, string req, string language)
         => new(type, type, best.Value, best.Unit, type, best.SourceArtifact, best.SourceField, best.BeatId ?? beatId, best.SourceArtifact == "Approved Derived Facts" ? "Derived" : "Verified", best.Confidence, req, null, null, language, true, best.SourceArtifact == "Approved Derived Facts" ? "Derived" : "Source", best.RuleId, best.Inputs);
+    [Obsolete("Legacy rollback-only path. Sprint 4B runtime resolution must use SemanticResolutionEngineV1.")]
     private static bool TryDerive(string type, List<CandidateFact> all, string family, out CandidateFact fact)
     {
         fact = default!;
@@ -2294,8 +2313,11 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         return p.RequiredFactTypes;
     }
     private static IEnumerable<string> OptionalTypes(AstronomyFamilyProfile p, string role, string format) => p.OptionalFactTypes.Concat(format == "long" ? ["AngularSeparation", "LocalPeakTime", "ObservationMode"] : ["AngularSeparation"]).Distinct(StringComparer.OrdinalIgnoreCase);
+    [Obsolete("Legacy rollback-only path. Sprint 4B runtime conflict analysis is owned by SemanticResolutionEngineV1.")]
     private static IEnumerable<FactConflict> FindConflicts(IEnumerable<string> types, List<CandidateFact> all) => types.SelectMany(t => all.Where(c => Matches(t, c.Type)).GroupBy(c => c.Value.ToString(), StringComparer.OrdinalIgnoreCase).Count() > 1 ? [new FactConflict(t, all.Where(c => Matches(t, c.Type)).Select(c => c.Value).Distinct().ToArray(), all.Where(c => Matches(t, c.Type)).OrderByDescending(c => c.Confidence).First().SourceArtifact, false, $"Conflicting {t} values resolved by source precedence.")] : Array.Empty<FactConflict>()).DistinctBy(c => c.FactType);
+    [Obsolete("Legacy rollback-only path. Sprint 4B runtime must not scan documentary JSON for facts.")]
     private static void AddDocumentary(List<CandidateFact> facts, JsonElement? contract, string format) { foreach (var beat in ReadArray(contract, "beats")) { var beatId = FirstNonEmpty(GetString(beat, "documentaryBeatId"), GetString(beat, "beatId"), GetString(beat, "id")); var a = FindProperty(beat, "allocatedFacts"); if (a is null) continue; AddJsonFacts(facts, a, "Documentary Contract", format, beatId); } }
+    [Obsolete("Legacy rollback-only path. Sprint 4B runtime must not scan raw JSON for facts.")]
     private static void AddJsonFacts(List<CandidateFact> facts, JsonElement? e, string source, string? format, string? beatId = null, string path = "")
     {
         if (e is null) return;
