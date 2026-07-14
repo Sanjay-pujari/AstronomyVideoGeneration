@@ -10,7 +10,7 @@ public sealed class LegacySemanticCapabilityMapV1Tests
     public void Every_Current_Legacy_Term_Maps_Exactly_Once()
     {
         Assert.All(LegacySemanticCapabilityMapV1.Entries.GroupBy(e => e.LegacyTerm, StringComparer.OrdinalIgnoreCase), g => Assert.Single(g));
-        Assert.Equal(70, LegacySemanticCapabilityMapV1.Entries.Length);
+        Assert.Equal(74, LegacySemanticCapabilityMapV1.Entries.Length);
     }
 
     [Theory]
@@ -83,6 +83,21 @@ public sealed class LegacySemanticCapabilityMapV1Tests
         var result = SemanticCapabilityCatalogV1.Validate(_catalog.Definitions, [.. LegacySemanticCapabilityMapV1.Entries, LegacySemanticCapabilityMapV1.Entry("EventType", SemanticCapabilityVocabularyV1.EditorialContext)]);
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, e => e.Contains("Duplicate legacy", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Capability_Inventory_Classifies_Every_Legacy_Profile_Reference()
+    {
+        var eventTypes = new[] { "PlanetPairing", "PlanetaryConjunction", "Occultation", "Eclipse", "MeteorShower", "NamedFullMoon", "FullMoon", "Constellation", "PlanetProfile", "Comet", "DeepSkyObject", "BlackHoleOrScientificExplainer" };
+        var profiles = eventTypes.Select(eventType => Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.AstronomyFamilyProfileCatalog.Resolve(TestJson.Json($"{{\"eventType\":\"{eventType}\"}}"), null));
+        var referenced = profiles.SelectMany(p => p.RequiredFactTypes.Concat(p.OptionalFactTypes).Concat(p.ScientificConcepts).Concat(p.ProhibitedAssumptions).Concat(p.ValidationRules)).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        var classified = LegacySemanticCapabilityMapV1.Entries.Select(e => e.LegacyTerm).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var inventory = referenced.Select(term => (Term: term, Result: _catalog.ResolveLegacyTerm(term))).ToArray();
+
+        Assert.DoesNotContain(inventory, row => row.Result.Status == LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm && !classified.Contains(row.Term));
+        Assert.Contains(inventory, row => row.Term == "BestSeason" && row.Result.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.Future);
+        Assert.Contains(inventory, row => row.Term == "DeepSkyObjects" && row.Result.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.Future);
+        Assert.Contains(inventory, row => row.Term == "Distance" && row.Result.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.StructuredField && row.Result.StructuredFieldPath == "ObjectKnowledge.distance");
     }
 
     private LegacySemanticCapabilityResolution AssertMaps(string term, string expected)

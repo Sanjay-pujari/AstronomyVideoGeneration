@@ -11,7 +11,7 @@ public sealed class FamilyProfileValidationV1Tests
     [Fact] public void SyntheticNonEventEventWindowRequirementFailsValidation() { var p = _catalog.GetRequired("Constellation"); var req = new FamilySemanticRequirementV1(new SemanticCapabilityId("EventWindow"), FamilyRequirementLevelV1.Required, FamilyMissingValueBehaviorV1.Block, ["Canonical"], 80, false, true); var beat = p.LongFormStructure.Beats[0] with { Requirements = p.LongFormStructure.Beats[0].Requirements.Add(req) }; var np = p with { LongFormStructure = p.LongFormStructure with { Beats = p.LongFormStructure.Beats.SetItem(0, beat) } }; Assert.Contains(AstronomyFamilyProfileCatalogV1.Validate([np], new AstronomyFamilyAliasCatalogV1([])).Errors, e => e.Contains("Non-event")); }
     [Fact] public void RuntimeCodeDoesNotReferenceFamilyV1Types()
     {
-        var root = FindRepositoryRoot();
+        var root = RepositoryTestPaths.Root();
         var infra = Path.Combine(root, "Backend/src/Astronomy.MediaFactory.Infrastructure");
         var excluded = Path.Combine(infra, "Production/Narration/Semantics/Families");
         var tokens = new[] { "AstronomyFamilyProfileCatalogV1", "IAstronomyFamilyProfileCatalogV1", "AstronomyFamilyAliasCatalogV1", "AstronomyFamilyProfileV1" };
@@ -25,5 +25,4 @@ public sealed class FamilyProfileValidationV1Tests
     }
     private static AstronomyFamilyProfileV1 MutateFirstReq(AstronomyFamilyProfileV1 p, Func<FamilySemanticRequirementV1, FamilySemanticRequirementV1> mutate) { var beat = p.LongFormStructure.Beats[0]; var nb = beat with { Requirements = beat.Requirements.SetItem(0, mutate(beat.Requirements[0])) }; return p with { LongFormStructure = p.LongFormStructure with { Beats = p.LongFormStructure.Beats.SetItem(0, nb) } }; }
     private static bool IsInDirectory(string directory, string file) { var rel = Path.GetRelativePath(directory, file); return rel == "." || (!rel.StartsWith(".." + Path.DirectorySeparatorChar) && !rel.StartsWith(".." + Path.AltDirectorySeparatorChar) && rel != ".."); }
-    private static string FindRepositoryRoot() { var d = new DirectoryInfo(AppContext.BaseDirectory); while (d is not null) { if (Directory.Exists(Path.Combine(d.FullName, "Backend/src"))) return d.FullName; d = d.Parent; } return Directory.GetCurrentDirectory(); }
 }

@@ -99,8 +99,7 @@ public sealed class CanonicalEventIdentityResolverV1Tests
     [Fact]
     public void CurrentRuntimeDoesNotReferenceV1ResolverOrAliasCatalog()
     {
-        var repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
-        var root = Path.Combine(repositoryRoot.FullName, "Backend", "src", "Astronomy.MediaFactory.Infrastructure");
+        var root = Path.Combine(RepositoryTestPaths.Root(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure");
 
         Assert.True(Directory.Exists(root), $"Expected infrastructure source root to exist at '{root}'.");
 
@@ -133,22 +132,4 @@ public sealed class CanonicalEventIdentityResolverV1Tests
                 && relativePath != "..");
     }
 
-    private static DirectoryInfo FindRepositoryRoot(string startDirectory)
-    {
-        var directory = new DirectoryInfo(startDirectory);
-
-        while (directory is not null)
-        {
-            if (Directory.Exists(Path.Combine(directory.FullName, "Backend", "src"))
-                && Directory.Exists(Path.Combine(directory.FullName, "Backend", "tests")))
-            {
-                return directory;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException(
-            $"Could not find repository root from '{startDirectory}' containing both Backend/src and Backend/tests.");
-    }
 }

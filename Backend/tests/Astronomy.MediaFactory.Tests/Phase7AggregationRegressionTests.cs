@@ -76,9 +76,8 @@ public sealed class Phase7AggregationRegressionTests
     [Fact]
     public void Rc2OverlaySourceDoesNotContainHardCodedPhase7MissingOutputFailure()
     {
-        var assemblyPath = typeof(Rc2ContentPlanningBatchOrchestrator).Assembly.Location;
-        var repoRoot = Directory.GetParent(assemblyPath)!.Parent!.Parent!.Parent!.Parent!.Parent!.Parent!.FullName;
-        var sourcePath = Path.Combine(repoRoot, "src", "Astronomy.MediaFactory.Infrastructure", "Orchestration", "RC2", "Rc2ContentPlanningBatchOrchestrator.cs");
+        var repoRoot = RepositoryTestPaths.Root();
+        var sourcePath = Path.Combine(repoRoot, "Backend", "src", "Astronomy.MediaFactory.Infrastructure", "Orchestration", "RC2", "Rc2ContentPlanningBatchOrchestrator.cs");
         var source = File.ReadAllText(sourcePath);
         Assert.DoesNotContain("Validation failed: required output missing.", source);
     }

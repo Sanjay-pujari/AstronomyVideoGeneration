@@ -100,7 +100,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
     [Fact]
     public void Migrated_Path_Does_Not_Invoke_Legacy_Json_Fact_Scanning()
     {
-        var source = File.ReadAllText(TestPaths.Source("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
         var resolveBody = source[source.IndexOf("public RequiredSemanticFactResolutionResult Resolve", StringComparison.Ordinal)..source.IndexOf("private static Dictionary<string, SemanticCapabilityCandidate[]>", StringComparison.Ordinal)];
 
         Assert.DoesNotContain("AddJsonFacts", resolveBody);
@@ -225,7 +225,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
     [Fact]
     public void Architecture_Guards_For_Migrated_Resolver_Orchestration()
     {
-        var source = File.ReadAllText(TestPaths.Source("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
         var resolverBody = source[source.IndexOf("public sealed class RequiredSemanticFactResolver", StringComparison.Ordinal)..source.IndexOf("public static class NarrationRealizedContextMapper", StringComparison.Ordinal)];
         var resolveBody = ExtractMethodBody(resolverBody, "public RequiredSemanticFactResolutionResult Resolve");
         var projectSignature = resolverBody[resolverBody.IndexOf("private static ResolvedSemanticFact? Project", StringComparison.Ordinal)..resolverBody.IndexOf("private IEnumerable<RequirementOccurrence>", StringComparison.Ordinal)];
@@ -239,6 +239,27 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         Assert.DoesNotContain("ISemanticResolutionEngineV1", projectSignature);
         Assert.DoesNotContain("BeatId", scopeRecord);
         Assert.DoesNotContain("BeatRole", scopeRecord);
+    }
+
+    [Fact]
+    public void Unsupported_Legacy_Capability_Is_Classified_Without_Creating_Request()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["UnsupportedFutureThing"], optional: []), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(0, engine.CallCount);
+        Assert.Equal(["UnsupportedFutureThing"], result.Beats.Single().MissingRequiredFacts);
+        Assert.Contains(result.Beats.Single().ResolutionWarnings, w => w.Contains("Unsupported legacy capability UnsupportedFutureThing", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Null_Event_Identity_Context_Does_Not_Throw_During_Scope_Creation()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Single(result.Beats.Single().RequiredFacts);
     }
 
 
