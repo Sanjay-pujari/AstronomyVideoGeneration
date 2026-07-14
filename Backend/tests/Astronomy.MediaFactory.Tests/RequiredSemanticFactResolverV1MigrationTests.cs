@@ -196,7 +196,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         Assert.Equal("EventIdentity", fact.FactKey);
         Assert.Equal("beat-1", fact.SourceBeatId);
         Assert.Equal("source-1", fact.SourceArtifact);
-        Assert.Equal("candidate-1", fact.SourceField);
+        Assert.Equal("path", fact.SourceField);
         Assert.Equal("Required", fact.Requiredness);
         Assert.Equal("en", fact.Language);
     }

@@ -75,7 +75,7 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
             };
         }
         if (value is MeteorActivityValue m)
-            return path.Equals("zhr", StringComparison.OrdinalIgnoreCase) ? (m.Zhr, "meteors/hour", m.Zhr?.ToString(CultureInfo.InvariantCulture), $"{sourceRoot}.MeteorActivity.Zhr") : (value, null, fact.SpeakableValue, $"{sourceRoot}.MeteorActivity");
+            return path.Equals("zhr", StringComparison.OrdinalIgnoreCase) ? (m.Zhr, "meteors/hour", m.Zhr?.ToString(CultureInfo.InvariantCulture), $"{sourceRoot}.MeteorActivity.zhr") : (value, null, fact.SpeakableValue, $"{sourceRoot}.MeteorActivity");
         if (value is ObjectKnowledgeValue ok)
         {
             var f = ok.Facts.FirstOrDefault(x => x.Field.Equals(path, StringComparison.OrdinalIgnoreCase));
@@ -90,6 +90,17 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
         {
             object? v = path.ToLowerInvariant() switch { "binocularguidance" => eq.BinocularSuitable, "nakedeye" => eq.NakedEyeSuitable, "telescopeguidance" => eq.TelescopeSuitable, _ => value };
             return (v, null, v?.ToString(), $"{sourceRoot}.EquipmentGuidance.{path}");
+        }
+        if (value is ObservationLocationValue loc)
+        {
+            var v = path.ToLowerInvariant() switch
+            {
+                "latitude" => loc.Latitude?.ToString(CultureInfo.InvariantCulture),
+                "longitude" => loc.Longitude?.ToString(CultureInfo.InvariantCulture),
+                "timezone" => loc.TimeZone,
+                _ => loc.LocationName ?? loc.TimeZone
+            };
+            return (v, null, v, $"{sourceRoot}.ObservationLocation.{(path.Equals("timezone", StringComparison.OrdinalIgnoreCase) ? nameof(ObservationLocationValue.TimeZone) : nameof(ObservationLocationValue.LocationName))}");
         }
         if (value is AngularSeparationValue a) return (a.Degrees, "degrees", $"{a.Degrees} degrees", $"{sourceRoot}.AngularSeparation.Degrees");
         return (value, null, fact.SpeakableValue, fact.Provenance.FirstOrDefault().SourcePropertyPath);
