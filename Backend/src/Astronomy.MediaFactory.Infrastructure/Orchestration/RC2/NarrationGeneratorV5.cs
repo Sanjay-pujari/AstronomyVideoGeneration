@@ -15,6 +15,7 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resol
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Directors;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries;
 using Microsoft.Extensions.Logging;
