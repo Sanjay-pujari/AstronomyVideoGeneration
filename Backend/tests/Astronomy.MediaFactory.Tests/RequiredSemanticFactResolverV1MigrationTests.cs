@@ -108,6 +108,136 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         Assert.DoesNotContain("SemanticSourceAdapter", resolveBody);
     }
 
+
+    [Fact]
+    public void Legacy_Aliases_With_Identical_Policy_Share_One_Engine_Call_And_Project_Both_Fact_Types()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["ObservationTiming", "PeakWindow"], optional: []), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Equal(["EventWindow"], engine.Requests.Select(r => r.CapabilityId.Value).Distinct().ToArray());
+        Assert.Equal(["ObservationTiming", "PeakWindow"], result.Beats.Single().RequiredFacts.Select(f => f.FactType).Order(StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
+    public void Legacy_Aliases_With_Different_Policies_Use_One_Engine_Call_Per_Policy_Scope()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["ObservationTiming"], optional: ["PeakWindow"]), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(2, engine.CallCount);
+        Assert.Contains(engine.Requests, r => r.CapabilityId.Value == "EventWindow" && r.Required && r.MissingValueBehavior == SemanticMissingValueBehaviorV1.BlockRequired);
+        Assert.Contains(engine.Requests, r => r.CapabilityId.Value == "EventWindow" && !r.Required && r.MissingValueBehavior == SemanticMissingValueBehaviorV1.OmitOptional);
+        Assert.Equal(["ObservationTiming"], result.Beats.Single().RequiredFacts.Select(f => f.FactType).ToArray());
+        Assert.Equal(["PeakWindow"], result.Beats.Single().OptionalFacts.Select(f => f.FactType).ToArray());
+    }
+
+    [Fact]
+    public void Same_Requirement_In_Long_And_Short_With_Distinct_Beat_Ids_Uses_One_Call_And_Preserves_Both_Projections()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("long-1"), Contract("short-1"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Equal(["long-1", "short-1"], result.Beats.Select(b => Assert.Single(b.RequiredFacts).SourceBeatId).ToArray());
+    }
+
+    [Fact]
+    public void Same_Beat_Id_In_Long_And_Short_Does_Not_Add_Engine_Call_And_Preserves_Format_Occurrences()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("beat-1"), Contract("beat-1"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Equal(["long", "short"], result.Beats.Select(b => b.Format).ToArray());
+        Assert.All(result.Beats, b => Assert.Equal("beat-1", Assert.Single(b.RequiredFacts).SourceBeatId));
+    }
+
+    [Fact]
+    public void Empty_Beat_List_Does_Not_Invoke_Engine_And_Returns_Empty_Result()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract(), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(0, engine.CallCount);
+        Assert.Empty(result.Beats);
+        Assert.False(result.Blocking);
+    }
+
+    [Fact]
+    public void Repeated_Requirement_Inside_Profile_List_Uses_One_Call_Per_Unique_Scope()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity", "EventIdentity"], optional: []), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Single(result.Beats.Single().RequiredFacts);
+    }
+
+    [Fact]
+    public void MissingRequiredValue_Does_Not_Create_Legacy_Filler_Fact()
+    {
+        var engine = new CountingEngine(SemanticResolutionStatusV1.MissingRequiredValue);
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Empty(result.Beats.Single().RequiredFacts);
+        Assert.Equal(["EventIdentity"], result.Beats.Single().MissingRequiredFacts);
+    }
+
+    [Fact]
+    public void Resolved_Projection_Preserves_Legacy_Metadata()
+    {
+        var engine = new CountingEngine();
+        var fact = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en"))).Beats.Single().RequiredFacts.Single();
+
+        Assert.Equal("EventIdentity", fact.FactType);
+        Assert.Equal("EventIdentity", fact.FactKey);
+        Assert.Equal("beat-1", fact.SourceBeatId);
+        Assert.Equal("source-1", fact.SourceArtifact);
+        Assert.Equal("candidate-1", fact.SourceField);
+        Assert.Equal("Required", fact.Requiredness);
+        Assert.Equal("en", fact.Language);
+    }
+
+    [Fact]
+    public void Projection_Order_Is_Deterministic_By_Beat_Order_Not_Input_Order()
+    {
+        var profile = Profile(required: ["EventIdentity"], optional: []);
+        var result = CreateResolver(new CountingEngine()).Resolve(new RequiredSemanticFactResolutionInput(profile, Contract("c", "b", "a"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(["c", "b", "a"], result.Beats.Select(b => Assert.Single(b.RequiredFacts).SourceBeatId).ToArray());
+    }
+
+    [Fact]
+    public void Counting_Engine_Confirms_No_Engine_Call_Occurs_During_Projection()
+    {
+        var engine = new CountingEngine();
+        CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("beat-1"), Contract("beat-2"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.DoesNotContain(engine.CallStacks, stack => stack.Contains("Project", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Architecture_Guards_For_Migrated_Resolver_Orchestration()
+    {
+        var source = File.ReadAllText(TestPaths.Source("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
+        var resolverBody = source[source.IndexOf("public sealed class RequiredSemanticFactResolver", StringComparison.Ordinal)..source.IndexOf("public static class NarrationRealizedContextMapper", StringComparison.Ordinal)];
+        var resolveBody = resolverBody[resolverBody.IndexOf("public RequiredSemanticFactResolutionResult Resolve", StringComparison.Ordinal)..resolverBody.IndexOf("private static ResolvedSemanticFact? Project", StringComparison.Ordinal)];
+        var projectSignature = resolverBody[resolverBody.IndexOf("private static ResolvedSemanticFact? Project", StringComparison.Ordinal)..resolverBody.IndexOf("private IEnumerable<RequirementOccurrence>", StringComparison.Ordinal)];
+        var scopeRecord = source[source.IndexOf("public sealed record SemanticResolutionScopeKeyV1", StringComparison.Ordinal)..source.IndexOf("public sealed class RequiredSemanticFactResolver", StringComparison.Ordinal)];
+
+        Assert.Contains("_semanticResolutionEngine.Resolve", resolveBody);
+        Assert.DoesNotContain("SemanticSourceAdapter", resolverBody);
+        Assert.DoesNotContain("AddJsonFacts", resolveBody);
+        Assert.True(resolveBody.IndexOf("_semanticResolutionEngine.Resolve", StringComparison.Ordinal) < resolveBody.IndexOf("Project", StringComparison.Ordinal));
+        Assert.DoesNotContain("ISemanticResolutionEngineV1", projectSignature);
+        Assert.DoesNotContain("BeatId", scopeRecord);
+        Assert.DoesNotContain("BeatRole", scopeRecord);
+    }
+
     private static RequiredSemanticFactResolver CreateResolver(CountingEngine engine) => new(
         Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.SemanticDefaults.SemanticCapabilityResolver,
         Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.SemanticDefaults.DomainKnowledgeProvider,
@@ -125,13 +255,18 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
 
     private sealed class CountingEngine : ISemanticResolutionEngineV1
     {
+        private readonly SemanticResolutionStatusV1 _status;
+        public CountingEngine(SemanticResolutionStatusV1 status = SemanticResolutionStatusV1.Resolved) => _status = status;
         public int CallCount { get; private set; }
         public List<SemanticResolutionRequestV1> Requests { get; } = [];
+        public List<string> CallStacks { get; } = [];
         public SemanticResolutionResultV1 Resolve(SemanticResolutionRequestV1 request)
         {
             CallCount++;
             Requests.Add(request);
-            var fact = new ResolvedSemanticFactV1(request.CapabilityId, SemanticResolutionStatusV1.Resolved, request.Required, new($"value-{request.CapabilityId.Value}", "String"), $"value-{request.CapabilityId.Value}", $"value-{request.CapabilityId.Value}", "candidate-1", "adapter-1", "source-1", SemanticEvidenceCategoryV1.VerifiedEventData, SemanticEvidenceStrengthV1.Strong, .95m, [new("source-1", "model", "path", true)], [], [], [], "FirstApprovedByPriority", [], [], "Resolved", "Resolved");
+            CallStacks.Add(Environment.StackTrace);
+            var value = _status is SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination ? new SemanticSourceValueV1($"value-{request.CapabilityId.Value}", "String") : null;
+            var fact = new ResolvedSemanticFactV1(request.CapabilityId, _status, request.Required, value, $"value-{request.CapabilityId.Value}", $"value-{request.CapabilityId.Value}", "candidate-1", "adapter-1", "source-1", SemanticEvidenceCategoryV1.VerifiedEventData, SemanticEvidenceStrengthV1.Strong, .95m, [new("source-1", "model", "path", true)], [], [], [], "FirstApprovedByPriority", [], [], _status.ToString(), _status.ToString());
             var diagnostics = new SemanticResolutionDiagnosticsV1(request.CapabilityId, request.Required, null, 1, 1, 0, [], [], [], [], "candidate-1", fact.Status, fact.ResolutionPolicy, [], [], [], []);
             return new(fact, diagnostics);
         }

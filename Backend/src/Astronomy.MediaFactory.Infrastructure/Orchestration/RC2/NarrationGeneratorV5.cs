@@ -2384,7 +2384,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         if (!p.ContentNature.Contains("Event", StringComparison.OrdinalIgnoreCase)) return p.RequiredFactTypes.Where(t => !Regex.IsMatch(t, "Date|Time|Peak|Window", RegexOptions.IgnoreCase));
         return p.RequiredFactTypes;
     }
-    private static IEnumerable<string> OptionalTypes(AstronomyFamilyProfile p, string role, string format) => p.OptionalFactTypes.Concat(format == "long" ? ["AngularSeparation", "LocalPeakTime", "ObservationMode"] : ["AngularSeparation"]).Distinct(StringComparer.OrdinalIgnoreCase);
+    private static IEnumerable<string> OptionalTypes(AstronomyFamilyProfile p, string role, string format) => p.OptionalFactTypes.Distinct(StringComparer.OrdinalIgnoreCase);
     [Obsolete("Legacy rollback-only path. Sprint 4B runtime conflict analysis is owned by SemanticResolutionEngineV1.")]
     private static IEnumerable<FactConflict> FindConflicts(IEnumerable<string> types, List<CandidateFact> all) => types.SelectMany(t => all.Where(c => Matches(t, c.Type)).GroupBy(c => c.Value.ToString(), StringComparer.OrdinalIgnoreCase).Count() > 1 ? [new FactConflict(t, all.Where(c => Matches(t, c.Type)).Select(c => c.Value).Distinct().ToArray(), all.Where(c => Matches(t, c.Type)).OrderByDescending(c => c.Confidence).First().SourceArtifact, false, $"Conflicting {t} values resolved by source precedence.")] : Array.Empty<FactConflict>()).DistinctBy(c => c.FactType);
     [Obsolete("Legacy rollback-only path. Sprint 4B runtime must not scan documentary JSON for facts.")]
