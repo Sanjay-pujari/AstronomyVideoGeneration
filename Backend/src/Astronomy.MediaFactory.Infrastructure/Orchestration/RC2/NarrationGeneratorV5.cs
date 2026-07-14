@@ -2471,11 +2471,20 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var secondaryObjects = ReadSecondaryObjectsFromRequest(request);
         var meteorActivity = ReadMeteorActivity(input.ProductionEventIntelligence);
         var requestLocation = ReadObservationLocationFromRequest(request);
-        var eventSource = new ProductionEventIntelligenceSourceV1(eventType, familyId, familyId, primaryObjects ?? [], secondaryObjects ?? [], productionEventWindow, angularSeparation, ReadObservationDirectionFromRequest(request), meteorActivity);
+        var eventSource = new ProductionEventIntelligenceSourceV1(
+            eventType,
+            familyId,
+            familyId,
+            primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty,
+            secondaryObjects,
+            productionEventWindow,
+            angularSeparation,
+            ReadObservationDirectionFromRequest(request),
+            meteorActivity);
         var observationSource = new ObservationMetadataSourceV1(observationEventWindow ?? productionEventWindow, observationAngularSeparation ?? angularSeparation, ReadObservationDirection(input.ObservationMetadata) ?? ReadObservationDirectionFromRequest(request), ReadObservationLocation(input.ObservationMetadata) ?? requestLocation);
         var documentarySource = new DocumentaryContractSourceV1(documentaryEventWindow);
-        var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract) ?? ResolveDomainKnowledge(familyId, primaryObjects ?? [], input.LanguageProfile.LanguageCode));
-        var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(VerifiedObjects: primaryObjects ?? [], ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, familyId));
+        var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract) ?? ResolveDomainKnowledge(familyId, primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, input.LanguageProfile.LanguageCode));
+        var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(VerifiedObjects: primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, familyId));
         return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, DocumentaryContract: documentarySource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode, TimeZone: request?.TimeZone, LocationContext: requestLocation);
     }
 
