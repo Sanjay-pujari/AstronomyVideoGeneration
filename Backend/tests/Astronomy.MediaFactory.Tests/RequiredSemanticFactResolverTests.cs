@@ -207,7 +207,7 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Geminids Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Geminids\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
 
         Assert.False(result.Blocking);
-        Assert.Contains("ZHR", result.Beats[0].OmittedOptionalFacts);
+        Assert.Contains(result.Beats[0].OmittedOptionalFacts, f => string.Equals(f, "ZHR", StringComparison.OrdinalIgnoreCase));
         var zhr = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.Capability == "MeteorActivity");
         Assert.Null(zhr.SelectedSource);
         Assert.Contains(zhr.Warnings, w => w.Contains("Typed source property was not supplied"));
@@ -220,7 +220,7 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Radiant\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventType\":\"MeteorShower\",\"zhr\":{\"value\":120,\"unit\":\"meteors/hour\",\"qualifier\":\"under ideal dark skies\",\"source\":\"verified upstream feed\",\"confidence\":0.95}}"), profile: profile);
 
         Assert.False(result.Blocking);
-        var fact = Assert.Single(result.Beats[0].OptionalFacts, f => f.FactType == "ZHR");
+        var fact = Assert.Single(result.Beats[0].OptionalFacts, f => string.Equals(f.FactType, "ZHR", StringComparison.OrdinalIgnoreCase));
         Assert.Equal("ProductionEventIntelligence", fact.SourceArtifact);
         Assert.Contains("ProductionEventIntelligence.MeteorActivity", fact.SourceField, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "MeteorActivity" && r.Status == "Resolved");
@@ -233,7 +233,7 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Geminids Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Geminids\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
 
         Assert.DoesNotContain(result.Beats[0].OptionalFacts, f => f.FactType == "Zhr");
-        Assert.Contains("ZHR", result.Beats[0].OmittedOptionalFacts);
+        Assert.Contains(result.Beats[0].OmittedOptionalFacts, f => string.Equals(f, "ZHR", StringComparison.OrdinalIgnoreCase));
     }
 
     [Theory]

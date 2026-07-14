@@ -2452,7 +2452,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var primaryObjects = ReadPrimaryObjects(input.ProductionEventIntelligence) ?? ReadPrimaryObjects(input.LongDocumentaryContract);
         var meteorActivity = ReadMeteorActivity(input.ProductionEventIntelligence);
         var eventSource = new ProductionEventIntelligenceSourceV1(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, primaryObjects ?? [], default, productionEventWindow, angularSeparation, null, meteorActivity);
-        var observationSource = new ObservationMetadataSourceV1(observationEventWindow, observationAngularSeparation, ReadObservationDirection(input.LongDocumentaryContract));
+        var observationSource = new ObservationMetadataSourceV1(observationEventWindow, observationAngularSeparation, ReadObservationDirection(input.LongDocumentaryContract), ReadObservationLocation(input.LongDocumentaryContract));
         var documentarySource = new DocumentaryContractSourceV1(documentaryEventWindow);
         var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract) ?? ResolveDomainKnowledge(input.FamilyProfile.FamilyId));
         var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, input.FamilyProfile.FamilyId));
@@ -2496,6 +2496,12 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     {
         var direction = TryGetAllocatedFactString(source, "Direction");
         return string.IsNullOrWhiteSpace(direction) ? null : new ObservationDirectionValue(direction, null, null, null, direction);
+    }
+
+    private static ObservationLocationValue? ReadObservationLocation(JsonElement? source)
+    {
+        var location = TryGetAllocatedFactString(source, "Region") ?? TryGetAllocatedFactString(source, "LocationContext") ?? TryGetAllocatedFactString(source, "VisibilityRegion");
+        return string.IsNullOrWhiteSpace(location) ? null : new ObservationLocationValue(location, null, null, null, null);
     }
 
     private static MeteorActivityValue? ReadMeteorActivity(JsonElement? source)
