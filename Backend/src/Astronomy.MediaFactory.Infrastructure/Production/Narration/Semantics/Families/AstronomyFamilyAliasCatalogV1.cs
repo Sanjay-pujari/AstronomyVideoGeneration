@@ -19,7 +19,8 @@ public sealed class AstronomyFamilyAliasCatalogV1
         new("Solar Eclipse", AstronomyFamilyVocabularyV1.SolarEclipse),
         new("Lunar Eclipse", AstronomyFamilyVocabularyV1.LunarEclipse),
         new("Deep Sky Object", AstronomyFamilyVocabularyV1.DeepSkyObject),
-        new("DeepSky", AstronomyFamilyVocabularyV1.DeepSkyObject)
+        new("DeepSky", AstronomyFamilyVocabularyV1.DeepSkyObject),
+        new("BlackHoleOrScientificExplainer", AstronomyFamilyVocabularyV1.ScientificExplainer)
     ];
     public AstronomyFamilyAliasCatalogV1() : this(DefaultAliases) { }
     public AstronomyFamilyAliasCatalogV1(IEnumerable<AstronomyFamilyAliasV1> aliases) { Aliases = aliases.Select(a => new AstronomyFamilyAliasV1(a.Alias.Trim(), a.CanonicalFamilyId.Trim())).ToImmutableArray(); }

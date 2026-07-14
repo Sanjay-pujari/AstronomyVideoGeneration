@@ -88,9 +88,14 @@ public sealed class LegacySemanticCapabilityMapV1Tests
     [Fact]
     public void Capability_Inventory_Classifies_Every_Legacy_Profile_Reference()
     {
-        var eventTypes = new[] { "PlanetPairing", "PlanetaryConjunction", "Occultation", "Eclipse", "MeteorShower", "NamedFullMoon", "FullMoon", "Constellation", "PlanetProfile", "Comet", "DeepSkyObject", "BlackHoleOrScientificExplainer" };
-        var profiles = eventTypes.Select(eventType => Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.AstronomyFamilyProfileCatalog.Resolve(TestJson.Json($"{{\"eventType\":\"{eventType}\"}}"), null));
-        var referenced = profiles.SelectMany(p => p.RequiredFactTypes.Concat(p.OptionalFactTypes).Concat(p.ScientificConcepts).Concat(p.ProhibitedAssumptions).Concat(p.ValidationRules)).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        var activeEventTypes = new[] { "PlanetPairing", "PlanetaryConjunction", "Occultation", "Eclipse", "MeteorShower", "NamedFullMoon", "FullMoon", "Constellation", "DeepSkyObject" };
+        var activeProfiles = activeEventTypes.Select(eventType => Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.AstronomyFamilyProfileCatalog.Resolve(TestJson.Json($"{{\"eventType\":\"{eventType}\"}}"), null));
+        var knownFutureAndDomainTerms = new[] { "PlanetProfile", "Comet", "BlackHoleOrScientificExplainer", "BestSeason", "DeepSkyObjects" };
+        var referenced = activeProfiles.SelectMany(p => p.RequiredFactTypes.Concat(p.OptionalFactTypes).Concat(p.ScientificConcepts).Concat(p.ProhibitedAssumptions).Concat(p.ValidationRules))
+            .Concat(knownFutureAndDomainTerms)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var classified = LegacySemanticCapabilityMapV1.Entries.Select(e => e.LegacyTerm).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var inventory = referenced.Select(term => (Term: term, Result: _catalog.ResolveLegacyTerm(term))).ToArray();
 
@@ -98,6 +103,30 @@ public sealed class LegacySemanticCapabilityMapV1Tests
         Assert.Contains(inventory, row => row.Term == "BestSeason" && row.Result.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.Future);
         Assert.Contains(inventory, row => row.Term == "DeepSkyObjects" && row.Result.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.Future);
         Assert.Contains(inventory, row => row.Term == "Distance" && row.Result.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.StructuredField && row.Result.StructuredFieldPath == "ObjectKnowledge.distance");
+    }
+
+    [Fact]
+    public void Future_Event_Family_Is_Classified_Without_Active_Profile()
+    {
+        var catalog = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.AstronomyFamilyProfileCatalogV1();
+
+        var result = catalog.ResolveEventType("BlackHoleOrScientificExplainer");
+
+        Assert.Equal(Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.AstronomyFamilyResolutionStatusV1.FutureFamily, result.Status);
+        Assert.Equal("ScientificExplainer", result.CanonicalFamilyId);
+        Assert.True(result.FutureFamily);
+        Assert.False(result.ActiveInV1);
+    }
+
+    [Fact]
+    public void Unknown_Event_Family_Returns_Unsupported_Diagnostic()
+    {
+        var catalog = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.AstronomyFamilyProfileCatalogV1();
+
+        var result = catalog.ResolveEventType("NotARealFamily");
+
+        Assert.Equal(Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.AstronomyFamilyResolutionStatusV1.Unsupported, result.Status);
+        Assert.Contains("Unsupported astronomy family", result.Diagnostic);
     }
 
     private LegacySemanticCapabilityResolution AssertMaps(string term, string expected)

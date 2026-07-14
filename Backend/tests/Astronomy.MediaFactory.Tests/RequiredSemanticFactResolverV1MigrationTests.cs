@@ -249,7 +249,41 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
 
         Assert.Equal(0, engine.CallCount);
         Assert.Equal(["UnsupportedFutureThing"], result.Beats.Single().MissingRequiredFacts);
-        Assert.Contains(result.Beats.Single().ResolutionWarnings, w => w.Contains("Unsupported legacy capability UnsupportedFutureThing", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Beats.Single().ResolutionWarnings, w => w.Contains("Unsupported legacy capability 'UnsupportedFutureThing': Disposition=UnsupportedLegacyTerm", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Optional_Unsupported_Legacy_Capability_Is_Omitted_Without_Blocking()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: [], optional: ["UnsupportedFutureThing"]), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(0, engine.CallCount);
+        Assert.Empty(result.Beats.Single().MissingRequiredFacts);
+        Assert.Contains("UnsupportedFutureThing", result.Beats.Single().OmittedOptionalFacts);
+        Assert.False(result.Beats.Single().Blocking);
+        Assert.Contains(result.Beats.Single().ResolutionWarnings, w => w.Contains("Unsupported legacy capability 'UnsupportedFutureThing': Disposition=UnsupportedLegacyTerm", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Future_Legacy_Capability_Is_Classified_Without_Creating_Request()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["BestSeason"], optional: []), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(0, engine.CallCount);
+        Assert.Equal(["BestSeason"], result.Beats.Single().MissingRequiredFacts);
+        Assert.Contains(result.Beats.Single().ResolutionWarnings, w => w.Contains("Unsupported legacy capability 'BestSeason': Disposition=Future", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Structured_Field_Mapping_Creates_Canonical_ObjectKnowledge_Request()
+    {
+        var engine = new CountingEngine();
+        CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["Distance"], optional: []), Contract("beat-1"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Equal("ObjectKnowledge", engine.Requests.Single().CapabilityId.Value);
     }
 
     [Fact]

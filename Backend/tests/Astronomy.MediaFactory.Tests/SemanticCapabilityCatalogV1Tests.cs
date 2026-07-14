@@ -102,22 +102,31 @@ public sealed class SemanticCapabilityCatalogV1Tests
     }
 
     [Fact]
-    public void Runtime_Code_Does_Not_Reference_V1_Catalog_Types()
+    public void Runtime_Catalog_References_Are_Restricted_To_Compatibility_Boundary()
     {
         var root = RepositoryTestPaths.Root();
-        var files = new[]
+        var forbiddenRuntimeFiles = new[]
         {
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Orchestration/RC2/NarrationGeneratorV5.cs",
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/SemanticCapabilityResolver.cs",
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/SemanticCapabilitySourceRegistry.cs",
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/RequiredSemanticFactResolver.cs",
             "Backend/src/Astronomy.MediaFactory.Infrastructure/Persistence/ProductionPipelineExecutionService.cs"
         };
-        var forbidden = new[] { "SemanticCapabilityCatalogV1", "ISemanticCapabilityCatalogV1", "LegacySemanticCapabilityMapV1" };
-        foreach (var file in files.Where(f => File.Exists(Path.Combine(root, f))))
+        foreach (var file in forbiddenRuntimeFiles.Where(f => File.Exists(Path.Combine(root, f))))
         {
             var text = File.ReadAllText(Path.Combine(root, file));
-            foreach (var token in forbidden) Assert.DoesNotContain(token, text);
+            foreach (var token in new[] { "SemanticCapabilityCatalogV1", "ISemanticCapabilityCatalogV1", "LegacySemanticCapabilityMapV1" }) Assert.DoesNotContain(token, text);
         }
+
+        var infra = Path.Combine(root, "Backend/src/Astronomy.MediaFactory.Infrastructure");
+        var approved = new[]
+        {
+            Path.Combine(infra, "Production/Narration/Semantics/Catalog/SemanticCapabilityCatalogV1.cs"),
+            Path.Combine(infra, "Production/Narration/Semantics/Catalog/LegacySemanticCapabilityMapV1.cs"),
+            Path.Combine(infra, "Orchestration/RC2/NarrationGeneratorV5.cs")
+        }.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var references = Directory.EnumerateFiles(infra, "*.cs", SearchOption.AllDirectories)
+            .Where(file => File.ReadAllText(file).Contains("LegacySemanticCapabilityMapV1", StringComparison.Ordinal))
+            .Select(Path.GetFullPath)
+            .ToArray();
+
+        Assert.All(references, file => Assert.Contains(file, approved));
     }
 }

@@ -24,7 +24,8 @@ public sealed class AstronomyEventAliasCatalogV1
         new("Meteor Shower", "MeteorShower"),
         new("Full Moon", "FullMoon"),
         new("Named Full Moon", "NamedFullMoon"),
-        new("Deep Sky Object", "DeepSkyObject")
+        new("Deep Sky Object", "DeepSkyObject"),
+        new("BlackHoleOrScientificExplainer", "ScientificExplainer")
     ];
 
     private readonly Dictionary<string, string> _aliases;

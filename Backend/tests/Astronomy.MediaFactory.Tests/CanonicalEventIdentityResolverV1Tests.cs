@@ -97,16 +97,24 @@ public sealed class CanonicalEventIdentityResolverV1Tests
     }
 
     [Fact]
-    public void CurrentRuntimeDoesNotReferenceV1ResolverOrAliasCatalog()
+    public void RuntimeUsesV1EventIdentityOnlyThroughApprovedServices()
     {
         var root = Path.Combine(RepositoryTestPaths.Root(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure");
 
         Assert.True(Directory.Exists(root), $"Expected infrastructure source root to exist at '{root}'.");
 
-        var identityImplementationRoot = Path.Combine(root, "Production", "Narration", "Semantics", "Identity");
-        var runtimeFiles = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !IsInDirectory(identityImplementationRoot, f))
-            .ToArray();
+        var serviceCollection = File.ReadAllText(Path.Combine(root, "Extensions", "ServiceCollectionExtensions.cs"));
+        Assert.Contains("AddSingleton<ICanonicalAstronomyEventIdentityResolverV1, CanonicalAstronomyEventIdentityResolverV1>", serviceCollection);
+
+        var familyResolver = File.ReadAllText(Path.Combine(root, "Production", "Narration", "Semantics", "AstronomyFamilyProfileResolver.cs"));
+        Assert.Contains("ICanonicalAstronomyEventIdentityResolverV1", familyResolver);
+
+        var approvedInstantiationFiles = new[]
+        {
+            Path.Combine(root, "Extensions", "ServiceCollectionExtensions.cs"),
+            Path.Combine(root, "Production", "Narration", "Semantics", "AstronomyFamilyProfileResolver.cs")
+        }.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var runtimeFiles = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories).ToArray();
 
         foreach (var runtimeFile in runtimeFiles)
         {
@@ -114,12 +122,19 @@ public sealed class CanonicalEventIdentityResolverV1Tests
             var relativePath = Path.GetRelativePath(root, runtimeFile);
 
             Assert.False(
-                source.Contains("CanonicalAstronomyEventIdentityResolverV1", StringComparison.Ordinal),
-                $"Production source file '{relativePath}' must not reference CanonicalAstronomyEventIdentityResolverV1.");
+                source.Contains("new CanonicalAstronomyEventIdentityResolverV1", StringComparison.Ordinal) && !approvedInstantiationFiles.Contains(Path.GetFullPath(runtimeFile)),
+                $"Production source file '{relativePath}' must not directly instantiate CanonicalAstronomyEventIdentityResolverV1 outside approved semantic bootstrap/resolver code.");
             Assert.False(
-                source.Contains("AstronomyEventAliasCatalogV1", StringComparison.Ordinal),
+                source.Contains("AstronomyEventAliasCatalogV1", StringComparison.Ordinal) && !relativePath.StartsWith(Path.Combine("Production", "Narration", "Semantics", "Identity"), StringComparison.Ordinal),
                 $"Production source file '{relativePath}' must not reference AstronomyEventAliasCatalogV1.");
         }
+
+        var narrationGenerator = File.ReadAllText(Path.Combine(root, "Orchestration", "RC2", "NarrationGeneratorV5.cs"));
+        Assert.DoesNotContain("AstronomyEventAliasCatalogV1", narrationGenerator);
+        Assert.DoesNotContain("CanonicalAstronomyEventIdentityResolverV1", narrationGenerator);
+
+        var pipeline = File.ReadAllText(Path.Combine(root, "Persistence", "ProductionPipelineExecutionService.cs"));
+        Assert.DoesNotContain("AstronomyEventAliasCatalogV1", pipeline);
     }
 
     private static bool IsInDirectory(string directory, string file)

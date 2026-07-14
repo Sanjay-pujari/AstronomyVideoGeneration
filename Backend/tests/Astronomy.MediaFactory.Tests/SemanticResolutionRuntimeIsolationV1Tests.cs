@@ -9,23 +9,29 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class SemanticResolutionRuntimeIsolationV1Tests
 {
     [Fact]
-    public void Runtime_Files_Do_Not_Reference_Sprint4A_Types()
+    public void RuntimeUsesSemanticResolutionEngineWithoutBypassingItsInternalLayers()
     {
         var root = RepositoryTestPaths.Root();
-        var files = new[]{
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Orchestration/RC2/NarrationGeneratorV5.cs",
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/SemanticCapabilityResolver.cs",
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/SemanticCapabilitySourceRegistry.cs",
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/RequiredSemanticFactResolver.cs",
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/AstronomyFamilyProfileResolver.cs",
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/Persistence/ProductionPipelineExecutionService.cs",
-            "Backend/src/Astronomy.MediaFactory.Infrastructure/ServiceCollectionExtensions.cs"};
-        var forbidden = new[]{"ISemanticResolutionEngineV1","SemanticResolutionEngineV1","ISemanticCandidateCollectorV1","ISemanticCandidateEvaluatorV1","ISemanticCandidateSelectorV1","ResolvedSemanticFactV1"};
-        foreach (var f in files.Where(f => File.Exists(Path.Combine(root, f))))
+        var narration = File.ReadAllText(Path.Combine(root, "Backend/src/Astronomy.MediaFactory.Infrastructure/Orchestration/RC2/NarrationGeneratorV5.cs"));
+        var resolverBody = narration[narration.IndexOf("public sealed class RequiredSemanticFactResolver", StringComparison.Ordinal)..narration.IndexOf("public static class NarrationRealizedContextMapper", StringComparison.Ordinal)];
+        Assert.Contains("ISemanticResolutionEngineV1", resolverBody);
+        foreach (var token in new[]{"ISemanticCandidateCollectorV1","ISemanticCandidateEvaluatorV1","ISemanticConflictAnalyzerV1","ISemanticCandidateSelectorV1"})
+            Assert.DoesNotContain(token, resolverBody);
+        Assert.DoesNotContain("TryExtract", resolverBody);
+        Assert.Contains("_semanticResolutionEngine.Resolve", resolverBody);
+
+        var orchestrationFiles = new[]{
+            "Backend/src/Astronomy.MediaFactory.Infrastructure/Persistence/ProductionPipelineExecutionService.cs"
+        };
+        foreach (var f in orchestrationFiles.Where(f => File.Exists(Path.Combine(root, f))))
         {
             var text = File.ReadAllText(Path.Combine(root, f));
-            foreach (var token in forbidden) Assert.DoesNotContain(token, text);
+            foreach (var token in new[]{"ISemanticCandidateCollectorV1","ISemanticCandidateEvaluatorV1","ISemanticConflictAnalyzerV1","ISemanticCandidateSelectorV1","ISemanticResolutionEngineV1","SemanticResolutionRequestV1","ResolvedSemanticFactV1"})
+                Assert.DoesNotContain(token, text);
         }
+
+        var engine = File.ReadAllText(Path.Combine(root, "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/Resolution/V1/Engine/SemanticResolutionEngineV1.cs"));
+        Assert.Contains("ISemanticCandidateSelectorV1 selector", engine);
     }
 
     [Fact]

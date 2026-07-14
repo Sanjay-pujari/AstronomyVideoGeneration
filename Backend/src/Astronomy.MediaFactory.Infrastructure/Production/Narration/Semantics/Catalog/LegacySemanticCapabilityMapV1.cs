@@ -7,7 +7,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.C
 [JsonConverter(typeof(JsonStringEnumConverter<LegacySemanticCapabilityResolutionStatus>))]
 public enum LegacySemanticCapabilityResolutionStatus { CanonicalMatch, DeprecatedAliasMatch, StructuredFieldMigration, UnsupportedLegacyTerm, AmbiguousMapping }
 [JsonConverter(typeof(JsonStringEnumConverter<LegacySemanticCapabilityMigrationDisposition>))]
-public enum LegacySemanticCapabilityMigrationDisposition { CanonicalCapability, StructuredField, Future, NeedsDomainDecision, RemoveDeadReference, Unsupported }
+public enum LegacySemanticCapabilityMigrationDisposition { CanonicalCapability, StructuredField, Future, NeedsDomainDecision, RemoveDeadReference, Unsupported, UnsupportedLegacyTerm }
 
 public sealed record LegacySemanticCapabilityResolution(string InputTerm, LegacySemanticCapabilityResolutionStatus Status, SemanticCapabilityId? CanonicalCapabilityId, string? StructuredFieldPath, LegacySemanticCapabilityMigrationDisposition MigrationDisposition, bool IsDeprecatedAlias, string? Diagnostic);
 public sealed record LegacySemanticCapabilityMapEntry(string LegacyTerm, SemanticCapabilityId? CanonicalCapabilityId, string? StructuredFieldPath, LegacySemanticCapabilityMigrationDisposition MigrationDisposition);
