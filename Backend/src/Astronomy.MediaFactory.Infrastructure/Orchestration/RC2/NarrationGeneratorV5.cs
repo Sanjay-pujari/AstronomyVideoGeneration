@@ -234,6 +234,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var semanticCapabilityDiagnosticsPath = Path.Combine(narrationRoot, "semantic-capability-diagnostics.json");
         await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolutionDiagnostics = familyProfileResolution.Diagnostics, semanticResolutionDiagnostics = semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(semanticCapabilityDiagnosticsPath, JsonSerializer.Serialize(semanticResolution.Diagnostics, JsonOptions), cancellationToken);
+        await WriteAllTextUtf8Async(Path.Combine(narrationRoot, "semantic-source-context-presence.json"), JsonSerializer.Serialize(semanticResolution.Diagnostics, JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(Path.Combine(narrationRoot, "domain-knowledge-diagnostics.json"), JsonSerializer.Serialize(DomainKnowledgeDiagnosticsBuilder.Build(familyProfileResolution.Resolved.ResolvedProfileId, familyProfile.FamilyId, semanticResolution), JsonOptions), cancellationToken);
 
         var narrationInputNormalization = NarrationInputNormalizer.Normalize(
@@ -2283,6 +2284,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var diagnostics = new
         {
             component = "RequiredSemanticFactResolver-v1",
+            sourceContextPresence = BuildPhase7SourceContextPresenceSnapshot(input),
             semanticCapabilityDiagnostics = beats.SelectMany(b => b.CapabilityResolutions.Select(r => new { r.Capability, capabilityId = r.Capability, registeredAdapterIds = r.Candidates.Select(c => c.Source).Distinct(), adaptersExecuted = r.Candidates.Select(c => c.Source).Concat(r.RejectedSources.Select(x => x.Source)).Distinct(), candidateSources = r.Candidates.Select(c => c.Source).Distinct(), candidatesFound = r.Candidates.Count, rejectedCandidates = r.RejectedSources, selectedAdapterId = r.SelectedSource, selectedSource = r.SelectedSource, selectedStrength = r.CapabilityStrength, selectionReason = r.Status, conversionApplied = r.SubstitutionsApplied.Any(x => x.Contains("converted", StringComparison.OrdinalIgnoreCase)), substitutionApplied = r.SubstitutionsApplied.Any(), unresolvedReason = r.Status.Equals("Resolved", StringComparison.OrdinalIgnoreCase) ? null : string.Join("; ", r.RejectedSources.Select(x => x.Reason).DefaultIfEmpty("NoApprovedSourceAvailable")) })),
             sourcePrecedence = "capability-specific adapter precedence",
             blocking = beats.Any(b => b.Blocking),
@@ -2292,6 +2294,31 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     }
 
 
+
+
+    private static object BuildPhase7SourceContextPresenceSnapshot(RequiredSemanticFactResolutionInput input)
+    {
+        var request = input.ProductionPipelineRequest;
+        return new
+        {
+            productionPipelineRequest = new { present = request is not null, planId = request?.PlanId, eventType = request?.EventType, regionId = request?.RegionId, timeZone = request?.TimeZone, language = request?.Language, primaryObjectCount = request?.PrimaryObjects.Count ?? 0, secondaryObjectCount = request?.SecondaryObjects.Count ?? 0 },
+            productionEventIntelligence = new { present = input.ProductionEventIntelligence.HasValue, eventType = TryGetRootString(input.ProductionEventIntelligence, "eventType") },
+            canonicalEventIdentity = new { present = input.CanonicalEventIdentity is not null, eventType = input.CanonicalEventIdentity?.EventType, family = input.CanonicalEventIdentity?.EventFamily, source = input.CanonicalEventIdentity?.ResolutionSource },
+            familyProfile = new { present = input.FamilyProfile is not null, familyId = input.FamilyProfile.FamilyId, profileId = input.FamilyProfile.FamilyId },
+            observationMetadata = new { present = input.ObservationMetadata.HasValue },
+            editorialContract = new { present = input.EditorialContract.HasValue },
+            documentaryContract = new { longPresent = input.LongDocumentaryContract.HasValue, shortPresent = input.ShortDocumentaryContract.HasValue },
+            locationContext = new { present = request is not null && (!string.IsNullOrWhiteSpace(request.RegionId) || !string.IsNullOrWhiteSpace(request.VisibilityRegion)), regionId = request?.RegionId, visibilityRegion = request?.VisibilityRegion },
+            languageAndFormat = new { language = input.LanguageProfile.LanguageCode, requestedFormats = request?.RequestedOutputs ?? Array.Empty<string>() },
+            beatOccurrence = new { longBeatCount = CountDocumentaryBeats(input.LongDocumentaryContract), shortBeatCount = CountDocumentaryBeats(input.ShortDocumentaryContract) }
+        };
+    }
+
+    private static int CountDocumentaryBeats(JsonElement? contract)
+    {
+        if (!contract.HasValue || !contract.Value.TryGetProperty("beats", out var beats) || beats.ValueKind != JsonValueKind.Array) return 0;
+        return beats.GetArrayLength();
+    }
 
     private static IEnumerable<FactConflict> ToFactConflicts(RequirementOccurrence occurrence, ResolvedSemanticFactV1 fact)
         => fact.Conflicts.Where(c => c.Material).Select(c => new FactConflict(occurrence.LegacyFactType, c.CandidateIds.ToArray(), fact.WinningSourceId ?? fact.WinningAdapterId ?? fact.CapabilityId.Value, !c.Resolvable, c.DiagnosticMessage));

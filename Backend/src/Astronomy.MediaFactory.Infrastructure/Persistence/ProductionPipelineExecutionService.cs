@@ -15297,6 +15297,29 @@ public sealed partial class ProductionPipelineExecutionService(
             File.Delete(file);
     }
 
+    private static void PreservePhase7DiagnosticEvidenceForOverwrite(ProductionPhaseContext context)
+    {
+        var diagnosticsRoot = Path.Combine(context.ExecutionContext.ValidationRoot!, "phase-07-preserved-diagnostics");
+        Directory.CreateDirectory(diagnosticsRoot);
+        var narrationRoot = BuildNarrationV5Root(context);
+        var diagnosticFiles = new[]
+        {
+            Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json"),
+            Path.Combine(narrationRoot, "semantic-capability-diagnostics.json"),
+            Path.Combine(narrationRoot, "semantic-registry-validation-report.json"),
+            Path.Combine(narrationRoot, "semantic-source-context-presence.json"),
+            Path.Combine(narrationRoot, "domain-knowledge-diagnostics.json"),
+            Path.Combine(context.ExecutionContext.ValidationRoot!, "phase-07-validation.json")
+        };
+
+        foreach (var file in diagnosticFiles)
+        {
+            if (!File.Exists(file)) continue;
+            var name = Path.GetFileName(file);
+            File.Copy(file, Path.Combine(diagnosticsRoot, name), overwrite: true);
+        }
+    }
+
     private static void DeleteProductionSubtree(string path, List<string>? deletedFiles = null, List<string>? deletedDirectories = null)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path)) return;
@@ -15322,6 +15345,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
         if (deleteStartPhaseNo <= 7 && deleteEndPhaseNo >= 7)
         {
+            PreservePhase7DiagnosticEvidenceForOverwrite(context);
             DeleteProductionSubtree(BuildNarrationV5Root(context), deletedFiles, deletedDirectories);
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), deletedFiles);
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"), deletedFiles);

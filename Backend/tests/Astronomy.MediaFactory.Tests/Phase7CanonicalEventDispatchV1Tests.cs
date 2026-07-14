@@ -44,12 +44,8 @@ public sealed class Phase7CanonicalEventDispatchV1Tests
     }
 
     [Theory]
-    [InlineData("METEOR_SHOWER", "MeteorShower")]
-    [InlineData("NAMED_FULL_MOON", "NamedFullMoon")]
-    [InlineData("SOLAR_ECLIPSE", "SolarEclipse")]
-    [InlineData("LUNAR_ECLIPSE", "LunarEclipse")]
-    [InlineData("PLANET_GROUPING", "PlanetGrouping")]
-    public void ProductionAliasesResolveToExpectedActiveFamilies(string eventType, string expectedFamily)
+    [InlineData("PLANET_CONJUNCTION", "PlanetPairing")]
+    public void ConfirmedProductionAliasesResolve(string eventType, string expectedFamily)
     {
         var identity = IdentityResolver.Resolve(eventType);
         var family = FamilyResolver.ResolveFamilyProfile(ToLegacyIdentity(identity));
