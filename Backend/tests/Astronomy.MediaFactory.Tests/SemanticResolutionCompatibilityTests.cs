@@ -34,7 +34,7 @@ public sealed class SemanticResolutionCompatibilityTests
         var second = LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, "EventIdentity", "beat-1", "Required", "en")!;
 
         Assert.NotSame(first.SourceInputs, second.SourceInputs);
-        Assert.True(first.SourceInputs!.SequenceEqual(second.SourceInputs!));
+        Assert.True(first.SourceInputs!.Value.SequenceEqual(second.SourceInputs!.Value));
     }
 
     [Fact]
@@ -44,9 +44,10 @@ public sealed class SemanticResolutionCompatibilityTests
 
         var first = LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, "EventIdentity", "beat-1", "Required", "en")!;
         var second = LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, "EventIdentity", "beat-1", "Required", "en")!;
-        ((string[])first.SourceInputs!)[0] = "mutated";
+        var callerOwnedCopy = first.SourceInputs!.Value.ToArray();
+        callerOwnedCopy[0] = "mutated";
 
-        Assert.Equal("path", second.SourceInputs![0]);
+        Assert.Equal("path", second.SourceInputs!.Value[0]);
     }
 
     private static ResolvedSemanticFactV1 ResolvedFact() => new(new SemanticCapabilityId("EventIdentity"), SemanticResolutionStatusV1.Resolved, true, new SemanticSourceValueV1("Solar eclipse", "String"), "Solar eclipse", "Solar eclipse", "candidate-1", "adapter-1", "source-1", SemanticEvidenceCategoryV1.VerifiedEventData, SemanticEvidenceStrengthV1.Strong, .95m, [new("source-1", "model", "path", true)], [], [], [], "FirstApprovedByPriority", [], [], "Resolved", "Resolved");
@@ -70,6 +71,6 @@ public sealed class SemanticResolutionCompatibilityTests
         Assert.Equal(first.SafeForNarration, second.SafeForNarration);
         Assert.Equal(first.FactOrigin, second.FactOrigin);
         Assert.Equal(first.DerivationRuleId, second.DerivationRuleId);
-        Assert.True((first.SourceInputs ?? []).SequenceEqual(second.SourceInputs ?? []));
+        Assert.True((first.SourceInputs?.ToArray() ?? []).SequenceEqual(second.SourceInputs?.ToArray() ?? []));
     }
 }

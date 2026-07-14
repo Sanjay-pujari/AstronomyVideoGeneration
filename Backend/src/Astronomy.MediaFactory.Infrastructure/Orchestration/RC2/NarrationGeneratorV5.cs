@@ -2273,7 +2273,30 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     }
 
     private static ResolvedSemanticFact? Project(RequirementOccurrence occurrence, ResolvedSemanticFactV1 fact, RequiredSemanticFactResolutionInput input)
-        => LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, occurrence.LegacyFactType, occurrence.BeatId, occurrence.Required ? "Required" : "Optional", input.LanguageProfile.LanguageCode);
+    {
+        var legacy = LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, occurrence.LegacyFactType, occurrence.BeatId, occurrence.Required ? "Required" : "Optional", input.LanguageProfile.LanguageCode);
+        return legacy is null
+            ? null
+            : new ResolvedSemanticFact(
+                legacy.FactType,
+                legacy.FactKey,
+                legacy.CanonicalValue,
+                legacy.Unit,
+                legacy.SemanticMeaning,
+                legacy.SourceArtifact,
+                legacy.SourceField,
+                legacy.SourceBeatId,
+                legacy.VerificationStatus.ToString(),
+                legacy.Confidence,
+                legacy.Requiredness.ToString(),
+                legacy.LocalizedDisplayValue,
+                legacy.SpeakableValue,
+                legacy.Language,
+                legacy.SafeForNarration,
+                legacy.FactOrigin,
+                legacy.DerivationRuleId,
+                legacy.SourceInputs?.ToArray());
+    }
 
     private IEnumerable<RequirementOccurrence> EnumerateRequirementOccurrences(RequiredSemanticFactResolutionInput input)
     {
@@ -2301,7 +2324,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var missingBehavior = required ? SemanticMissingValueBehaviorV1.BlockRequired : SemanticMissingValueBehaviorV1.OmitOptional;
         var adapterContext = CreateAdapterContext(input);
         var request = new SemanticResolutionRequestV1(capabilityId, required, required ? SemanticRequirementLevelV1.Required : SemanticRequirementLevelV1.Optional, missingBehavior, minimumStrength, allowedCategories, adapterContext, input.FamilyProfile.FamilyId, format, beatId);
-        var scopeKey = new SemanticResolutionScopeKeyV1(capabilityId, required, minimumStrength, allowedCategories, missingBehavior, adapterContext.Identity.CanonicalEventType, adapterContext.Identity.ResolutionSource);
+        var scopeKey = new SemanticResolutionScopeKeyV1(capabilityId, required, minimumStrength, allowedCategories, missingBehavior, adapterContext.EventIdentity!.CanonicalEventType, adapterContext.EventIdentity.ResolutionSource);
         return new RequirementOccurrence(format, sceneId, beatId, role, type, capabilityId, required, scopeKey, request, capability);
     }
 

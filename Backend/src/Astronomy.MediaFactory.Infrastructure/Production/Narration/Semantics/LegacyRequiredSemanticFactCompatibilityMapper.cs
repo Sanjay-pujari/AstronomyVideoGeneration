@@ -1,4 +1,4 @@
-using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
 
 namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
@@ -21,9 +21,9 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
             fact.WinningSourceId ?? fact.WinningAdapterId ?? "SemanticResolutionEngineV1",
             fact.WinningCandidateId ?? fact.CapabilityId.Value,
             beatId,
-            "Verified",
+            SemanticVerificationStatus.Verified,
             fact.Confidence,
-            requiredness,
+            Enum.Parse<SemanticFactRequiredness>(requiredness, ignoreCase: true),
             fact.SpeakableValue,
             fact.SpeakableValue,
             language,
