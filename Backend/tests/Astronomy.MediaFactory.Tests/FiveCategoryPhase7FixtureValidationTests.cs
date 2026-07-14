@@ -38,17 +38,17 @@ public static class Phase7ProductionFixtures
 {
     public static IReadOnlyList<Phase7ProductionFixture> All { get; } =
     [
-        Fixture("Jupiter–Venus conjunction", "production planning path: PLANET_CONJUNCTION detection/content-plan request", "PLANET_CONJUNCTION", "PlanetPairing", ["Jupiter"], ["Venus"], "IN-RJ-UDAIPUR", "Asia/Kolkata", 1.63m),
-        Fixture("Mars–Jupiter conjunction", "production planning path: PLANET_CONJUNCTION detection/content-plan request", "PLANET_CONJUNCTION", "PlanetPairing", ["Mars"], ["Jupiter"], "US-CA-SF", "America/Los_Angeles", 0.75m),
-        Fixture("Geminids meteor shower", "production planning path: Meteor Shower content-plan request", "Meteor Shower", "MeteorShower", ["Geminids Meteor Shower"], [], "GLOBAL", "UTC", null),
-        Fixture("Wolf Moon / Named Full Moon", "production planning path: Named Full Moon content-plan request", "Named Full Moon", "NamedFullMoon", ["Moon"], [], "GLOBAL", "UTC", null),
-        Fixture("Solar Eclipse", "production planning path: ManualContentPlanCreation solar eclipse request", "Solar Eclipse", "SolarEclipse", ["Sun", "Moon"], [], "US-TX", "America/Chicago", null)
+        Fixture("Jupiter–Venus conjunction", "production planning path: PLANET_CONJUNCTION detection/content-plan request", "PLANET_CONJUNCTION", "PlanetPairing", "PlanetPairing", ["Jupiter"], ["Venus"], "IN-RJ-UDAIPUR", "Asia/Kolkata", 1.63m),
+        Fixture("Mars–Jupiter conjunction", "production planning path: PLANET_CONJUNCTION detection/content-plan request", "PLANET_CONJUNCTION", "PlanetPairing", "PlanetPairing", ["Mars"], ["Jupiter"], "US-CA-SF", "America/Los_Angeles", 0.75m),
+        Fixture("Geminids meteor shower", "production planning path: Meteor Shower content-plan request", "Meteor Shower", "MeteorShower", "MeteorShower", ["Geminids Meteor Shower"], [], "GLOBAL", "UTC", null),
+        Fixture("Wolf Moon / Named Full Moon", "production planning path: NamedFullMoon astronomy ingestion/persisted-plan request", "NamedFullMoon", "NamedFullMoon", "NamedFullMoon", ["Moon"], [], "GLOBAL", "UTC", null),
+        Fixture("Solar Eclipse", "production planning path: ManualContentPlanCreation solar eclipse request", "Solar Eclipse", "SolarEclipse", "Eclipse", ["Sun", "Moon"], [], "US-TX", "America/Chicago", null)
     ];
 
-    private static Phase7ProductionFixture Fixture(string name, string source, string rawCode, string family, IReadOnlyList<string> primary, IReadOnlyList<string> secondary, string region, string timezone, decimal? separation)
+    private static Phase7ProductionFixture Fixture(string name, string source, string rawCode, string expectedCanonicalIdentity, string expectedFamily, IReadOnlyList<string> primary, IReadOnlyList<string> secondary, string region, string timezone, decimal? separation)
     {
         var id = Guid.NewGuid();
-        var request = new ContentPlanProductionPipelineRequest(id, "Astronomy", name, name, rawCode, region, "en", primary, secondary, DateTimeOffset.Parse("2026-08-12T01:00:00Z"), DateTimeOffset.Parse("2026-08-12T02:00:00Z"), DateTimeOffset.Parse("2026-08-12T03:00:00Z"), DateTimeOffset.Parse("2026-08-10T12:00:00Z"), $"fixture-{id:N}", "long", ["long", "short"], 80, 70, 75, 77, "Verified", source, family, null, name.Contains("conjunction", StringComparison.OrdinalIgnoreCase) ? "western sky" : null, region, null, "after sunset", name.Contains("Geminids", StringComparison.OrdinalIgnoreCase) ? "radiant only when typed source supplies it" : null, null, null, ["Short", "Long"], [], [source], timezone, separation);
-        return new(name, source, request, family, family);
+        var request = new ContentPlanProductionPipelineRequest(id, "Astronomy", name, name, rawCode, region, "en", primary, secondary, DateTimeOffset.Parse("2026-08-12T01:00:00Z"), DateTimeOffset.Parse("2026-08-12T02:00:00Z"), DateTimeOffset.Parse("2026-08-12T03:00:00Z"), DateTimeOffset.Parse("2026-08-10T12:00:00Z"), $"fixture-{id:N}", "long", ["long", "short"], 80, 70, 75, 77, "Verified", source, expectedFamily, null, name.Contains("conjunction", StringComparison.OrdinalIgnoreCase) ? "western sky" : null, region, null, "after sunset", name.Contains("Geminids", StringComparison.OrdinalIgnoreCase) ? "radiant only when typed source supplies it" : null, null, null, ["Short", "Long"], [], [source], timezone, separation);
+        return new(name, source, request, expectedCanonicalIdentity, expectedFamily);
     }
 }
