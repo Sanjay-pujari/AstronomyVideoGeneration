@@ -11,8 +11,8 @@ public sealed class CurrentNarrationV5DependencyCharacterizationTests
     [Fact]
     public void CurrentBehavior_NarrationGeneratorV5IsActivePhase7GeneratorAndKeepsStaticFallbacks()
     {
-        var production = TestPaths.Source("Persistence", "ProductionPipelineExecutionService.cs");
-        var generator = TestPaths.Source("Orchestration", "RC2", "NarrationGeneratorV5.cs");
+        var production = RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs");
+        var generator = RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "NarrationGeneratorV5.cs");
         var productionSource = File.ReadAllText(production);
         var generatorSource = File.ReadAllText(generator);
 
@@ -276,7 +276,7 @@ public sealed class CurrentSemanticFallbackCharacterizationTests
         Assert.True(zhr.TryExtract(new SemanticCapabilitySourceContext("MeteorShower", "long", null, null, null, null, null, TestJson.Json("{\"deep\":{\"expectedZhr\":120}}"), null, null), out var candidate, out _));
         Assert.Equal("deep.expectedZhr", candidate.SourceField);
 
-        var source = File.ReadAllText(TestPaths.Source("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
         Assert.Contains("AddJsonFacts", source);
         Assert.Contains("private static bool TryDerive", source);
         Assert.Contains("return false;", source.Substring(source.IndexOf("private static bool TryDerive", StringComparison.Ordinal)));
@@ -379,14 +379,14 @@ public sealed class CurrentSemanticArchitectureStaticCharacterizationTests
     [Fact]
     public void ExistingImplementation_StaticMigrationBaselineIsColocatedAndUsesDefaults()
     {
-        var source = File.ReadAllText(TestPaths.Source("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
         foreach (var token in new[] { "CanonicalEventIdentityResolver", "AstronomyFamilyProfileCatalog", "RequiredSemanticFactResolver", "AstronomyDomainKnowledgeProvider", "NarrationRealizer", "RequiredSemanticFactPhase7Validator" })
             Assert.Contains(token, source);
-        Assert.True(File.Exists(TestPaths.Source("Production", "Narration", "Semantics", "SemanticDefaults.cs")));
+        Assert.True(File.Exists(RepositoryTestPaths.InfrastructureSource("Production", "Narration", "Semantics", "SemanticDefaults.cs")));
         Assert.Contains("AddJsonFacts", source);
         Assert.Contains("TryDerive", source);
         Assert.Contains("SemanticDefaults.SemanticCapabilitySourceRegistry", source);
-        Assert.Contains("new NarrationGeneratorV5", File.ReadAllText(TestPaths.Source("Persistence", "ProductionPipelineExecutionService.cs")));
+        Assert.Contains("new NarrationGeneratorV5", File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs")));
     }
 }
 
@@ -408,35 +408,4 @@ internal static class TestResolver
 internal static class TestJson
 {
     public static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
-}
-
-internal static class TestPaths
-{
-    public static string Source(params string[] parts)
-    {
-        var path = Path.Combine(new[] { RepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure" }.Concat(parts).ToArray());
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException($"Requested source file was not found under Backend/src/Astronomy.MediaFactory.Infrastructure: {Path.Combine(parts)}", path);
-        }
-
-        return path;
-    }
-
-    private static string RepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (Directory.Exists(Path.Combine(directory.FullName, "Backend", "src")) &&
-                Directory.Exists(Path.Combine(directory.FullName, "Backend", "tests")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException($"Could not locate repository root from {AppContext.BaseDirectory}; expected parent containing Backend/src and Backend/tests.");
-    }
 }

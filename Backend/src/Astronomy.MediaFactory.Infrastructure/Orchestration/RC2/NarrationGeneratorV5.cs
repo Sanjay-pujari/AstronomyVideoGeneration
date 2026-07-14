@@ -2241,24 +2241,26 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     {
         var all = new List<CandidateFact>();
         var occurrences = EnumerateRequirementOccurrences(input).ToArray();
-        var resolvedByScope = occurrences
-            .GroupBy(o => o.ScopeKey)
-            .ToDictionary(g => g.Key, g => _semanticResolutionEngine.Resolve(g.First().Request).Fact);
+        var supportedOccurrences = occurrences.Where(o => o.Request is not null && o.ScopeKey is not null).ToArray();
+        var resolvedByScope = supportedOccurrences
+            .GroupBy(o => o.ScopeKey!)
+            .ToDictionary(g => g.Key, g => _semanticResolutionEngine.Resolve(g.First().Request!).Fact);
 
         var beats = new List<ResolvedBeatFacts>();
         foreach (var beatGroup in occurrences.GroupBy(o => new { o.Format, o.SceneId, o.BeatId, o.Role }))
         {
             var requiredOccurrences = beatGroup.Where(o => o.Required).ToArray();
             var optionalOccurrences = beatGroup.Where(o => !o.Required).ToArray();
-            var resolvedRequired = requiredOccurrences.Select(o => Project(o, resolvedByScope[o.ScopeKey], input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
-            var resolvedOptional = optionalOccurrences.Select(o => Project(o, resolvedByScope[o.ScopeKey], input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
+            var resolvedRequired = requiredOccurrences.Select(o => o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey], input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
+            var resolvedOptional = optionalOccurrences.Select(o => o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey], input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
             var required = requiredOccurrences.Select(o => o.LegacyFactType).ToArray();
             var optional = optionalOccurrences.Select(o => o.LegacyFactType).ToArray();
             var missing = required.Where(t => !resolvedRequired.Any(f => Matches(t, f.FactType))).ToArray();
             var omitted = optional.Where(t => !resolvedOptional.Any(f => Matches(t, f.FactType))).ToArray();
             var conflicts = FindConflicts(required.Concat(optional), all).ToArray();
             var capabilityResults = beatGroup.Select(o => o.CapabilityResolution).ToArray();
-            var warnings = omitted.Select(o => $"Optional capability {o} was unavailable and omitted.").Concat(capabilityResults.SelectMany(r => r.Warnings)).Concat(conflicts.Select(c => c.Message)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var unsupportedWarnings = beatGroup.Where(o => !o.IsSupported).Select(o => $"Unsupported legacy capability {o.LegacyFactType} classified as {o.CapabilityResolution.Status}; no semantic resolution request was created.");
+            var warnings = omitted.Select(o => $"Optional capability {o} was unavailable and omitted.").Concat(unsupportedWarnings).Concat(capabilityResults.SelectMany(r => r.Warnings)).Concat(conflicts.Select(c => c.Message)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             beats.Add(new(beatGroup.Key.Format, beatGroup.Key.SceneId, beatGroup.Key.BeatId, beatGroup.Key.Role, resolvedRequired, resolvedOptional, missing, omitted, warnings, conflicts, capabilityResults, missing.Length > 0 || conflicts.Any(c => c.Blocking)));
         }
         var diagnostics = new
@@ -2318,17 +2320,27 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     private static RequirementOccurrence CreateOccurrence(RequiredSemanticFactResolutionInput input, string format, string sceneId, string beatId, string role, string type, bool required, SemanticCapabilityResolution capability)
     {
         var map = LegacySemanticCapabilityMapV1.Entries.FirstOrDefault(e => e.LegacyTerm.Equals(type, StringComparison.OrdinalIgnoreCase));
-        var capabilityId = map.CanonicalCapabilityId ?? new SemanticCapabilityId(type);
+        var capabilityId = map?.CanonicalCapabilityId;
+        if (capabilityId is null)
+        {
+            return new RequirementOccurrence(format, sceneId, beatId, role, type, new SemanticCapabilityId(type), required, null, null, capability);
+        }
+
         var minimumStrength = SemanticEvidenceStrengthV1.Weak;
         var allowedCategories = Enum.GetValues<SemanticEvidenceCategoryV1>().OrderBy(x => x.ToString(), StringComparer.Ordinal).ToArray();
         var missingBehavior = required ? SemanticMissingValueBehaviorV1.BlockRequired : SemanticMissingValueBehaviorV1.OmitOptional;
         var adapterContext = CreateAdapterContext(input);
-        var request = new SemanticResolutionRequestV1(capabilityId, required, required ? SemanticRequirementLevelV1.Required : SemanticRequirementLevelV1.Optional, missingBehavior, minimumStrength, allowedCategories, adapterContext, input.FamilyProfile.FamilyId, format, beatId);
-        var scopeKey = new SemanticResolutionScopeKeyV1(capabilityId, required, minimumStrength, allowedCategories, missingBehavior, adapterContext.EventIdentity!.CanonicalEventType, adapterContext.EventIdentity.ResolutionSource);
-        return new RequirementOccurrence(format, sceneId, beatId, role, type, capabilityId, required, scopeKey, request, capability);
+        var sourceContextIdentity = FirstNonEmpty(adapterContext.EventIdentity?.CanonicalEventType, input.FamilyProfile.FamilyId, "UnknownEvent");
+        var sourceContextVersion = FirstNonEmpty(adapterContext.EventIdentity?.ResolutionSource, "RequiredSemanticFactResolver.LegacyInput");
+        var request = new SemanticResolutionRequestV1(capabilityId.Value, required, required ? SemanticRequirementLevelV1.Required : SemanticRequirementLevelV1.Optional, missingBehavior, minimumStrength, allowedCategories, adapterContext, input.FamilyProfile.FamilyId, format, beatId);
+        var scopeKey = new SemanticResolutionScopeKeyV1(capabilityId.Value, required, minimumStrength, allowedCategories, missingBehavior, sourceContextIdentity, sourceContextVersion);
+        return new RequirementOccurrence(format, sceneId, beatId, role, type, capabilityId.Value, required, scopeKey, request, capability);
     }
 
-    private sealed record RequirementOccurrence(string Format, string SceneId, string BeatId, string Role, string LegacyFactType, SemanticCapabilityId CapabilityId, bool Required, SemanticResolutionScopeKeyV1 ScopeKey, SemanticResolutionRequestV1 Request, SemanticCapabilityResolution CapabilityResolution);
+    private sealed record RequirementOccurrence(string Format, string SceneId, string BeatId, string Role, string LegacyFactType, SemanticCapabilityId CapabilityId, bool Required, SemanticResolutionScopeKeyV1? ScopeKey, SemanticResolutionRequestV1? Request, SemanticCapabilityResolution CapabilityResolution)
+    {
+        public bool IsSupported => Request is not null && ScopeKey is not null;
+    }
 
     private static Dictionary<string, SemanticCapabilityCandidate[]> CandidateSourcesByCapability(IEnumerable<SemanticCapabilityResolution> resolutions) => resolutions
         .GroupBy(r => r.Capability, StringComparer.OrdinalIgnoreCase)

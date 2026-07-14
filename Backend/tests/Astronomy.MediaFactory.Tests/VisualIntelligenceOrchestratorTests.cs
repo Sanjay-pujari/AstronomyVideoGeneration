@@ -533,20 +533,12 @@ public sealed class VisualIntelligenceOrchestratorTests
 
     private static VisualIntelligenceOptions BindVisualIntelligenceOptions(string fileName)
     {
-        var apiPath = Path.Combine(FindRepositoryRoot().FullName, "Backend", "src", "Astronomy.MediaFactory.Api");
+        var apiPath = Path.Combine(RepositoryTestPaths.Root(), "Backend", "src", "Astronomy.MediaFactory.Api");
         var configuration = new ConfigurationBuilder()
             .SetBasePath(apiPath)
             .AddJsonFile(fileName, optional: false)
             .Build();
         return configuration.GetSection(VisualIntelligenceOptions.SectionName).Get<VisualIntelligenceOptions>() ?? new VisualIntelligenceOptions();
-    }
-
-    private static DirectoryInfo FindRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Backend", "src", "Astronomy.MediaFactory.Api", "appsettings.json")))
-            directory = directory.Parent;
-        return directory ?? throw new DirectoryNotFoundException("Could not locate repository root.");
     }
 
     private sealed class CountingProviderAdapter : IProviderAdapter

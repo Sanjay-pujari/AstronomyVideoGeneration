@@ -11,7 +11,7 @@ public sealed class SemanticResolutionRuntimeIsolationV1Tests
     [Fact]
     public void Runtime_Files_Do_Not_Reference_Sprint4A_Types()
     {
-        var root = FindRoot();
+        var root = RepositoryTestPaths.Root();
         var files = new[]{
             "Backend/src/Astronomy.MediaFactory.Infrastructure/Orchestration/RC2/NarrationGeneratorV5.cs",
             "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/SemanticCapabilityResolver.cs",
@@ -31,7 +31,7 @@ public sealed class SemanticResolutionRuntimeIsolationV1Tests
     [Fact]
     public void Sprint4A_Components_Remain_Separated_By_Interface()
     {
-        var root = FindRoot();
+        var root = RepositoryTestPaths.Root();
         var collectorPath = Path.Combine(
             root,
             "Backend",
@@ -65,22 +65,4 @@ public sealed class SemanticResolutionRuntimeIsolationV1Tests
         Assert.Contains("ISemanticCandidateCollectorV1", typeof(SemanticResolutionEngineV1).GetConstructors().Single().ToString());
     }
 
-    static string FindRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (directory is not null)
-        {
-            if (Directory.Exists(Path.Combine(directory.FullName, "Backend", "src")) &&
-                Directory.Exists(Path.Combine(directory.FullName, "Backend", "tests")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException(
-            $"Could not locate repository root from '{AppContext.BaseDirectory}'. Expected a parent directory containing both 'Backend/src' and 'Backend/tests'.");
-    }
 }

@@ -104,7 +104,7 @@ public sealed class SemanticCapabilityCatalogV1Tests
     [Fact]
     public void Runtime_Code_Does_Not_Reference_V1_Catalog_Types()
     {
-        var root = FindRepositoryRoot();
+        var root = RepositoryTestPaths.Root();
         var files = new[]
         {
             "Backend/src/Astronomy.MediaFactory.Infrastructure/Orchestration/RC2/NarrationGeneratorV5.cs",
@@ -121,7 +121,6 @@ public sealed class SemanticCapabilityCatalogV1Tests
         }
     }
 
-    private static string FindRepositoryRoot()
     {
         var dir = AppContext.BaseDirectory;
         while (dir is not null && !File.Exists(Path.Combine(dir, "AstronomyVideoGeneration.sln")) && !Directory.Exists(Path.Combine(dir, ".git"))) dir = Directory.GetParent(dir)?.FullName;
