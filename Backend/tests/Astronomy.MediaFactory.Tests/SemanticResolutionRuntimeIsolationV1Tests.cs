@@ -31,10 +31,56 @@ public sealed class SemanticResolutionRuntimeIsolationV1Tests
     [Fact]
     public void Sprint4A_Components_Remain_Separated_By_Interface()
     {
-        Assert.DoesNotContain("ISemanticCandidateSelectorV1", File.ReadAllText(Path.Combine(FindRoot(), "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/Resolution/V1/Collection/SemanticCandidateCollectorV1.cs")));
-        Assert.DoesNotContain("TryExtract", File.ReadAllText(Path.Combine(FindRoot(), "Backend/src/Astronomy.MediaFactory.Infrastructure/Production/Narration/Semantics/Resolution/V1/Selection/SemanticCandidateSelectorV1.cs")));
+        var root = FindRoot();
+        var collectorPath = Path.Combine(
+            root,
+            "Backend",
+            "src",
+            "Astronomy.MediaFactory.Infrastructure",
+            "Production",
+            "Narration",
+            "Semantics",
+            "Resolution",
+            "V1",
+            "Collection",
+            "SemanticCandidateCollectorV1.cs");
+        var selectorPath = Path.Combine(
+            root,
+            "Backend",
+            "src",
+            "Astronomy.MediaFactory.Infrastructure",
+            "Production",
+            "Narration",
+            "Semantics",
+            "Resolution",
+            "V1",
+            "Selection",
+            "SemanticCandidateSelectorV1.cs");
+
+        Assert.True(File.Exists(collectorPath), $"Expected collector source file to exist at '{collectorPath}'.");
+        Assert.True(File.Exists(selectorPath), $"Expected selector source file to exist at '{selectorPath}'.");
+
+        Assert.DoesNotContain("ISemanticCandidateSelectorV1", File.ReadAllText(collectorPath));
+        Assert.DoesNotContain("TryExtract", File.ReadAllText(selectorPath));
         Assert.Contains("ISemanticCandidateCollectorV1", typeof(SemanticResolutionEngineV1).GetConstructors().Single().ToString());
     }
 
-    static string FindRoot(){var d=new DirectoryInfo(AppContext.BaseDirectory); while(d is not null&&!File.Exists(Path.Combine(d.FullName,".git"))) d=d.Parent; return d?.FullName ?? Directory.GetCurrentDirectory();}
+    static string FindRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory is not null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, "Backend", "src")) &&
+                Directory.Exists(Path.Combine(directory.FullName, "Backend", "tests")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException(
+            $"Could not locate repository root from '{AppContext.BaseDirectory}'. Expected a parent directory containing both 'Backend/src' and 'Backend/tests'.");
+    }
 }
