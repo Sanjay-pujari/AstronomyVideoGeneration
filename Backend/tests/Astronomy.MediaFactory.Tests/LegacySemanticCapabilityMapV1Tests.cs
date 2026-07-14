@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -10,7 +11,7 @@ public sealed class LegacySemanticCapabilityMapV1Tests
     public void Every_Current_Legacy_Term_Maps_Exactly_Once()
     {
         Assert.All(LegacySemanticCapabilityMapV1.Entries.GroupBy(e => e.LegacyTerm, StringComparer.OrdinalIgnoreCase), g => Assert.Single(g));
-        Assert.Equal(74, LegacySemanticCapabilityMapV1.Entries.Length);
+        Assert.Equal(107, LegacySemanticCapabilityMapV1.Entries.Length);
     }
 
     [Theory]
@@ -105,6 +106,53 @@ public sealed class LegacySemanticCapabilityMapV1Tests
         Assert.Contains(inventory, row => row.Term == "Distance" && row.Result.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.StructuredField && row.Result.StructuredFieldPath == "ObjectKnowledge.distance");
     }
 
+
+    [Theory]
+    [InlineData("ApparentAlignment", SemanticCapabilityVocabularyV1.DomainScientificKnowledge, "DomainScientificKnowledge.apparentAlignment")]
+    [InlineData("AstrophysicalStructure", SemanticCapabilityVocabularyV1.ObjectKnowledge, "ObjectKnowledge.astrophysicalStructure")]
+    public void Newly_Classified_Profile_Terms_Map_To_Approved_Canonical_Field(string term, string expectedCapability, string expectedPath)
+    {
+        var first = AssertMaps(term, expectedCapability);
+        var second = _catalog.ResolveLegacyTerm(term.ToUpperInvariant());
+
+        Assert.Equal(LegacySemanticCapabilityResolutionStatus.StructuredFieldMigration, first.Status);
+        Assert.Equal(LegacySemanticCapabilityMigrationDisposition.StructuredField, first.MigrationDisposition);
+        Assert.Equal(expectedPath, first.StructuredFieldPath);
+        Assert.Equal(first.CanonicalCapabilityId, second.CanonicalCapabilityId);
+        Assert.Equal(first.StructuredFieldPath, second.StructuredFieldPath);
+        Assert.Equal(first.MigrationDisposition, second.MigrationDisposition);
+
+        var json = JsonSerializer.Serialize(first);
+        var roundTrip = JsonSerializer.Deserialize<LegacySemanticCapabilityResolution>(json);
+        Assert.NotNull(roundTrip);
+        Assert.Equal(first.Status, roundTrip!.Status);
+        Assert.Equal(first.CanonicalCapabilityId, roundTrip.CanonicalCapabilityId);
+        Assert.Equal(first.StructuredFieldPath, roundTrip.StructuredFieldPath);
+
+        static string Normalize(string value) => value.Trim().Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
+        Assert.Single(LegacySemanticCapabilityMapV1.Entries.Where(e => Normalize(e.LegacyTerm) == Normalize(term)));
+    }
+
+    [Fact]
+    public void ApparentAlignment_Maps_To_Approved_Canonical_Field()
+    {
+        Newly_Classified_Profile_Terms_Map_To_Approved_Canonical_Field("ApparentAlignment", SemanticCapabilityVocabularyV1.DomainScientificKnowledge, "DomainScientificKnowledge.apparentAlignment");
+    }
+
+    [Fact]
+    public void AstrophysicalStructure_Maps_To_Approved_Canonical_Field()
+    {
+        Newly_Classified_Profile_Terms_Map_To_Approved_Canonical_Field("AstrophysicalStructure", SemanticCapabilityVocabularyV1.ObjectKnowledge, "ObjectKnowledge.astrophysicalStructure");
+    }
+
+    [Fact]
+    public void Remaining_Unsupported_Active_Profile_Terms_Is_Zero()
+    {
+        var inventory = BuildActiveProfileInventory();
+
+        Assert.Empty(inventory.Where(row => row.Result.Status == LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm));
+    }
+
     [Fact]
     public void Future_Event_Family_Is_Classified_Without_Active_Profile()
     {
@@ -127,6 +175,20 @@ public sealed class LegacySemanticCapabilityMapV1Tests
 
         Assert.Equal(Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.AstronomyFamilyResolutionStatusV1.Unsupported, result.Status);
         Assert.Contains("Unsupported astronomy family", result.Diagnostic);
+    }
+
+    private (string Term, LegacySemanticCapabilityResolution Result)[] BuildActiveProfileInventory()
+    {
+        var activeEventTypes = new[] { "PlanetPairing", "PlanetaryConjunction", "Occultation", "Eclipse", "MeteorShower", "NamedFullMoon", "FullMoon", "Constellation", "DeepSkyObject" };
+        var activeProfiles = activeEventTypes.Select(eventType => Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.AstronomyFamilyProfileCatalog.Resolve(TestJson.Json($"{{\"eventType\":\"{eventType}\"}}"), null));
+        var knownFutureAndDomainTerms = new[] { "PlanetProfile", "Comet", "BlackHoleOrScientificExplainer", "BestSeason", "DeepSkyObjects" };
+        var referenced = activeProfiles.SelectMany(p => p.RequiredFactTypes.Concat(p.OptionalFactTypes).Concat(p.ScientificConcepts).Concat(p.ProhibitedAssumptions).Concat(p.ValidationRules))
+            .Concat(knownFutureAndDomainTerms)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return referenced.Select(term => (Term: term, Result: _catalog.ResolveLegacyTerm(term))).ToArray();
     }
 
     private LegacySemanticCapabilityResolution AssertMaps(string term, string expected)
