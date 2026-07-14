@@ -5,12 +5,10 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Phase7SingleAuthorityStaticTests
 {
-    private static readonly string RepoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
-
     [Fact]
     public void NarrationGeneratorV5_DoesNotWriteFinalPhase7ValidationArtifact()
     {
-        var source = ReadSource("src", "Astronomy.MediaFactory.Infrastructure", "Orchestration", "RC2", "NarrationGeneratorV5.cs");
+        var source = ReadSource("Orchestration", "RC2", "NarrationGeneratorV5.cs");
         Assert.DoesNotContain("phase-07-validation.json", source);
         Assert.DoesNotContain("Path.Combine(outputRoot, \"validation\")", source);
         Assert.Contains("generator-preflight-diagnostics.json", source);
@@ -19,7 +17,7 @@ public sealed class Phase7SingleAuthorityStaticTests
     [Fact]
     public void Rc2Orchestrator_DoesNotExecuteOrReplacePhase7Overlay()
     {
-        var source = ReadSource("src", "Astronomy.MediaFactory.Infrastructure", "Orchestration", "RC2", "Rc2ContentPlanningBatchOrchestrator.cs");
+        var source = ReadSource("Orchestration", "RC2", "Rc2ContentPlanningBatchOrchestrator.cs");
         Assert.DoesNotContain("ApplyRc2Phase7ResponseAsync", source);
         Assert.DoesNotContain("narrationGeneratorV5.BuildAndWriteDiagnosticsAsync", source);
         Assert.DoesNotContain("Expected RC2 output was not created in this run", Phase7Blocks(source));
@@ -28,8 +26,8 @@ public sealed class Phase7SingleAuthorityStaticTests
     [Fact]
     public void ProductionPipeline_IsOnlyFinalPhase7ValidationWriter()
     {
-        var production = ReadSource("src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "ProductionPipelineExecutionService.cs");
-        var rc2 = ReadSource("src", "Astronomy.MediaFactory.Infrastructure", "Orchestration", "RC2", "Rc2ContentPlanningBatchOrchestrator.cs");
+        var production = ReadSource("Persistence", "ProductionPipelineExecutionService.cs");
+        var rc2 = ReadSource("Orchestration", "RC2", "Rc2ContentPlanningBatchOrchestrator.cs");
         Assert.Contains("WritePhaseValidationAsync(context, phaseNo, phaseName", production);
         Assert.DoesNotContain("phase-07-validation.json", rc2);
     }
@@ -41,7 +39,12 @@ public sealed class Phase7SingleAuthorityStaticTests
         Assert.Null(typeof(ProductionPipelineExecutionService).GetMethod("PersistPhase7NarrationFilesAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static));
     }
 
-    private static string ReadSource(params string[] parts) => File.ReadAllText(Path.Combine(new[] { RepoRoot }.Concat(parts).ToArray()));
+    private static string ReadSource(params string[] parts)
+    {
+        var path = RepositoryTestPaths.InfrastructureSource(parts);
+        Assert.True(File.Exists(path), $"Expected source path to exist before reading: {path}");
+        return File.ReadAllText(path);
+    }
 
     private static string Phase7Blocks(string source)
     {

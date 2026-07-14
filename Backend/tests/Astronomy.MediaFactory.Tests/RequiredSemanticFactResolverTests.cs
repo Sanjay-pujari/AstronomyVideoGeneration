@@ -14,14 +14,16 @@ public sealed class RequiredSemanticFactResolverTests
     {
         var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"Planetary conjunction\"}"));
         var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "PrimaryObjects");
-        Assert.Equal("Documentary Contract", fact.SourceArtifact);
+        Assert.Contains("ProductionEventIntelligence", fact.SourceField);
+        Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "AstronomicalObjects" && r.Status == "Resolved");
     }
 
     [Fact]
     public void FactAbsentInContractFallsBackToEventIntelligence()
     {
         var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\"}"), eventIntel: Json("{\"eventType\":\"Planetary conjunction\"}"));
-        Assert.Contains(result.Beats[0].RequiredFacts, f => f.FactType == "EventIdentity" && f.SourceArtifact == "Production Event Intelligence");
+        Assert.Contains(result.Beats[0].RequiredFacts, f => f.FactType == "EventIdentity");
+        Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "EventIdentity" && r.SelectedSource == "EventIdentityContext");
     }
 
     [Fact]
@@ -29,10 +31,9 @@ public sealed class RequiredSemanticFactResolverTests
     {
         var result = Resolve(LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\"}"));
         var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentAlignmentExplanation");
-        Assert.Equal("DomainKnowledge", fact.FactOrigin);
-        Assert.Equal("Astronomy Domain Knowledge Provider", fact.SourceArtifact);
-        Assert.Equal("planet-pairing-apparent-line-of-sight-v1", fact.DerivationRuleId);
-        Assert.False(fact.CanonicalValue is string);
+        Assert.Equal("AstronomyDomainKnowledgeProvider", fact.SourceArtifact);
+        Assert.Contains("AstronomyDomainKnowledge.DomainKnowledge", fact.SourceInputs!);
+        Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "DomainScientificKnowledge" && r.SelectedSource == "AstronomyDomainKnowledgeProvider");
     }
 
 
@@ -41,16 +42,18 @@ public sealed class RequiredSemanticFactResolverTests
     {
         var result = Resolve(LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\",\"ApparentAlignmentExplanation\":\"allocated upstream concept\"}"));
         var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentAlignmentExplanation");
-        Assert.Equal("Documentary Contract", fact.SourceArtifact);
-        Assert.Equal("Source", fact.FactOrigin);
+        Assert.Equal("AstronomyDomainKnowledgeProvider", fact.SourceArtifact);
+        Assert.Contains("AstronomyDomainKnowledge.DomainKnowledge", fact.SourceInputs!);
+        Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "DomainScientificKnowledge");
     }
 
     [Fact]
     public void PlanetPairingDoesNotFabricateAngularSeparation()
     {
         var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\"}"));
-        Assert.DoesNotContain(result.Beats[0].OptionalFacts, f => f.FactType == "AngularSeparation");
-        Assert.Contains("AngularSeparation", result.Beats[0].OmittedOptionalFacts);
+        Assert.DoesNotContain(result.Beats[0].OptionalFacts, f => f.FactType is "AngularSeparation" or "AngularRelationship");
+        Assert.Contains("AngularRelationship", result.Beats[0].OmittedOptionalFacts);
+        Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "AngularSeparation" && r.Status == "UnavailableOptional");
     }
 
     [Fact]
@@ -87,8 +90,9 @@ public sealed class RequiredSemanticFactResolverTests
 
         Assert.False(result.Blocking);
         var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ObservationTiming");
-        Assert.Equal(expectedSource, fact.SourceArtifact);
-        Assert.Contains(expectedField, fact.SourceField);
+        Assert.Equal("ObservationMetadata", fact.SourceArtifact);
+        Assert.Contains("ObservationMetadata.EventWindow", fact.SourceField);
+        Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "EventWindow" && r.Status == "Resolved" && r.SubstitutionsApplied.Any(s => s.Contains("ObservationTiming mapped to canonical capability EventWindow")));
         Assert.DoesNotContain("ViewingWindow", result.Beats[0].MissingRequiredFacts);
     }
 
@@ -98,9 +102,9 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"Planetary conjunction\"}"));
         Assert.False(result.Blocking);
         Assert.Contains("BinocularGuidance", result.Beats[0].OmittedOptionalFacts);
-        var binocular = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.Capability == "ObservationMode");
+        var binocular = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.SubstitutionsApplied.Any(s => s.Contains("BinocularGuidance mapped to canonical capability ObservationEquipment")));
         Assert.Null(binocular.SelectedSource);
-        Assert.Contains(binocular.RejectedSources, r => r.Reason == "SourceValueMissing");
+        Assert.Contains(binocular.Warnings, w => w.Contains("Typed source model was not supplied") || w.Contains("Typed source property was not supplied"));
     }
 
     [Fact]
@@ -203,10 +207,10 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Geminids Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Geminids\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
 
         Assert.False(result.Blocking);
-        Assert.Contains("Zhr", result.Beats[0].OmittedOptionalFacts);
-        var zhr = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.Capability == "Zhr");
+        Assert.Contains("ZHR", result.Beats[0].OmittedOptionalFacts);
+        var zhr = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.Capability == "MeteorActivity");
         Assert.Null(zhr.SelectedSource);
-        Assert.Contains(zhr.RejectedSources, r => r.Reason == "SourceValueMissing");
+        Assert.Contains(zhr.Warnings, w => w.Contains("Typed source property was not supplied"));
     }
 
     [Fact]
@@ -216,9 +220,10 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Radiant\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventType\":\"MeteorShower\",\"zhr\":{\"value\":120,\"unit\":\"meteors/hour\",\"qualifier\":\"under ideal dark skies\",\"source\":\"verified upstream feed\",\"confidence\":0.95}}"), profile: profile);
 
         Assert.False(result.Blocking);
-        var fact = Assert.Single(result.Beats[0].OptionalFacts, f => f.FactType == "Zhr");
-        Assert.Equal("Production Event Intelligence", fact.SourceArtifact);
-        Assert.Contains("zhr", fact.SourceField, StringComparison.OrdinalIgnoreCase);
+        var fact = Assert.Single(result.Beats[0].OptionalFacts, f => f.FactType == "ZHR");
+        Assert.Equal("ProductionEventIntelligence", fact.SourceArtifact);
+        Assert.Contains("ProductionEventIntelligence.MeteorActivity", fact.SourceField, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "MeteorActivity" && r.Status == "Resolved");
     }
 
     [Fact]
@@ -228,7 +233,7 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Geminids Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Geminids\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
 
         Assert.DoesNotContain(result.Beats[0].OptionalFacts, f => f.FactType == "Zhr");
-        Assert.Contains("Zhr", result.Beats[0].OmittedOptionalFacts);
+        Assert.Contains("ZHR", result.Beats[0].OmittedOptionalFacts);
     }
 
     [Theory]

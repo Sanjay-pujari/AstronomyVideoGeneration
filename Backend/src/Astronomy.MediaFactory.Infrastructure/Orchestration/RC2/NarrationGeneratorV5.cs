@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -2257,8 +2258,8 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             var optional = optionalOccurrences.Select(o => o.LegacyFactType).ToArray();
             var missing = required.Where(t => !resolvedRequired.Any(f => Matches(t, f.FactType))).ToArray();
             var omitted = optional.Where(t => !resolvedOptional.Any(f => Matches(t, f.FactType))).ToArray();
-            var conflicts = FindConflicts(required.Concat(optional), all).ToArray();
-            var capabilityResults = beatGroup.Select(o => o.CapabilityResolution).ToArray();
+            var conflicts = beatGroup.SelectMany(o => o.ScopeKey is null ? Array.Empty<FactConflict>() : ToFactConflicts(o, resolvedByScope[o.ScopeKey])).Concat(FindConflicts(required.Concat(optional), all)).DistinctBy(c => c.FactType).ToArray();
+            var capabilityResults = beatGroup.Select(o => o.ScopeKey is null ? o.CapabilityResolution : ToCapabilityResolution(o, resolvedByScope[o.ScopeKey])).ToArray();
             var unsupportedWarnings = beatGroup.Where(o => !o.IsSupported).Select(o => $"Unsupported legacy capability {o.LegacyFactType} classified as {o.CapabilityResolution.Status}; no semantic resolution request was created.");
             var warnings = omitted.Select(o => $"Optional capability {o} was unavailable and omitted.").Concat(unsupportedWarnings).Concat(capabilityResults.SelectMany(r => r.Warnings)).Concat(conflicts.Select(c => c.Message)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             beats.Add(new(beatGroup.Key.Format, beatGroup.Key.SceneId, beatGroup.Key.BeatId, beatGroup.Key.Role, resolvedRequired, resolvedOptional, missing, omitted, warnings, conflicts, capabilityResults, missing.Length > 0 || conflicts.Any(c => c.Blocking)));
@@ -2272,6 +2273,35 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             beats = beats.Select(b => new { input.FamilyProfile.FamilyId, b.Format, b.SceneId, b.DocumentaryBeatId, b.NarrativeRole, requiredCapabilities = RequiredTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedRequiredCapabilities = b.RequiredFacts.Select(f => f.FactType), b.MissingRequiredFacts, optionalCapabilities = OptionalTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedOptionalCapabilities = b.OptionalFacts.Select(f => f.FactType), b.OmittedOptionalFacts, candidateSources = CandidateSourcesByCapability(b.CapabilityResolutions), selectedSources = SelectedSourcesByCapability(b.CapabilityResolutions), rejectedSources = RejectedSourcesByCapability(b.CapabilityResolutions), substitutionsApplied = b.CapabilityResolutions.SelectMany(r => r.SubstitutionsApplied).Distinct(StringComparer.OrdinalIgnoreCase), capabilityStrength = CapabilityStrengthByCapability(b.CapabilityResolutions), beatAdaptations = b.ResolutionWarnings.Where(w => w.Contains("adapt", StringComparison.OrdinalIgnoreCase) || w.Contains("omitted", StringComparison.OrdinalIgnoreCase)), capabilityResolutions = b.CapabilityResolutions, sourceArtifacts = b.RequiredFacts.Concat(b.OptionalFacts).Select(f => f.SourceArtifact).Distinct(), b.Conflicts, derivedFacts = b.RequiredFacts.Concat(b.OptionalFacts).Where(f => f.FactOrigin == "Derived"), b.Blocking, warnings = b.ResolutionWarnings })
         };
         return new RequiredSemanticFactResolutionResult(beats, diagnostics);
+    }
+
+
+
+    private static IEnumerable<FactConflict> ToFactConflicts(RequirementOccurrence occurrence, ResolvedSemanticFactV1 fact)
+        => fact.Conflicts.Where(c => c.Material).Select(c => new FactConflict(occurrence.LegacyFactType, c.CandidateIds.ToArray(), fact.WinningSourceId ?? fact.WinningAdapterId ?? fact.CapabilityId.Value, !c.Resolvable, c.DiagnosticMessage));
+
+    private static SemanticCapabilityResolution ToCapabilityResolution(RequirementOccurrence occurrence, ResolvedSemanticFactV1 fact)
+    {
+        if (!occurrence.IsSupported) return occurrence.CapabilityResolution;
+        var status = fact.Status is SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination ? "Resolved" : fact.Status.ToString();
+        var candidates = fact.Status is SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination
+            ? [new SemanticCapabilityCandidate(fact.WinningAdapterId ?? fact.WinningSourceId ?? fact.CapabilityId.Value, fact.Provenance.FirstOrDefault()?.SourcePropertyPath ?? fact.WinningCandidateId ?? fact.CapabilityId.Value, fact.TypedValue?.Value ?? fact.CanonicalValue ?? string.Empty, fact.EvidenceStrength.ToString())]
+            : Array.Empty<SemanticCapabilityCandidate>();
+        var rejected = fact.RejectedCandidates.Select(c => new SemanticCapabilityRejection(c.SourceId, c.Provenance.FirstOrDefault()?.SourcePropertyPath ?? c.CanonicalValue, "RejectedByPolicy")).ToArray();
+        var warnings = fact.Warnings.Concat(fact.DiagnosticCode.Equals("Resolved", StringComparison.OrdinalIgnoreCase) ? [] : [fact.DiagnosticMessage]).Where(w => !string.IsNullOrWhiteSpace(w)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var substitutions = occurrence.CapabilityResolution.SubstitutionsApplied.Concat(occurrence.LegacyFactType.Equals(fact.CapabilityId.Value, StringComparison.OrdinalIgnoreCase) ? [] : [$"{occurrence.LegacyFactType} mapped to canonical capability {fact.CapabilityId.Value}."]).ToArray();
+        return new SemanticCapabilityResolution(
+            fact.CapabilityId.Value,
+            status,
+            fact.WinningSourceId,
+            fact.TypedValue?.Value ?? fact.CanonicalValue,
+            fact.SpeakableValue,
+            fact.RejectedCandidates.Select(c => c.CanonicalValue).ToArray(),
+            warnings,
+            fact.EvidenceStrength.ToString(),
+            candidates,
+            rejected,
+            substitutions);
     }
 
     private static ResolvedSemanticFact? Project(RequirementOccurrence occurrence, ResolvedSemanticFactV1 fact, RequiredSemanticFactResolutionInput input)
@@ -2316,7 +2346,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         }
     }
 
-    private static RequirementOccurrence CreateOccurrence(RequiredSemanticFactResolutionInput input, string format, string sceneId, string beatId, string role, string type, bool required)
+    private RequirementOccurrence CreateOccurrence(RequiredSemanticFactResolutionInput input, string format, string sceneId, string beatId, string role, string type, bool required)
     {
         var legacyResolution = ResolveLegacyCapability(type);
         var capabilityId = legacyResolution.CanonicalCapabilityId;
@@ -2409,16 +2439,115 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 
     private static int CapabilityStrengthRank(string strength) => strength.Equals("Strong", StringComparison.OrdinalIgnoreCase) ? 3 : strength.Equals("Medium", StringComparison.OrdinalIgnoreCase) ? 2 : strength.Equals("Weak", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
 
-    private static SemanticSourceAdapterContextV1 CreateAdapterContext(RequiredSemanticFactResolutionInput input)
+    private SemanticSourceAdapterContextV1 CreateAdapterContext(RequiredSemanticFactResolutionInput input)
     {
-        var eventType = TryGetRootString(input.ProductionEventIntelligence, "eventType") ?? input.FamilyProfile.FamilyId;
+        var eventType = TryGetRootString(input.ProductionEventIntelligence, "eventType") ?? TryGetAllocatedFactString(input.LongDocumentaryContract, "EventType") ?? input.FamilyProfile.FamilyId;
         var identity = new CanonicalAstronomyEventIdentity(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, eventType, "RequiredSemanticFactResolver.LegacyInput");
-        var eventSource = new ProductionEventIntelligenceSourceV1(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId);
-        var observationSource = new ObservationMetadataSourceV1();
-        return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, Language: input.LanguageProfile.LanguageCode);
+        var eventWindow = ReadEventWindow(input.ObservationMetadata) ?? ReadEventWindow(input.ProductionEventIntelligence) ?? ReadEventWindow(input.LongDocumentaryContract);
+        var angularSeparation = ReadAngularSeparation(input.ProductionEventIntelligence) ?? ReadAngularSeparation(input.LongDocumentaryContract);
+        var observationAngularSeparation = ReadAngularSeparation(input.ObservationMetadata);
+        var primaryObjects = ReadPrimaryObjects(input.ProductionEventIntelligence) ?? ReadPrimaryObjects(input.LongDocumentaryContract);
+        var meteorActivity = ReadMeteorActivity(input.ProductionEventIntelligence);
+        var eventSource = new ProductionEventIntelligenceSourceV1(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, primaryObjects ?? [], default, eventWindow, angularSeparation, null, meteorActivity);
+        var observationSource = new ObservationMetadataSourceV1(eventWindow, observationAngularSeparation, ReadObservationDirection(input.LongDocumentaryContract));
+        var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract) ?? ResolveDomainKnowledge(input.FamilyProfile.FamilyId));
+        var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, input.FamilyProfile.FamilyId));
+        return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode);
+    }
+
+    private static ImmutableArray<AstronomicalObjectValue>? ReadPrimaryObjects(params JsonElement?[] sources)
+    {
+        var text = sources.Select(s => TryGetAllocatedFactString(s, "PrimaryObjects") ?? TryGetRootString(s, "PrimaryObjects")).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+        return string.IsNullOrWhiteSpace(text) ? null : text.Split(" and ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(n => new AstronomicalObjectValue(n, null, "Primary", null, [])).ToImmutableArray();
+    }
+
+    private static EventWindowValue? ReadEventWindow(params JsonElement?[] sources)
+    {
+        foreach (var s in sources)
+        {
+            var peakUtcText = TryGetRootString(s, "peakUtc") ?? TryGetAllocatedFactString(s, "peakUtc");
+            DateTimeOffset? peakUtc = DateTimeOffset.TryParse(peakUtcText, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var peak) ? peak : null;
+            var local = TryGetRootString(s, "localPeakTime") ?? TryGetAllocatedFactString(s, "localPeakTime");
+            var best = TryGetRootString(s, "bestViewingWindowLocal") ?? TryGetAllocatedFactString(s, "bestViewingWindowLocal") ?? TryGetAllocatedFactString(s, "PeakWindow") ?? TryGetAllocatedFactString(s, "EventDateOrWindow");
+            if (peakUtc is not null || !string.IsNullOrWhiteSpace(local) || !string.IsNullOrWhiteSpace(best))
+                return new EventWindowValue(null, peakUtc, null, null, null, null, null, null, FirstNonEmpty(local, best, peakUtcText));
+        }
+        return null;
+    }
+
+    private static AngularSeparationValue? ReadAngularSeparation(params JsonElement?[] sources)
+    {
+        foreach (var s in sources)
+        {
+            var text = TryGetRootString(s, "angularSeparation") ?? TryGetAllocatedFactString(s, "AngularSeparation");
+            if (decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var degrees)) return new AngularSeparationValue(degrees, null, null, null, null, null);
+            var raw = TryGetAllocatedFactElement(s, "AngularSeparation");
+            var value = GetString(raw, "value");
+            if (decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out degrees)) return new AngularSeparationValue(degrees, null, null, null, null, null);
+        }
+        return null;
+    }
+
+    private static ObservationDirectionValue? ReadObservationDirection(JsonElement? source)
+    {
+        var direction = TryGetAllocatedFactString(source, "Direction");
+        return string.IsNullOrWhiteSpace(direction) ? null : new ObservationDirectionValue(direction, null, null, null, direction);
+    }
+
+    private static MeteorActivityValue? ReadMeteorActivity(JsonElement? source)
+    {
+        var zhrElement = TryGetRootProperty(source, "zhr");
+        var zhrText = zhrElement is { ValueKind: JsonValueKind.Object } obj ? GetString(obj, "value") : zhrElement?.ValueKind == JsonValueKind.Number ? zhrElement.Value.GetRawText() : null;
+        return int.TryParse(zhrText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var zhr) ? new MeteorActivityValue(null, null, null, zhr, null, null) : null;
+    }
+
+    private static DomainScientificKnowledgeValue? ReadDomainKnowledge(JsonElement? source)
+    {
+        var alignment = TryGetAllocatedFactString(source, "ApparentAlignmentExplanation") ?? TryGetAllocatedFactString(source, "ApparentPairingScience");
+        var significance = TryGetAllocatedFactString(source, "ScientificImportance");
+        return string.IsNullOrWhiteSpace(alignment) && string.IsNullOrWhiteSpace(significance) ? null : new DomainScientificKnowledgeValue(null, alignment, significance, null);
+    }
+
+
+    private DomainScientificKnowledgeValue? ResolveDomainKnowledge(string familyId)
+    {
+        if (_domainKnowledgeProvider.TryResolve(familyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(familyId, [], "en"), out var fact))
+            return new DomainScientificKnowledgeValue(null, Convert.ToString(fact.CanonicalValue, CultureInfo.InvariantCulture), null, null);
+        return null;
+    }
+
+    private static ObjectKnowledgeValue? ReadObjectKnowledge(JsonElement? source, string familyId)
+    {
+        var facts = new List<ObjectKnowledgeFactV1>();
+        foreach (var key in new[] { "Name", "ObjectName", "ObjectType", "SkyRegion", "SkyLocation", "ScientificIdentity", "IdentificationPattern", "MajorStars", "ScientificImportance", "Distance" })
+        {
+            var value = TryGetAllocatedFactString(source, key);
+            if (!string.IsNullOrWhiteSpace(value)) facts.Add(new ObjectKnowledgeFactV1(key, value!, new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyObjectKnowledgeProvider, nameof(ObjectKnowledgeValue), $"DocumentaryContract.AllocatedFacts.{key}", true)));
+        }
+        return facts.Count == 0 ? null : new ObjectKnowledgeValue(familyId, facts.ToImmutableArray());
     }
 
     private static string? TryGetRootString(JsonElement? element, string name) => element is { ValueKind: JsonValueKind.Object } e ? GetString(e, name) : null;
+    private static JsonElement? TryGetRootProperty(JsonElement? element, string name)
+    {
+        if (element is not { ValueKind: JsonValueKind.Object } e) return null;
+        foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p.Value;
+        return null;
+    }
+    private static JsonElement? TryGetAllocatedFactElement(JsonElement? contract, string name)
+    {
+        foreach (var beat in ReadArray(contract, "beats"))
+        {
+            var facts = FindProperty(beat, "allocatedFacts");
+            if (facts is { ValueKind: JsonValueKind.Object } f) foreach (var p in f.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return p.Value;
+        }
+        return null;
+    }
+    private static string? TryGetAllocatedFactString(JsonElement? contract, string name)
+    {
+        var value = TryGetAllocatedFactElement(contract, name);
+        return value is null ? null : value.Value.ValueKind == JsonValueKind.String ? value.Value.GetString() : value.Value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False ? value.Value.GetRawText() : null;
+    }
 
     [Obsolete("Legacy rollback-only path. Sprint 4B runtime resolution must use SemanticResolutionEngineV1.")]
     private static ResolvedSemanticFact ToResolved(string type, CandidateFact best, string beatId, string req, string language)
