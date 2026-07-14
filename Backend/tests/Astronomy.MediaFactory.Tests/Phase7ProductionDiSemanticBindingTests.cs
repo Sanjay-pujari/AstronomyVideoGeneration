@@ -28,7 +28,23 @@ public sealed class ProductionSourcePolicyCatalogNonEmptyTests
             Assert.True(catalog.TryGet(new SemanticCapabilityId(capability), out _), $"Missing policy for {capability}.");
     }
 
-    internal static ServiceProvider BuildProvider() => new ServiceCollection().AddMediaFactory(new ConfigurationBuilder().Build()).BuildServiceProvider();
+    internal static ServiceProvider BuildProvider()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:Postgres"] = "Host=localhost;Port=5432;Database=astronomy_tests;Username=test;Password=test"
+            })
+            .Build();
+
+        return new ServiceCollection()
+            .AddMediaFactory(configuration)
+            .BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateOnBuild = true,
+                ValidateScopes = true
+            });
+    }
 
     internal static readonly string[] RequiredProductionCapabilities =
     [
