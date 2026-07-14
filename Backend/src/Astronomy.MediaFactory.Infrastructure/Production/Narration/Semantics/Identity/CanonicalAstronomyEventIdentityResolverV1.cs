@@ -16,7 +16,8 @@ public sealed class CanonicalAstronomyEventIdentityResolverV1 : ICanonicalAstron
             ["LunarEclipse"] = ("Eclipse", "LunarEclipse"),
             ["Occultation"] = ("Occultation", "Occultation"),
             ["Constellation"] = ("Constellation", "Constellation"),
-            ["DeepSkyObject"] = ("DeepSkyObject", "DeepSkyObject")
+            ["DeepSkyObject"] = ("DeepSkyObject", "DeepSkyObject"),
+            ["ScientificExplainer"] = ("ScientificExplainer", "ScientificExplainer")
         };
 
     public CanonicalAstronomyEventIdentityResolverV1()

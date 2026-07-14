@@ -66,7 +66,7 @@ public sealed class CurrentAstronomyFamilyProfileCharacterizationTests
     [InlineData("Elongation", "Unsupported astronomy event type: Elongation")]
     [InlineData("Transit", "Unsupported astronomy event type: Transit")]
     [InlineData("LunarPhase", "Unsupported astronomy event type: LunarPhase")]
-    [InlineData("BlackHoleOrScientificExplainer", "Unsupported astronomy event type: BlackHoleOrScientificExplainer")]
+    [InlineData("BlackHoleOrScientificExplainer", "Future astronomy family is not active in current runtime: ScientificExplainer")]
     public void CurrentBehavior_UnsupportedOrAbsentFamilyProfilesThrow(string eventType, string message)
     {
         var ex = Assert.Throws<InvalidOperationException>(() => ResolveProfile(eventType));

@@ -2307,25 +2307,49 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         {
             var role = ResolveRole(beat, index);
             var beatId = FirstNonEmpty(GetString(beat, "documentaryBeatId"), GetString(beat, "beatId"), GetString(beat, "id")) ?? $"{format}-beat-{index + 1:000}";
-            var sourceContext = new SemanticCapabilitySourceContext(input.FamilyProfile.FamilyId, format, input.EditorialContract, input.LongDocumentaryContract, input.ShortDocumentaryContract, input.EditorialContract, input.StoryGraph, input.ProductionEventIntelligence, input.ObservationMetadata, input.QuestionAnswerSet);
-            var capabilityResults = RequiredTypes(input.FamilyProfile, role, format).Select(t => (Type: t, Required: true))
+            var requirementKeys = RequiredTypes(input.FamilyProfile, role, format).Select(t => (Type: t, Required: true))
                 .Concat(OptionalTypes(input.FamilyProfile, role, format).Select(t => (Type: t, Required: false)))
                 .DistinctBy(x => (x.Type, x.Required))
-                .ToDictionary(x => (x.Type, x.Required), x => _capabilityResolver.Resolve(x.Type, sourceContext, input.LanguageProfile));
-            foreach (var item in capabilityResults)
-                yield return CreateOccurrence(input, format, GetString(beat, "sceneId") ?? string.Empty, beatId, role, item.Key.Type, item.Key.Required, item.Value);
+                .ToArray();
+            foreach (var requirement in requirementKeys)
+                yield return CreateOccurrence(input, format, GetString(beat, "sceneId") ?? string.Empty, beatId, role, requirement.Type, requirement.Required);
         }
     }
 
-    private static RequirementOccurrence CreateOccurrence(RequiredSemanticFactResolutionInput input, string format, string sceneId, string beatId, string role, string type, bool required, SemanticCapabilityResolution capability)
+    private static RequirementOccurrence CreateOccurrence(RequiredSemanticFactResolutionInput input, string format, string sceneId, string beatId, string role, string type, bool required)
     {
-        var map = LegacySemanticCapabilityMapV1.Entries.FirstOrDefault(e => e.LegacyTerm.Equals(type, StringComparison.OrdinalIgnoreCase));
-        var capabilityId = map?.CanonicalCapabilityId;
-        if (capabilityId is null)
+        var legacyResolution = ResolveLegacyCapability(type);
+        var capabilityId = legacyResolution.CanonicalCapabilityId;
+        if (capabilityId is null || legacyResolution.MigrationDisposition is LegacySemanticCapabilityMigrationDisposition.Future or LegacySemanticCapabilityMigrationDisposition.NeedsDomainDecision or LegacySemanticCapabilityMigrationDisposition.RemoveDeadReference or LegacySemanticCapabilityMigrationDisposition.Unsupported or LegacySemanticCapabilityMigrationDisposition.UnsupportedLegacyTerm)
         {
+            var warning = BuildUnsupportedLegacyCapabilityWarning(legacyResolution);
+            var capability = new SemanticCapabilityResolution(
+                type,
+                legacyResolution.MigrationDisposition.ToString(),
+                null,
+                null,
+                null,
+                [],
+                [warning],
+                "Missing",
+                [],
+                [],
+                []);
             return new RequirementOccurrence(format, sceneId, beatId, role, type, new SemanticCapabilityId(type), required, null, null, capability);
         }
 
+        var capability = new SemanticCapabilityResolution(
+            type,
+            legacyResolution.MigrationDisposition.ToString(),
+            null,
+            null,
+            null,
+            [],
+            [],
+            "PendingV1Resolution",
+            [],
+            [],
+            legacyResolution.StructuredFieldPath is null ? [] : [$"{type} migrated to {capabilityId.Value.Value} via {legacyResolution.StructuredFieldPath}."]);
         var minimumStrength = SemanticEvidenceStrengthV1.Weak;
         var allowedCategories = Enum.GetValues<SemanticEvidenceCategoryV1>().OrderBy(x => x.ToString(), StringComparer.Ordinal).ToArray();
         var missingBehavior = required ? SemanticMissingValueBehaviorV1.BlockRequired : SemanticMissingValueBehaviorV1.OmitOptional;
@@ -2335,6 +2359,30 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var request = new SemanticResolutionRequestV1(capabilityId.Value, required, required ? SemanticRequirementLevelV1.Required : SemanticRequirementLevelV1.Optional, missingBehavior, minimumStrength, allowedCategories, adapterContext, input.FamilyProfile.FamilyId, format, beatId);
         var scopeKey = new SemanticResolutionScopeKeyV1(capabilityId.Value, required, minimumStrength, allowedCategories, missingBehavior, sourceContextIdentity, sourceContextVersion);
         return new RequirementOccurrence(format, sceneId, beatId, role, type, capabilityId.Value, required, scopeKey, request, capability);
+    }
+
+    private static LegacySemanticCapabilityResolution ResolveLegacyCapability(string type)
+    {
+        var map = LegacySemanticCapabilityMapV1.Entries.FirstOrDefault(e => e.LegacyTerm.Equals(type, StringComparison.OrdinalIgnoreCase));
+        if (map is null)
+            return new(type, LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm, null, null, LegacySemanticCapabilityMigrationDisposition.UnsupportedLegacyTerm, false, "No V1 mapping exists for this term.");
+
+        var status = map.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.StructuredField
+            ? LegacySemanticCapabilityResolutionStatus.StructuredFieldMigration
+            : LegacySemanticCapabilityResolutionStatus.DeprecatedAliasMatch;
+        return new(type, status, map.CanonicalCapabilityId, map.StructuredFieldPath, map.MigrationDisposition, true, null);
+    }
+
+    private static string BuildUnsupportedLegacyCapabilityWarning(LegacySemanticCapabilityResolution resolution)
+    {
+        var details = new List<string>
+        {
+            $"Unsupported legacy capability '{resolution.InputTerm}': Disposition={resolution.MigrationDisposition}"
+        };
+        if (resolution.CanonicalCapabilityId is not null) details.Add($"CanonicalCapability={resolution.CanonicalCapabilityId.Value}");
+        if (!string.IsNullOrWhiteSpace(resolution.StructuredFieldPath)) details.Add($"StructuredFieldPath={resolution.StructuredFieldPath}");
+        details.Add("no semantic request created.");
+        return string.Join("; ", details);
     }
 
     private sealed record RequirementOccurrence(string Format, string SceneId, string BeatId, string Role, string LegacyFactType, SemanticCapabilityId CapabilityId, bool Required, SemanticResolutionScopeKeyV1? ScopeKey, SemanticResolutionRequestV1? Request, SemanticCapabilityResolution CapabilityResolution)

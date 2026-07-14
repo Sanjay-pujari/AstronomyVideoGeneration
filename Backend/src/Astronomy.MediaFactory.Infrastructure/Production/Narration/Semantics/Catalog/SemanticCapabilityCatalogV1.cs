@@ -27,11 +27,11 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
     public SemanticCapabilityDefinitionV1 GetRequired(SemanticCapabilityId id) => TryGet(id, out var d) ? d : throw new KeyNotFoundException($"Unknown V1 semantic capability: {id.Value}");
     public LegacySemanticCapabilityResolution ResolveLegacyTerm(string term)
     {
-        if (string.IsNullOrWhiteSpace(term)) return new(term, LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm, null, null, LegacySemanticCapabilityMigrationDisposition.Unsupported, false, "Blank legacy term.");
+        if (string.IsNullOrWhiteSpace(term)) return new(term, LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm, null, null, LegacySemanticCapabilityMigrationDisposition.UnsupportedLegacyTerm, false, "Blank legacy term.");
         var n = Normalize(term);
         if (_canonical.TryGetValue(n, out var canonical)) return new(term, LegacySemanticCapabilityResolutionStatus.CanonicalMatch, new(canonical.CapabilityId), null, LegacySemanticCapabilityMigrationDisposition.CanonicalCapability, false, null);
         var entries = _legacy.Where(e => Normalize(e.LegacyTerm) == n).ToArray();
-        if (entries.Length > 1) return new(term, LegacySemanticCapabilityResolutionStatus.AmbiguousMapping, null, null, LegacySemanticCapabilityMigrationDisposition.Unsupported, false, "Legacy term has multiple mappings.");
+        if (entries.Length > 1) return new(term, LegacySemanticCapabilityResolutionStatus.AmbiguousMapping, null, null, LegacySemanticCapabilityMigrationDisposition.UnsupportedLegacyTerm, false, "Legacy term has multiple mappings.");
         if (entries.Length == 1)
         {
             var e = entries[0];
@@ -39,7 +39,7 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
             return new(term, status, e.CanonicalCapabilityId, e.StructuredFieldPath, e.MigrationDisposition, true, null);
         }
         if (_aliases.TryGetValue(n, out var alias)) return new(term, LegacySemanticCapabilityResolutionStatus.DeprecatedAliasMatch, new(alias.CapabilityId), null, LegacySemanticCapabilityMigrationDisposition.CanonicalCapability, true, null);
-        return new(term, LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm, null, null, LegacySemanticCapabilityMigrationDisposition.Unsupported, false, "No V1 mapping exists for this term.");
+        return new(term, LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm, null, null, LegacySemanticCapabilityMigrationDisposition.UnsupportedLegacyTerm, false, "No V1 mapping exists for this term.");
     }
     public SemanticCapabilityCatalogValidationResult Validate() => Validate(_definitions, _legacy);
     public static SemanticCapabilityCatalogValidationResult Validate(IEnumerable<SemanticCapabilityDefinitionV1> definitions, IEnumerable<LegacySemanticCapabilityMapEntry> legacy)
