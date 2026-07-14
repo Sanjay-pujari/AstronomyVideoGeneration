@@ -9,6 +9,7 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sourc
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry;
 using System.Collections.Immutable;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
