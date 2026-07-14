@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptComposer;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Identity;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
@@ -2659,21 +2660,9 @@ public static class CanonicalEventIdentityResolver
 
     private static string Normalize(string value, out bool aliasApplied)
     {
-        var text = value.Trim();
-        var normalized = text.ToUpperInvariant() switch
-        {
-            "PLANET_GROUPING" => "PlanetGrouping",
-            "PLANET_PAIRING" => "PlanetPairing",
-            "METEOR_SHOWER" => "MeteorShower",
-            "FULL_MOON" => "FullMoon",
-            "NAMED_FULL_MOON" => "NamedFullMoon",
-            "SOLAR_ECLIPSE" => "SolarEclipse",
-            "LUNAR_ECLIPSE" => "LunarEclipse",
-            "DEEP_SKY_OBJECT" => "DeepSkyObject",
-            _ => text
-        };
-        aliasApplied = !string.Equals(text, normalized, StringComparison.Ordinal);
-        return normalized;
+        var normalized = new AstronomyEventAliasCatalogV1().Normalize(value);
+        aliasApplied = normalized.AppliedAliases.Count > 0;
+        return normalized.CanonicalEventType ?? value.Trim();
     }
 
     private static string? MapFamily(string eventType) => AstronomyFamilyProfileCatalog.TryMapToProfileId(eventType, out var profileId) ? profileId : null;

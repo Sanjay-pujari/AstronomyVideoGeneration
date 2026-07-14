@@ -10,6 +10,9 @@ public sealed class AstronomyFamilyAliasCatalogV1
     public static readonly AstronomyFamilyAliasV1[] DefaultAliases =
     [
         new("PlanetaryConjunction", AstronomyFamilyVocabularyV1.PlanetPairing),
+        new("PlanetConjunction", AstronomyFamilyVocabularyV1.PlanetPairing),
+        new("PLANET_CONJUNCTION", AstronomyFamilyVocabularyV1.PlanetPairing),
+        new("PLANET_PAIRING", AstronomyFamilyVocabularyV1.PlanetPairing),
         new("Planet Grouping", AstronomyFamilyVocabularyV1.PlanetGrouping),
         new("MultiPlanetGrouping", AstronomyFamilyVocabularyV1.PlanetGrouping),
         new("PLANET_GROUPING", AstronomyFamilyVocabularyV1.PlanetGrouping),
