@@ -5,6 +5,7 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contr
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
+using LegacyResolvedSemanticFact = Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts.ResolvedSemanticFact;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -50,7 +51,7 @@ public sealed class SemanticResolutionCompatibilityTests
 
     private static ResolvedSemanticFactV1 ResolvedFact() => new(new SemanticCapabilityId("EventIdentity"), SemanticResolutionStatusV1.Resolved, true, new SemanticSourceValueV1("Solar eclipse", "String"), "Solar eclipse", "Solar eclipse", "candidate-1", "adapter-1", "source-1", SemanticEvidenceCategoryV1.VerifiedEventData, SemanticEvidenceStrengthV1.Strong, .95m, [new("source-1", "model", "path", true)], [], [], [], "FirstApprovedByPriority", [], [], "Resolved", "Resolved");
 
-    private static void AssertLegacyFactsEquivalent(ResolvedSemanticFact first, ResolvedSemanticFact second)
+    private static void AssertLegacyFactsEquivalent(LegacyResolvedSemanticFact first, LegacyResolvedSemanticFact second)
     {
         Assert.Equal(first.FactType, second.FactType);
         Assert.Equal(first.FactKey, second.FactKey);
