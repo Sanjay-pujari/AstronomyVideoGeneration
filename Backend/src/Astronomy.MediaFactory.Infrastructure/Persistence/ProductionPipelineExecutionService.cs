@@ -496,7 +496,8 @@ public sealed partial class ProductionPipelineExecutionService(
             UseProductionPipeline: true,
             PlanId: context.Request.PlanId,
             Title: context.Request.Title,
-            OutputRoot: context.OutputRoot);
+            OutputRoot: context.OutputRoot,
+            ProductionPipelineRequest: context.Request);
 
         var result = await generator.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
         return result.GeneratedFiles
