@@ -2444,7 +2444,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     private SemanticSourceAdapterContextV1 CreateAdapterContext(RequiredSemanticFactResolutionInput input)
     {
         var eventType = TryGetRootString(input.ProductionEventIntelligence, "eventType") ?? TryGetAllocatedFactString(input.LongDocumentaryContract, "EventType") ?? input.FamilyProfile.FamilyId;
-        var identity = new CanonicalAstronomyEventIdentity(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, eventType, "RequiredSemanticFactResolver.LegacyInput");
+        var identity = new global::Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts.CanonicalAstronomyEventIdentity(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, eventType, "RequiredSemanticFactResolver.LegacyInput");
         var productionEventWindow = ReadEventWindow(input.ProductionEventIntelligence);
         var observationEventWindow = ReadEventWindow(input.ObservationMetadata);
         var documentaryEventWindow = ReadEventWindow(input.LongDocumentaryContract);
@@ -2624,7 +2624,10 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 }
 
 public sealed record AstronomyFamilyProfile(string FamilyId, string ContentNature, string PreferredLongArchetype, string PreferredShortArchetype, IReadOnlyList<string> RequiredFactTypes, IReadOnlyList<string> OptionalFactTypes, IReadOnlyList<string> AllowedBeatRoles, IReadOnlyList<string> PreferredBeatOrder, string ObservationRequirements, string TimingRequirements, IReadOnlyList<string> ScientificConcepts, IReadOnlyList<string> ProhibitedAssumptions, IReadOnlyList<string> ValidationRules);
-public sealed record ResolvedFamilyProfile(string ResolvedEventFamily, string ResolvedProfileId, string ResolutionSource, bool FallbackUsed, string? FallbackReason, string ResolvedProfileVersion);
+public sealed record ResolvedFamilyProfile(string ResolvedEventFamily, string ResolvedProfileId, string ResolutionSource, bool FallbackUsed, string? FallbackReason, string ResolvedProfileVersion)
+{
+    public string CanonicalFamilyId => ResolvedEventFamily;
+}
 public sealed record AstronomyFamilyProfileResolutionInput(string? EventType, string? ContentCategory, string? DocumentaryArchetype, string? ObservationMode, JsonElement? EditorialContract = null, JsonElement? CreativeStoryboard = null, JsonElement? LongDocumentaryContract = null, JsonElement? ShortDocumentaryContract = null, JsonElement? ProductionEventIntelligence = null, JsonElement? ObservationMetadata = null);
 public sealed record AstronomyFamilyProfileResolutionResult(AstronomyFamilyProfile Profile, ResolvedFamilyProfile Resolved, object Diagnostics);
 public sealed record FamilyProfileResolutionStage(string Stage, string? InputValue, string? ResolvedEventFamily, string? ResolvedProfileId, string ResolutionSource, bool FallbackUsed);
