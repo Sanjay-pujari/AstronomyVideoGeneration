@@ -120,10 +120,4 @@ public sealed class SemanticCapabilityCatalogV1Tests
             foreach (var token in forbidden) Assert.DoesNotContain(token, text);
         }
     }
-
-    {
-        var dir = AppContext.BaseDirectory;
-        while (dir is not null && !File.Exists(Path.Combine(dir, "AstronomyVideoGeneration.sln")) && !Directory.Exists(Path.Combine(dir, ".git"))) dir = Directory.GetParent(dir)?.FullName;
-        return dir ?? Directory.GetCurrentDirectory();
-    }
 }
