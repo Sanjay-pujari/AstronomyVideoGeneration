@@ -2444,16 +2444,19 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     {
         var eventType = TryGetRootString(input.ProductionEventIntelligence, "eventType") ?? TryGetAllocatedFactString(input.LongDocumentaryContract, "EventType") ?? input.FamilyProfile.FamilyId;
         var identity = new CanonicalAstronomyEventIdentity(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, eventType, "RequiredSemanticFactResolver.LegacyInput");
-        var eventWindow = ReadEventWindow(input.ObservationMetadata) ?? ReadEventWindow(input.ProductionEventIntelligence) ?? ReadEventWindow(input.LongDocumentaryContract);
+        var productionEventWindow = ReadEventWindow(input.ProductionEventIntelligence);
+        var observationEventWindow = ReadEventWindow(input.ObservationMetadata);
+        var documentaryEventWindow = ReadEventWindow(input.LongDocumentaryContract);
         var angularSeparation = ReadAngularSeparation(input.ProductionEventIntelligence) ?? ReadAngularSeparation(input.LongDocumentaryContract);
         var observationAngularSeparation = ReadAngularSeparation(input.ObservationMetadata);
         var primaryObjects = ReadPrimaryObjects(input.ProductionEventIntelligence) ?? ReadPrimaryObjects(input.LongDocumentaryContract);
         var meteorActivity = ReadMeteorActivity(input.ProductionEventIntelligence);
-        var eventSource = new ProductionEventIntelligenceSourceV1(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, primaryObjects ?? [], default, eventWindow, angularSeparation, null, meteorActivity);
-        var observationSource = new ObservationMetadataSourceV1(eventWindow, observationAngularSeparation, ReadObservationDirection(input.LongDocumentaryContract));
+        var eventSource = new ProductionEventIntelligenceSourceV1(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, primaryObjects ?? [], default, productionEventWindow, angularSeparation, null, meteorActivity);
+        var observationSource = new ObservationMetadataSourceV1(observationEventWindow, observationAngularSeparation, ReadObservationDirection(input.LongDocumentaryContract));
+        var documentarySource = new DocumentaryContractSourceV1(documentaryEventWindow);
         var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract) ?? ResolveDomainKnowledge(input.FamilyProfile.FamilyId));
         var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, input.FamilyProfile.FamilyId));
-        return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode);
+        return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, DocumentaryContract: documentarySource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode);
     }
 
     private static ImmutableArray<AstronomicalObjectValue>? ReadPrimaryObjects(params JsonElement?[] sources)
