@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Event;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry;
@@ -31,7 +32,22 @@ public class SemanticSourceAdapterRegistryV1Tests
 
         Assert.True(Directory.Exists(adapterDirectory), $"Adapter source directory does not exist: {adapterDirectory}");
 
-        var files = Directory.GetFiles(adapterDirectory, "*.cs", SearchOption.AllDirectories);
+        var implementationDirectories = new[]
+        {
+            Path.Combine(adapterDirectory, "Event"),
+            Path.Combine(adapterDirectory, "Knowledge")
+        };
+
+        foreach (var implementationDirectory in implementationDirectories)
+        {
+            Assert.True(
+                Directory.Exists(implementationDirectory),
+                $"Adapter implementation source directory does not exist: {implementationDirectory}");
+        }
+
+        var files = implementationDirectories
+            .SelectMany(d => Directory.GetFiles(d, "*.cs", SearchOption.AllDirectories))
+            .ToArray();
         Assert.NotEmpty(files);
 
         foreach (var f in files)
@@ -45,8 +61,38 @@ public class SemanticSourceAdapterRegistryV1Tests
             Assert.False(text.Contains("LegacyRawJsonScanner", StringComparison.Ordinal), $"Adapter source must not reference LegacyRawJsonScanner: {relativePath}");
         }
     }
+    [Fact] public void Registry_Rejects_LegacyRawJsonScanner_Adapter()
+    {
+        Assert.DoesNotContain(_registry.Adapters, a => a.SourceId == SemanticSourcePolicyVocabularyV1.LegacyRawJsonScanner);
+
+        var registry = new SemanticSourceAdapterRegistryV1([new LegacyRawJsonScannerSyntheticAdapter()]);
+        var result = registry.Validate();
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("Raw JSON adapter is not allowed", StringComparison.Ordinal));
+    }
     [Fact] public void Coverage_Is_Deterministic_And_Reports_Missing_Adapters(){var a=_registry.GetCoverageReport().ToArray();var b=_registry.GetCoverageReport().ToArray();Assert.Equal(a,b);Assert.Contains(a,i=>i.Status==SemanticSourceAdapterCertificationStatusV1.AdapterMissing);}
     [Fact] public void Contracts_Serialize_And_RoundTrip(){var r=new EventWindowSourceAdapterV1().TryExtract(new(ObservationMetadata:new(EventWindow:new(DateTimeOffset.Parse("2026-01-01T00:00:00Z"),DateTimeOffset.Parse("2026-01-01T01:00:00Z"),DateTimeOffset.Parse("2026-01-01T02:00:00Z"),null,null,null,null,"UTC","window"))));var json=JsonSerializer.Serialize(r);var clone=JsonSerializer.Deserialize<SemanticSourceAdapterResultV1>(json);Assert.Equal(r.Status, clone!.Status);}
+
+    private sealed class LegacyRawJsonScannerSyntheticAdapter : ISemanticSourceAdapterV1
+    {
+        public string AdapterId => "test.legacy-raw-json-scanner.synthetic";
+        public SemanticCapabilityId SupportedCapabilityId => new(SemanticCapabilityVocabularyV1.EventIdentity);
+        public string SourceId => SemanticSourcePolicyVocabularyV1.LegacyRawJsonScanner;
+        public SemanticEvidenceCategoryV1 EvidenceCategory => SemanticEvidenceCategoryV1.LegacyCompatibilityData;
+        public SemanticEvidenceStrengthV1 MaximumEvidenceStrength => SemanticEvidenceStrengthV1.Strong;
+        public bool EventSpecific => true;
+        public bool SupportsLocalization => false;
+        public bool SupportsUnits => false;
+        public bool SupportsProvenance => false;
+        public SemanticSourceAdapterResultV1 TryExtract(SemanticSourceAdapterContextV1 context) =>
+            SemanticSourceAdapterResultV1.Reject(
+                SupportedCapabilityId,
+                AdapterId,
+                SourceId,
+                SemanticSourceAdapterStatusV1.RejectedByPolicy,
+                "Synthetic adapter exists only to verify registry validation.");
+    }
 
     private static string FindBackendRoot()
     {
