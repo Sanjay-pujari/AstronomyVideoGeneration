@@ -18,6 +18,9 @@ public sealed class AstronomyEventAliasCatalogV1
     private static readonly AstronomyEventAliasV1[] DefaultAliases =
     [
         new("PlanetaryConjunction", "PlanetPairing"),
+        new("PlanetConjunction", "PlanetPairing"),
+        new("PLANET_CONJUNCTION", "PlanetPairing"),
+        new("PLANET_PAIRING", "PlanetPairing"),
         new("PLANET_GROUPING", "PlanetGrouping"),
         new("Solar Eclipse", "SolarEclipse"),
         new("Lunar Eclipse", "LunarEclipse"),
