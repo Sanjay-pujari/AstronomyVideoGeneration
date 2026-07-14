@@ -2323,7 +2323,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         if (capabilityId is null || legacyResolution.MigrationDisposition is LegacySemanticCapabilityMigrationDisposition.Future or LegacySemanticCapabilityMigrationDisposition.NeedsDomainDecision or LegacySemanticCapabilityMigrationDisposition.RemoveDeadReference or LegacySemanticCapabilityMigrationDisposition.Unsupported or LegacySemanticCapabilityMigrationDisposition.UnsupportedLegacyTerm)
         {
             var warning = BuildUnsupportedLegacyCapabilityWarning(legacyResolution);
-            var capability = new SemanticCapabilityResolution(
+            var unsupportedCapabilityResolution = new SemanticCapabilityResolution(
                 type,
                 legacyResolution.MigrationDisposition.ToString(),
                 null,
@@ -2335,7 +2335,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
                 [],
                 [],
                 []);
-            return new RequirementOccurrence(format, sceneId, beatId, role, type, new SemanticCapabilityId(type), required, null, null, capability);
+            return new RequirementOccurrence(format, sceneId, beatId, role, type, new SemanticCapabilityId(type), required, null, null, unsupportedCapabilityResolution);
         }
 
         var capability = new SemanticCapabilityResolution(
