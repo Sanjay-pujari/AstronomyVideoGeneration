@@ -13,13 +13,26 @@ public sealed class SemanticSourcePolicyCatalogV1 : ISemanticSourcePolicyCatalog
     public SemanticSourcePolicyCatalogV1() : this(CreatePolicies()) { }
     public SemanticSourcePolicyCatalogV1(IEnumerable<SemanticSourcePolicyV1> policies) { _policies=policies.ToImmutableArray(); Policies=_policies; }
     public IReadOnlyCollection<SemanticSourcePolicyV1> Policies { get; }
-    public bool TryGet(SemanticCapabilityId capabilityId, out SemanticSourcePolicyV1 policy) { policy=_policies.FirstOrDefault(p=>p.SemanticCapabilityId.Equals(capabilityId))!; return policy is not null; }
+    public bool TryGet(SemanticCapabilityId capabilityId, out SemanticSourcePolicyV1 policy)
+    {
+        var canonicalCapabilityId = CanonicalizeCapabilityId(capabilityId);
+        policy=_policies.FirstOrDefault(p=>p.SemanticCapabilityId.Equals(canonicalCapabilityId))!;
+        return policy is not null;
+    }
     public SemanticSourcePolicyV1 GetRequired(SemanticCapabilityId capabilityId)=>TryGet(capabilityId,out var p)?p:throw new KeyNotFoundException($"Source policy '{capabilityId.Value}' was not registered.");
     public SemanticSourcePolicyValidationResult Validate()=>SemanticSourcePolicyValidatorV1.Validate(_policies);
     public bool IsSourceApproved(SemanticCapabilityId capabilityId,string sourceId)=>TryGet(capabilityId,out var p)&&p.ApprovedSources.Any(s=>s.ActiveInV1&&s.SourceId.Equals(sourceId,StringComparison.Ordinal));
     public SemanticSourceApprovalResultV1 EvaluateSource(SemanticCapabilityId capabilityId, SemanticSourceDescriptorV1 d)
     { if(!TryGet(capabilityId,out var p)) return new(capabilityId,d.SourceId,false,d.EvidenceCategory,d.EvidenceStrength,d.CompatibilityOnly,"MissingCapabilityPolicy","No policy exists."); var s=p.ApprovedSources.FirstOrDefault(x=>x.SourceId==d.SourceId); var ok=s is not null && p.AllowedEvidenceCategories.Contains(d.EvidenceCategory) && d.EvidenceStrength>=p.MinimumEvidenceStrength && !d.CompatibilityOnly; return new(capabilityId,d.SourceId,ok,d.EvidenceCategory,d.EvidenceStrength,d.CompatibilityOnly,ok?"Approved":"Rejected",ok?"Source is approved by policy.":"Source does not satisfy policy."); }
     public SemanticSourcePolicyCertificationReportV1 CertifyFamilyProfile(AstronomyFamilyProfileV1 profile)=>new SemanticSourcePolicyCertifierV1(this,new SemanticCapabilityCatalogV1()).Certify(profile);
+
+    private static SemanticCapabilityId CanonicalizeCapabilityId(SemanticCapabilityId capabilityId)
+    {
+        if (_canonicalPolicyIds.Contains(capabilityId.Value)) return capabilityId;
+        var mapped = LegacySemanticCapabilityMapV1.Entries.FirstOrDefault(e => e.LegacyTerm.Equals(capabilityId.Value, StringComparison.OrdinalIgnoreCase)).CanonicalCapabilityId;
+        return mapped ?? capabilityId;
+    }
+    private static readonly ImmutableHashSet<string> _canonicalPolicyIds = CreatePolicies().Select(p => p.SemanticCapabilityId.Value).ToImmutableHashSet(StringComparer.Ordinal);
 
     private static ApprovedSemanticSourceV1 S(string id, SemanticEvidenceCategoryV1 cat, int pri, bool ev=false, SemanticEvidenceStrengthV1 str=SemanticEvidenceStrengthV1.Strong, bool compat=false)=>new(id,cat,str,pri,ev,true,true,false,true,true,compat,true,$"{id} policy declaration only.");
     private static SemanticSourcePolicyV1 P(string id, SemanticEvidenceCategoryV1[] cats, ApprovedSemanticSourceV1[] src, SemanticEvidenceStrengthV1 min, bool ev, bool domain, bool cultural, bool editorial, SemanticSourceMultiplicityV1 multi, SemanticSourceConflictPolicyV1 conflict, SemanticSourceMissingPolicyV1 opt=SemanticSourceMissingPolicyV1.OmitCapability, bool derived=false, string[]? rules=null)=>new(new SemanticCapabilityId(id),"V1",cats,src,min,ev,domain,cultural,editorial,false,multi,conflict,SemanticSourceMissingPolicyV1.Block,opt,derived,rules??[],[],true,new("Sprint3A","PolicyOnly","V1 source policy is not wired to runtime extraction."));

@@ -472,7 +472,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         ValidatePhase7ChronicleCoreInputs(context);
 
-        var generator = narrationGeneratorV5 ?? new NarrationGeneratorV5(Microsoft.Extensions.Logging.Abstractions.NullLogger<NarrationGeneratorV5>.Instance);
+        var generator = narrationGeneratorV5 ?? throw new InvalidOperationException("Phase 7 NarrationGeneratorV5 must be resolved through AddMediaFactory DI so semantic source policies and adapters are populated.");
         var request = new BatchGenerateFromPlansRequest(
             Year: (context.Request.ScheduledUtc ?? DateTimeOffset.UtcNow).Year,
             RegionId: context.Request.RegionId,

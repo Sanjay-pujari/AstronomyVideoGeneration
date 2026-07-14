@@ -9,7 +9,7 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class CurrentNarrationV5DependencyCharacterizationTests
 {
     [Fact]
-    public void CurrentBehavior_NarrationGeneratorV5IsActivePhase7GeneratorAndKeepsStaticFallbacks()
+    public void CurrentBehavior_NarrationGeneratorV5IsActivePhase7GeneratorAndRequiresProductionDi()
     {
         var production = RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs");
         var generator = RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "NarrationGeneratorV5.cs");
@@ -19,7 +19,7 @@ public sealed class CurrentNarrationV5DependencyCharacterizationTests
         Assert.Contains("PhaseGenerateNarrationPlanAsync", productionSource);
         Assert.Contains("NarrationGeneratorV5", productionSource);
         Assert.Contains("BuildAndWriteDiagnosticsAsync", productionSource);
-        Assert.Contains("new NarrationGeneratorV5", productionSource); // direct-construction fallback
+        Assert.DoesNotContain("new NarrationGeneratorV5", productionSource);
         Assert.Contains("IRequiredSemanticFactResolver requiredSemanticFactResolver", generatorSource);
         Assert.Contains("INarrationRealizer narrationRealizer", generatorSource);
         Assert.Contains("IAstronomyFamilyProfileResolver familyProfileResolver", generatorSource);
@@ -386,7 +386,7 @@ public sealed class CurrentSemanticArchitectureStaticCharacterizationTests
         Assert.Contains("AddJsonFacts", source);
         Assert.Contains("TryDerive", source);
         Assert.Contains("SemanticDefaults.SemanticCapabilitySourceRegistry", source);
-        Assert.Contains("new NarrationGeneratorV5", File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs")));
+        Assert.DoesNotContain("new NarrationGeneratorV5", File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs")));
     }
 }
 
