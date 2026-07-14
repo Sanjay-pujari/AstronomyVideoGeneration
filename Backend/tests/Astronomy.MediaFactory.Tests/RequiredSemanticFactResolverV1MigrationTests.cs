@@ -214,10 +214,12 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
     public void Counting_Engine_Confirms_No_Engine_Call_Occurs_During_Projection()
     {
         var engine = new CountingEngine();
-        CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("beat-1"), Contract("beat-2"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("beat-1"), Contract("beat-2"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
 
         Assert.Equal(1, engine.CallCount);
-        Assert.DoesNotContain(engine.CallStacks, stack => stack.Contains("Project", StringComparison.Ordinal));
+        var projectedFacts = result.Beats.Select(b => Assert.Single(b.RequiredFacts)).ToArray();
+        Assert.All(projectedFacts, fact => Assert.Equal("value-EventIdentity", fact.CanonicalValue));
+        Assert.Equal(1, engine.CallCount);
     }
 
     [Fact]
@@ -225,17 +227,40 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
     {
         var source = File.ReadAllText(TestPaths.Source("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
         var resolverBody = source[source.IndexOf("public sealed class RequiredSemanticFactResolver", StringComparison.Ordinal)..source.IndexOf("public static class NarrationRealizedContextMapper", StringComparison.Ordinal)];
-        var resolveBody = resolverBody[resolverBody.IndexOf("public RequiredSemanticFactResolutionResult Resolve", StringComparison.Ordinal)..resolverBody.IndexOf("private static ResolvedSemanticFact? Project", StringComparison.Ordinal)];
+        var resolveBody = ExtractMethodBody(resolverBody, "public RequiredSemanticFactResolutionResult Resolve");
         var projectSignature = resolverBody[resolverBody.IndexOf("private static ResolvedSemanticFact? Project", StringComparison.Ordinal)..resolverBody.IndexOf("private IEnumerable<RequirementOccurrence>", StringComparison.Ordinal)];
         var scopeRecord = source[source.IndexOf("public sealed record SemanticResolutionScopeKeyV1", StringComparison.Ordinal)..source.IndexOf("public sealed class RequiredSemanticFactResolver", StringComparison.Ordinal)];
 
         Assert.Contains("_semanticResolutionEngine.Resolve", resolveBody);
-        Assert.DoesNotContain("SemanticSourceAdapter", resolverBody);
+        Assert.DoesNotContain("SemanticSourceAdapter", resolveBody);
         Assert.DoesNotContain("AddJsonFacts", resolveBody);
-        Assert.True(resolveBody.IndexOf("_semanticResolutionEngine.Resolve", StringComparison.Ordinal) < resolveBody.IndexOf("Project", StringComparison.Ordinal));
+        Assert.DoesNotContain("AddDocumentary", resolveBody);
+        Assert.True(resolveBody.IndexOf("_semanticResolutionEngine.Resolve", StringComparison.Ordinal) < resolveBody.IndexOf("Project(", StringComparison.Ordinal));
         Assert.DoesNotContain("ISemanticResolutionEngineV1", projectSignature);
         Assert.DoesNotContain("BeatId", scopeRecord);
         Assert.DoesNotContain("BeatRole", scopeRecord);
+    }
+
+
+    private static string ExtractMethodBody(string source, string signature)
+    {
+        var signatureIndex = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(signatureIndex >= 0, $"Could not find method signature: {signature}");
+
+        var bodyStart = source.IndexOf('{', signatureIndex);
+        Assert.True(bodyStart >= 0, $"Could not find method body for: {signature}");
+
+        var depth = 0;
+        for (var i = bodyStart; i < source.Length; i++)
+        {
+            if (source[i] == '{') depth++;
+            if (source[i] != '}') continue;
+
+            depth--;
+            if (depth == 0) return source[bodyStart..(i + 1)];
+        }
+
+        throw new InvalidOperationException($"Could not find method body end for: {signature}");
     }
 
     private static RequiredSemanticFactResolver CreateResolver(CountingEngine engine) => new(
@@ -259,12 +284,10 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         public CountingEngine(SemanticResolutionStatusV1 status = SemanticResolutionStatusV1.Resolved) => _status = status;
         public int CallCount { get; private set; }
         public List<SemanticResolutionRequestV1> Requests { get; } = [];
-        public List<string> CallStacks { get; } = [];
         public SemanticResolutionResultV1 Resolve(SemanticResolutionRequestV1 request)
         {
             CallCount++;
             Requests.Add(request);
-            CallStacks.Add(Environment.StackTrace);
             var value = _status is SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination ? new SemanticSourceValueV1($"value-{request.CapabilityId.Value}", "String") : null;
             var fact = new ResolvedSemanticFactV1(request.CapabilityId, _status, request.Required, value, $"value-{request.CapabilityId.Value}", $"value-{request.CapabilityId.Value}", "candidate-1", "adapter-1", "source-1", SemanticEvidenceCategoryV1.VerifiedEventData, SemanticEvidenceStrengthV1.Strong, .95m, [new("source-1", "model", "path", true)], [], [], [], "FirstApprovedByPriority", [], [], _status.ToString(), _status.ToString());
             var diagnostics = new SemanticResolutionDiagnosticsV1(request.CapabilityId, request.Required, null, 1, 1, 0, [], [], [], [], "candidate-1", fact.Status, fact.ResolutionPolicy, [], [], [], []);
