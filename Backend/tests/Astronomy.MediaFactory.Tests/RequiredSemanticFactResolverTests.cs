@@ -203,8 +203,8 @@ public sealed class RequiredSemanticFactResolverTests
     [Fact]
     public void OptionalZhrWithNoSourceValueDoesNotBlockMeteorShower()
     {
-        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"MeteorShower\"}"), null);
-        var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Geminids Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Geminids\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
+        var profile = OptionalMeteorZhrProfile();
+        var result = Resolve(LongWithBeat("Hook", "{}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
 
         Assert.False(result.Blocking);
         Assert.Contains(result.Beats[0].OmittedOptionalFacts, f => string.Equals(f, "ZHR", StringComparison.OrdinalIgnoreCase));
@@ -216,8 +216,8 @@ public sealed class RequiredSemanticFactResolverTests
     [Fact]
     public void VerifiedUpstreamZhrResolvesWhenPresent()
     {
-        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"MeteorShower\"}"), null);
-        var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Radiant\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventType\":\"MeteorShower\",\"zhr\":{\"value\":120,\"unit\":\"meteors/hour\",\"qualifier\":\"under ideal dark skies\",\"source\":\"verified upstream feed\",\"confidence\":0.95}}"), profile: profile);
+        var profile = OptionalMeteorZhrProfile();
+        var result = Resolve(LongWithBeat("Hook", "{}"), eventIntel: Json("{\"eventType\":\"MeteorShower\",\"zhr\":{\"value\":120,\"unit\":\"meteors/hour\",\"qualifier\":\"under ideal dark skies\",\"source\":\"verified upstream feed\",\"confidence\":0.95}}"), profile: profile);
 
         Assert.False(result.Blocking);
         var fact = Assert.Single(result.Beats[0].OptionalFacts, f => string.Equals(f.FactType, "ZHR", StringComparison.OrdinalIgnoreCase));
@@ -229,10 +229,10 @@ public sealed class RequiredSemanticFactResolverTests
     [Fact]
     public void ZhrIsNotFabricatedFromGeminidsTitle()
     {
-        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"MeteorShower\"}"), null);
-        var result = Resolve(LongWithBeat("Hook", "{\"Name\":\"Geminids Meteor Shower Peak\",\"EventDateOrWindow\":\"2026-12-14\",\"Radiant\":\"Geminids\",\"PeakWindow\":\"00:00-05:00 IST\"}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
+        var profile = OptionalMeteorZhrProfile();
+        var result = Resolve(LongWithBeat("Hook", "{}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
 
-        Assert.DoesNotContain(result.Beats[0].OptionalFacts, f => f.FactType == "Zhr");
+        Assert.DoesNotContain(result.Beats[0].OptionalFacts, f => string.Equals(f.FactType, "ZHR", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.Beats[0].OmittedOptionalFacts, f => string.Equals(f, "ZHR", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -281,6 +281,8 @@ public sealed class RequiredSemanticFactResolverTests
         Assert.Contains("Unable to resolve astronomy family profile.", ex.Message);
         Assert.Contains("No matching profile found.", ex.Message);
     }
+
+    private static AstronomyFamilyProfile OptionalMeteorZhrProfile() => new("MeteorShower", "TimedObservationEvent", "ObservationGuide", "SkyWatchShort", [], ["Zhr"], ["Hook"], ["Hook"], "", "", [], [], []);
 
     private static RequiredSemanticFactResolutionResult Resolve(JsonElement longContract, JsonElement? shortContract = null, JsonElement? eventIntel = null, JsonElement? observation = null, AstronomyFamilyProfile? profile = null, LanguageProfile? language = null)
         => new RequiredSemanticFactResolver().Resolve(new RequiredSemanticFactResolutionInput(profile ?? Planetary, longContract, shortContract ?? longContract, null, null, eventIntel, observation, null, language ?? English));

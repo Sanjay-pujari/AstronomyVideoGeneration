@@ -196,7 +196,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         Assert.Equal("EventIdentity", fact.FactKey);
         Assert.Equal("beat-1", fact.SourceBeatId);
         Assert.Equal("source-1", fact.SourceArtifact);
-        Assert.Equal("path", fact.SourceField);
+        Assert.Equal("EventIdentityContext.EventIdentity", fact.SourceField);
         Assert.Equal("Required", fact.Requiredness);
         Assert.Equal("en", fact.Language);
     }
@@ -344,7 +344,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
             CallCount++;
             Requests.Add(request);
             var value = _status is SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination ? new SemanticSourceValueV1($"value-{request.CapabilityId.Value}", "String") : null;
-            var fact = new ResolvedSemanticFactV1(request.CapabilityId, _status, request.Required, value, $"value-{request.CapabilityId.Value}", $"value-{request.CapabilityId.Value}", "candidate-1", "adapter-1", "source-1", SemanticEvidenceCategoryV1.VerifiedEventData, SemanticEvidenceStrengthV1.Strong, .95m, [new("source-1", "model", "path", true)], [], [], [], "FirstApprovedByPriority", [], [], _status.ToString(), _status.ToString());
+            var fact = new ResolvedSemanticFactV1(request.CapabilityId, _status, request.Required, value, $"value-{request.CapabilityId.Value}", $"value-{request.CapabilityId.Value}", "candidate-1", "adapter-1", "source-1", SemanticEvidenceCategoryV1.VerifiedEventData, SemanticEvidenceStrengthV1.Strong, .95m, [new("source-1", "model", "EventIdentityContext.EventIdentity", true)], [], [], [], "FirstApprovedByPriority", [], [], _status.ToString(), _status.ToString());
             var diagnostics = new SemanticResolutionDiagnosticsV1(request.CapabilityId, request.Required, null, 1, 1, 0, [], [], [], [], "candidate-1", fact.Status, fact.ResolutionPolicy, [], [], [], []);
             return new(fact, diagnostics);
         }
