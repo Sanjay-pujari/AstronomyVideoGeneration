@@ -12,7 +12,7 @@ public sealed class FiveCategoryPhase7FixtureValidationTests
     [MemberData(nameof(Fixtures))]
     public void ActualRawEventCodeResolvesCanonicallyToActiveFamilyAndTypedContext(Phase7ProductionFixture fixture)
     {
-        var profile = AstronomyFamilyProfileCatalog.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput(fixture.Request.EventType, null, fixture.Request.PrimaryObjects, fixture.Request.SecondaryObjects)).Profile;
+        var profile = AstronomyFamilyProfileCatalog.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput(fixture.Request.EventType, fixture.Request.Category, fixture.Request.PlannedFormat, fixture.Request.BestViewingWindowLocal)).Profile;
         var v1Identity = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Identity.CanonicalAstronomyEventIdentityResolverV1().Resolve(fixture.Request.EventType, fixture.ProductionSource);
         var identity = CanonicalEventIdentityResolver.Resolve(new CanonicalEventIdentityResolutionInput(fixture.Request.EventType, fixture.Request.EventType, fixture.Request.EventType, [], null));
         var contract = Json("{\"beats\":[{\"documentaryBeatId\":\"hook\",\"narrativeRole\":\"Hook\",\"allocatedFacts\":{}},{\"documentaryBeatId\":\"timing\",\"narrativeRole\":\"Timing\",\"allocatedFacts\":{}},{\"documentaryBeatId\":\"observation\",\"narrativeRole\":\"Observation\",\"allocatedFacts\":{}},{\"documentaryBeatId\":\"science\",\"narrativeRole\":\"Science\",\"allocatedFacts\":{}}]}");
