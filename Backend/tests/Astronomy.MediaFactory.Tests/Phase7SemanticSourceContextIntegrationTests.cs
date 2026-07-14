@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Text.Json;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
@@ -66,7 +68,17 @@ public sealed class Phase7SemanticSourceContextIntegrationTests
 
         Assert.Equal("PlanetPairing", identity.EventType);
         Assert.Equal("PlanetPairing", profile.FamilyId);
-        Assert.Contains(facts, f => f.FactType == "PrimaryObjects" && f.CanonicalValue.ToString()!.Contains("Jupiter") && f.CanonicalValue.ToString()!.Contains("Venus"));
+        var primaryObjectsFact = Assert.Single(facts, f => f.FactType == "PrimaryObjects");
+        Assert.Equal("AstronomicalObjects", primaryObjectsFact.SemanticMeaning);
+        Assert.Equal("ProductionEventIntelligence", primaryObjectsFact.SourceArtifact);
+        Assert.Equal("ProductionEventIntelligence.PrimaryObjects", primaryObjectsFact.SourceField);
+        Assert.Equal("Verified", primaryObjectsFact.VerificationStatus);
+
+        var primaryObjects = Assert.IsType<ImmutableArray<AstronomicalObjectValue>>(primaryObjectsFact.CanonicalValue);
+        var jupiter = Assert.Single(primaryObjects, o => o.Name == "Jupiter");
+        var venus = Assert.Single(primaryObjects, o => o.Name == "Venus");
+        Assert.Equal("Primary", jupiter.Role);
+        Assert.Equal("Secondary", venus.Role);
         Assert.Contains(facts, f => f.FactType == "EventIdentity");
         Assert.Contains(facts, f => f.FactType == "ObservationTiming" && f.SourceField.Contains("EventWindow"));
         Assert.Contains(facts, f => f.FactType == "ApparentAlignmentExplanation");
