@@ -71,9 +71,18 @@ public sealed class Phase7CanonicalEventDispatchV1Tests
     public void NarrationGeneratorV5ContainsNoRawAliasSwitch()
     {
         var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
-        Assert.DoesNotContain("switch", source[source.IndexOf("private static string Normalize", StringComparison.Ordinal)..source.IndexOf("public static class CanonicalEventIdentityDiagnosticsBuilder", StringComparison.Ordinal)]);
+        var dispatchStart = source.IndexOf("CanonicalEventIdentityResolver.Resolve", StringComparison.Ordinal);
+        var dispatchEnd = source.IndexOf("familyProfileResolver.ResolveFamilyProfile", dispatchStart, StringComparison.Ordinal);
+        var dispatchSource = source[dispatchStart..dispatchEnd];
+        Assert.DoesNotContain("switch", dispatchSource);
+        Assert.DoesNotContain("PLANET_CONJUNCTION", dispatchSource);
+        Assert.DoesNotContain("METEOR_SHOWER", dispatchSource);
+        Assert.DoesNotContain("SOLAR_ECLIPSE", dispatchSource);
+        Assert.Contains("CanonicalEventIdentityResolver.Resolve", source);
+        Assert.Contains("familyProfileResolver.ResolveFamilyProfile", source);
+        var identityResolverSource = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Production", "Narration", "Semantics", "Identity", "CanonicalAstronomyEventIdentityResolverV1.cs"));
+        Assert.Contains("AstronomyEventAliasCatalogV1", identityResolverSource);
         Assert.DoesNotContain("PLANET_CONJUNCTION", source);
-        Assert.Contains("AstronomyEventAliasCatalogV1", source);
     }
 
     [Fact]

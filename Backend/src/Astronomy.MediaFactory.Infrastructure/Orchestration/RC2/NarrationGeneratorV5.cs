@@ -227,7 +227,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             productionEventIntelligence,
             observationMetadata,
             ReadFirstJson(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")),
-            languageProfile));
+            languageProfile,
+            ExtractProductionPipelineRequest(response.ProductionPipelineRequest),
+            canonicalEventIdentity));
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
         var semanticCapabilityDiagnosticsPath = Path.Combine(narrationRoot, "semantic-capability-diagnostics.json");
         await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolutionDiagnostics = familyProfileResolution.Diagnostics, semanticResolutionDiagnostics = semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
@@ -1362,6 +1364,18 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     private static string? GetString(JsonElement? element, string name) { if (element is not { ValueKind: JsonValueKind.Object } e) return null; foreach (var p in e.EnumerateObject()) if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) return ValueToString(p.Value); return null; }
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+    private static ContentPlanProductionPipelineRequest? ExtractProductionPipelineRequest(object? value)
+    {
+        if (value is ContentPlanProductionPipelineRequest typed) return typed;
+        if (value is ProductionPipelineRequest pipelineRequest) return pipelineRequest.Request;
+        if (value is JsonElement json && json.ValueKind == JsonValueKind.Object)
+        {
+            try { return json.Deserialize<ContentPlanProductionPipelineRequest>(JsonOptions); }
+            catch (JsonException) { return null; }
+        }
+        return null;
+    }
+
     private static string? ResolvePipelineRequestEventType(object? pipelineRequest)
     {
         if (pipelineRequest is null) return null;
@@ -2133,7 +2147,7 @@ public interface IRequiredSemanticFactResolver
     RequiredSemanticFactResolutionResult Resolve(RequiredSemanticFactResolutionInput input);
 }
 
-public sealed record RequiredSemanticFactResolutionInput(AstronomyFamilyProfile FamilyProfile, JsonElement? LongDocumentaryContract, JsonElement? ShortDocumentaryContract, JsonElement? EditorialContract, JsonElement? StoryGraph, JsonElement? ProductionEventIntelligence, JsonElement? ObservationMetadata, JsonElement? QuestionAnswerSet, LanguageProfile LanguageProfile);
+public sealed record RequiredSemanticFactResolutionInput(AstronomyFamilyProfile FamilyProfile, JsonElement? LongDocumentaryContract, JsonElement? ShortDocumentaryContract, JsonElement? EditorialContract, JsonElement? StoryGraph, JsonElement? ProductionEventIntelligence, JsonElement? ObservationMetadata, JsonElement? QuestionAnswerSet, LanguageProfile LanguageProfile, ContentPlanProductionPipelineRequest? ProductionPipelineRequest = null, CanonicalEventIdentity? CanonicalEventIdentity = null);
 public sealed record RequiredSemanticFactResolutionResult(IReadOnlyList<ResolvedBeatFacts> Beats, object Diagnostics)
 {
     public bool Blocking => Beats.Any(b => b.Blocking);
@@ -2443,22 +2457,54 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 
     private SemanticSourceAdapterContextV1 CreateAdapterContext(RequiredSemanticFactResolutionInput input)
     {
-        var eventType = TryGetRootString(input.ProductionEventIntelligence, "eventType") ?? TryGetAllocatedFactString(input.LongDocumentaryContract, "EventType") ?? input.FamilyProfile.FamilyId;
-        var identity = new global::Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts.CanonicalAstronomyEventIdentity(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, eventType, "RequiredSemanticFactResolver.LegacyInput");
-        var productionEventWindow = ReadEventWindow(input.ProductionEventIntelligence);
+        var request = input.ProductionPipelineRequest;
+        var eventType = FirstNonEmpty(request?.EventType, TryGetRootString(input.ProductionEventIntelligence, "eventType"), TryGetAllocatedFactString(input.LongDocumentaryContract, "EventType"), input.FamilyProfile.FamilyId);
+        var canonicalType = FirstNonEmpty(input.CanonicalEventIdentity?.EventType, input.FamilyProfile.FamilyId, eventType) ?? input.FamilyProfile.FamilyId;
+        var familyId = FirstNonEmpty(input.CanonicalEventIdentity?.EventFamily, input.FamilyProfile.FamilyId, canonicalType) ?? input.FamilyProfile.FamilyId;
+        var identity = new global::Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts.CanonicalAstronomyEventIdentity(canonicalType, familyId, familyId, eventType, input.CanonicalEventIdentity?.ResolutionSource ?? "RequiredSemanticFactResolver.Phase7CanonicalIdentity");
+        var productionEventWindow = ReadEventWindowFromRequest(request) ?? ReadEventWindow(input.ProductionEventIntelligence);
         var observationEventWindow = ReadEventWindow(input.ObservationMetadata);
         var documentaryEventWindow = ReadEventWindow(input.LongDocumentaryContract);
-        var angularSeparation = ReadAngularSeparation(input.ProductionEventIntelligence) ?? ReadAngularSeparation(input.LongDocumentaryContract);
+        var angularSeparation = ReadAngularSeparationFromRequest(request) ?? ReadAngularSeparation(input.ProductionEventIntelligence) ?? ReadAngularSeparation(input.LongDocumentaryContract);
         var observationAngularSeparation = ReadAngularSeparation(input.ObservationMetadata);
-        var primaryObjects = ReadPrimaryObjects(input.ProductionEventIntelligence) ?? ReadPrimaryObjects(input.LongDocumentaryContract);
+        var primaryObjects = ReadObjectsFromRequest(request, includeSecondary: true) ?? ReadPrimaryObjects(input.ProductionEventIntelligence) ?? ReadPrimaryObjects(input.LongDocumentaryContract);
+        var secondaryObjects = ReadSecondaryObjectsFromRequest(request);
         var meteorActivity = ReadMeteorActivity(input.ProductionEventIntelligence);
-        var eventSource = new ProductionEventIntelligenceSourceV1(eventType, input.FamilyProfile.FamilyId, input.FamilyProfile.FamilyId, primaryObjects ?? [], default, productionEventWindow, angularSeparation, null, meteorActivity);
-        var observationSource = new ObservationMetadataSourceV1(observationEventWindow, observationAngularSeparation, ReadObservationDirection(input.LongDocumentaryContract), ReadObservationLocation(input.LongDocumentaryContract));
+        var requestLocation = ReadObservationLocationFromRequest(request);
+        var eventSource = new ProductionEventIntelligenceSourceV1(eventType, familyId, familyId, primaryObjects ?? [], secondaryObjects ?? [], productionEventWindow, angularSeparation, ReadObservationDirectionFromRequest(request), meteorActivity);
+        var observationSource = new ObservationMetadataSourceV1(observationEventWindow ?? productionEventWindow, observationAngularSeparation ?? angularSeparation, ReadObservationDirection(input.ObservationMetadata) ?? ReadObservationDirectionFromRequest(request), ReadObservationLocation(input.ObservationMetadata) ?? requestLocation);
         var documentarySource = new DocumentaryContractSourceV1(documentaryEventWindow);
-        var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract) ?? ResolveDomainKnowledge(input.FamilyProfile.FamilyId));
-        var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, input.FamilyProfile.FamilyId));
-        return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, DocumentaryContract: documentarySource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode);
+        var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract) ?? ResolveDomainKnowledge(familyId, primaryObjects ?? [], input.LanguageProfile.LanguageCode));
+        var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(VerifiedObjects: primaryObjects ?? [], ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, familyId));
+        return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, DocumentaryContract: documentarySource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode, TimeZone: request?.TimeZone, LocationContext: requestLocation);
     }
+
+    private static ImmutableArray<AstronomicalObjectValue>? ReadObjectsFromRequest(ContentPlanProductionPipelineRequest? request, bool includeSecondary)
+    {
+        if (request is null) return null;
+        var items = request.PrimaryObjects.Select(n => (Name: n, Role: "Primary", Path: "ProductionPipelineRequest.PrimaryObjects"))
+            .Concat(includeSecondary ? request.SecondaryObjects.Select(n => (Name: n, Role: "Secondary", Path: "ProductionPipelineRequest.SecondaryObjects")) : []);
+        var values = items.Where(i => !string.IsNullOrWhiteSpace(i.Name)).DistinctBy(i => i.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(i => new AstronomicalObjectValue(i.Name.Trim(), null, i.Role, null, [new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.ProductionEventIntelligence, nameof(ContentPlanProductionPipelineRequest), i.Path, true)])).ToImmutableArray();
+        return values.Length == 0 ? null : values;
+    }
+
+    private static ImmutableArray<AstronomicalObjectValue> ReadSecondaryObjectsFromRequest(ContentPlanProductionPipelineRequest? request)
+        => request?.SecondaryObjects.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).Select(n => new AstronomicalObjectValue(n.Trim(), null, "Secondary", null, [new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.ProductionEventIntelligence, nameof(ContentPlanProductionPipelineRequest), "ProductionPipelineRequest.SecondaryObjects", true)])).ToImmutableArray() ?? [];
+
+    private static EventWindowValue? ReadEventWindowFromRequest(ContentPlanProductionPipelineRequest? request)
+        => request is null || (!request.StartUtc.HasValue && !request.PeakUtc.HasValue && !request.EndUtc.HasValue && !request.ScheduledUtc.HasValue && string.IsNullOrWhiteSpace(request.LocalPeakTime) && string.IsNullOrWhiteSpace(request.BestViewingWindowLocal))
+            ? null
+            : new EventWindowValue(request.StartUtc, request.PeakUtc ?? request.ScheduledUtc, request.EndUtc, null, null, null, null, request.TimeZone, FirstNonEmpty(request.BestViewingWindowLocal, request.LocalPeakTime, (request.PeakUtc ?? request.ScheduledUtc)?.ToString("O", CultureInfo.InvariantCulture)));
+
+    private static AngularSeparationValue? ReadAngularSeparationFromRequest(ContentPlanProductionPipelineRequest? request)
+        => request?.AngularSeparationDegrees is { } degrees ? new AngularSeparationValue(degrees, null, null, null, null, request.PeakUtc) : null;
+
+    private static ObservationDirectionValue? ReadObservationDirectionFromRequest(ContentPlanProductionPipelineRequest? request)
+        => string.IsNullOrWhiteSpace(request?.SkyDirectionHint) ? null : new ObservationDirectionValue(request.SkyDirectionHint, null, null, null, request.SkyDirectionHint);
+
+    private static ObservationLocationValue? ReadObservationLocationFromRequest(ContentPlanProductionPipelineRequest? request)
+        => request is null || (string.IsNullOrWhiteSpace(request.RegionId) && string.IsNullOrWhiteSpace(request.TimeZone)) ? null : new ObservationLocationValue(request.RegionId, null, null, null, request.TimeZone);
 
     private static ImmutableArray<AstronomicalObjectValue>? ReadPrimaryObjects(params JsonElement?[] sources)
     {
@@ -2520,9 +2566,9 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     }
 
 
-    private DomainScientificKnowledgeValue? ResolveDomainKnowledge(string familyId)
+    private DomainScientificKnowledgeValue? ResolveDomainKnowledge(string familyId, ImmutableArray<AstronomicalObjectValue> objects, string languageCode)
     {
-        if (_domainKnowledgeProvider.TryResolve(familyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(familyId, [], "en"), out var fact))
+        if (_domainKnowledgeProvider.TryResolve(familyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(familyId, objects.Select(o => new AstronomyKnowledgeContextFact("AstronomicalObject", o.Name, "ProductionEventIntelligence", o.Role ?? "Object")).ToArray(), languageCode), out var fact))
             return new DomainScientificKnowledgeValue(null, Convert.ToString(fact.CanonicalValue, CultureInfo.InvariantCulture), null, null);
         return null;
     }
