@@ -499,11 +499,19 @@ public sealed partial class ProductionPipelineExecutionService(
             OutputRoot: context.OutputRoot,
             ProductionPipelineRequest: context.Request);
 
-        var result = await generator.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-        return result.GeneratedFiles
-            .Concat([BuildNarrationV5Path(context), BuildNarrationV5DiagnosticsPath(context), BuildNarrationV5PromptPreviewPath(context)])
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        try
+        {
+            var result = await generator.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
+            return result.GeneratedFiles
+                .Concat([BuildNarrationV5Path(context), BuildNarrationV5DiagnosticsPath(context), BuildNarrationV5PromptPreviewPath(context)])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch
+        {
+            PreservePhase7DiagnosticEvidenceForOverwrite(context);
+            throw;
+        }
     }
 
 

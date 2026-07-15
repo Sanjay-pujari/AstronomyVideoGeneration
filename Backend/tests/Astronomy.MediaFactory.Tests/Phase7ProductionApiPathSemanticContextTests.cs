@@ -52,14 +52,20 @@ public sealed class Phase7ProductionApiPathSemanticContextTests
             OutputRoot: outputRoot,
             ProductionPipelineRequest: productionRequest);
 
+        Exception? phase7Exception = null;
         try
         {
             await generator.BuildAndWriteDiagnosticsAsync(request, response, CancellationToken.None);
         }
         catch (InvalidOperationException ex) when (!ex.Message.Contains("Required semantic fact resolution failed", StringComparison.OrdinalIgnoreCase))
         {
+            phase7Exception = ex;
             // This regression targets the pre-prompt resolver boundary; later prompt/narration validations are outside this parity assertion.
         }
+
+        Assert.False(
+            ExceptionOriginatesFromSemanticRegistry(phase7Exception),
+            "Phase 7 must not throw from SemanticSourceAdapterRegistryV1.CanonicalizeCapabilityId or SemanticSourceAdapterRegistryV1.GetAdapters.");
 
         var diagnosticsPath = Path.Combine(outputRoot, "narration-v5", "required-semantic-fact-diagnostics.json");
         Assert.True(File.Exists(diagnosticsPath), "Phase 7 must write required semantic diagnostics before prompt generation.");
@@ -96,6 +102,21 @@ public sealed class Phase7ProductionApiPathSemanticContextTests
         Assert.DoesNotContain("PhysicalProximityClarification", missing);
         Assert.DoesNotContain("No source policy", semantic.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains(semantic.GetProperty("semanticCapabilityDiagnostics").EnumerateArray(), d => d.GetProperty("adaptersExecuted").GetArrayLength() > 0 && d.GetProperty("candidatesFound").GetInt32() > 0);
+    }
+
+    private static bool ExceptionOriginatesFromSemanticRegistry(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            var stackTrace = current.StackTrace ?? string.Empty;
+            if (stackTrace.Contains("SemanticSourceAdapterRegistryV1.CanonicalizeCapabilityId", StringComparison.Ordinal) ||
+                stackTrace.Contains("SemanticSourceAdapterRegistryV1.GetAdapters", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static ContentPlanProductionPipelineRequest BuildJupiterVenusRequest() => new(
