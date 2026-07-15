@@ -377,7 +377,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var requiredOutputDiagnostics = phaseNo == 7
                 ? await WritePhase7RequiredOutputValidationDiagnosticsAsync(context, outputs, cancellationToken)
                 : null;
-            var missing = requiredOutputDiagnostics?.BlockingErrors?.ToArray()
+            var missing = requiredOutputDiagnostics?.BlockingErrors?.Concat(phaseNo == 7 ? EvaluatePhase7NarrationQualityAuthority(context) : Array.Empty<string>()).ToArray()
                 ?? outputs.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(p => $"Expected output was not found: {p}").ToArray();
             var phase10TitleDiagnostics = phaseNo == 10 ? ReadPhase10TitleDiagnostics(outputs) : null;
             var warnings = phaseNo == 18 ? ReadPhase18Warnings(context) : [];
@@ -394,6 +394,55 @@ public sealed partial class ProductionPipelineExecutionService(
             return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], [], [], [ex.Message], ex.Message, true, cancellationToken, started, phase10TitleDiagnostics);
         }
     }
+
+
+    private static IReadOnlyList<string> EvaluatePhase7NarrationQualityAuthority(ProductionPhaseContext context)
+    {
+        var errors = new List<string>();
+        foreach (var profile in new[] { "long", "short" })
+        {
+            var path = Path.Combine(context.ExecutionContext.NarrationRoot!, profile, "narration-validation.json");
+            if (!File.Exists(path)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                var root = doc.RootElement;
+                var blocking = false;
+                if (TryGetBool(root, "isValid", out var isValid) && !isValid) blocking = true;
+                if (TryGetBool(root, "passed", out var passed) && !passed) blocking = true;
+                if (TryGetBool(root, "finalValidationPassed", out var finalPassed) && !finalPassed) blocking = true;
+                if (TryGetBool(root, "auroraCertified", out var certified) && !certified) blocking = true;
+                var status = TryGetString(root, "status");
+                var finalDecision = TryGetString(root, "finalDecision");
+                var publishability = TryGetString(root, "publishability");
+                if (IsBlockingDecision(status) || IsBlockingDecision(finalDecision) || IsBlockingDecision(publishability)) blocking = true;
+                if (ArrayCount(root, "errors") > 0 || ArrayCount(root, "blockingErrors") > 0 || ArrayCount(root, "blockingIssues") > 0) blocking = true;
+                if (blocking) errors.Add($"Narration generated but validation failed: profile={profile}, diagnostics={NormalizePath(path)}");
+            }
+            catch (JsonException ex)
+            {
+                errors.Add($"Narration generated but validation failed: profile={profile}, diagnostics={NormalizePath(path)}, reason=InvalidJson: {ex.Message}");
+            }
+        }
+        return errors;
+    }
+
+    private static bool TryGetBool(JsonElement root, string name, out bool value)
+    {
+        value = false;
+        if (!root.TryGetProperty(name, out var p)) return false;
+        if (p.ValueKind is JsonValueKind.True or JsonValueKind.False) { value = p.GetBoolean(); return true; }
+        return p.ValueKind == JsonValueKind.String && bool.TryParse(p.GetString(), out value);
+    }
+
+    private static string? TryGetString(JsonElement root, string name)
+        => root.TryGetProperty(name, out var p) ? p.ValueKind == JsonValueKind.String ? p.GetString() : p.GetRawText() : null;
+
+    private static int ArrayCount(JsonElement root, string name)
+        => root.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.Array ? p.GetArrayLength() : 0;
+
+    private static bool IsBlockingDecision(string? value)
+        => !string.IsNullOrWhiteSpace(value) && (value.Contains("fail", StringComparison.OrdinalIgnoreCase) || value.Contains("do not publish", StringComparison.OrdinalIgnoreCase) || value.Contains("rejected", StringComparison.OrdinalIgnoreCase) || value.Contains("not publishable", StringComparison.OrdinalIgnoreCase));
 
     private async Task<IReadOnlyList<string>> PhaseLoadPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {

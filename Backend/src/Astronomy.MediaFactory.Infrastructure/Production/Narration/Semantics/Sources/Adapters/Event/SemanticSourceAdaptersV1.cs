@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
@@ -15,7 +16,7 @@ public abstract class SemanticSourceAdapterV1Base<T>(string adapterId, string ca
     protected SemanticSourceAdapterResultV1 Unavailable() => SemanticSourceAdapterResultV1.Reject(SupportedCapabilityId, AdapterId, SourceId, SemanticSourceAdapterStatusV1.SourceUnavailable, "Typed source model was not supplied.");
     protected SemanticSourceAdapterResultV1 Unverified(string path) => SemanticSourceAdapterResultV1.Reject(SupportedCapabilityId, AdapterId, SourceId, SemanticSourceAdapterStatusV1.UnverifiedValue, "Source value is not verified.", [new("UnverifiedValue","Approved source requires verified structured data.",path)]);
     protected SemanticSourceAdapterResultV1 Invalid(string msg, string path) => SemanticSourceAdapterResultV1.Reject(SupportedCapabilityId, AdapterId, SourceId, SemanticSourceAdapterStatusV1.InvalidValue, msg, [new("InvalidValue",msg,path)]);
-    protected SemanticSourceAdapterResultV1 Res(T value, string path, string? speak = null, SemanticEvidenceStrengthV1? strength = null) { var p = new SemanticSourceProvenanceV1(SourceId, typeof(T).Name, path, true); var c = new SemanticSourceCandidateV1(SupportedCapabilityId, AdapterId, SourceId, new(value!, typeof(T).Name), value?.ToString() ?? "", speak, EvidenceCategory, strength ?? MaximumEvidenceStrength, .95m, [p], [], [], [], []); return SemanticSourceAdapterResultV1.Resolved(c); }
+    protected SemanticSourceAdapterResultV1 Res(T value, string path, string? speak = null, SemanticEvidenceStrengthV1? strength = null) { var p = new SemanticSourceProvenanceV1(SourceId, typeof(T).Name, path, true); var canonical = SemanticFactValueRealizer.Instance.RealizeCandidateValue(value, speak, null, SupportedCapabilityId.Value); var c = new SemanticSourceCandidateV1(SupportedCapabilityId, AdapterId, SourceId, new(value!, typeof(T).Name), canonical, speak ?? canonical, EvidenceCategory, strength ?? MaximumEvidenceStrength, .95m, [p], [], [], [], []); return SemanticSourceAdapterResultV1.Resolved(c); }
 }
 
 public sealed class EventIdentitySourceAdapterV1() : SemanticSourceAdapterV1Base<CanonicalAstronomyEventIdentity>("v1.event-identity.event-identity-context", SemanticCapabilityVocabularyV1.EventIdentity, SemanticSourcePolicyVocabularyV1.EventIdentityContext, SemanticEvidenceCategoryV1.EventIdentityContext, SemanticEvidenceStrengthV1.Strong, true) { public override SemanticSourceAdapterResultV1 TryExtract(SemanticSourceAdapterContextV1 c) => c.EventIdentity is null ? Unavailable() : Res(c.EventIdentity, nameof(c.EventIdentity)); }
