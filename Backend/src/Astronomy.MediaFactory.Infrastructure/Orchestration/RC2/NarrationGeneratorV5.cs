@@ -1347,30 +1347,43 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     private static object BuildResolverInputPresenceDiagnostic(RequiredSemanticFactResolutionInput input, IRequiredSemanticFactResolver resolver)
     {
         var resolverType = resolver.GetType();
+        var engine = TryGetResolverField<ISemanticResolutionEngineV1>(resolver, "_semanticResolutionEngine");
+        var catalog = TryGetResolverField<ISemanticSourcePolicyCatalogV1>(resolver, "_sourcePolicyCatalog") ?? SemanticDefaults.SemanticSourcePolicyCatalogV1;
+        var registry = TryGetResolverField<ISemanticSourceAdapterRegistryV1>(resolver, "_sourceAdapterRegistry") ?? SemanticDefaults.SemanticSourceAdapterRegistryV1;
+        var eventWindowPresent = ReadEventWindowFromRequest(input.ProductionPipelineRequest) is not null || ReadEventWindow(input.ProductionEventIntelligence) is not null;
+        var observationWindowPresent = ReadEventWindow(input.ObservationMetadata) is not null || eventWindowPresent;
+        var observationLocationPresent = ReadObservationLocation(input.ObservationMetadata) is not null || ReadObservationLocationFromRequest(input.ProductionPipelineRequest) is not null;
+        var observationDirectionPresent = ReadObservationDirection(input.ObservationMetadata) is not null || ReadObservationDirectionFromRequest(input.ProductionPipelineRequest) is not null;
+        var primaryObjectCount = (ReadObjectsFromRequest(input.ProductionPipelineRequest, includeSecondary: true) ?? ReadPrimaryObjects(input.ProductionEventIntelligence) ?? ImmutableArray<AstronomicalObjectValue>.Empty).Length;
         return new
         {
-            component = "Phase7ResolverInputPresenceDiagnostic-v1",
-            productionPipelineRequestPresent = input.ProductionPipelineRequest is not null,
-            productionEventIntelligencePresent = input.ProductionEventIntelligence.HasValue,
-            observationMetadataPresent = input.ObservationMetadata.HasValue,
-            canonicalIdentityPresent = input.CanonicalEventIdentity is not null,
-            canonicalEventType = input.CanonicalEventIdentity?.EventType,
-            familyProfilePresent = input.FamilyProfile is not null,
-            familyId = input.FamilyProfile.FamilyId,
+            resolverType = resolverType.FullName,
+            engineType = engine?.GetType().FullName,
+            policyCount = catalog.Policies.Count,
+            adapterCount = registry.Adapters.Count,
+            eventIdentityPresent = input.CanonicalEventIdentity is not null,
+            productionEventIntelligencePresent = input.ProductionEventIntelligence.HasValue || input.ProductionPipelineRequest is not null,
+            productionPrimaryObjectCount = primaryObjectCount,
+            productionEventWindowPresent = eventWindowPresent,
+            observationMetadataPresent = input.ObservationMetadata.HasValue || ReadObservationLocationFromRequest(input.ProductionPipelineRequest) is not null,
+            observationEventWindowPresent = observationWindowPresent,
+            observationLocationPresent,
+            observationDirectionPresent,
             domainKnowledgePresent = true,
+            language = input.LanguageProfile.LanguageCode,
+            timeZone = input.ProductionPipelineRequest?.TimeZone,
+            familyId = input.FamilyProfile.FamilyId,
+            profileId = input.FamilyProfile.FamilyId,
+            productionPipelineRequestPresent = input.ProductionPipelineRequest is not null,
             longDocumentaryContractPresent = input.LongDocumentaryContract.HasValue,
             shortDocumentaryContractPresent = input.ShortDocumentaryContract.HasValue,
             editorialContractPresent = input.EditorialContract.HasValue,
-            storyGraphPresent = input.StoryGraph.HasValue,
-            language = input.LanguageProfile.LanguageCode,
-            requestRegionId = input.ProductionPipelineRequest?.RegionId,
-            requestTimeZone = input.ProductionPipelineRequest?.TimeZone,
-            resolverConcreteType = resolverType.FullName,
-            usesDiResolverContract = typeof(IRequiredSemanticFactResolver).IsAssignableFrom(resolverType),
-            policyCount = SemanticDefaults.SemanticSourcePolicyCatalogV1.Policies.Count,
-            adapterCount = SemanticDefaults.SemanticSourceAdapterRegistryV1.Adapters.Count
+            storyGraphPresent = input.StoryGraph.HasValue
         };
     }
+
+    private static T? TryGetResolverField<T>(IRequiredSemanticFactResolver resolver, string fieldName) where T : class
+        => resolver.GetType().GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(resolver) as T;
 
     private static void ValidateFullProductionSemanticInput(RequiredSemanticFactResolutionInput input)
     {
@@ -2313,21 +2326,21 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var supportedOccurrences = occurrences.Where(o => o.Request is not null && o.ScopeKey is not null).ToArray();
         var resolvedByScope = supportedOccurrences
             .GroupBy(o => o.ScopeKey!)
-            .ToDictionary(g => g.Key, g => _semanticResolutionEngine.Resolve(g.First().Request!).Fact);
+            .ToDictionary(g => g.Key, g => _semanticResolutionEngine.Resolve(g.First().Request!));
 
         var beats = new List<ResolvedBeatFacts>();
         foreach (var beatGroup in occurrences.GroupBy(o => new { o.Format, o.SceneId, o.BeatId, o.Role }))
         {
             var requiredOccurrences = beatGroup.Where(o => o.Required).ToArray();
             var optionalOccurrences = beatGroup.Where(o => !o.Required).ToArray();
-            var resolvedRequired = requiredOccurrences.Select(o => o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey], input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
-            var resolvedOptional = optionalOccurrences.Select(o => o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey], input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
+            var resolvedRequired = requiredOccurrences.Select(o => o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey].Fact, input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
+            var resolvedOptional = optionalOccurrences.Select(o => o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey].Fact, input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
             var required = requiredOccurrences.Select(o => o.LegacyFactType).ToArray();
             var optional = optionalOccurrences.Select(o => o.LegacyFactType).ToArray();
             var missing = required.Where(t => !resolvedRequired.Any(f => Matches(t, f.FactType))).ToArray();
             var omitted = optional.Where(t => !resolvedOptional.Any(f => Matches(t, f.FactType))).ToArray();
-            var conflicts = beatGroup.SelectMany(o => o.ScopeKey is null ? Array.Empty<FactConflict>() : ToFactConflicts(o, resolvedByScope[o.ScopeKey])).Concat(FindConflicts(required.Concat(optional), all)).DistinctBy(c => c.FactType).ToArray();
-            var capabilityResults = beatGroup.Select(o => o.ScopeKey is null ? o.CapabilityResolution : ToCapabilityResolution(o, resolvedByScope[o.ScopeKey])).ToArray();
+            var conflicts = beatGroup.SelectMany(o => o.ScopeKey is null ? Array.Empty<FactConflict>() : ToFactConflicts(o, resolvedByScope[o.ScopeKey].Fact)).Concat(FindConflicts(required.Concat(optional), all)).DistinctBy(c => c.FactType).ToArray();
+            var capabilityResults = beatGroup.Select(o => o.ScopeKey is null ? o.CapabilityResolution : ToCapabilityResolution(o, resolvedByScope[o.ScopeKey].Fact)).ToArray();
             var unsupportedWarnings = beatGroup.Where(o => !o.IsSupported).Select(o => $"Unsupported legacy capability {o.LegacyFactType} classified as {o.CapabilityResolution.Status}; no semantic resolution request was created.");
             var warnings = omitted.Select(o => $"Optional capability {o} was unavailable and omitted.").Concat(unsupportedWarnings).Concat(capabilityResults.SelectMany(r => r.Warnings)).Concat(conflicts.Select(c => c.Message)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             beats.Add(new(beatGroup.Key.Format, beatGroup.Key.SceneId, beatGroup.Key.BeatId, beatGroup.Key.Role, resolvedRequired, resolvedOptional, missing, omitted, warnings, conflicts, capabilityResults, missing.Length > 0 || conflicts.Any(c => c.Blocking)));
@@ -2341,6 +2354,25 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             adapterCount = _sourceAdapterRegistry.Adapters.Count,
             sourceContextPresence = BuildPhase7SourceContextPresenceSnapshot(input),
             semanticCapabilityDiagnostics = beats.SelectMany(b => b.CapabilityResolutions.Select(r => new { r.Capability, capabilityId = r.Capability, registeredAdapterIds = r.Candidates.Select(c => c.Source).Distinct(), adaptersExecuted = r.Candidates.Select(c => c.Source).Concat(r.RejectedSources.Select(x => x.Source)).Distinct(), candidateSources = r.Candidates.Select(c => c.Source).Distinct(), candidatesFound = r.Candidates.Count, rejectedCandidates = r.RejectedSources, selectedAdapterId = r.SelectedSource, selectedSource = r.SelectedSource, selectedStrength = r.CapabilityStrength, selectionReason = r.Status, conversionApplied = r.SubstitutionsApplied.Any(x => x.Contains("converted", StringComparison.OrdinalIgnoreCase)), substitutionApplied = r.SubstitutionsApplied.Any(), unresolvedReason = r.Status.Equals("Resolved", StringComparison.OrdinalIgnoreCase) ? null : string.Join("; ", r.RejectedSources.Select(x => x.Reason).DefaultIfEmpty("NoApprovedSourceAvailable")) })),
+            requiredFactResultDiagnostics = supportedOccurrences.Select(o =>
+            {
+                var result = resolvedByScope[o.ScopeKey!];
+                var policy = _sourcePolicyCatalog.Policies.FirstOrDefault(p => p.CapabilityId.Equals(result.Fact.CapabilityId));
+                return new
+                {
+                    requestedLegacyField = o.LegacyFactType,
+                    canonicalCapabilityId = result.Fact.CapabilityId.Value,
+                    policyFound = policy is not null,
+                    approvedSourceIds = policy?.ApprovedSources.Select(s => s.SourceId).ToArray() ?? Array.Empty<string>(),
+                    registeredAdapterIds = _sourceAdapterRegistry.Adapters.Where(a => a.CapabilityId.Equals(result.Fact.CapabilityId)).Select(a => a.AdapterId).ToArray(),
+                    invokedAdapterIds = result.Diagnostics.InvokedAdapterIds,
+                    candidateCount = result.Diagnostics.CandidateCount,
+                    candidateRejectionReasons = result.Diagnostics.CandidateEvaluations.Where(e => !e.Eligible).Select(e => e.RejectionReason ?? e.Disposition.ToString()).Concat(result.Fact.RejectedCandidates.Select(c => c.DiagnosticMessage)).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    selectedAdapterId = result.Fact.WinningAdapterId,
+                    finalResolutionStatus = result.Fact.Status.ToString(),
+                    finalDiagnostic = result.Fact.DiagnosticMessage
+                };
+            }).ToArray(),
             sourcePrecedence = "capability-specific adapter precedence",
             blocking = beats.Any(b => b.Blocking),
             beats = beats.Select(b => new { input.FamilyProfile.FamilyId, b.Format, b.SceneId, b.DocumentaryBeatId, b.NarrativeRole, requiredCapabilities = RequiredTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedRequiredCapabilities = b.RequiredFacts.Select(f => f.FactType), b.MissingRequiredFacts, optionalCapabilities = OptionalTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedOptionalCapabilities = b.OptionalFacts.Select(f => f.FactType), b.OmittedOptionalFacts, candidateSources = CandidateSourcesByCapability(b.CapabilityResolutions), selectedSources = SelectedSourcesByCapability(b.CapabilityResolutions), rejectedSources = RejectedSourcesByCapability(b.CapabilityResolutions), substitutionsApplied = b.CapabilityResolutions.SelectMany(r => r.SubstitutionsApplied).Distinct(StringComparer.OrdinalIgnoreCase), capabilityStrength = CapabilityStrengthByCapability(b.CapabilityResolutions), beatAdaptations = b.ResolutionWarnings.Where(w => w.Contains("adapt", StringComparison.OrdinalIgnoreCase) || w.Contains("omitted", StringComparison.OrdinalIgnoreCase)), capabilityResolutions = b.CapabilityResolutions, sourceArtifacts = b.RequiredFacts.Concat(b.OptionalFacts).Select(f => f.SourceArtifact).Distinct(), b.Conflicts, derivedFacts = b.RequiredFacts.Concat(b.OptionalFacts).Where(f => f.FactOrigin == "Derived"), b.Blocking, warnings = b.ResolutionWarnings })
