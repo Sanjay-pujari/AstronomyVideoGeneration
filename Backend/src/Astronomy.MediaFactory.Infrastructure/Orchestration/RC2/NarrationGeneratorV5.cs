@@ -218,7 +218,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         await WriteAllTextUtf8Async(semanticRegistryValidationReportPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, coverage = semanticRegistryCoverage, invalidCapabilities = invalidSemanticRegistrations }, JsonOptions), cancellationToken);
         if (invalidSemanticRegistrations.Length > 0)
             throw new InvalidOperationException("Semantic registry validation failed: " + string.Join("; ", invalidSemanticRegistrations.Select(i => $"FamilyProfile={i.familyProfile}, Format={i.format}, BeatRole={i.beatRole}, Capability={i.capabilityId}, Required={i.required}, FailureReason={i.failureReason}")));
-        var semanticResolution = requiredSemanticFactResolver.Resolve(new RequiredSemanticFactResolutionInput(
+        var productionPipelineRequest = ExtractProductionPipelineRequest(response.ProductionPipelineRequest);
+        var resolverInput = new RequiredSemanticFactResolutionInput(
             familyProfile,
             longDocumentaryContract,
             shortDocumentaryContract,
@@ -228,8 +229,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             observationMetadata,
             ReadFirstJson(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")),
             languageProfile,
-            ExtractProductionPipelineRequest(response.ProductionPipelineRequest),
-            canonicalEventIdentity));
+            productionPipelineRequest,
+            canonicalEventIdentity);
+        var resolverInputPresencePath = Path.Combine(narrationRoot, "resolver-input-presence-diagnostics.json");
+        await WriteAllTextUtf8Async(resolverInputPresencePath, JsonSerializer.Serialize(BuildResolverInputPresenceDiagnostic(resolverInput, requiredSemanticFactResolver), JsonOptions), cancellationToken);
+        ValidateFullProductionSemanticInput(resolverInput);
+        var semanticResolution = requiredSemanticFactResolver.Resolve(resolverInput);
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
         var semanticCapabilityDiagnosticsPath = Path.Combine(narrationRoot, "semantic-capability-diagnostics.json");
         await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolutionDiagnostics = familyProfileResolution.Diagnostics, semanticResolutionDiagnostics = semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
@@ -1337,6 +1342,49 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         return fact.Name.Contains("altitude", StringComparison.OrdinalIgnoreCase) || fact.Name.Contains("azimuth", StringComparison.OrdinalIgnoreCase);
     }
 
+
+    private static object BuildResolverInputPresenceDiagnostic(RequiredSemanticFactResolutionInput input, IRequiredSemanticFactResolver resolver)
+    {
+        var resolverType = resolver.GetType();
+        return new
+        {
+            component = "Phase7ResolverInputPresenceDiagnostic-v1",
+            productionPipelineRequestPresent = input.ProductionPipelineRequest is not null,
+            productionEventIntelligencePresent = input.ProductionEventIntelligence.HasValue,
+            observationMetadataPresent = input.ObservationMetadata.HasValue,
+            canonicalIdentityPresent = input.CanonicalEventIdentity is not null,
+            canonicalEventType = input.CanonicalEventIdentity?.EventType,
+            familyProfilePresent = input.FamilyProfile is not null,
+            familyId = input.FamilyProfile.FamilyId,
+            domainKnowledgePresent = true,
+            longDocumentaryContractPresent = input.LongDocumentaryContract.HasValue,
+            shortDocumentaryContractPresent = input.ShortDocumentaryContract.HasValue,
+            editorialContractPresent = input.EditorialContract.HasValue,
+            storyGraphPresent = input.StoryGraph.HasValue,
+            language = input.LanguageProfile.LanguageCode,
+            requestRegionId = input.ProductionPipelineRequest?.RegionId,
+            requestTimeZone = input.ProductionPipelineRequest?.TimeZone,
+            resolverConcreteType = resolverType.FullName,
+            usesDiResolverContract = typeof(IRequiredSemanticFactResolver).IsAssignableFrom(resolverType),
+            policyCount = SemanticDefaults.SemanticSourcePolicyCatalogV1.Policies.Count,
+            adapterCount = SemanticDefaults.SemanticSourceAdapterRegistryV1.Adapters.Count
+        };
+    }
+
+    private static void ValidateFullProductionSemanticInput(RequiredSemanticFactResolutionInput input)
+    {
+        if (input.ProductionPipelineRequest is null)
+            throw new InvalidOperationException("Phase 7 semantic resolution requires the typed production pipeline request; the real endpoint must not use the reduced resolver input path.");
+        if (input.CanonicalEventIdentity is null)
+            throw new InvalidOperationException("Phase 7 semantic resolution requires the already-resolved canonical event identity.");
+        if (!input.LongDocumentaryContract.HasValue || !input.ShortDocumentaryContract.HasValue)
+            throw new InvalidOperationException("Phase 7 semantic resolution requires both typed documentary contracts.");
+        if (!input.ProductionEventIntelligence.HasValue)
+            throw new InvalidOperationException("Phase 7 semantic resolution requires production event intelligence from Phase 2.");
+        if (!input.ObservationMetadata.HasValue)
+            throw new InvalidOperationException("Phase 7 semantic resolution requires observation metadata from Phase 5.");
+    }
+
     private static int Score(bool basePass, int covered, int total) => !basePass ? 50 : total == 0 ? 90 : Math.Clamp(70 + (covered * 30 / Math.Max(1, total)), 0, 100);
     private static bool TryGetFact(IReadOnlyDictionary<string, string> facts, string name, out string value) => facts.TryGetValue(name, out value!) && !string.IsNullOrWhiteSpace(value);
     private static string CleanNarration(string text) => string.Join(" ", text.Split(' ', StringSplitOptions.RemoveEmptyEntries)).Trim();
@@ -2250,10 +2298,12 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     private readonly IAstronomyDomainKnowledgeProvider _domainKnowledgeProvider;
     private readonly ISemanticCapabilityResolver _capabilityResolver;
     private readonly ISemanticResolutionEngineV1 _semanticResolutionEngine;
+    private readonly ISemanticSourcePolicyCatalogV1 _sourcePolicyCatalog;
+    private readonly ISemanticSourceAdapterRegistryV1 _sourceAdapterRegistry;
 
-    public RequiredSemanticFactResolver() : this(SemanticDefaults.SemanticCapabilityResolver, SemanticDefaults.DomainKnowledgeProvider, SemanticDefaults.SemanticResolutionEngineV1) { }
-    public RequiredSemanticFactResolver(IAstronomyDomainKnowledgeProvider domainKnowledgeProvider) : this(SemanticDefaults.SemanticCapabilityResolver, domainKnowledgeProvider, SemanticDefaults.SemanticResolutionEngineV1) { }
-    public RequiredSemanticFactResolver(ISemanticCapabilityResolver capabilityResolver, IAstronomyDomainKnowledgeProvider domainKnowledgeProvider, ISemanticResolutionEngineV1 semanticResolutionEngine) { _capabilityResolver = capabilityResolver; _domainKnowledgeProvider = domainKnowledgeProvider; _semanticResolutionEngine = semanticResolutionEngine; }
+    public RequiredSemanticFactResolver() : this(SemanticDefaults.SemanticCapabilityResolver, SemanticDefaults.DomainKnowledgeProvider, SemanticDefaults.SemanticResolutionEngineV1, SemanticDefaults.SemanticSourcePolicyCatalogV1, SemanticDefaults.SemanticSourceAdapterRegistryV1) { }
+    public RequiredSemanticFactResolver(IAstronomyDomainKnowledgeProvider domainKnowledgeProvider) : this(SemanticDefaults.SemanticCapabilityResolver, domainKnowledgeProvider, SemanticDefaults.SemanticResolutionEngineV1, SemanticDefaults.SemanticSourcePolicyCatalogV1, SemanticDefaults.SemanticSourceAdapterRegistryV1) { }
+    public RequiredSemanticFactResolver(ISemanticCapabilityResolver capabilityResolver, IAstronomyDomainKnowledgeProvider domainKnowledgeProvider, ISemanticResolutionEngineV1 semanticResolutionEngine, ISemanticSourcePolicyCatalogV1? sourcePolicyCatalog = null, ISemanticSourceAdapterRegistryV1? sourceAdapterRegistry = null) { _capabilityResolver = capabilityResolver; _domainKnowledgeProvider = domainKnowledgeProvider; _semanticResolutionEngine = semanticResolutionEngine; _sourcePolicyCatalog = sourcePolicyCatalog ?? SemanticDefaults.SemanticSourcePolicyCatalogV1; _sourceAdapterRegistry = sourceAdapterRegistry ?? SemanticDefaults.SemanticSourceAdapterRegistryV1; }
 
     public RequiredSemanticFactResolutionResult Resolve(RequiredSemanticFactResolutionInput input)
     {
@@ -2284,6 +2334,10 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var diagnostics = new
         {
             component = "RequiredSemanticFactResolver-v1",
+            resolverConcreteType = GetType().FullName,
+            semanticEngineConcreteType = _semanticResolutionEngine.GetType().FullName,
+            policyCount = _sourcePolicyCatalog.Policies.Count,
+            adapterCount = _sourceAdapterRegistry.Adapters.Count,
             sourceContextPresence = BuildPhase7SourceContextPresenceSnapshot(input),
             semanticCapabilityDiagnostics = beats.SelectMany(b => b.CapabilityResolutions.Select(r => new { r.Capability, capabilityId = r.Capability, registeredAdapterIds = r.Candidates.Select(c => c.Source).Distinct(), adaptersExecuted = r.Candidates.Select(c => c.Source).Concat(r.RejectedSources.Select(x => x.Source)).Distinct(), candidateSources = r.Candidates.Select(c => c.Source).Distinct(), candidatesFound = r.Candidates.Count, rejectedCandidates = r.RejectedSources, selectedAdapterId = r.SelectedSource, selectedSource = r.SelectedSource, selectedStrength = r.CapabilityStrength, selectionReason = r.Status, conversionApplied = r.SubstitutionsApplied.Any(x => x.Contains("converted", StringComparison.OrdinalIgnoreCase)), substitutionApplied = r.SubstitutionsApplied.Any(), unresolvedReason = r.Status.Equals("Resolved", StringComparison.OrdinalIgnoreCase) ? null : string.Join("; ", r.RejectedSources.Select(x => x.Reason).DefaultIfEmpty("NoApprovedSourceAvailable")) })),
             sourcePrecedence = "capability-specific adapter precedence",
@@ -2306,6 +2360,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             canonicalEventIdentity = new { present = input.CanonicalEventIdentity is not null, eventType = input.CanonicalEventIdentity?.EventType, family = input.CanonicalEventIdentity?.EventFamily, source = input.CanonicalEventIdentity?.ResolutionSource },
             familyProfile = new { present = input.FamilyProfile is not null, familyId = input.FamilyProfile.FamilyId, profileId = input.FamilyProfile.FamilyId },
             observationMetadata = new { present = input.ObservationMetadata.HasValue },
+            domainKnowledge = new { present = true, provider = nameof(AstronomyDomainKnowledgeProvider) },
             editorialContract = new { present = input.EditorialContract.HasValue },
             documentaryContract = new { longPresent = input.LongDocumentaryContract.HasValue, shortPresent = input.ShortDocumentaryContract.HasValue },
             locationContext = new { present = request is not null && (!string.IsNullOrWhiteSpace(request.RegionId) || !string.IsNullOrWhiteSpace(request.VisibilityRegion)), regionId = request?.RegionId, visibilityRegion = request?.VisibilityRegion },
