@@ -209,7 +209,7 @@ public class SemanticSourceAdapterRegistryV1Tests
         public string AdapterId { get; }
         public SemanticCapabilityId SupportedCapabilityId => _capabilityFactory();
         public string SourceId { get; }
-        public SemanticEvidenceCategoryV1 EvidenceCategory => SemanticEvidenceCategoryV1.VerifiedEventMetadata;
+        public SemanticEvidenceCategoryV1 EvidenceCategory => SemanticEvidenceCategoryV1.VerifiedEventData;
         public SemanticEvidenceStrengthV1 MaximumEvidenceStrength => SemanticEvidenceStrengthV1.Strong;
         public bool EventSpecific => true;
         public bool SupportsLocalization => false;
