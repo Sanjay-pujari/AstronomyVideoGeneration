@@ -2275,8 +2275,13 @@ public static class DomainKnowledgeDiagnosticsBuilder
     }
 }
 
+public enum SemanticFactScopeKindV1 { EventGlobal, FormatGlobal, BeatSpecific }
+
 public sealed record SemanticResolutionScopeKeyV1(
     SemanticCapabilityId CapabilityId,
+    SemanticFactScopeKindV1 ScopeKind,
+    string? Format,
+    string? BeatId,
     bool Required,
     SemanticEvidenceStrengthV1 MinimumEvidenceStrength,
     IReadOnlyList<SemanticEvidenceCategoryV1> AllowedEvidenceCategories,
@@ -2287,6 +2292,9 @@ public sealed record SemanticResolutionScopeKeyV1(
     public bool Equals(SemanticResolutionScopeKeyV1? other)
         => other is not null
         && CapabilityId.Equals(other.CapabilityId)
+        && ScopeKind == other.ScopeKind
+        && string.Equals(Format, other.Format, StringComparison.Ordinal)
+        && string.Equals(BeatId, other.BeatId, StringComparison.Ordinal)
         && Required == other.Required
         && MinimumEvidenceStrength == other.MinimumEvidenceStrength
         && MissingValueBehavior == other.MissingValueBehavior
@@ -2298,6 +2306,9 @@ public sealed record SemanticResolutionScopeKeyV1(
     {
         var hash = new HashCode();
         hash.Add(CapabilityId);
+        hash.Add(ScopeKind);
+        hash.Add(Format, StringComparer.Ordinal);
+        hash.Add(BeatId, StringComparer.Ordinal);
         hash.Add(Required);
         hash.Add(MinimumEvidenceStrength);
         hash.Add(MissingValueBehavior);
@@ -2438,7 +2449,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 
     private static ResolvedSemanticFact? Project(RequirementOccurrence occurrence, ResolvedSemanticFactV1 fact, RequiredSemanticFactResolutionInput input)
     {
-        var legacy = LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, occurrence.LegacyFactType, occurrence.BeatId, occurrence.Required ? "Required" : "Optional", input.LanguageProfile.LanguageCode);
+        var legacy = LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, occurrence.LegacyFactType, occurrence.ScopeKind == SemanticFactScopeKindV1.BeatSpecific ? occurrence.BeatId : null, occurrence.Required ? "Required" : "Optional", input.LanguageProfile.LanguageCode);
         return legacy is null
             ? null
             : new ResolvedSemanticFact(
@@ -2497,7 +2508,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
                 [],
                 [],
                 []);
-            return new RequirementOccurrence(format, sceneId, beatId, role, type, new SemanticCapabilityId(type), required, null, null, unsupportedCapabilityResolution);
+            return new RequirementOccurrence(format, sceneId, beatId, role, type, new SemanticCapabilityId(type), SemanticFactScopeKindV1.BeatSpecific, required, null, null, unsupportedCapabilityResolution);
         }
 
         var capability = new SemanticCapabilityResolution(
@@ -2518,9 +2529,13 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var adapterContext = CreateAdapterContext(input);
         var sourceContextIdentity = FirstNonEmpty(adapterContext.EventIdentity?.CanonicalEventType, input.FamilyProfile.FamilyId, "UnknownEvent");
         var sourceContextVersion = FirstNonEmpty(adapterContext.EventIdentity?.ResolutionSource, "RequiredSemanticFactResolver.LegacyInput");
-        var request = new SemanticResolutionRequestV1(capabilityId.Value, required, required ? SemanticRequirementLevelV1.Required : SemanticRequirementLevelV1.Optional, missingBehavior, minimumStrength, allowedCategories, adapterContext, input.FamilyProfile.FamilyId, format, beatId);
-        var scopeKey = new SemanticResolutionScopeKeyV1(capabilityId.Value, required, minimumStrength, allowedCategories, missingBehavior, sourceContextIdentity, sourceContextVersion);
-        return new RequirementOccurrence(format, sceneId, beatId, role, type, capabilityId.Value, required, scopeKey, request, capability);
+        var scopeKind = ResolveSemanticFactScope(capabilityId.Value);
+        var scopeFormat = scopeKind == SemanticFactScopeKindV1.FormatGlobal ? format : null;
+        var scopeBeatId = scopeKind == SemanticFactScopeKindV1.BeatSpecific ? beatId : null;
+        var requestBeatId = scopeKind == SemanticFactScopeKindV1.BeatSpecific ? beatId : null;
+        var request = new SemanticResolutionRequestV1(capabilityId.Value, required, required ? SemanticRequirementLevelV1.Required : SemanticRequirementLevelV1.Optional, missingBehavior, minimumStrength, allowedCategories, adapterContext, input.FamilyProfile.FamilyId, scopeFormat ?? format, requestBeatId);
+        var scopeKey = new SemanticResolutionScopeKeyV1(capabilityId.Value, scopeKind, scopeFormat, scopeBeatId, required, minimumStrength, allowedCategories, missingBehavior, sourceContextIdentity, sourceContextVersion);
+        return new RequirementOccurrence(format, sceneId, beatId, role, type, capabilityId.Value, scopeKind, required, scopeKey, request, capability);
     }
 
     private static LegacySemanticCapabilityResolution ResolveLegacyCapability(string type)
@@ -2547,7 +2562,13 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         return string.Join("; ", details);
     }
 
-    private sealed record RequirementOccurrence(string Format, string SceneId, string BeatId, string Role, string LegacyFactType, SemanticCapabilityId CapabilityId, bool Required, SemanticResolutionScopeKeyV1? ScopeKey, SemanticResolutionRequestV1? Request, SemanticCapabilityResolution CapabilityResolution)
+    private static SemanticFactScopeKindV1 ResolveSemanticFactScope(SemanticCapabilityId capabilityId) => capabilityId.Value switch
+    {
+        SemanticCapabilityVocabularyV1.ObservationDirection => SemanticFactScopeKindV1.BeatSpecific,
+        _ => SemanticFactScopeKindV1.EventGlobal
+    };
+
+    private sealed record RequirementOccurrence(string Format, string SceneId, string BeatId, string Role, string LegacyFactType, SemanticCapabilityId CapabilityId, SemanticFactScopeKindV1 ScopeKind, bool Required, SemanticResolutionScopeKeyV1? ScopeKey, SemanticResolutionRequestV1? Request, SemanticCapabilityResolution CapabilityResolution)
     {
         public bool IsSupported => Request is not null && ScopeKey is not null;
     }

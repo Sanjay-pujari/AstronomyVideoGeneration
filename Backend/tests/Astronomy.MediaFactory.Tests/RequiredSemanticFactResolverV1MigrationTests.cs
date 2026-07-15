@@ -25,7 +25,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         Assert.Single(engine.Requests);
         Assert.Equal("EventIdentity", engine.Requests[0].CapabilityId.Value);
         Assert.Equal(2, result.Beats.Count);
-        Assert.All(result.Beats, b => Assert.Equal("beat-1", Assert.Single(b.RequiredFacts).SourceBeatId));
+        Assert.All(result.Beats, b => Assert.Null(Assert.Single(b.RequiredFacts).SourceBeatId));
         Assert.Single(engine.Requests.Select(ScopeSignature));
     }
 
@@ -42,7 +42,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
 
         Assert.Equal(1, engine.CallCount);
         Assert.Equal(6, result.Beats.Count);
-        Assert.Equal(["long-1", "long-2", "long-3", "short-1", "short-2", "short-3"], result.Beats.Select(b => Assert.Single(b.RequiredFacts).SourceBeatId).ToArray());
+        Assert.All(result.Beats, b => Assert.Null(Assert.Single(b.RequiredFacts).SourceBeatId));
     }
 
     [Fact]
@@ -64,8 +64,8 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
     public void Scope_Key_Separates_Different_Minimum_Evidence_Strengths()
     {
         var categories = Enum.GetValues<SemanticEvidenceCategoryV1>();
-        var weak = new SemanticResolutionScopeKeyV1(new("EventIdentity"), true, SemanticEvidenceStrengthV1.Weak, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
-        var strong = new SemanticResolutionScopeKeyV1(new("EventIdentity"), true, SemanticEvidenceStrengthV1.Strong, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
+        var weak = new SemanticResolutionScopeKeyV1(new("EventIdentity"), SemanticFactScopeKindV1.EventGlobal, null, null, true, SemanticEvidenceStrengthV1.Weak, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
+        var strong = new SemanticResolutionScopeKeyV1(new("EventIdentity"), SemanticFactScopeKindV1.EventGlobal, null, null, true, SemanticEvidenceStrengthV1.Strong, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
 
         Assert.NotEqual(weak, strong);
     }
@@ -140,7 +140,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("long-1"), Contract("short-1"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
 
         Assert.Equal(1, engine.CallCount);
-        Assert.Equal(["long-1", "short-1"], result.Beats.Select(b => Assert.Single(b.RequiredFacts).SourceBeatId).ToArray());
+        Assert.All(result.Beats, b => Assert.Null(Assert.Single(b.RequiredFacts).SourceBeatId));
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
 
         Assert.Equal(1, engine.CallCount);
         Assert.Equal(["long", "short"], result.Beats.Select(b => b.Format).ToArray());
-        Assert.All(result.Beats, b => Assert.Equal("beat-1", Assert.Single(b.RequiredFacts).SourceBeatId));
+        Assert.All(result.Beats, b => Assert.Null(Assert.Single(b.RequiredFacts).SourceBeatId));
     }
 
     [Fact]
@@ -194,7 +194,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
 
         Assert.Equal("EventIdentity", fact.FactType);
         Assert.Equal("EventIdentity", fact.FactKey);
-        Assert.Equal("beat-1", fact.SourceBeatId);
+        Assert.Null(fact.SourceBeatId);
         Assert.Equal("source-1", fact.SourceArtifact);
         Assert.Equal("EventIdentityContext.EventIdentity", fact.SourceField);
         Assert.Equal("Required", fact.Requiredness);
@@ -207,7 +207,8 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         var profile = Profile(required: ["EventIdentity"], optional: []);
         var result = CreateResolver(new CountingEngine()).Resolve(new RequiredSemanticFactResolutionInput(profile, Contract("c", "b", "a"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
 
-        Assert.Equal(["c", "b", "a"], result.Beats.Select(b => Assert.Single(b.RequiredFacts).SourceBeatId).ToArray());
+        Assert.Equal(["c", "b", "a"], result.Beats.Select(b => b.DocumentaryBeatId).ToArray());
+        Assert.All(result.Beats, b => Assert.Null(Assert.Single(b.RequiredFacts).SourceBeatId));
     }
 
     [Fact]
@@ -294,6 +295,63 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
 
         Assert.Equal(1, engine.CallCount);
         Assert.Single(result.Beats.Single().RequiredFacts);
+    }
+
+    [Fact]
+    public void EventGlobalFact_Satisfies_All_Beat_References()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("long-1", "long-2"), Contract("short-1", "short-2"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Equal(4, result.Beats.Count);
+        Assert.All(result.Beats, b =>
+        {
+            var fact = Assert.Single(b.RequiredFacts);
+            Assert.Equal("EventIdentity", fact.FactKey);
+            Assert.Null(fact.SourceBeatId);
+            Assert.Equal("source-1", fact.SourceArtifact);
+        });
+    }
+
+    [Fact]
+    public void Global_ApparentPairingScience_Satisfies_All_Beat_References()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["ApparentPairingScience"], optional: []), Contract("long-1", "long-2"), Contract("short-1"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Equal(["DomainScientificKnowledge"], engine.Requests.Select(r => r.CapabilityId.Value).Distinct().ToArray());
+        Assert.All(result.Beats, b =>
+        {
+            var fact = Assert.Single(b.RequiredFacts);
+            Assert.Equal("ApparentPairingScience", fact.FactKey);
+            Assert.Null(fact.SourceBeatId);
+            Assert.Equal("source-1", fact.SourceArtifact);
+        });
+    }
+
+    [Fact]
+    public void BeatSpecificFact_Does_Not_Leak_To_Other_Beats()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["ObservationDirection"], optional: []), Contract("beat-1", "beat-2"), Contract(), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(2, engine.CallCount);
+        Assert.Equal(["beat-1", "beat-2"], engine.Requests.Select(r => r.BeatIdForDiagnostics).ToArray());
+        Assert.Equal(["beat-1", "beat-2"], result.Beats.Select(b => Assert.Single(b.RequiredFacts).SourceBeatId).ToArray());
+    }
+
+    [Fact]
+    public void PlanetPairing_Resolves_GlobalIdentityAndScienceOnce()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity", "ApparentPairingScience"], optional: []), Contract("long-1", "long-2"), Contract("short-1", "short-2"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(2, engine.CallCount);
+        Assert.Equal(["DomainScientificKnowledge", "EventIdentity"], engine.Requests.Select(r => r.CapabilityId.Value).Order(StringComparer.Ordinal).ToArray());
+        Assert.All(result.Beats, b => Assert.Equal(["ApparentPairingScience", "EventIdentity"], b.RequiredFacts.Select(f => f.FactKey).Order(StringComparer.Ordinal).ToArray()));
+        Assert.All(result.Beats.SelectMany(b => b.RequiredFacts), f => Assert.Null(f.SourceBeatId));
     }
 
 
