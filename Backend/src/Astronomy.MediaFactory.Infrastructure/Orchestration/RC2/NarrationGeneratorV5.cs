@@ -910,6 +910,31 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 
     private static int CountDocumentaryBeats(string path) => ReadArray(ReadFirstJson(path), "beats").Count;
 
+    private static object BuildPhase7SourceContextPresenceSnapshot(RequiredSemanticFactResolutionInput input)
+    {
+        var request = input.ProductionPipelineRequest;
+        return new
+        {
+            productionPipelineRequest = new { present = request is not null, planId = request?.PlanId, eventType = request?.EventType, regionId = request?.RegionId, timeZone = request?.TimeZone, language = request?.Language, primaryObjectCount = request?.PrimaryObjects.Count ?? 0, secondaryObjectCount = request?.SecondaryObjects.Count ?? 0 },
+            productionEventIntelligence = new { present = input.ProductionEventIntelligence.HasValue, eventType = TryGetRootString(input.ProductionEventIntelligence, "eventType") },
+            canonicalEventIdentity = new { present = input.CanonicalEventIdentity is not null, eventType = input.CanonicalEventIdentity?.EventType, family = input.CanonicalEventIdentity?.EventFamily, source = input.CanonicalEventIdentity?.ResolutionSource },
+            familyProfile = new { present = input.FamilyProfile is not null, familyId = input.FamilyProfile.FamilyId, profileId = input.FamilyProfile.FamilyId },
+            observationMetadata = new { present = input.ObservationMetadata.HasValue },
+            domainKnowledge = new { present = true, provider = nameof(AstronomyDomainKnowledgeProvider) },
+            editorialContract = new { present = input.EditorialContract.HasValue },
+            documentaryContract = new { longPresent = input.LongDocumentaryContract.HasValue, shortPresent = input.ShortDocumentaryContract.HasValue },
+            locationContext = new { present = request is not null && (!string.IsNullOrWhiteSpace(request.RegionId) || !string.IsNullOrWhiteSpace(request.VisibilityRegion)), regionId = request?.RegionId, visibilityRegion = request?.VisibilityRegion },
+            languageAndFormat = new { language = input.LanguageProfile.LanguageCode, requestedFormats = request?.RequestedOutputs ?? Array.Empty<string>() },
+            beatOccurrence = new { longBeatCount = CountDocumentaryBeats(input.LongDocumentaryContract), shortBeatCount = CountDocumentaryBeats(input.ShortDocumentaryContract) }
+        };
+    }
+
+    private static int CountDocumentaryBeats(JsonElement? contract)
+    {
+        if (!contract.HasValue || !contract.Value.TryGetProperty("beats", out var beats) || beats.ValueKind != JsonValueKind.Array) return 0;
+        return beats.GetArrayLength();
+    }
+
     private static StoryFrameSource LoadStoryFrames(string outputRoot, string format)
     {
         var manifestPath = Path.Combine(outputRoot, "story-frames", format, "story-frame-manifest.json");
