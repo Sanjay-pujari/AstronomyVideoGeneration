@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
@@ -27,7 +28,7 @@ public sealed class SemanticFactValueRealizerRegressionTests
     [Fact]
     public void StructuredScienceRealizesWithoutAnonymousObjectText()
     {
-        var fact = new ResolvedSemanticFact("ApparentPairingScience", "ApparentPairingScience", new DomainScientificKnowledgeValue(null, "They appear close because of line-of-sight geometry from Earth.", null, null), null, "DomainScientificKnowledge", "test", "science", null, SemanticVerificationStatus.Verified, 1m, SemanticFactRequiredness.Required, null, null, "en", true);
+        var fact = new ResolvedSemanticFact("ApparentPairingScience", "ApparentPairingScience", new DomainScientificKnowledgeValue(null, "They appear close because of line-of-sight geometry from Earth.", null, null), null, "DomainScientificKnowledge", "test", "science", null, SemanticVerificationStatus.Verified, 1m, SemanticFactRequiredness.Required, null, null, "en", true, sourceInputs: Array.Empty<string>());
 
         var realized = SemanticFactValueRealizer.Instance.Realize(fact, English);
 
@@ -51,7 +52,7 @@ public sealed class SemanticFactValueRealizerRegressionTests
     [Fact]
     public void RequiredUnsupportedStructuredValueBlocksWithDiagnostic()
     {
-        var fact = new ResolvedSemanticFact("UnsupportedRequired", "UnsupportedRequired", new { Internal = "value" }, null, "Unsupported", "test", "field", null, SemanticVerificationStatus.Verified, 1m, SemanticFactRequiredness.Required, null, null, "en", true);
+        var fact = new ResolvedSemanticFact("UnsupportedRequired", "UnsupportedRequired", new { Internal = "value" }, null, "Unsupported", "test", "field", null, SemanticVerificationStatus.Verified, 1m, SemanticFactRequiredness.Required, null, null, "en", true, sourceInputs: Array.Empty<string>());
 
         var realized = SemanticFactValueRealizer.Instance.Realize(fact, English);
 
@@ -64,7 +65,7 @@ public sealed class SemanticFactValueRealizerRegressionTests
     [Fact]
     public void OptionalUnsupportedStructuredValueOmitsSafely()
     {
-        var fact = new ResolvedSemanticFact("UnsupportedOptional", "UnsupportedOptional", new { Internal = "value" }, null, "Unsupported", "test", "field", null, SemanticVerificationStatus.Verified, 1m, SemanticFactRequiredness.Optional, null, null, "en", true);
+        var fact = new ResolvedSemanticFact("UnsupportedOptional", "UnsupportedOptional", new { Internal = "value" }, null, "Unsupported", "test", "field", null, SemanticVerificationStatus.Verified, 1m, SemanticFactRequiredness.Optional, null, null, "en", true, sourceInputs: Array.Empty<string>());
 
         var realized = SemanticFactValueRealizer.Instance.Realize(fact, English);
 
