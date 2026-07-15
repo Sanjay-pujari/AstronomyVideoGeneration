@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
+using ResolvedSemanticFact = Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts.ResolvedSemanticFact;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 
