@@ -10,7 +10,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 
 public static class LegacyRequiredSemanticFactCompatibilityMapper
 {
-    public static ResolvedSemanticFact? Map(ResolvedSemanticFactV1 fact, string legacyFactType, string beatId, string requiredness, string language)
+    public static ResolvedSemanticFact? Map(ResolvedSemanticFactV1 fact, string legacyFactType, string? beatId, string requiredness, string language)
     {
         if (fact.Status is not (SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination)) return null;
 
