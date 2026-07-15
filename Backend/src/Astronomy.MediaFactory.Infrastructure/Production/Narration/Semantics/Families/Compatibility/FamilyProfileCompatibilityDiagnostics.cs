@@ -17,7 +17,16 @@ public sealed record FamilyProfileCompatibilityMapping(
     FamilyProfileCompatibilityMappingKind MappingKind,
     IReadOnlyList<string> LegacyRequirements,
     bool Required,
-    string Diagnostic);
+    string Diagnostic,
+    string RequirementLevel,
+    string MissingValueBehavior,
+    IReadOnlyList<string> AllowedSources,
+    int MinimumConfidence,
+    bool EventSpecific,
+    bool MayOmit,
+    bool BlocksPhase7,
+    IReadOnlyList<string> LongBeatRoles,
+    IReadOnlyList<string> ShortBeatRoles);
 
 public sealed record FamilyProfileCompatibilityDiagnostics(
     string InputEventType,
@@ -33,4 +42,7 @@ public sealed record FamilyProfileCompatibilityDiagnostics(
     IReadOnlyList<string> BlockingCompatibilityErrors,
     string ResolutionAuthority,
     IReadOnlyList<FamilyProfileCompatibilityMapping> Mappings,
-    int? MinimumObjectCountPolicy);
+    int? MinimumObjectCountPolicy,
+    IReadOnlyList<string> SupportedFormats,
+    IReadOnlyList<string> LongBeatRoles,
+    IReadOnlyList<string> ShortBeatRoles);

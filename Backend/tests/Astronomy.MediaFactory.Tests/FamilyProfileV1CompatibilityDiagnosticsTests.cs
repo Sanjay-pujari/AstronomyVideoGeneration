@@ -4,7 +4,7 @@ public sealed class FamilyProfileV1CompatibilityDiagnosticsTests
 {
     [Fact] public void DiagnosticsCarryV1AuthorityAndGeneratedRequirements()
     {
-        var d = new FamilyProfileCompatibilityDiagnostics("PlanetaryConjunction", "PlanetPairing", "PlanetPairing", "PlanetPairing", true, "adapter", "PlanetPairing", ["PrimaryObjects"], ["EditorialContext"], [], [], "V1", [], null);
+        var d = new FamilyProfileCompatibilityDiagnostics("PlanetaryConjunction", "PlanetPairing", "PlanetPairing", "PlanetPairing", true, "adapter", "PlanetPairing", ["PrimaryObjects"], ["EditorialContext"], [], [], "V1", [], null, ["Long", "Short"], ["Hook"], ["Hook"]);
         Assert.Equal("V1", d.ResolutionAuthority);
         Assert.Contains("PrimaryObjects", d.GeneratedLegacyRequirements);
     }
