@@ -100,6 +100,16 @@ public sealed class Phase7ProductionApiPathSemanticContextTests
         Assert.DoesNotContain("LocationContext", missing);
         Assert.DoesNotContain("ApparentAlignmentExplanation", missing);
         Assert.DoesNotContain("PhysicalProximityClarification", missing);
+        Assert.DoesNotContain("ObservationDirection", missing);
+        var omittedOptional = allBeats.SelectMany(b => b.GetProperty("omittedOptionalFacts").EnumerateArray().Select(x => x.GetString())).Where(x => x is not null).Distinct().ToArray();
+        Assert.Contains("ObservationDirection", omittedOptional);
+        Assert.DoesNotContain(allBeats.SelectMany(b => b.GetProperty("resolvedRequiredCapabilities").EnumerateArray().Concat(b.GetProperty("resolvedOptionalCapabilities").EnumerateArray()).Select(x => x.GetString())), x => x == "ObservationDirection");
+        var narrationRoot = Path.Combine(outputRoot, "narration-v5");
+        if (Directory.Exists(narrationRoot))
+        {
+            var narrationText = string.Join("\n", Directory.EnumerateFiles(narrationRoot, "*.json", SearchOption.AllDirectories).Select(File.ReadAllText));
+            Assert.DoesNotMatch("\\b(east|west|north|south|eastern|western|northern|southern)\\b", narrationText);
+        }
         Assert.DoesNotContain("No source policy", semantic.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains(semantic.GetProperty("semanticCapabilityDiagnostics").EnumerateArray(), d => d.GetProperty("adaptersExecuted").GetArrayLength() > 0 && d.GetProperty("candidatesFound").GetInt32() > 0);
     }

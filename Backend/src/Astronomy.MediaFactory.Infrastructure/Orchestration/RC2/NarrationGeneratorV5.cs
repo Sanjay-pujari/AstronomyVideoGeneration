@@ -2748,8 +2748,8 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             if (r.Contains("hook")) return ["PrimaryObjects", "EventIdentity"];
             if (r.Contains("timing")) return ["ObservationTiming"];
             if (r.Contains("science")) return ["ApparentAlignmentExplanation", "PhysicalProximityClarification"];
-            if (r.Contains("observation")) return ["ObservationDirection", "ObservationTiming"];
-            if (r.Contains("orientation")) return format == "long" ? ["ObservationDirection", "LocationContext"] : ["ObservationDirection"];
+            if (r.Contains("observation")) return ["ObservationTiming"];
+            if (r.Contains("orientation")) return format == "long" ? ["LocationContext"] : [];
             return ["PrimaryObjects"];
         }
         if (!p.ContentNature.Contains("Event", StringComparison.OrdinalIgnoreCase)) return p.RequiredFactTypes.Where(t => !Regex.IsMatch(t, "Date|Time|Peak|Window", RegexOptions.IgnoreCase));
