@@ -559,7 +559,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISemanticCapabilityCatalog, SemanticCapabilityCatalog>();
         services.AddSingleton<ISemanticCapabilitySourceRegistry, SemanticCapabilitySourceRegistry>();
         services.AddScoped<ISemanticCapabilityResolver, SemanticCapabilityResolver>();
-        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.ISemanticSourcePolicyCatalogV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1>(
+            _ => new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1());
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.ISemanticSourcePolicyCatalogV1>(
+            sp => sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1>());
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry.ISemanticSourceAdapterRegistryV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry.SemanticSourceAdapterRegistryV1>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.ISemanticCandidateCollectorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.SemanticCandidateCollectorV1>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.ISemanticCandidateEvaluatorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.SemanticCandidateEvaluatorV1>();

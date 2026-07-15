@@ -23,11 +23,32 @@ public sealed class ProductionSourcePolicyCatalogNonEmptyTests
     [Fact]
     public void AddMediaFactory_RegistersPopulatedProductionSourcePolicyCatalog()
     {
-        using var provider = BuildProvider();
+        var services = BuildServices();
+        var sourcePolicyDescriptors = services
+            .Where(d => d.ServiceType == typeof(ISemanticSourcePolicyCatalogV1))
+            .Select((d, i) => $"#{i}: lifetime={d.Lifetime}, implementationType={d.ImplementationType?.FullName ?? "<factory/instance>"}, hasFactory={d.ImplementationFactory is not null}, hasInstance={d.ImplementationInstance is not null}")
+            .ToArray();
+        Assert.Single(sourcePolicyDescriptors);
+
+        using var provider = BuildProvider(services);
         var catalog = provider.GetRequiredService<ISemanticSourcePolicyCatalogV1>();
+        var capabilityIds = catalog.Policies.Select(p => p.SemanticCapabilityId.Value).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        var diagnostic = $"CatalogType={catalog.GetType().FullName}; PolicyCount={catalog.Policies.Count}; CapabilityIds={string.Join(",", capabilityIds)}; Registrations={string.Join(" | ", sourcePolicyDescriptors)}";
         Assert.NotEmpty(catalog.Policies);
+        Assert.True(catalog.Policies.Count > 0, diagnostic);
         foreach (var capability in RequiredProductionCapabilities)
-            Assert.True(catalog.TryGet(new SemanticCapabilityId(capability), out _), $"Missing policy for {capability}.");
+            Assert.True(catalog.TryGet(new SemanticCapabilityId(capability), out _), $"Missing policy for {capability}. {diagnostic}");
+
+        using var scope = provider.CreateScope();
+        var scopedCatalog = scope.ServiceProvider.GetRequiredService<ISemanticSourcePolicyCatalogV1>();
+        Assert.Same(catalog, scopedCatalog);
+        var concrete = provider.GetRequiredService<SemanticSourcePolicyCatalogV1>();
+        Assert.Same(concrete, catalog);
+        var engine = scope.ServiceProvider.GetRequiredService<ISemanticResolutionEngineV1>();
+        Assert.IsType<SemanticResolutionEngineV1>(engine);
+        var result = engine.Resolve(new SemanticResolutionRequestV1(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.EventIdentity), true, SemanticRequirementLevelV1.Required, SemanticMissingValueBehaviorV1.BlockRequired, SemanticEvidenceStrengthV1.Weak, Enum.GetValues<SemanticEvidenceCategoryV1>(), BuildJupiterVenusProductionShapeContext(), "PlanetPairing", "long", "di-identity-proof"));
+        Assert.NotEqual(SemanticResolutionStatusV1.ArchitectureError, result.Fact.Status);
+        Assert.DoesNotContain("No source policy", result.Fact.DiagnosticMessage, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static ServiceProvider BuildProvider()
@@ -40,11 +61,31 @@ public sealed class ProductionSourcePolicyCatalogNonEmptyTests
             })
             .Build();
 
+        var services = BuildServices(configuration);
+
+        return BuildProvider(services);
+    }
+
+    internal static ServiceCollection BuildServices(IConfiguration? configuration = null)
+    {
+        configuration ??= new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:Postgres"] = "Host=localhost;Port=5432;Database=astronomy_tests;Username=test;Password=test",
+                ["DatabaseSafety:AllowLocalhostPostgres"] = "true"
+            })
+            .Build();
+
         var services = new ServiceCollection();
+        services.AddSingleton(configuration);
         services.AddSingleton<IConfiguration>(configuration);
         services.AddSingleton<IHostEnvironment>(new Phase7ProductionDiTestHostEnvironment());
         services.AddMediaFactory(configuration);
+        return services;
+    }
 
+    internal static ServiceProvider BuildProvider(IServiceCollection services)
+    {
         return services.BuildServiceProvider(new ServiceProviderOptions
         {
             ValidateOnBuild = true,
@@ -122,11 +163,21 @@ public sealed class ProductionSemanticRegistryNonEmptyTests
     {
         using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
         var registry = provider.GetRequiredService<ISemanticSourceAdapterRegistryV1>();
+        var catalog = provider.GetRequiredService<ISemanticSourcePolicyCatalogV1>();
         Assert.NotEmpty(registry.Adapters);
-        Assert.Contains(registry.GetAdapters(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.AstronomicalObjects)), a => a.AdapterId == "v1.astronomical-objects.production-event-intelligence");
-        Assert.Contains(registry.GetAdapters(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.EventIdentity)), a => a.AdapterId == "v1.event-identity.event-identity-context");
-        Assert.Contains(registry.GetAdapters(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.EventWindow)), a => a.AdapterId == "v1.event-window.observation-metadata");
-        Assert.Contains(registry.GetAdapters(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.DomainScientificKnowledge)), a => a.AdapterId == "v1.domain-scientific-knowledge.domain-provider");
+        AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.AstronomicalObjects, "v1.astronomical-objects.production-event-intelligence");
+        AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.EventIdentity, "v1.event-identity.event-identity-context");
+        AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.EventWindow, "v1.event-window.observation-metadata");
+        AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.ObservationLocation, "v1.observation-location.observation-metadata");
+        AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.DomainScientificKnowledge, "v1.domain-scientific-knowledge.domain-provider");
+    }
+
+    private static void AssertPolicyAndAdapter(ISemanticSourcePolicyCatalogV1 catalog, ISemanticSourceAdapterRegistryV1 registry, string capabilityId, string adapterId)
+    {
+        Assert.True(catalog.TryGet(new SemanticCapabilityId(capabilityId), out var policy), $"Missing policy for {capabilityId}. PolicyCount={catalog.Policies.Count}.");
+        var adapters = registry.GetAdapters(new SemanticCapabilityId(capabilityId)).ToArray();
+        Assert.Contains(adapters, a => a.AdapterId == adapterId);
+        Assert.Contains(policy.ApprovedSources, s => adapters.Any(a => a.SourceId == s.SourceId));
     }
 }
 
