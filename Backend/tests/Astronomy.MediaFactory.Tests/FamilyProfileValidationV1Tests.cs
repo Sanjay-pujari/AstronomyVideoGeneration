@@ -9,6 +9,37 @@ public sealed class FamilyProfileValidationV1Tests
     [Fact] public void SyntheticUnknownCapabilityFailsValidation() { var p = MutateFirstReq(_catalog.GetRequired("FullMoon"), r => r with { SemanticCapabilityId = new SemanticCapabilityId("Bogus") }); Assert.False(AstronomyFamilyProfileCatalogV1.Validate([p], new AstronomyFamilyAliasCatalogV1([])).IsValid); }
     [Fact] public void SyntheticInvalidRequiredPolicyFailsValidation() { var p = MutateFirstReq(_catalog.GetRequired("FullMoon"), r => r with { MayOmit = true }); Assert.Contains(AstronomyFamilyProfileCatalogV1.Validate([p], new AstronomyFamilyAliasCatalogV1([])).Errors, e => e.Contains("omittable")); }
     [Fact] public void SyntheticNonEventEventWindowRequirementFailsValidation() { var p = _catalog.GetRequired("Constellation"); var req = new FamilySemanticRequirementV1(new SemanticCapabilityId("EventWindow"), FamilyRequirementLevelV1.Required, FamilyMissingValueBehaviorV1.Block, ["Canonical"], 80, false, true); var beat = p.LongFormStructure.Beats[0] with { Requirements = p.LongFormStructure.Beats[0].Requirements.Add(req) }; var np = p with { LongFormStructure = p.LongFormStructure with { Beats = p.LongFormStructure.Beats.SetItem(0, beat) } }; Assert.Contains(AstronomyFamilyProfileCatalogV1.Validate([np], new AstronomyFamilyAliasCatalogV1([])).Errors, e => e.Contains("Non-event")); }
+
+    [Fact]
+    public void PlanetPairingObservationDirectionIsOptionalWithOmitBehavior()
+    {
+        var profile = _catalog.GetRequired("PlanetPairing");
+        var directionRequirements = profile.LongFormStructure.Beats.Concat(profile.ShortFormStructure.Beats)
+            .SelectMany(beat => beat.Requirements.Select(req => new { beat.BeatRole, req }))
+            .Where(x => x.req.SemanticCapabilityId.Value == "ObservationDirection")
+            .ToArray();
+
+        Assert.NotEmpty(directionRequirements);
+        Assert.All(directionRequirements, x => Assert.Equal(FamilyRequirementLevelV1.Optional, x.req.RequirementLevel));
+        Assert.All(directionRequirements, x => Assert.Equal(FamilyMissingValueBehaviorV1.OmitCapability, x.req.MissingValueBehavior));
+        Assert.All(directionRequirements, x => Assert.True(x.req.MayOmit));
+        Assert.All(directionRequirements, x => Assert.False(x.req.BlocksPhase7));
+    }
+
+    [Fact]
+    public void OtherDirectionMandatoryFamiliesAreUnchanged()
+    {
+        foreach (var family in new[] { "PlanetGrouping", "MeteorShower" })
+        {
+            var profile = _catalog.GetRequired(family);
+            Assert.Contains(profile.LongFormStructure.Beats.SelectMany(b => b.Requirements), r =>
+                r.SemanticCapabilityId.Value == "ObservationDirection" &&
+                r.RequirementLevel == FamilyRequirementLevelV1.Required &&
+                !r.MayOmit &&
+                r.BlocksPhase7);
+        }
+    }
+
     [Fact] public void RuntimeUsesV1FamilyCatalogThroughApprovedResolverBoundary()
     {
         var root = RepositoryTestPaths.Root();

@@ -56,6 +56,48 @@ public sealed class RequiredSemanticFactResolverTests
         Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "AngularSeparation" && r.Status == "UnavailableOptional");
     }
 
+
+    [Fact]
+    public void PlanetPairingWithoutObservationDirectionDoesNotBlockAndRecordsOptionalOmission()
+    {
+        var longC = LongWithBeat("Observation", "{\"EventDateOrWindow\":\"August 12\",\"PrimaryObjects\":\"Jupiter and Venus\",\"EventType\":\"PlanetPairing\"}");
+        var shortC = ShortWithBeat("Observation", "{\"EventDateOrWindow\":\"August 12\",\"PrimaryObjects\":\"Jupiter and Venus\",\"EventType\":\"PlanetPairing\"}");
+
+        var result = Resolve(longC, shortC);
+
+        Assert.False(result.Blocking);
+        Assert.All(result.Beats, beat => Assert.DoesNotContain("ObservationDirection", beat.MissingRequiredFacts));
+        Assert.Contains(result.Beats, beat => beat.Format == "long" && beat.NarrativeRole == "Observation" && beat.OmittedOptionalFacts.Contains("ObservationDirection"));
+        Assert.Contains(result.Beats, beat => beat.Format == "short" && beat.NarrativeRole == "Observation" && beat.OmittedOptionalFacts.Contains("ObservationDirection"));
+        Assert.DoesNotContain(result.Beats.SelectMany(b => b.RequiredFacts.Concat(b.OptionalFacts)), f => f.FactType == "ObservationDirection");
+    }
+
+    [Fact]
+    public void PlanetPairingVerifiedObservationDirectionResolvesAsOptionalFact()
+    {
+        var result = Resolve(
+            LongWithBeat("Observation", "{\"EventDateOrWindow\":\"August 12\"}"),
+            ShortWithBeat("Observation", "{\"EventDateOrWindow\":\"August 12\"}"),
+            observation: Json("{\"beats\":[{\"allocatedFacts\":{\"Direction\":\"verified western horizon\"}}]}"));
+
+        Assert.False(result.Blocking);
+        Assert.Contains(result.Beats, b => b.OptionalFacts.Any(f => f.FactType == "ObservationDirection" && f.CanonicalValue.ToString()!.Contains("western horizon")));
+        Assert.All(result.Beats, beat => Assert.DoesNotContain("ObservationDirection", beat.MissingRequiredFacts));
+    }
+
+    [Theory]
+    [InlineData("{\"title\":\"Look east for Jupiter Venus\",\"eventType\":\"PlanetPairing\"}")]
+    [InlineData("{\"eventType\":\"PlanetPairing\",\"primaryObjects\":[\"Jupiter\"],\"secondaryObjects\":[\"Venus\"]}")]
+    [InlineData("{\"eventType\":\"PlanetPairing\",\"visibilityRegion\":\"Udaipur\",\"bestViewingWindowLocal\":\"twilight after sunset\"}")]
+    public void PlanetPairingDoesNotInferDirectionFromNonDirectionalContext(string eventIntelJson)
+    {
+        var result = Resolve(LongWithBeat("Observation", "{\"EventDateOrWindow\":\"August 12\"}"), eventIntel: Json(eventIntelJson));
+
+        Assert.False(result.Blocking);
+        Assert.Contains("ObservationDirection", result.Beats[0].OmittedOptionalFacts);
+        Assert.DoesNotContain(result.Beats[0].RequiredFacts.Concat(result.Beats[0].OptionalFacts), f => f.FactType == "ObservationDirection");
+    }
+
     [Fact]
     public void ConstellationDoesNotUsePlanetPairingApparentAlignmentKnowledge()
     {
@@ -151,6 +193,7 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(longC, shortC);
         Assert.Contains(result.Beats, b => b.Format == "long" && b.RequiredFacts.Any(f => f.FactType == "LocationContext"));
         Assert.Contains(result.Beats, b => b.Format == "short" && !b.RequiredFacts.Any(f => f.FactType == "LocationContext"));
+        Assert.All(result.Beats, beat => Assert.DoesNotContain("ObservationDirection", beat.MissingRequiredFacts));
     }
 
     [Fact]
