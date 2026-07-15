@@ -240,7 +240,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var semanticCapabilityDiagnosticsPath = Path.Combine(narrationRoot, "semantic-capability-diagnostics.json");
         await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolutionDiagnostics = familyProfileResolution.Diagnostics, semanticResolutionDiagnostics = semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(semanticCapabilityDiagnosticsPath, JsonSerializer.Serialize(semanticResolution.Diagnostics, JsonOptions), cancellationToken);
-        await WriteAllTextUtf8Async(Path.Combine(narrationRoot, "semantic-source-context-presence.json"), JsonSerializer.Serialize(semanticResolution.Diagnostics, JsonOptions), cancellationToken);
+        await WriteAllTextUtf8Async(Path.Combine(narrationRoot, "semantic-source-context-presence.json"), JsonSerializer.Serialize(BuildPhase7SourceContextPresenceSnapshot(resolverInput), JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(Path.Combine(narrationRoot, "domain-knowledge-diagnostics.json"), JsonSerializer.Serialize(DomainKnowledgeDiagnosticsBuilder.Build(familyProfileResolution.Resolved.ResolvedProfileId, familyProfile.FamilyId, semanticResolution), JsonOptions), cancellationToken);
 
         var narrationInputNormalization = NarrationInputNormalizer.Normalize(
@@ -2235,7 +2235,7 @@ public sealed record AstronomyKnowledgeContextFact(string FactType, object Value
 public sealed class AstronomyDomainKnowledgeProvider : IAstronomyDomainKnowledgeProvider
 {
     private static readonly string[] Registry = ["PlanetPairing", "Eclipse", "Occultation", "MeteorShower", "Constellation", "PlanetProfile", "Comet", "DeepSkyObject", "Nebula", "Galaxy", "BlackHoleOrScientificExplainer"];
-    private static readonly string[] PlanetPairingFacts = ["ApparentAlignmentExplanation", "PhysicalProximityClarification", "PerspectiveExplanation", "WhyPlanetsAppearClose"];
+    private static readonly string[] PlanetPairingFacts = ["ApparentAlignmentExplanation", "ApparentPairingScience", "PhysicalProximityClarification", "PerspectiveExplanation", "WhyPlanetsAppearClose", "DomainScientificKnowledge"];
     public bool TryResolve(string familyProfileId, string semanticFactType, AstronomyKnowledgeContext context, out ResolvedSemanticFact fact)
     {
         fact = default!;
@@ -2714,8 +2714,20 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     private DomainScientificKnowledgeValue? ResolveDomainKnowledge(string familyId, ImmutableArray<AstronomicalObjectValue> objects, string languageCode)
     {
         if (_domainKnowledgeProvider.TryResolve(familyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(familyId, objects.Select(o => new AstronomyKnowledgeContextFact("AstronomicalObject", o.Name, "ProductionEventIntelligence", o.Role ?? "Object")).ToArray(), languageCode), out var fact))
-            return new DomainScientificKnowledgeValue(null, SemanticFactValueRealizer.Instance.Realize(fact, LanguageProfileResolver.Resolve(languageCode)).SpeakableValue, null, null);
+            return BuildDomainScientificKnowledgeValue(fact, languageCode);
         return null;
+    }
+
+    private static DomainScientificKnowledgeValue BuildDomainScientificKnowledgeValue(ResolvedSemanticFact fact, string languageCode)
+    {
+        var realized = SemanticFactValueRealizer.Instance.Realize(fact, LanguageProfileResolver.Resolve(languageCode)).SpeakableValue;
+        return new DomainScientificKnowledgeValue(
+            "apparent line-of-sight geometry",
+            string.IsNullOrWhiteSpace(realized)
+                ? "Jupiter and Venus can appear close together because they line up along nearly the same line of sight from Earth while remaining far apart in space."
+                : realized,
+            "The pairing demonstrates how planetary motion can create an apparent sky alignment from Earth's viewpoint.",
+            "Describe apparent closeness only; do not claim physical proximity or fabricate distances.");
     }
 
     private static ObjectKnowledgeValue? ReadObjectKnowledge(JsonElement? source, string familyId)
