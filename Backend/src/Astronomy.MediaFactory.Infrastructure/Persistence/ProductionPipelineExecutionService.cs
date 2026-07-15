@@ -15304,6 +15304,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var narrationRoot = BuildNarrationV5Root(context);
         var diagnosticFiles = new[]
         {
+            Path.Combine(narrationRoot, "resolver-input-presence-diagnostics.json"),
             Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json"),
             Path.Combine(narrationRoot, "semantic-capability-diagnostics.json"),
             Path.Combine(narrationRoot, "semantic-registry-validation-report.json"),
