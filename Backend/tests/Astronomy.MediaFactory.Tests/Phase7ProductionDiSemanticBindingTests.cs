@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
@@ -217,6 +218,92 @@ public sealed class ProductionSemanticRegistryNonEmptyTests
 
 public sealed class Phase7ProductionDiSemanticBindingTests
 {
+
+    [Fact]
+    public void ProductionEngine_Resolves_EventIdentity_From_Typed_Context()
+    {
+        using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
+        using var scope = provider.CreateScope();
+        var engine = scope.ServiceProvider.GetRequiredService<ISemanticResolutionEngineV1>();
+        var request = BuildRequest(SemanticCapabilityVocabularyV1.EventIdentity);
+
+        var result = engine.Resolve(request);
+
+        Assert.True(result.Fact.Status is SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination, result.Fact.DiagnosticMessage);
+        Assert.NotNull(result.Fact.TypedValue);
+        Assert.True(result.Diagnostics.CandidateCount > 0);
+        Assert.Equal("v1.event-identity.event-identity-context", result.Fact.WinningAdapterId);
+        Assert.Equal(SemanticSourcePolicyVocabularyV1.EventIdentityContext, result.Fact.WinningSourceId);
+        Assert.Contains(result.Fact.Provenance, p => p.SourcePropertyPath == "EventIdentity");
+        Assert.DoesNotContain(result.Diagnostics.InvokedAdapterIds, id => id.Contains("RawJson", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ProductionEngine_Resolves_PlanetPairing_DomainScientificKnowledge()
+    {
+        using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
+        using var scope = provider.CreateScope();
+        var engine = scope.ServiceProvider.GetRequiredService<ISemanticResolutionEngineV1>();
+        var request = BuildRequest(SemanticCapabilityVocabularyV1.DomainScientificKnowledge);
+
+        var result = engine.Resolve(request);
+
+        Assert.True(result.Fact.Status is SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination, result.Fact.DiagnosticMessage);
+        Assert.True(result.Diagnostics.CandidateCount > 0);
+        Assert.NotNull(result.Fact.TypedValue);
+        var value = Assert.IsType<DomainScientificKnowledgeValue>(result.Fact.TypedValue!.Value);
+        Assert.Contains("line-of-sight", string.Join(' ', value.Mechanism, value.PerspectiveAlignmentExplanation), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("far apart", value.PerspectiveAlignmentExplanation, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("v1.domain-scientific-knowledge.domain-provider", result.Fact.WinningAdapterId);
+        Assert.Equal(SemanticSourcePolicyVocabularyV1.AstronomyDomainKnowledgeProvider, result.Fact.WinningSourceId);
+        Assert.Contains(result.Fact.Provenance, p => p.SourcePropertyPath == "AstronomyDomainKnowledge.DomainKnowledge");
+        Assert.DoesNotContain(result.Diagnostics.InvokedAdapterIds, id => id.Contains("RawJson", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ProductionResolver_Resolves_Identity_And_Science_Without_CountingEngine()
+    {
+        using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
+        using var scope = provider.CreateScope();
+        var resolver = scope.ServiceProvider.GetRequiredService<IRequiredSemanticFactResolver>();
+        Assert.IsType<SemanticResolutionEngineV1>(scope.ServiceProvider.GetRequiredService<ISemanticResolutionEngineV1>());
+        var contract = JsonDocument.Parse("{\"beats\":[{\"documentaryBeatId\":\"hook\",\"beatOrder\":1,\"narrativeRole\":\"Hook\",\"allocatedFacts\":{}},{\"documentaryBeatId\":\"science\",\"beatOrder\":2,\"narrativeRole\":\"Science\",\"allocatedFacts\":{}}]}").RootElement.Clone();
+        var input = new RequiredSemanticFactResolutionInput(
+            new AstronomyFamilyProfile("PlanetPairing", "Event", "", "", ["EventIdentity", "ApparentPairingScience"], [], [], [], "", "", [], [], []),
+            contract,
+            contract,
+            null,
+            null,
+            null,
+            null,
+            null,
+            LanguageProfileResolver.Resolve("en"),
+            null,
+            new CanonicalEventIdentity("PlanetPairing", "PlanetPairing", "PlanetPairing", "PLANET_CONJUNCTION", "PlanetPairing", "ProductionEngineTest", true, new Dictionary<string, string?>(), [], [], []));
+
+        var result = resolver.Resolve(input);
+
+        Assert.False(result.Blocking, JsonSerializer.Serialize(result.Diagnostics));
+        Assert.All(result.Beats, b => Assert.DoesNotContain("EventIdentity", b.MissingRequiredFacts));
+        Assert.All(result.Beats, b => Assert.DoesNotContain("ApparentPairingScience", b.MissingRequiredFacts));
+        Assert.Contains(result.Beats.SelectMany(b => b.RequiredFacts), f => f.FactType == "EventIdentity" && f.SourceArtifact == SemanticSourcePolicyVocabularyV1.EventIdentityContext);
+        Assert.Contains(result.Beats.SelectMany(b => b.RequiredFacts), f => f.FactType == "ApparentPairingScience" && f.CanonicalValue is DomainScientificKnowledgeValue);
+    }
+
+    private static SemanticResolutionRequestV1 BuildRequest(string capabilityId)
+        => new(
+            new SemanticCapabilityId(capabilityId),
+            true,
+            SemanticRequirementLevelV1.Required,
+            SemanticMissingValueBehaviorV1.BlockRequired,
+            SemanticEvidenceStrengthV1.Weak,
+            Enum.GetValues<SemanticEvidenceCategoryV1>(),
+            ProductionSourcePolicyCatalogNonEmptyTests.BuildJupiterVenusProductionShapeContext(),
+            "PlanetPairing",
+            "long",
+            "production-engine-test");
+
+
     [Fact]
     public void ProductionScope_ResolvesPhase7ServicesThroughSharedPopulatedDiGraph()
     {
