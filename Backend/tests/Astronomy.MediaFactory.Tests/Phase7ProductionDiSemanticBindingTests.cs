@@ -12,6 +12,8 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sourc
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -38,13 +40,16 @@ public sealed class ProductionSourcePolicyCatalogNonEmptyTests
             })
             .Build();
 
-        return new ServiceCollection()
-            .AddMediaFactory(configuration)
-            .BuildServiceProvider(new ServiceProviderOptions
-            {
-                ValidateOnBuild = true,
-                ValidateScopes = true
-            });
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton<IHostEnvironment>(new Phase7ProductionDiTestHostEnvironment());
+        services.AddMediaFactory(configuration);
+
+        return services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
     }
 
     internal static readonly string[] RequiredProductionCapabilities =
@@ -100,6 +105,14 @@ public sealed class ProductionSourcePolicyCatalogNonEmptyTests
             Language: "en",
             TimeZone: "America/New_York");
     }
+}
+
+internal sealed class Phase7ProductionDiTestHostEnvironment : IHostEnvironment
+{
+    public string EnvironmentName { get; set; } = Environments.Development;
+    public string ApplicationName { get; set; } = "Astronomy.MediaFactory.Tests";
+    public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+    public IFileProvider ContentRootFileProvider { get; set; } = new PhysicalFileProvider(AppContext.BaseDirectory);
 }
 
 public sealed class ProductionSemanticRegistryNonEmptyTests
