@@ -161,15 +161,49 @@ public sealed class ProductionSemanticRegistryNonEmptyTests
     [Fact]
     public void AddMediaFactory_RegistersPopulatedProductionSemanticAdapterRegistry()
     {
-        using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
+        var services = ProductionSourcePolicyCatalogNonEmptyTests.BuildServices();
+        using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider(services);
         var registry = provider.GetRequiredService<ISemanticSourceAdapterRegistryV1>();
+        var concreteRegistry = provider.GetRequiredService<SemanticSourceAdapterRegistryV1>();
         var catalog = provider.GetRequiredService<ISemanticSourcePolicyCatalogV1>();
+        var diagnostic = BuildRegistryDiagnostic(services, registry, concreteRegistry);
         Assert.NotEmpty(registry.Adapters);
+        Assert.Same(concreteRegistry, registry);
+        Assert.Equal(registry.Adapters.Count, registry.Adapters.Select(a => a.AdapterId).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(registry.Adapters, a => Assert.False(string.IsNullOrWhiteSpace(a.SourceId), $"Adapter '{a.AdapterId}' has empty SourceId. {diagnostic}"));
+        foreach (var policy in catalog.Policies)
+        {
+            var sourceBackedSources = policy.ApprovedSources
+                .Where(s => s.ActiveInV1 && s.Structured && !s.CompatibilityOnly)
+                .ToArray();
+            if (sourceBackedSources.Length == 0) continue;
+
+            var compatibleAdapters = registry.GetAdapters(policy.SemanticCapabilityId)
+                .Where(a => sourceBackedSources.Any(s => s.SourceId == a.SourceId && s.EvidenceCategory == a.EvidenceCategory && a.MaximumEvidenceStrength >= s.MinimumStrength))
+                .ToArray();
+            Assert.NotEmpty(compatibleAdapters);
+        }
         AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.AstronomicalObjects, "v1.astronomical-objects.production-event-intelligence");
         AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.EventIdentity, "v1.event-identity.event-identity-context");
         AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.EventWindow, "v1.event-window.observation-metadata");
         AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.ObservationLocation, "v1.observation-location.observation-metadata");
+        AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.AngularSeparation, "v1.angular-separation.observation-metadata");
+        AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.ObservationEquipment, "v1.observation-equipment.domain-knowledge");
+        AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.ObservationConditions, "v1.observation-conditions.observation-metadata");
         AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.DomainScientificKnowledge, "v1.domain-scientific-knowledge.domain-provider");
+    }
+
+    internal static string BuildRegistryDiagnostic(IServiceCollection services, ISemanticSourceAdapterRegistryV1 registry, SemanticSourceAdapterRegistryV1? concreteRegistry = null)
+    {
+        var descriptors = services
+            .Select((d, i) => (Descriptor: d, Index: i))
+            .Where(x => x.Descriptor.ServiceType == typeof(ISemanticSourceAdapterRegistryV1)
+                || x.Descriptor.ServiceType == typeof(SemanticSourceAdapterRegistryV1)
+                || x.Descriptor.ServiceType == typeof(ISemanticSourceAdapterV1)
+                || typeof(ISemanticSourceAdapterV1).IsAssignableFrom(x.Descriptor.ServiceType))
+            .Select(x => $"#{x.Index}:{x.Descriptor.Lifetime}:{x.Descriptor.ServiceType.FullName}->{x.Descriptor.ImplementationType?.FullName ?? (x.Descriptor.ImplementationFactory is not null ? "<factory>" : x.Descriptor.ImplementationInstance?.GetType().FullName ?? "<unknown>")}")
+            .ToArray();
+        return $"RegistryType={registry.GetType().FullName}; ConcreteType={concreteRegistry?.GetType().FullName ?? "<not resolved>"}; AdapterCount={registry.Adapters.Count}; AdapterIds={string.Join(",", registry.Adapters.Select(a => a.AdapterId).OrderBy(x => x, StringComparer.Ordinal))}; SourceIds={string.Join(",", registry.Adapters.Select(a => a.SourceId).Distinct().OrderBy(x => x, StringComparer.Ordinal))}; RegistryDescriptors={string.Join(" | ", descriptors)}; AdapterDescriptorCount={services.Count(d => d.ServiceType == typeof(ISemanticSourceAdapterV1))}";
     }
 
     private static void AssertPolicyAndAdapter(ISemanticSourcePolicyCatalogV1 catalog, ISemanticSourceAdapterRegistryV1 registry, string capabilityId, string adapterId)

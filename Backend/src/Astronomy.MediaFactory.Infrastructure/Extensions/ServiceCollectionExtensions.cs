@@ -15,6 +15,10 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Identity;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Event;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Knowledge;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry;
 using Astronomy.MediaFactory.Infrastructure.Optimization;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Infrastructure.Scheduling;
@@ -563,7 +567,32 @@ public static class ServiceCollectionExtensions
             _ => new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1());
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.ISemanticSourcePolicyCatalogV1>(
             sp => sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1>());
-        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry.ISemanticSourceAdapterRegistryV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry.SemanticSourceAdapterRegistryV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, EventIdentitySourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, EventWindowSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, EventWindowProductionEventIntelligenceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, EventWindowDocumentaryContractAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, AstronomicalObjectsSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, SecondaryAstronomicalObjectsSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, AngularSeparationSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, AngularSeparationObservationMetadataAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, ObservationDirectionSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, ObservationLocationSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, ObservationConditionsSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, MeteorActivitySourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, FullMoonObservationSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, EclipseCircumstancesSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, OccultationContactsSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, SafetyGuidanceEventSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, ObservationEquipmentKnowledgeAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, ObjectKnowledgeSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, DomainScientificKnowledgeSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, CulturalContextSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, EditorialContextSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, SafetyGuidanceKnowledgeAdapterV1>();
+        services.AddSingleton<SemanticSourceAdapterRegistryV1>(sp =>
+            new SemanticSourceAdapterRegistryV1(sp.GetServices<ISemanticSourceAdapterV1>()));
+        services.AddSingleton<ISemanticSourceAdapterRegistryV1>(sp =>
+            sp.GetRequiredService<SemanticSourceAdapterRegistryV1>());
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.ISemanticCandidateCollectorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.SemanticCandidateCollectorV1>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.ISemanticCandidateEvaluatorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.SemanticCandidateEvaluatorV1>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.ISemanticConflictAnalyzerV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.SemanticConflictAnalyzerV1>();
