@@ -33,7 +33,8 @@ public sealed class ProductionSourcePolicyCatalogNonEmptyTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:Postgres"] = "Host=localhost;Port=5432;Database=astronomy_tests;Username=test;Password=test"
+                ["ConnectionStrings:Postgres"] = "Host=localhost;Port=5432;Database=astronomy_tests;Username=test;Password=test",
+                ["DatabaseSafety:AllowLocalhostPostgres"] = "true"
             })
             .Build();
 
