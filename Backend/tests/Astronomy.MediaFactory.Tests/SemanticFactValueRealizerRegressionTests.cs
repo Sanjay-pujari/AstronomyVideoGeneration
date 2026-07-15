@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
