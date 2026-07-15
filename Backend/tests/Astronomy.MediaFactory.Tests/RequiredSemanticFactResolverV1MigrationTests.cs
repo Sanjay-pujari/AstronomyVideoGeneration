@@ -64,8 +64,8 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
     public void Scope_Key_Separates_Different_Minimum_Evidence_Strengths()
     {
         var categories = Enum.GetValues<SemanticEvidenceCategoryV1>();
-        var weak = new SemanticResolutionScopeKeyV1(new("EventIdentity"), SemanticFactScopeKindV1.EventGlobal, null, null, true, SemanticEvidenceStrengthV1.Weak, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
-        var strong = new SemanticResolutionScopeKeyV1(new("EventIdentity"), SemanticFactScopeKindV1.EventGlobal, null, null, true, SemanticEvidenceStrengthV1.Strong, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
+        var weak = new SemanticResolutionScopeKeyV1(new("EventIdentity"), SemanticFactScopeKindV1.EventGlobal, null, true, SemanticEvidenceStrengthV1.Weak, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
+        var strong = new SemanticResolutionScopeKeyV1(new("EventIdentity"), SemanticFactScopeKindV1.EventGlobal, null, true, SemanticEvidenceStrengthV1.Strong, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
 
         Assert.NotEqual(weak, strong);
     }
@@ -230,7 +230,7 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         var resolverBody = source[source.IndexOf("public sealed class RequiredSemanticFactResolver", StringComparison.Ordinal)..source.IndexOf("public static class NarrationRealizedContextMapper", StringComparison.Ordinal)];
         var resolveBody = ExtractMethodBody(resolverBody, "public RequiredSemanticFactResolutionResult Resolve");
         var projectSignature = resolverBody[resolverBody.IndexOf("private static ResolvedSemanticFact? Project", StringComparison.Ordinal)..resolverBody.IndexOf("private IEnumerable<RequirementOccurrence>", StringComparison.Ordinal)];
-        var scopeRecord = source[source.IndexOf("public sealed record SemanticResolutionScopeKeyV1", StringComparison.Ordinal)..source.IndexOf("public sealed class RequiredSemanticFactResolver", StringComparison.Ordinal)];
+        var scopeProperties = typeof(SemanticResolutionScopeKeyV1).GetProperties().Select(p => p.Name).ToArray();
 
         Assert.Contains("_semanticResolutionEngine.Resolve", resolveBody);
         Assert.DoesNotContain("SemanticSourceAdapter", resolveBody);
@@ -238,8 +238,11 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         Assert.DoesNotContain("AddDocumentary", resolveBody);
         Assert.True(resolveBody.IndexOf("_semanticResolutionEngine.Resolve", StringComparison.Ordinal) < resolveBody.IndexOf("Project(", StringComparison.Ordinal));
         Assert.DoesNotContain("ISemanticResolutionEngineV1", projectSignature);
-        Assert.DoesNotContain("BeatId", scopeRecord);
-        Assert.DoesNotContain("BeatRole", scopeRecord);
+        Assert.DoesNotContain("_semanticResolutionEngine.Resolve", projectSignature);
+        Assert.DoesNotContain("BeatId", scopeProperties);
+        Assert.DoesNotContain("BeatIdForDiagnostics", scopeProperties);
+        Assert.DoesNotContain("BeatRole", scopeProperties);
+        Assert.DoesNotContain("BeatRoleForDiagnostics", scopeProperties);
     }
 
     [Fact]
@@ -354,6 +357,35 @@ public sealed class RequiredSemanticFactResolverV1MigrationTests
         Assert.All(result.Beats.SelectMany(b => b.RequiredFacts), f => Assert.Null(f.SourceBeatId));
     }
 
+    [Fact]
+    public void Scope_Key_Equality_Normalizes_Format_And_Beat_By_Scope()
+    {
+        var categories = Enum.GetValues<SemanticEvidenceCategoryV1>();
+        var eventLong = new SemanticResolutionScopeKeyV1(new("EventIdentity"), SemanticFactScopeKindV1.EventGlobal, null, true, SemanticEvidenceStrengthV1.Weak, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
+        var eventShort = new SemanticResolutionScopeKeyV1(new("EventIdentity"), SemanticFactScopeKindV1.EventGlobal, null, true, SemanticEvidenceStrengthV1.Weak, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
+        var formatLong = new SemanticResolutionScopeKeyV1(new("TitleCard"), SemanticFactScopeKindV1.FormatGlobal, "long", true, SemanticEvidenceStrengthV1.Weak, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
+        var formatLongOtherBeat = new SemanticResolutionScopeKeyV1(new("TitleCard"), SemanticFactScopeKindV1.FormatGlobal, "long", true, SemanticEvidenceStrengthV1.Weak, categories, SemanticMissingValueBehaviorV1.BlockRequired, "ctx", "v1");
+        var formatShort = formatLong with { Format = "short" };
+        var beatOne = new SemanticResolutionBeatScopeKeyV1(eventLong with { ScopeKind = SemanticFactScopeKindV1.BeatSpecific }, "beat-1");
+        var beatTwo = beatOne with { BeatId = "beat-2" };
+
+        Assert.Equal(eventLong, eventShort);
+        Assert.Equal(eventLong.GetHashCode(), eventShort.GetHashCode());
+        Assert.Equal(formatLong, formatLongOtherBeat);
+        Assert.NotEqual(formatLong, formatShort);
+        Assert.NotEqual(beatOne, beatTwo);
+    }
+
+    [Fact]
+    public void Dictionary_Lookup_Reuses_Global_Result_Across_All_Beats()
+    {
+        var engine = new CountingEngine();
+        var result = CreateResolver(engine).Resolve(new RequiredSemanticFactResolutionInput(Profile(required: ["EventIdentity"], optional: []), Contract("long-1", "long-2", "long-3"), Contract("short-1", "short-2", "short-3"), null, null, null, null, null, LanguageProfileResolver.Resolve("en")));
+
+        Assert.Equal(1, engine.CallCount);
+        Assert.Equal(6, result.Beats.Count);
+        Assert.All(result.Beats, b => Assert.Null(Assert.Single(b.RequiredFacts).SourceBeatId));
+    }
 
     private static string ExtractMethodBody(string source, string signature)
     {

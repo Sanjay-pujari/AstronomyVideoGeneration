@@ -2281,7 +2281,6 @@ public sealed record SemanticResolutionScopeKeyV1(
     SemanticCapabilityId CapabilityId,
     SemanticFactScopeKindV1 ScopeKind,
     string? Format,
-    string? BeatId,
     bool Required,
     SemanticEvidenceStrengthV1 MinimumEvidenceStrength,
     IReadOnlyList<SemanticEvidenceCategoryV1> AllowedEvidenceCategories,
@@ -2294,7 +2293,6 @@ public sealed record SemanticResolutionScopeKeyV1(
         && CapabilityId.Equals(other.CapabilityId)
         && ScopeKind == other.ScopeKind
         && string.Equals(Format, other.Format, StringComparison.Ordinal)
-        && string.Equals(BeatId, other.BeatId, StringComparison.Ordinal)
         && Required == other.Required
         && MinimumEvidenceStrength == other.MinimumEvidenceStrength
         && MissingValueBehavior == other.MissingValueBehavior
@@ -2308,7 +2306,6 @@ public sealed record SemanticResolutionScopeKeyV1(
         hash.Add(CapabilityId);
         hash.Add(ScopeKind);
         hash.Add(Format, StringComparer.Ordinal);
-        hash.Add(BeatId, StringComparer.Ordinal);
         hash.Add(Required);
         hash.Add(MinimumEvidenceStrength);
         hash.Add(MissingValueBehavior);
@@ -2318,6 +2315,8 @@ public sealed record SemanticResolutionScopeKeyV1(
         return hash.ToHashCode();
     }
 }
+
+public sealed record SemanticResolutionBeatScopeKeyV1(SemanticResolutionScopeKeyV1 SemanticScope, string BeatId);
 
 public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 {
@@ -2531,10 +2530,10 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var sourceContextVersion = FirstNonEmpty(adapterContext.EventIdentity?.ResolutionSource, "RequiredSemanticFactResolver.LegacyInput");
         var scopeKind = ResolveSemanticFactScope(capabilityId.Value);
         var scopeFormat = scopeKind == SemanticFactScopeKindV1.FormatGlobal ? format : null;
-        var scopeBeatId = scopeKind == SemanticFactScopeKindV1.BeatSpecific ? beatId : null;
         var requestBeatId = scopeKind == SemanticFactScopeKindV1.BeatSpecific ? beatId : null;
         var request = new SemanticResolutionRequestV1(capabilityId.Value, required, required ? SemanticRequirementLevelV1.Required : SemanticRequirementLevelV1.Optional, missingBehavior, minimumStrength, allowedCategories, adapterContext, input.FamilyProfile.FamilyId, scopeFormat ?? format, requestBeatId);
-        var scopeKey = new SemanticResolutionScopeKeyV1(capabilityId.Value, scopeKind, scopeFormat, scopeBeatId, required, minimumStrength, allowedCategories, missingBehavior, sourceContextIdentity, sourceContextVersion);
+        var semanticScopeKey = new SemanticResolutionScopeKeyV1(capabilityId.Value, scopeKind, scopeFormat, required, minimumStrength, allowedCategories, missingBehavior, sourceContextIdentity, sourceContextVersion);
+        object scopeKey = scopeKind == SemanticFactScopeKindV1.BeatSpecific ? new SemanticResolutionBeatScopeKeyV1(semanticScopeKey, beatId) : semanticScopeKey;
         return new RequirementOccurrence(format, sceneId, beatId, role, type, capabilityId.Value, scopeKind, required, scopeKey, request, capability);
     }
 
@@ -2568,7 +2567,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         _ => SemanticFactScopeKindV1.EventGlobal
     };
 
-    private sealed record RequirementOccurrence(string Format, string SceneId, string BeatId, string Role, string LegacyFactType, SemanticCapabilityId CapabilityId, SemanticFactScopeKindV1 ScopeKind, bool Required, SemanticResolutionScopeKeyV1? ScopeKey, SemanticResolutionRequestV1? Request, SemanticCapabilityResolution CapabilityResolution)
+    private sealed record RequirementOccurrence(string Format, string SceneId, string BeatId, string Role, string LegacyFactType, SemanticCapabilityId CapabilityId, SemanticFactScopeKindV1 ScopeKind, bool Required, object? ScopeKey, SemanticResolutionRequestV1? Request, SemanticCapabilityResolution CapabilityResolution)
     {
         public bool IsSupported => Request is not null && ScopeKey is not null;
     }
