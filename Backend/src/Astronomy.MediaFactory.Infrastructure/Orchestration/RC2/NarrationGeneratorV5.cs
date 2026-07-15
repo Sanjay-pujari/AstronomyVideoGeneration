@@ -2742,18 +2742,8 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     }
     private static IEnumerable<string> RequiredTypes(AstronomyFamilyProfile p, string role, string format)
     {
-        var r = role.ToLowerInvariant();
-        if (p.FamilyId == "PlanetaryConjunction" || p.FamilyId == "PlanetPairing")
-        {
-            if (r.Contains("hook")) return ["PrimaryObjects", "EventIdentity"];
-            if (r.Contains("timing")) return ["ObservationTiming"];
-            if (r.Contains("science")) return ["ApparentAlignmentExplanation", "PhysicalProximityClarification"];
-            if (r.Contains("observation")) return ["ObservationTiming"];
-            if (r.Contains("orientation")) return format == "long" ? ["LocationContext"] : [];
-            return ["PrimaryObjects"];
-        }
         if (!p.ContentNature.Contains("Event", StringComparison.OrdinalIgnoreCase)) return p.RequiredFactTypes.Where(t => !Regex.IsMatch(t, "Date|Time|Peak|Window", RegexOptions.IgnoreCase));
-        return p.RequiredFactTypes;
+        return p.RequiredFactTypes.Distinct(StringComparer.OrdinalIgnoreCase);
     }
     private static IEnumerable<string> OptionalTypes(AstronomyFamilyProfile p, string role, string format) => p.OptionalFactTypes.Distinct(StringComparer.OrdinalIgnoreCase);
     [Obsolete("Legacy rollback-only path. Sprint 4B runtime conflict analysis is owned by SemanticResolutionEngineV1.")]

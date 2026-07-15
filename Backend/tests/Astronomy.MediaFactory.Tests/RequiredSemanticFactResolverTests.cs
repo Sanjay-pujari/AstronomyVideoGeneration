@@ -1,11 +1,13 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility;
 
 namespace Astronomy.MediaFactory.Tests;
 
 public sealed class RequiredSemanticFactResolverTests
 {
-    private static readonly AstronomyFamilyProfile Planetary = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"PlanetPairing\"}"), null);
+    private static readonly AstronomyFamilyProfile Planetary = V1CompatibilityProfile("PlanetPairing");
     private static readonly LanguageProfile English = LanguageProfileResolver.Resolve("en");
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
@@ -101,7 +103,7 @@ public sealed class RequiredSemanticFactResolverTests
     [Fact]
     public void ConstellationDoesNotUsePlanetPairingApparentAlignmentKnowledge()
     {
-        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"Constellation\"}"), null);
+        var profile = V1CompatibilityProfile("Constellation");
         var provider = new AstronomyDomainKnowledgeProvider();
         var resolved = provider.TryResolve(profile.FamilyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(profile.FamilyId, [], "en"), out _);
         Assert.False(resolved);
@@ -163,7 +165,7 @@ public sealed class RequiredSemanticFactResolverTests
     [Fact]
     public void ConstellationProfileDoesNotRequireEventDate()
     {
-        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"Constellation\"}"), null);
+        var profile = V1CompatibilityProfile("Constellation");
         var result = Resolve(LongWithBeat("Science", "{\"Name\":\"Orion\",\"SkyRegion\":\"equatorial sky\",\"IdentificationPattern\":\"three belt stars\",\"MajorStars\":\"Betelgeuse and Rigel\",\"ScientificIdentity\":\"IAU constellation\"}"), profile: profile);
         Assert.False(result.Blocking);
         Assert.DoesNotContain("EventDate", string.Join(",", result.Beats[0].MissingRequiredFacts));
@@ -172,7 +174,7 @@ public sealed class RequiredSemanticFactResolverTests
     [Fact]
     public void DeepSkyObjectDoesNotRequireLocalViewingTimeWhenNotObservationTiming()
     {
-        var profile = AstronomyFamilyProfileCatalog.Resolve(Json("{\"family\":\"DeepSkyObject\"}"), null);
+        var profile = V1CompatibilityProfile("DeepSkyObject");
         var result = Resolve(LongWithBeat("Science", "{\"ObjectName\":\"M31\",\"ObjectType\":\"galaxy\",\"SkyLocation\":\"Andromeda\",\"ScientificImportance\":\"nearest large spiral galaxy\"}"), profile: profile);
         Assert.False(result.Blocking);
         Assert.Empty(result.Beats[0].MissingRequiredFacts.Where(f => f.Contains("Time")));
@@ -323,6 +325,16 @@ public sealed class RequiredSemanticFactResolverTests
 
         Assert.Contains("Unable to resolve astronomy family profile.", ex.Message);
         Assert.Contains("No matching profile found.", ex.Message);
+    }
+
+
+    private static AstronomyFamilyProfile V1CompatibilityProfile(string familyId)
+    {
+        var catalog = new AstronomyFamilyProfileCatalogV1();
+        var v1 = catalog.GetRequired(familyId);
+        var compatibility = new AstronomyFamilyProfileV1CompatibilityAdapter().Convert(v1, new FamilyProfileCompatibilityContext(familyId, familyId, familyId, false));
+        Assert.True(compatibility.Succeeded, string.Join("; ", compatibility.BlockingErrors));
+        return compatibility.LegacyProfile!;
     }
 
     private static AstronomyFamilyProfile OptionalMeteorZhrProfile() => new("MeteorShower", "TimedObservationEvent", "ObservationGuide", "SkyWatchShort", [], ["Zhr"], ["Hook"], ["Hook"], "", "", [], [], []);

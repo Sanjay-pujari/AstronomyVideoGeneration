@@ -12,7 +12,8 @@ public sealed class AstronomyFamilyProfileV1CompatibilityAdapter : IAstronomyFam
     {
         var requiredCaps = Requirements(profile, required: true).ToArray();
         var optionalCaps = Requirements(profile, required: false).ToArray();
-        var mappings = requiredCaps.Select(c => Map(profile.FamilyId, c, true)).Concat(optionalCaps.Select(c => Map(profile.FamilyId, c, false))).ToArray();
+        var requirementIndex = RequirementIndex(profile);
+        var mappings = requiredCaps.Select(c => Map(profile, requirementIndex[c], true)).Concat(optionalCaps.Select(c => Map(profile, requirementIndex[c], false))).ToArray();
         var blocking = mappings.Where(m => m.Required && m.MappingKind == FamilyProfileCompatibilityMappingKind.UNSUPPORTED_FOR_CURRENT_RUNTIME)
             .Select(m => $"V1 capability '{m.V1CapabilityId}' for family '{profile.FamilyId}' cannot be represented by the current legacy runtime.").ToArray();
         var required = mappings.Where(m => m.Required && m.MappingKind != FamilyProfileCompatibilityMappingKind.UNSUPPORTED_FOR_CURRENT_RUNTIME).SelectMany(m => m.LegacyRequirements).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -21,7 +22,7 @@ public sealed class AstronomyFamilyProfileV1CompatibilityAdapter : IAstronomyFam
         var diagnostics = new FamilyProfileCompatibilityDiagnostics(
             context.InputEventType ?? string.Empty, context.CanonicalEventType ?? profile.FamilyId, context.CanonicalFamilyId ?? profile.FamilyId, profile.FamilyId,
             context.AliasApplied, AdapterId, profile.FamilyId, required, omitted,
-            mappings.Where(m => m.MappingKind == FamilyProfileCompatibilityMappingKind.UNSUPPORTED_FOR_CURRENT_RUNTIME).ToArray(), blocking, "V1", mappings, profile.Policy.MinimumObjectCount);
+            mappings.Where(m => m.MappingKind == FamilyProfileCompatibilityMappingKind.UNSUPPORTED_FOR_CURRENT_RUNTIME).ToArray(), blocking, "V1", mappings, profile.Policy.MinimumObjectCount, profile.SupportedFormats.ToArray(), profile.LongFormStructure.Beats.Select(b => b.BeatRole).ToArray(), profile.ShortFormStructure.Beats.Select(b => b.BeatRole).ToArray());
         if (blocking.Length > 0) return new(false, null, diagnostics, blocking);
         return new(true, Legacy(profile, required, optional), diagnostics, []);
     }
@@ -30,9 +31,18 @@ public sealed class AstronomyFamilyProfileV1CompatibilityAdapter : IAstronomyFam
         .SelectMany(b => b.Requirements).Where(r => required ? r.RequirementLevel == FamilyRequirementLevelV1.Required : r.RequirementLevel == FamilyRequirementLevelV1.Optional)
         .Select(r => r.SemanticCapabilityId.Value).Distinct(StringComparer.OrdinalIgnoreCase);
 
-    private static FamilyProfileCompatibilityMapping Map(string family, string cap, bool required)
+    private static Dictionary<string, FamilySemanticRequirementV1> RequirementIndex(AstronomyFamilyProfileV1 p) => p.LongFormStructure.Beats.Concat(p.ShortFormStructure.Beats)
+        .SelectMany(b => b.Requirements)
+        .GroupBy(r => r.SemanticCapabilityId.Value, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+    private static FamilyProfileCompatibilityMapping Map(AstronomyFamilyProfileV1 profile, FamilySemanticRequirementV1 requirement, bool required)
     {
-        static FamilyProfileCompatibilityMapping M(string f, string c, bool r, FamilyProfileCompatibilityMappingKind k, string[] legacy, string d) => new(f, c, k, legacy, r, d);
+        var family = profile.FamilyId;
+        var cap = requirement.SemanticCapabilityId.Value;
+        var longRoles = profile.LongFormStructure.Beats.Where(b => b.Requirements.Any(r => r.SemanticCapabilityId.Value.Equals(cap, StringComparison.OrdinalIgnoreCase))).Select(b => b.BeatRole).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var shortRoles = profile.ShortFormStructure.Beats.Where(b => b.Requirements.Any(r => r.SemanticCapabilityId.Value.Equals(cap, StringComparison.OrdinalIgnoreCase))).Select(b => b.BeatRole).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        FamilyProfileCompatibilityMapping M(string f, string c, bool r, FamilyProfileCompatibilityMappingKind k, string[] legacy, string d) => new(f, c, k, legacy, r, d, requirement.RequirementLevel.ToString(), requirement.MissingValueBehavior.ToString(), requirement.AllowedEvidenceCategories.ToArray(), requirement.MinimumEvidenceStrength, false, requirement.MayOmit, requirement.BlocksPhase7, longRoles, shortRoles);
         if (!required && cap is SemanticCapabilityVocabularyV1.EditorialContext or SemanticCapabilityVocabularyV1.ObservationLocation)
             return M(family, cap, false, FamilyProfileCompatibilityMappingKind.OPTIONAL_COMPATIBILITY_OMISSION, [], "Optional V1 context is recorded but omitted because the legacy Phase 7 profile does not require a minimum field for current behavior.");
         var legacy = (family, cap) switch
