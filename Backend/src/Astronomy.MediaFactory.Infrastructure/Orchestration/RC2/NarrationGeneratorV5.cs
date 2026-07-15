@@ -1350,11 +1350,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var engine = TryGetResolverField<ISemanticResolutionEngineV1>(resolver, "_semanticResolutionEngine");
         var catalog = TryGetResolverField<ISemanticSourcePolicyCatalogV1>(resolver, "_sourcePolicyCatalog") ?? SemanticDefaults.SemanticSourcePolicyCatalogV1;
         var registry = TryGetResolverField<ISemanticSourceAdapterRegistryV1>(resolver, "_sourceAdapterRegistry") ?? SemanticDefaults.SemanticSourceAdapterRegistryV1;
-        var eventWindowPresent = ReadEventWindowFromRequest(input.ProductionPipelineRequest) is not null || ReadEventWindow(input.ProductionEventIntelligence) is not null;
-        var observationWindowPresent = ReadEventWindow(input.ObservationMetadata) is not null || eventWindowPresent;
-        var observationLocationPresent = ReadObservationLocation(input.ObservationMetadata) is not null || ReadObservationLocationFromRequest(input.ProductionPipelineRequest) is not null;
-        var observationDirectionPresent = ReadObservationDirection(input.ObservationMetadata) is not null || ReadObservationDirectionFromRequest(input.ProductionPipelineRequest) is not null;
-        var primaryObjectCount = (ReadObjectsFromRequest(input.ProductionPipelineRequest, includeSecondary: true) ?? ReadPrimaryObjects(input.ProductionEventIntelligence) ?? ImmutableArray<AstronomicalObjectValue>.Empty).Length;
+        var request = input.ProductionPipelineRequest;
+        var eventWindowPresent = request is not null && (request.StartUtc.HasValue || request.PeakUtc.HasValue || request.EndUtc.HasValue || request.ScheduledUtc.HasValue || !string.IsNullOrWhiteSpace(request.LocalPeakTime) || !string.IsNullOrWhiteSpace(request.BestViewingWindowLocal));
+        var observationWindowPresent = input.ObservationMetadata.HasValue || eventWindowPresent;
+        var observationLocationPresent = input.ObservationMetadata.HasValue || request is not null && (!string.IsNullOrWhiteSpace(request.RegionId) || !string.IsNullOrWhiteSpace(request.TimeZone));
+        var observationDirectionPresent = input.ObservationMetadata.HasValue || request is not null && !string.IsNullOrWhiteSpace(request.SkyDirectionHint);
+        var primaryObjectCount = (request?.PrimaryObjects.Count ?? 0) + (request?.SecondaryObjects.Count ?? 0);
         return new
         {
             resolverType = resolverType.FullName,
@@ -1365,7 +1366,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             productionEventIntelligencePresent = input.ProductionEventIntelligence.HasValue || input.ProductionPipelineRequest is not null,
             productionPrimaryObjectCount = primaryObjectCount,
             productionEventWindowPresent = eventWindowPresent,
-            observationMetadataPresent = input.ObservationMetadata.HasValue || ReadObservationLocationFromRequest(input.ProductionPipelineRequest) is not null,
+            observationMetadataPresent = input.ObservationMetadata.HasValue || observationLocationPresent,
             observationEventWindowPresent = observationWindowPresent,
             observationLocationPresent,
             observationDirectionPresent,
@@ -2357,17 +2358,17 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             requiredFactResultDiagnostics = supportedOccurrences.Select(o =>
             {
                 var result = resolvedByScope[o.ScopeKey!];
-                var policy = _sourcePolicyCatalog.Policies.FirstOrDefault(p => p.CapabilityId.Equals(result.Fact.CapabilityId));
+                var policy = _sourcePolicyCatalog.Policies.FirstOrDefault(p => p.SemanticCapabilityId.Equals(result.Fact.CapabilityId));
                 return new
                 {
                     requestedLegacyField = o.LegacyFactType,
                     canonicalCapabilityId = result.Fact.CapabilityId.Value,
                     policyFound = policy is not null,
                     approvedSourceIds = policy?.ApprovedSources.Select(s => s.SourceId).ToArray() ?? Array.Empty<string>(),
-                    registeredAdapterIds = _sourceAdapterRegistry.Adapters.Where(a => a.CapabilityId.Equals(result.Fact.CapabilityId)).Select(a => a.AdapterId).ToArray(),
+                    registeredAdapterIds = _sourceAdapterRegistry.Adapters.Where(a => a.SupportedCapabilityId.Equals(result.Fact.CapabilityId)).Select(a => a.AdapterId).ToArray(),
                     invokedAdapterIds = result.Diagnostics.InvokedAdapterIds,
                     candidateCount = result.Diagnostics.CandidateCount,
-                    candidateRejectionReasons = result.Diagnostics.CandidateEvaluations.Where(e => !e.Eligible).Select(e => e.RejectionReason ?? e.Disposition.ToString()).Concat(result.Fact.RejectedCandidates.Select(c => c.DiagnosticMessage)).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    candidateRejectionReasons = result.Diagnostics.CandidateEvaluations.Where(e => !e.Eligible).Select(e => e.RejectionReason ?? e.Disposition.ToString()).Concat(result.Fact.RejectedCandidates.Select(c => string.Join("; ", c.Warnings.Concat(c.ValidationIssues.Select(i => i.Message))))).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                     selectedAdapterId = result.Fact.WinningAdapterId,
                     finalResolutionStatus = result.Fact.Status.ToString(),
                     finalDiagnostic = result.Fact.DiagnosticMessage
