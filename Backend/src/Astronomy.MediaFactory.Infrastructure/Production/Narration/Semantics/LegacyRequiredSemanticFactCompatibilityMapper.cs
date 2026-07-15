@@ -1,4 +1,5 @@
 using System.Globalization;
+using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
@@ -14,6 +15,10 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
 
         var mapping = LegacySemanticCapabilityMapV1.Entries.FirstOrDefault(e => e.LegacyTerm.Equals(legacyFactType, StringComparison.OrdinalIgnoreCase));
         var projected = ProjectStructuredValue(fact, mapping.StructuredFieldPath, legacyFactType);
+        var realized = SemanticFactValueRealizer.Instance.Realize(fact, legacyFactType, mapping.StructuredFieldPath, LanguageProfileResolver.Resolve(language));
+        if (projected.DisplayValue is null && realized.Succeeded) projected = (projected.Value, projected.Unit, realized.SpeakableValue, projected.SourcePropertyPath);
+        if (projected.Value is null && realized.Succeeded) projected = (realized.SpeakableValue, projected.Unit, realized.SpeakableValue, projected.SourcePropertyPath);
+        if (projected.Value is not null && !realized.Succeeded && fact.Required) return null;
         if (projected.Value is null) return null;
 
         var sourcePath = projected.SourcePropertyPath
@@ -39,8 +44,8 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
             SemanticVerificationStatus.Verified,
             fact.Confidence,
             Enum.Parse<SemanticFactRequiredness>(requiredness, ignoreCase: true),
-            projected.DisplayValue ?? fact.SpeakableValue,
-            projected.DisplayValue ?? fact.SpeakableValue,
+            projected.DisplayValue ?? realized.SpeakableValue ?? fact.SpeakableValue,
+            projected.DisplayValue ?? realized.SpeakableValue ?? fact.SpeakableValue,
             language,
             true,
             "Source",
@@ -103,7 +108,8 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
             return (v, null, v, $"{sourceRoot}.ObservationLocation.{(path.Equals("timezone", StringComparison.OrdinalIgnoreCase) ? nameof(ObservationLocationValue.TimeZone) : nameof(ObservationLocationValue.LocationName))}");
         }
         if (value is AngularSeparationValue a) return (a.Degrees, "degrees", $"{a.Degrees} degrees", $"{sourceRoot}.AngularSeparation.Degrees");
-        return (value, null, fact.SpeakableValue, fact.Provenance.FirstOrDefault().SourcePropertyPath);
+        var fallback = SemanticFactValueRealizer.Instance.RealizeCandidateValue(value, fact.SpeakableValue, fact.SpeakableValue, legacyFactType, structuredFieldPath);
+        return string.IsNullOrWhiteSpace(fallback) ? (null, null, null, fact.Provenance.FirstOrDefault().SourcePropertyPath) : (value, null, fallback, fact.Provenance.FirstOrDefault().SourcePropertyPath);
     }
 
 }

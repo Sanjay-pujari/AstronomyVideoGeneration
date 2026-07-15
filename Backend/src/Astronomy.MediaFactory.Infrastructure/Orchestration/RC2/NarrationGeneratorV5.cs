@@ -1885,7 +1885,7 @@ public static class NarrationContextBuilder
     {
         if (resolvedFacts is null) return [];
         var beat = resolvedFacts.Beats.FirstOrDefault(b => b.Format.Equals(format, StringComparison.OrdinalIgnoreCase) && (string.IsNullOrWhiteSpace(beatId) || b.DocumentaryBeatId.Equals(beatId, StringComparison.OrdinalIgnoreCase)));
-        return beat is null ? [] : beat.RequiredFacts.Concat(beat.OptionalFacts).Where(f => f.SafeForNarration).Select(f => new NarrationVerifiedFact(f.FactType, f.FactOrigin == "DomainKnowledge" ? f.SemanticMeaning : Convert.ToString(f.CanonicalValue, CultureInfo.InvariantCulture) ?? string.Empty, f.SemanticMeaning, f.Unit)).ToArray();
+        return beat is null ? [] : beat.RequiredFacts.Concat(beat.OptionalFacts).Where(f => f.SafeForNarration).Select(f => new NarrationVerifiedFact(f.FactType, SemanticFactValueRealizer.Instance.Realize(f, LanguageProfileResolver.Resolve(f.Language)).SpeakableValue ?? string.Empty, f.SemanticMeaning, f.Unit)).ToArray();
     }
 
     private static IReadOnlyList<NarrationVerifiedFact> ReadAllocatedFacts(JsonElement beat, List<string> warnings)
@@ -2694,7 +2694,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     private DomainScientificKnowledgeValue? ResolveDomainKnowledge(string familyId, ImmutableArray<AstronomicalObjectValue> objects, string languageCode)
     {
         if (_domainKnowledgeProvider.TryResolve(familyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(familyId, objects.Select(o => new AstronomyKnowledgeContextFact("AstronomicalObject", o.Name, "ProductionEventIntelligence", o.Role ?? "Object")).ToArray(), languageCode), out var fact))
-            return new DomainScientificKnowledgeValue(null, Convert.ToString(fact.CanonicalValue, CultureInfo.InvariantCulture), null, null);
+            return new DomainScientificKnowledgeValue(null, SemanticFactValueRealizer.Instance.Realize(fact, LanguageProfileResolver.Resolve(languageCode)).SpeakableValue, null, null);
         return null;
     }
 
@@ -2968,7 +2968,7 @@ public sealed class NarrationRealizer : INarrationRealizer
 {
     public NarrationRealizationResult Realize(NarrationSafeContext context, AstronomyFamilyProfile familyProfile, LanguageProfile languageProfile)
     {
-        var facts = context.SpeakableFacts.Select(f => new RealizedSemanticFact(IntentForFact(f.FactType), f.FactKey, HumanizeFact(f.FactKey), f.SpeakableValue, f.CanonicalUnit)).ToArray();
+        var facts = context.SpeakableFacts.Select(f => new RealizedSemanticFact(IntentForFact(f.FactType), f.FactKey, HumanizeFact(f.FactKey), f.SpeakableValue, f.CanonicalUnit)).Where(f => !string.IsNullOrWhiteSpace(f.Value) && !Regex.IsMatch(f.Value, @"System\.Collections|ImmutableArray|Astronomy\.MediaFactory\.Infrastructure|<>f__AnonymousType|\{\s*\w+\s*=|`\d+", RegexOptions.CultureInvariant)).ToArray();
         var observation = facts.Where(f => Regex.IsMatch(f.FactType + f.Label, "Direction|Window|Time|Date|Region|Visibility|Telescope|Binocular|Radiant|SkyLocation|Pattern", RegexOptions.IgnoreCase)).ToArray();
         var role = ResolveBeatRole(context, familyProfile);
         return new NarrationRealizationResult(context.Format, string.IsNullOrWhiteSpace(context.SceneId) ? $"{context.Format}-{role}" : context.SceneId, role, familyProfile.FamilyId, familyProfile.ContentNature, role, Purpose(role, familyProfile), facts, BuildBoundaries(context, familyProfile), observation, BuildTransition(role, familyProfile), context.Tone, context.Rhythm, context.WordBudget, null, null, ["private-note prose", "imperative guidance language", "raw time strings", "production staging language", "data labels", "internal IDs"], OpeningGuidance(role, familyProfile));
