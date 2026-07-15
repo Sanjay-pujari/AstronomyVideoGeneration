@@ -23,7 +23,11 @@ public sealed class SemanticFactValueRealizer : ISemanticFactValueRealizer
     public static SemanticFactValueRealizer Instance { get; } = new();
 
     public SemanticFactRealizationResult Realize(ResolvedSemanticFact fact, LanguageProfile language)
-        => RealizeValue(fact.CanonicalValue, fact.SpeakableValue, fact.LocalizedDisplayValue, fact.FactType, null, language.LanguageCode, fact.Requiredness.Equals("Required", StringComparison.OrdinalIgnoreCase));
+        => RealizeValue(fact.CanonicalValue, fact.SpeakableValue, fact.LocalizedDisplayValue, fact.FactType, null, language.LanguageCode, fact.Requiredness == SemanticFactRequiredness.Required);
+
+
+    public SemanticFactRealizationResult Realize(Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.ResolvedSemanticFact fact, LanguageProfile language)
+        => RealizeValue(fact.CanonicalValue, fact.SpeakableValue, fact.LocalizedDisplayValue, fact.FactType, null, language.LanguageCode, string.Equals(fact.Requiredness, "Required", StringComparison.OrdinalIgnoreCase));
 
     public SemanticFactRealizationResult Realize(ResolvedSemanticFactV1 fact, string? legacyFactType, string? structuredFieldPath, LanguageProfile language)
         => RealizeValue(fact.TypedValue?.Value ?? fact.CanonicalValue, fact.SpeakableValue, fact.SpeakableValue, legacyFactType ?? fact.CapabilityId.Value, structuredFieldPath, language.LanguageCode, fact.Required);
