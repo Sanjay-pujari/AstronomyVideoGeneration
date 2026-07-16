@@ -47,7 +47,7 @@ public sealed record CanonicalAstronomyEventIdentity(
     ImmutableArray<AstronomicalObjectValue> PrimaryObjects = default,
     ImmutableArray<AstronomicalObjectValue> SecondaryObjects = default,
     string? RegionId = null,
-    string? Language = null);
+    string? Language = null, string? DisplayName = null, string? ShortTitle = null, string? Title = null);
 
 public sealed record EventWindowValue(DateTimeOffset? StartUtc, DateTimeOffset? PeakUtc, DateTimeOffset? EndUtc, DateTimeOffset? LocalViewingStart, DateTimeOffset? LocalViewingEnd, DateTimeOffset? Moonrise, DateTimeOffset? Moonset, string? TimeZone, string? LocalizedWindowDescription);
 public sealed record AstronomicalObjectValue(string Name, string? ObjectType, string? Role, string? ScientificClassification, ImmutableArray<SemanticSourceProvenanceV1> Provenance);
@@ -57,7 +57,7 @@ public sealed record ObservationEquipmentValue(bool? NakedEyeSuitable, bool? Bin
 public sealed record ObservationLocationValue(string? LocationName, decimal? Latitude, decimal? Longitude, decimal? ElevationMeters, string? TimeZone, bool ClaimsLocalTimeConversion = false);
 public sealed record ObservationDirectionValue(string? CardinalDirection, decimal? AzimuthDegrees, decimal? AltitudeDegrees, string? HorizonProgression, string? LocalizedDescription);
 public sealed record EclipseCircumstancesValue(string EclipseType, DateTimeOffset? Start, DateTimeOffset? Maximum, DateTimeOffset? End, decimal? Magnitude, decimal? Obscuration, TimeSpan? TotalityDuration, string? VisibilityRegion, string? Path, ImmutableArray<DateTimeOffset> ContactTimes, string? SolarOrLunarClassification);
-public sealed record MeteorActivityValue(string? Radiant, EventWindowValue? ActivityWindow, EventWindowValue? PeakWindow, int? Zhr, decimal? VelocityKmS, string? ParentBody, string? MechanicsExplanation = null);
+public sealed record MeteorActivityValue(string? Radiant, EventWindowValue? ActivityWindow, EventWindowValue? PeakWindow, int? Zhr, decimal? VelocityKmS, string? ParentBody, string? MechanicsExplanation = null, string? ShowerName = null, string? RadiantConstellation = null, string? MoonInterference = null, string? VisibilityNotes = null, string? ObservationDirectionDescription = null);
 public sealed record CulturalContextValue(string? CulturalName, string? Tradition, string? OriginContext, decimal? Confidence, string? LocalityRegion, string? NarrativeCaution, bool Verified);
 public sealed record OccultationContactsValue(DateTimeOffset? Ingress, DateTimeOffset? Maximum, DateTimeOffset? Egress, DateTimeOffset? Reappearance, TimeSpan? Duration, string? OccultingObject, string? HiddenObject);
 public sealed record FullMoonObservationValue(DateTimeOffset? Moonrise, DateTimeOffset? Moonset, decimal? AltitudeDegrees, decimal? IlluminationPercent, string? ApparentSize, string? ObservationalNotes);

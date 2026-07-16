@@ -2661,7 +2661,10 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             requestPrimaryObjects,
             requestSecondaryObjects,
             request?.RegionId,
-            input.LanguageProfile.LanguageCode);
+            input.LanguageProfile.LanguageCode,
+            FirstNonEmpty(request?.ShortTitle, request?.Title, canonicalType),
+            request?.ShortTitle,
+            request?.Title);
         var productionEventWindow = ReadEventWindowFromRequest(request) ?? ReadEventWindow(input.ProductionEventIntelligence);
         var observationEventWindow = ReadEventWindow(input.ObservationMetadata);
         var documentaryEventWindow = ReadEventWindow(input.LongDocumentaryContract);
@@ -2669,7 +2672,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var observationAngularSeparation = ReadAngularSeparation(input.ObservationMetadata);
         var primaryObjects = ReadObjectsFromRequest(request, includeSecondary: true) ?? ReadPrimaryObjects(input.ProductionEventIntelligence) ?? ReadPrimaryObjects(input.LongDocumentaryContract);
         var secondaryObjects = requestSecondaryObjects;
-        var meteorActivity = ReadMeteorActivity(input.ProductionEventIntelligence);
+        var meteorActivity = ReadMeteorActivity(input.ProductionEventIntelligence) ?? BuildMeteorActivityFromRequest(request, productionEventWindow);
         var requestLocation = ReadObservationLocationFromRequest(request);
         var eventSource = new ProductionEventIntelligenceSourceV1(
             eventType,
@@ -2683,7 +2686,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             meteorActivity);
         var observationSource = new ObservationMetadataSourceV1(observationEventWindow ?? productionEventWindow, observationAngularSeparation ?? angularSeparation, ReadObservationDirection(input.ObservationMetadata) ?? ReadObservationDirectionFromRequest(request), ReadObservationLocation(input.ObservationMetadata) ?? requestLocation);
         var documentarySource = new DocumentaryContractSourceV1(documentaryEventWindow);
-        var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract) ?? ResolveDomainKnowledge(familyId, primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, input.LanguageProfile.LanguageCode));
+        var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract, familyId) ?? ResolveDomainKnowledge(familyId, primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, input.LanguageProfile.LanguageCode));
         var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(VerifiedObjects: primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, familyId) ?? BuildStructuredObjectKnowledge(familyId, primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty));
         return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, DocumentaryContract: documentarySource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode, TimeZone: request?.TimeZone, LocationContext: requestLocation);
     }
@@ -2771,20 +2774,49 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         return int.TryParse(zhrText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var zhr) ? new MeteorActivityValue(null, null, null, zhr, null, null) : null;
     }
 
-    private static DomainScientificKnowledgeValue? ReadDomainKnowledge(JsonElement? source)
+    private static DomainScientificKnowledgeValue? ReadDomainKnowledge(JsonElement? source, string familyId)
     {
         var alignment = TryGetAllocatedFactString(source, "ApparentAlignmentExplanation") ?? TryGetAllocatedFactString(source, "ApparentPairingScience");
         var significance = TryGetAllocatedFactString(source, "ScientificImportance");
+        if (familyId.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) && ContainsPlanetPairingScience(alignment, significance)) return null;
         return string.IsNullOrWhiteSpace(alignment) && string.IsNullOrWhiteSpace(significance) ? null : new DomainScientificKnowledgeValue(null, alignment, significance, null);
     }
 
 
+    private static MeteorActivityValue? BuildMeteorActivityFromRequest(ContentPlanProductionPipelineRequest? request, EventWindowValue? eventWindow)
+    {
+        if (request is null || !string.Equals(request.ContentStrategy, "MeteorShower", StringComparison.OrdinalIgnoreCase)) return null;
+        var shower = FirstNonEmpty(request.PrimaryObjects.FirstOrDefault(), request.ShortTitle, request.Title);
+        var key = NormalizeShowerName(shower);
+        var radiant = key switch { "geminids" => "Gemini", "perseids" => "Perseus", _ => null };
+        var parent = key switch { "geminids" => "3200 Phaethon", "perseids" => "109P/Swift–Tuttle", _ => null };
+        var zhr = key switch { "geminids" => 120, "perseids" => 100, _ => (int?)null };
+        if (string.IsNullOrWhiteSpace(radiant)) return null;
+        return new MeteorActivityValue(radiant, eventWindow, eventWindow, zhr, null, parent, "Earth crosses a stream of comet or asteroid debris; the radiant is a perspective point, not the viewing direction.", shower, radiant, request.MoonInterference, request.RadiantVisibilityNote, request.SkyDirectionHint);
+    }
+
+    private static string NormalizeShowerName(string? value)
+    {
+        var text = (value ?? string.Empty).Trim().ToLowerInvariant();
+        if (text.Contains("geminid")) return "geminids";
+        if (text.Contains("perseid")) return "perseids";
+        return text;
+    }
+
     private DomainScientificKnowledgeValue? ResolveDomainKnowledge(string familyId, ImmutableArray<AstronomicalObjectValue> objects, string languageCode)
     {
+        if (familyId.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase))
+            return new DomainScientificKnowledgeValue(
+                "Earth passes through a stream of small debris left along a parent body's orbit, and the particles burn up as meteors in the atmosphere.",
+                "The radiant is a perspective effect: meteor paths appear to trace back to one constellation even though the particles enter Earth's atmosphere along many parallel paths.",
+                "Meteor showers reveal Earth crossing a debris stream, with observed rates shaped by radiant altitude, moonlight, weather, and sky darkness.",
+                "Avoid guaranteed-count claims; explain that dark skies, radiant altitude, moonlight, and weather affect what observers see.");
         if (_domainKnowledgeProvider.TryResolve(familyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(familyId, objects.Select(o => new AstronomyKnowledgeContextFact("AstronomicalObject", o.Name, "ProductionEventIntelligence", o.Role ?? "Object")).ToArray(), languageCode), out var fact))
             return BuildDomainScientificKnowledgeValue(fact, languageCode);
         return null;
     }
+
+    private static bool ContainsPlanetPairingScience(params string?[] values) => values.Where(v => !string.IsNullOrWhiteSpace(v)).Any(v => v!.Contains("planet", StringComparison.OrdinalIgnoreCase) || v.Contains("alignment", StringComparison.OrdinalIgnoreCase) || v.Contains("line of sight", StringComparison.OrdinalIgnoreCase));
 
     private static DomainScientificKnowledgeValue BuildDomainScientificKnowledgeValue(ResolvedSemanticFact fact, string languageCode)
     {

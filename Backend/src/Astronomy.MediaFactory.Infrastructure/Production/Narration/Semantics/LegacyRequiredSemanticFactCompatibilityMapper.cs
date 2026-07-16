@@ -49,8 +49,8 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
             projected.DisplayValue ?? realized.SpeakableValue ?? fact.SpeakableValue,
             language,
             true,
-            "Source",
-            null,
+            string.Equals(legacyFactType, fact.CapabilityId.Value, StringComparison.OrdinalIgnoreCase) ? "Source" : "Derived",
+            string.Equals(legacyFactType, fact.CapabilityId.Value, StringComparison.OrdinalIgnoreCase) ? null : $"V1Projection.{fact.CapabilityId.Value}.{legacyFactType}",
             provenance);
     }
     private static (object? Value, string? Unit, string? DisplayValue, string? SourcePropertyPath) ProjectStructuredValue(ResolvedSemanticFactV1 fact, string? structuredFieldPath, string legacyFactType)
@@ -68,6 +68,15 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
         };
         var path = structuredFieldPath?.Split('.', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? legacyFactType;
         static string? S(DateTimeOffset? d) => d?.ToString("O", CultureInfo.InvariantCulture);
+        if (value is CanonicalAstronomyEventIdentity eid)
+        {
+            var v = path.ToLowerInvariant() switch
+            {
+                "displayname" or "name" => eid.DisplayName ?? eid.ShortTitle ?? eid.Title ?? eid.SourceEventType ?? eid.CanonicalEventType,
+                _ => eid.DisplayName ?? eid.ShortTitle ?? eid.Title ?? eid.CanonicalEventType
+            };
+            return (v, null, v, $"{sourceRoot}.EventIdentity.{path}");
+        }
         if (value is EventWindowValue w)
         {
             return path.ToLowerInvariant() switch
@@ -81,7 +90,15 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
             };
         }
         if (value is MeteorActivityValue m)
-            return path.Equals("zhr", StringComparison.OrdinalIgnoreCase) ? (m.Zhr, "meteors/hour", m.Zhr?.ToString(CultureInfo.InvariantCulture), $"{sourceRoot}.MeteorActivity.zhr") : (value, null, fact.SpeakableValue, $"{sourceRoot}.MeteorActivity");
+        {
+            return path.ToLowerInvariant() switch
+            {
+                "zhr" => (m.Zhr, "meteors/hour", m.Zhr?.ToString(CultureInfo.InvariantCulture), $"{sourceRoot}.MeteorActivity.zhr"),
+                "radiant" => (FirstNonEmpty(m.Radiant, m.RadiantConstellation), null, FirstNonEmpty(m.Radiant, m.RadiantConstellation), $"{sourceRoot}.MeteorActivity.Radiant"),
+                "peakwindow" => (m.PeakWindow?.LocalizedWindowDescription ?? m.ActivityWindow?.LocalizedWindowDescription ?? m.PeakWindow?.PeakUtc?.ToString("O", CultureInfo.InvariantCulture), null, m.PeakWindow?.LocalizedWindowDescription ?? m.ActivityWindow?.LocalizedWindowDescription ?? m.PeakWindow?.PeakUtc?.ToString("O", CultureInfo.InvariantCulture), $"{sourceRoot}.MeteorActivity.PeakWindow"),
+                _ => (value, null, fact.SpeakableValue, $"{sourceRoot}.MeteorActivity")
+            };
+        }
         if (value is ObjectKnowledgeValue ok)
         {
             var f = ok.Facts.FirstOrDefault(x => x.Field.Equals(path, StringComparison.OrdinalIgnoreCase));
@@ -113,4 +130,5 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
         return string.IsNullOrWhiteSpace(fallback) ? (null, null, null, fact.Provenance.FirstOrDefault().SourcePropertyPath) : (value, null, fallback, fact.Provenance.FirstOrDefault().SourcePropertyPath);
     }
 
+    private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim();
 }
