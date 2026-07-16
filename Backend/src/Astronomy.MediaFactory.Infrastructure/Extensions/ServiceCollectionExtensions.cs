@@ -594,6 +594,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISemanticSourceAdapterRegistryV1>(sp =>
             sp.GetRequiredService<SemanticSourceAdapterRegistryV1>());
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.ISemanticCandidateCollectorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.SemanticCandidateCollectorV1>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.SemanticCandidateFamilyCompatibilityValidatorV1>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyRegistryConsistencyValidatorV1>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.ISemanticCandidateEvaluatorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.SemanticCandidateEvaluatorV1>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.ISemanticConflictAnalyzerV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation.SemanticConflictAnalyzerV1>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Selection.ISemanticCandidateSelectorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Selection.SemanticCandidateSelectorV1>();
