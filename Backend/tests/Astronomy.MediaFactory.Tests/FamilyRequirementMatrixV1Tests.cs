@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -19,4 +20,34 @@ public sealed class FamilyRequirementMatrixV1Tests
     [Fact] public void RequiredRequirementsCannotBeOmitted() { foreach (var r in _catalog.Profiles.SelectMany(Requirements).Where(r => r.RequirementLevel == FamilyRequirementLevelV1.Required)) Assert.False(r.MayOmit); }
     [Fact] public void OptionalRequirementsHaveExplicitOmissionBehavior() { foreach (var r in _catalog.Profiles.SelectMany(Requirements).Where(r => r.RequirementLevel == FamilyRequirementLevelV1.Optional)) Assert.NotEqual(FamilyMissingValueBehaviorV1.Block, r.MissingValueBehavior); }
     [Fact] public void BeatIdsAndOrdersAreUnique() { foreach (var p in _catalog.Profiles) foreach (var s in new[] { p.LongFormStructure, p.ShortFormStructure }) { Assert.Equal(s.Beats.Length, s.Beats.Select(b => b.BeatId).Distinct(StringComparer.OrdinalIgnoreCase).Count()); Assert.Equal(s.Beats.Length, s.Beats.Select(b => b.Order).Distinct().Count()); } }
+    [Fact]
+    public void EverySupportedFamilyRequiredCapabilityHasPolicyAndApprovedSource()
+    {
+        var policies = new SemanticSourcePolicyCatalogV1();
+        foreach (var profile in _catalog.Profiles.Where(p => p.ActiveInV1))
+        foreach (var requirement in Requirements(profile).Where(r => r.RequirementLevel == FamilyRequirementLevelV1.Required).GroupBy(r => r.SemanticCapabilityId.Value).Select(g => g.First()))
+        {
+            var policy = policies.GetRequired(requirement.SemanticCapabilityId);
+            Assert.Contains(policy.ApprovedSources, source => source.ActiveInV1 && !source.CompatibilityOnly);
+        }
+    }
+
+    [Fact]
+    public void FamilyCoverageCertificationMatrixHasNoMissingCanonicalRequirements()
+    {
+        var requiredFamilies = new[] { "PlanetPairing", "MeteorShower", "NamedFullMoon", "SolarEclipse", "LunarEclipse", "PlanetGrouping", "Constellation", "DeepSkyObject" };
+        var policies = new SemanticSourcePolicyCatalogV1();
+        foreach (var family in requiredFamilies)
+        {
+            var profile = _catalog.GetRequired(family);
+            var missing = Requirements(profile)
+                .Where(r => r.RequirementLevel == FamilyRequirementLevelV1.Required)
+                .Select(r => r.SemanticCapabilityId)
+                .Distinct()
+                .Where(id => !policies.TryGet(id, out var policy) || !policy.ApprovedSources.Any(source => source.ActiveInV1 && !source.CompatibilityOnly))
+                .Select(id => id.Value)
+                .ToArray();
+            Assert.Empty(missing);
+        }
+    }
 }
