@@ -48,6 +48,7 @@ public sealed class SemanticFactValueRealizer : ISemanticFactValueRealizer
 
     private static (string? Text, string Kind, string Source) RealizeTyped(object value, string? capability, string? path, string? language)
     {
+        if (value is Sources.Adapters.Contracts.CanonicalAstronomyEventIdentity eventIdentity) return (First(eventIdentity.CanonicalEventType, eventIdentity.FamilyId, eventIdentity.SourceEventType), "EventIdentity", "TypedValueRealizer");
         if (value is ImmutableArray<AstronomicalObjectValue> immutableObjects) return (JoinNames(immutableObjects), "AstronomicalObjectArray", "TypedValueRealizer");
         if (value is IEnumerable<AstronomicalObjectValue> enumerableObjects) return (JoinNames(enumerableObjects), "AstronomicalObjectArray", "TypedValueRealizer");
         if (value is EventWindowValue w) return (w.LocalizedWindowDescription ?? FormatWindow(w, language), "EventWindow", "TypedValueRealizer");

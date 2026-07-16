@@ -37,7 +37,17 @@ public sealed record SemanticSourceAdapterResultV1
 }
 
 public sealed record SemanticSourceAdapterContextV1(CanonicalAstronomyEventIdentity? EventIdentity = null, ProductionEventIntelligenceSourceV1? ProductionEventIntelligence = null, ObservationMetadataSourceV1? ObservationMetadata = null, DocumentaryContractSourceV1? DocumentaryContract = null, EditorialContractSourceV1? EditorialContract = null, ContentPlanSourceV1? ContentPlan = null, AstronomyObjectKnowledgeSourceV1? AstronomyObjectKnowledge = null, AstronomyDomainKnowledgeSourceV1? AstronomyDomainKnowledge = null, CulturalAstronomyKnowledgeSourceV1? CulturalAstronomyKnowledge = null, EditorialIntentSourceV1? EditorialIntent = null, DocumentaryStructureSourceV1? DocumentaryStructure = null, string? Language = null, string? TimeZone = null, ObservationLocationValue? LocationContext = null);
-public sealed record CanonicalAstronomyEventIdentity(string CanonicalEventType, string FamilyId, string? ProfileId, string? SourceEventType, string ResolutionSource);
+public sealed record CanonicalAstronomyEventIdentity(
+    string CanonicalEventType,
+    string FamilyId,
+    string? ProfileId,
+    string? SourceEventType,
+    string ResolutionSource,
+    string? SourceEventId = null,
+    ImmutableArray<AstronomicalObjectValue> PrimaryObjects = default,
+    ImmutableArray<AstronomicalObjectValue> SecondaryObjects = default,
+    string? RegionId = null,
+    string? Language = null);
 
 public sealed record EventWindowValue(DateTimeOffset? StartUtc, DateTimeOffset? PeakUtc, DateTimeOffset? EndUtc, DateTimeOffset? LocalViewingStart, DateTimeOffset? LocalViewingEnd, DateTimeOffset? Moonrise, DateTimeOffset? Moonset, string? TimeZone, string? LocalizedWindowDescription);
 public sealed record AstronomicalObjectValue(string Name, string? ObjectType, string? Role, string? ScientificClassification, ImmutableArray<SemanticSourceProvenanceV1> Provenance);
