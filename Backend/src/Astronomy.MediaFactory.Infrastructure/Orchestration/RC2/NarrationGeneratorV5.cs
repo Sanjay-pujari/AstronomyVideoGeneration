@@ -2284,10 +2284,26 @@ public sealed class AstronomyDomainKnowledgeProvider : IAstronomyDomainKnowledge
         if (!Registry.Contains(family, StringComparer.OrdinalIgnoreCase)) return false;
         if (Regex.IsMatch(semanticFactType, "AngularSeparation|ViewingDirection|Direction|BestViewingTime|VisibilityMethod|Time|Date|Region|Location|Zhr|Moonrise|Start|End|Peak", RegexOptions.IgnoreCase)) return false;
         if (!DomainFacts.Any(t => t.Equals(semanticFactType, StringComparison.OrdinalIgnoreCase)) && !semanticFactType.Equals("DomainScientificKnowledge", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!IsFamilyCompatibleFact(family, semanticFactType)) return false;
         var semanticMeaning = KnowledgeFor(family);
         fact = new ResolvedSemanticFact(semanticFactType, semanticFactType, semanticMeaning, null, $"{family}StructuredKnowledge", "Astronomy Domain Knowledge Provider", $"{family}KnowledgeProfile", null, "DomainKnowledge", 1.0m, "Required", null, null, context.LanguageCode, true, "DomainKnowledge", $"{ToKebab(family)}-structured-domain-knowledge-v1", ["familyProfileId", "semanticFactType"]);
         return true;
     }
+    private static bool IsFamilyCompatibleFact(string family, string semanticFactType)
+    {
+        if (IsPlanetPairingFact(semanticFactType))
+            return family.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase) || family.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase);
+        if (semanticFactType.Equals("ApparentGrouping", StringComparison.OrdinalIgnoreCase))
+            return family.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase);
+        if (semanticFactType.Equals("MoonAppearance", StringComparison.OrdinalIgnoreCase) || semanticFactType.Equals("MoonPhaseKnowledge", StringComparison.OrdinalIgnoreCase) || semanticFactType.Equals("SeasonalName", StringComparison.OrdinalIgnoreCase))
+            return family.Equals("NamedFullMoon", StringComparison.OrdinalIgnoreCase) || family.Equals("FullMoon", StringComparison.OrdinalIgnoreCase);
+        if (semanticFactType.Equals("DomainScientificKnowledge", StringComparison.OrdinalIgnoreCase) || semanticFactType.Equals("ScientificImportance", StringComparison.OrdinalIgnoreCase) || semanticFactType.Equals("ScientificMechanism", StringComparison.OrdinalIgnoreCase) || semanticFactType.Equals("Mechanism", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return false;
+    }
+
+    private static bool IsPlanetPairingFact(string semanticFactType) => semanticFactType.Equals("ApparentAlignmentExplanation", StringComparison.OrdinalIgnoreCase) || semanticFactType.Equals("ApparentPairingScience", StringComparison.OrdinalIgnoreCase) || semanticFactType.Equals("PhysicalProximityClarification", StringComparison.OrdinalIgnoreCase) || semanticFactType.Equals("PerspectiveExplanation", StringComparison.OrdinalIgnoreCase) || semanticFactType.Equals("WhyPlanetsAppearClose", StringComparison.OrdinalIgnoreCase);
+
     private static object KnowledgeFor(string family) => family.ToLowerInvariant() switch
     {
         "meteorshower" => new { mechanism = "meteor showers happen when Earth crosses streams of comet or asteroid debris", scientificSignificance = "radiants and activity patterns reveal the orbit and structure of the parent debris stream", observingPrinciples = "dark skies, patience, and a wide view matter more than telescopes", constraints = new[] { "Do not guarantee meteor counts.", "Do not fabricate ZHR, weather, or exact radiant coordinates." } },

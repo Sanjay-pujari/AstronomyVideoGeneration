@@ -101,13 +101,26 @@ public sealed class RequiredSemanticFactResolverTests
         Assert.DoesNotContain("ObservationDirection", result.Beats[0].MissingRequiredFacts);
     }
 
-    [Fact]
-    public void ConstellationDoesNotUsePlanetPairingApparentAlignmentKnowledge()
+    [Theory]
+    [InlineData("Constellation")]
+    [InlineData("MeteorShower")]
+    [InlineData("NamedFullMoon")]
+    [InlineData("SolarEclipse")]
+    [InlineData("LunarEclipse")]
+    public void NonPlanetPairingFamiliesDoNotUsePlanetPairingApparentAlignmentKnowledge(string familyId)
     {
-        var profile = V1CompatibilityProfile("Constellation");
         var provider = new AstronomyDomainKnowledgeProvider();
-        var resolved = provider.TryResolve(profile.FamilyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(profile.FamilyId, [], "en"), out _);
+        var resolved = provider.TryResolve(familyId, "ApparentAlignmentExplanation", new AstronomyKnowledgeContext(familyId, [], "en"), out _);
         Assert.False(resolved);
+    }
+
+    [Fact]
+    public void PlanetPairingContinuesResolvingItsOwnApparentAlignmentKnowledge()
+    {
+        var provider = new AstronomyDomainKnowledgeProvider();
+        var resolved = provider.TryResolve("PlanetPairing", "ApparentAlignmentExplanation", new AstronomyKnowledgeContext("PlanetPairing", [], "en"), out var fact);
+        Assert.True(resolved);
+        Assert.Equal("PlanetPairingKnowledgeProfile", fact.SourceField);
     }
 
     [Fact]
@@ -192,11 +205,12 @@ public sealed class RequiredSemanticFactResolverTests
     [Fact]
     public void LongAndShortResolveIndependentRequirementSets()
     {
-        var longC = LongWithBeat("Orientation", "{\"Direction\":\"SE\",\"Region\":\"Udaipur, Rajasthan\"}");
-        var shortC = ShortWithBeat("Orientation", "{\"Direction\":\"SE\"}");
+        var longC = LongWithBeat("Observation", "{\"EventDateOrWindow\":\"August 12\",\"PrimaryObjects\":\"Jupiter and Venus\",\"EventType\":\"PlanetPairing\"}");
+        var shortC = ShortWithBeat("Observation", "{\"EventDateOrWindow\":\"August 12\",\"PrimaryObjects\":\"Jupiter and Venus\",\"EventType\":\"PlanetPairing\"}");
         var result = Resolve(longC, shortC);
-        Assert.Contains(result.Beats, b => b.Format == "long" && b.RequiredFacts.Any(f => f.FactType == "LocationContext"));
-        Assert.Contains(result.Beats, b => b.Format == "short" && !b.RequiredFacts.Any(f => f.FactType == "LocationContext"));
+        var longRequired = result.Beats.Single(b => b.Format == "long").RequiredFacts.Select(f => f.FactType).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        var shortRequired = result.Beats.Single(b => b.Format == "short").RequiredFacts.Select(f => f.FactType).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        Assert.Equal(longRequired, shortRequired);
         Assert.All(result.Beats, beat => Assert.DoesNotContain("ObservationDirection", beat.MissingRequiredFacts));
     }
 
@@ -286,7 +300,7 @@ public sealed class RequiredSemanticFactResolverTests
 
     [Theory]
     [InlineData("PlanetPairing", "PlanetPairing")]
-    [InlineData("SolarEclipse", "Eclipse")]
+    [InlineData("SolarEclipse", "SolarEclipse")]
     [InlineData("LunarOccultation", "Occultation")]
     [InlineData("Constellation", "Constellation")]
     [InlineData("Galaxy", "DeepSkyObject")]

@@ -16,8 +16,9 @@ public sealed class SemanticCandidateFamilyCompatibilityValidatorV1
             var text = string.Join(" ", dk.Mechanism, dk.PerspectiveAlignmentExplanation, dk.ScientificSignificance, dk.StableObservingPrinciples);
             var planetPairing = text.Contains("planet", StringComparison.OrdinalIgnoreCase) || text.Contains("line-of-sight", StringComparison.OrdinalIgnoreCase) || text.Contains("line of sight", StringComparison.OrdinalIgnoreCase);
             var meteorScience = text.Contains("meteor", StringComparison.OrdinalIgnoreCase) || text.Contains("debris stream", StringComparison.OrdinalIgnoreCase) || text.Contains("radiant", StringComparison.OrdinalIgnoreCase);
-            if (activeFamilyId.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) && planetPairing) { reason = FamilyIncompatibleCandidate; return false; }
-            if (!activeFamilyId.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) && meteorScience && (activeFamilyId.Contains("Moon", StringComparison.OrdinalIgnoreCase) || activeFamilyId.Contains("Eclipse", StringComparison.OrdinalIgnoreCase))) { reason = FamilyIncompatibleCandidate; return false; }
+            var planetPairingFamily = activeFamilyId.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase) || activeFamilyId.Equals("PlanetGrouping", StringComparison.OrdinalIgnoreCase);
+            if (!planetPairingFamily && planetPairing) { reason = FamilyIncompatibleCandidate; return false; }
+            if (!activeFamilyId.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) && meteorScience) { reason = FamilyIncompatibleCandidate; return false; }
         }
         return true;
     }

@@ -44,6 +44,27 @@ public sealed class ExecutableFamilySemanticCoverageV1Tests
         Assert.DoesNotContain(result.Diagnostics.CandidateEvaluations, e => e.Eligible && e.ValidationIssues.Contains("FamilyIncompatibleCandidate"));
     }
 
+    [Fact]
+    public void FamilyIsolationRejectsIncompatibleDomainScienceCandidates()
+    {
+        using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
+        using var scope = provider.CreateScope();
+        var engine = scope.ServiceProvider.GetRequiredService<ISemanticResolutionEngineV1>();
+        var planetScience = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: new DomainScientificKnowledgeValue("apparent line-of-sight geometry", "Planets can appear close from Earth's perspective while remaining far apart.", "Planetary alignments show orbital motion.", "Do not imply physical proximity."));
+        var meteorContext = ExecutableFamilySemanticCoverageV1Tests.MeteorContext() with { AstronomyDomainKnowledge = planetScience };
+        var meteorResult = engine.Resolve(new SemanticResolutionRequestV1(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.DomainScientificKnowledge), true, SemanticRequirementLevelV1.Required, SemanticMissingValueBehaviorV1.BlockRequired, SemanticEvidenceStrengthV1.Weak, Enum.GetValues<SemanticEvidenceCategoryV1>(), meteorContext, "MeteorShower"));
+        Assert.Contains(meteorResult.Diagnostics.CandidateEvaluations, e => e.RejectionReason?.Contains("FamilyIncompatibleCandidate", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.NotEqual("AstronomyDomainKnowledgeProvider", meteorResult.Fact.WinningSourceId);
+
+        var constellationContext = meteorContext with
+        {
+            EventIdentity = new CanonicalAstronomyEventIdentity("Constellation", "Constellation", "Constellation", "Constellation", "test"),
+            ProductionEventIntelligence = new ProductionEventIntelligenceSourceV1("Constellation", "Constellation", "Constellation")
+        };
+        var constellationResult = engine.Resolve(new SemanticResolutionRequestV1(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.DomainScientificKnowledge), true, SemanticRequirementLevelV1.Required, SemanticMissingValueBehaviorV1.BlockRequired, SemanticEvidenceStrengthV1.Weak, Enum.GetValues<SemanticEvidenceCategoryV1>(), constellationContext, "Constellation"));
+        Assert.Contains(constellationResult.Diagnostics.CandidateEvaluations, e => e.RejectionReason?.Contains("FamilyIncompatibleCandidate", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
     internal static SemanticSourceAdapterContextV1 MeteorContext(string shower = "Geminids", string radiant = "Gemini")
     {
         var window = new EventWindowValue(DateTimeOffset.Parse("2026-12-13T00:00:00Z"), DateTimeOffset.Parse("2026-12-14T07:00:00Z"), DateTimeOffset.Parse("2026-12-15T12:00:00Z"), null, null, null, null, "UTC", "overnight December 13–14");

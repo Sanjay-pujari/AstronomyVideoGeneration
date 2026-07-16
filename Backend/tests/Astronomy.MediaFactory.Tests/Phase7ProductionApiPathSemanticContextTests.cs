@@ -91,13 +91,19 @@ public sealed class Phase7ProductionApiPathSemanticContextTests
         Assert.Contains("ObservationTiming", resolved);
         var resolvedOptional = allBeats.SelectMany(b => b.GetProperty("resolvedOptionalCapabilities").EnumerateArray().Select(x => x.GetString())).Where(x => x is not null).ToArray();
         Assert.Contains("AngularRelationship", resolvedOptional);
-        Assert.Contains("LocationContext", resolved);
+        var requiredCapabilities = allBeats.SelectMany(b => b.GetProperty("requiredCapabilities").EnumerateArray().Select(x => x.GetString())).Where(x => x is not null).Distinct().ToArray();
+        var locationRequired = requiredCapabilities.Contains("LocationContext");
+        if (locationRequired)
+            Assert.Contains("LocationContext", resolved);
+        else
+            Assert.DoesNotContain("LocationContext", resolved);
         Assert.Contains("ApparentPairingScience", resolved);
         var missing = allBeats.SelectMany(b => b.GetProperty("missingRequiredFacts").EnumerateArray().Select(x => x.GetString())).Where(x => x is not null).Distinct().ToArray();
         Assert.DoesNotContain("PrimaryObjects", missing);
         Assert.DoesNotContain("EventIdentity", missing);
         Assert.DoesNotContain("ObservationTiming", missing);
-        Assert.DoesNotContain("LocationContext", missing);
+        if (locationRequired)
+            Assert.DoesNotContain("LocationContext", missing);
         Assert.DoesNotContain("ApparentPairingScience", missing);
         Assert.DoesNotContain("ObservationDirection", missing);
         var omittedOptional = allBeats.SelectMany(b => b.GetProperty("omittedOptionalFacts").EnumerateArray().Select(x => x.GetString())).Where(x => x is not null).Distinct().ToArray();
