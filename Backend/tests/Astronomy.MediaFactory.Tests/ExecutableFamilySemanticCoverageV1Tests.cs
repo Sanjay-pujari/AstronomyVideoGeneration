@@ -8,6 +8,7 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resol
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
