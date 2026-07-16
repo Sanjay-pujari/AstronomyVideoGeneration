@@ -15,7 +15,9 @@ public sealed class MeteorShowerExecutableFamilyCoverageTests
     public void Geminids_CanonicalParentsResolve_AndProjectLegacyChildren()
     {
         using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
-        var engine = provider.GetRequiredService<ISemanticResolutionEngineV1>();
+        using var scope = provider.CreateScope();
+        var services = scope.ServiceProvider;
+        var engine = services.GetRequiredService<ISemanticResolutionEngineV1>();
         var context = ExecutableFamilySemanticCoverageV1Tests.MeteorContext();
 
         var identity = Resolve(engine, SemanticCapabilityVocabularyV1.EventIdentity, context);
@@ -39,7 +41,9 @@ public sealed class MeteorShowerExecutableFamilyCoverageTests
     public void Perseids_UsesSameFamilyAdaptersAndProjectionRules_AsGeminids()
     {
         using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
-        var engine = provider.GetRequiredService<ISemanticResolutionEngineV1>();
+        using var scope = provider.CreateScope();
+        var services = scope.ServiceProvider;
+        var engine = services.GetRequiredService<ISemanticResolutionEngineV1>();
         var geminids = Resolve(engine, SemanticCapabilityVocabularyV1.MeteorActivity, ExecutableFamilySemanticCoverageV1Tests.MeteorContext("Geminids", "Gemini"));
         var perseids = Resolve(engine, SemanticCapabilityVocabularyV1.MeteorActivity, ExecutableFamilySemanticCoverageV1Tests.MeteorContext("Perseids", "Perseus"));
         Assert.Equal(geminids.Fact.WinningAdapterId, perseids.Fact.WinningAdapterId);

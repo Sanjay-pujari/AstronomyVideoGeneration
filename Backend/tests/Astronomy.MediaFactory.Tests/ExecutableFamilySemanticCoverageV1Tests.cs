@@ -23,9 +23,11 @@ public sealed class ExecutableFamilySemanticCoverageV1Tests
     public void ActiveFamilyRequiredCapabilities_ReachExecutableLevel6(string family, string capability)
     {
         using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
-        var policies = provider.GetRequiredService<ISemanticSourcePolicyCatalogV1>();
-        var registry = provider.GetRequiredService<ISemanticSourceAdapterRegistryV1>();
-        var engine = provider.GetRequiredService<ISemanticResolutionEngineV1>();
+        using var scope = provider.CreateScope();
+        var services = scope.ServiceProvider;
+        var policies = services.GetRequiredService<ISemanticSourcePolicyCatalogV1>();
+        var registry = services.GetRequiredService<ISemanticSourceAdapterRegistryV1>();
+        var engine = services.GetRequiredService<ISemanticResolutionEngineV1>();
         var id = new SemanticCapabilityId(capability);
         Assert.True(policies.TryGet(id, out var policy));
         var approved = policy!.ApprovedSources.Where(s => s.ActiveInV1).Select(s => s.SourceId).ToArray();
