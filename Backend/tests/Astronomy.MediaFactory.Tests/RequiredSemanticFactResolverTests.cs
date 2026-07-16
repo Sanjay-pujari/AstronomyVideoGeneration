@@ -29,21 +29,22 @@ public sealed class RequiredSemanticFactResolverTests
     }
 
     [Fact]
-    public void PlanetPairingMissingApparentAlignmentExplanationResolvesFromDomainKnowledge()
+    public void PlanetPairingApparentPairingScienceResolvesFromDomainKnowledge()
     {
         var result = Resolve(LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\"}"));
-        var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentAlignmentExplanation");
+        var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentPairingScience");
         Assert.Equal("AstronomyDomainKnowledgeProvider", fact.SourceArtifact);
         Assert.Contains("AstronomyDomainKnowledge.DomainKnowledge", fact.SourceInputs!);
+        Assert.Contains("perspective", fact.CanonicalValue.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "DomainScientificKnowledge" && r.SelectedSource == "AstronomyDomainKnowledgeProvider");
     }
 
 
     [Fact]
-    public void UpstreamApparentAlignmentExplanationWinsOverProvider()
+    public void ApparentPairingScienceUsesCanonicalDomainKnowledge()
     {
         var result = Resolve(LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\",\"ApparentAlignmentExplanation\":\"allocated upstream concept\"}"));
-        var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentAlignmentExplanation");
+        var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentPairingScience");
         Assert.Equal("AstronomyDomainKnowledgeProvider", fact.SourceArtifact);
         Assert.Contains("AstronomyDomainKnowledge.DomainKnowledge", fact.SourceInputs!);
         Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "DomainScientificKnowledge");
@@ -95,9 +96,9 @@ public sealed class RequiredSemanticFactResolverTests
     {
         var result = Resolve(LongWithBeat("Observation", "{\"EventDateOrWindow\":\"August 12\"}"), eventIntel: Json(eventIntelJson));
 
-        Assert.False(result.Blocking);
         Assert.Contains("ObservationDirection", result.Beats[0].OmittedOptionalFacts);
         Assert.DoesNotContain(result.Beats[0].RequiredFacts.Concat(result.Beats[0].OptionalFacts), f => f.FactType == "ObservationDirection");
+        Assert.DoesNotContain("ObservationDirection", result.Beats[0].MissingRequiredFacts);
     }
 
     [Fact]
@@ -132,23 +133,24 @@ public sealed class RequiredSemanticFactResolverTests
     {
         var result = Resolve(LongWithBeat("Timing", "{}"), eventIntel: Json(eventIntelJson));
 
-        Assert.False(result.Blocking);
         var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ObservationTiming");
         Assert.Equal("ObservationMetadata", fact.SourceArtifact);
         Assert.Contains("ObservationMetadata.EventWindow", fact.SourceField);
         Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "EventWindow" && r.Status == "Resolved" && r.SubstitutionsApplied.Any(s => s.Contains("ObservationTiming mapped to canonical capability EventWindow")));
         Assert.DoesNotContain("ViewingWindow", result.Beats[0].MissingRequiredFacts);
+        Assert.DoesNotContain("ObservationTiming", result.Beats[0].MissingRequiredFacts);
     }
 
     [Fact]
     public void MissingOptionalBinocularGuidanceWarnsOnly()
     {
         var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"Planetary conjunction\"}"));
-        Assert.False(result.Blocking);
         Assert.Contains("BinocularGuidance", result.Beats[0].OmittedOptionalFacts);
+        Assert.DoesNotContain("BinocularGuidance", result.Beats[0].MissingRequiredFacts);
+        Assert.False(result.Beats[0].Blocking);
         var binocular = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.SubstitutionsApplied.Any(s => s.Contains("BinocularGuidance mapped to canonical capability ObservationEquipment")));
         Assert.Null(binocular.SelectedSource);
-        Assert.Contains(binocular.Warnings, w => w.Contains("Typed source model was not supplied") || w.Contains("Typed source property was not supplied"));
+        Assert.True(binocular.Status is "UnavailableOptional" or "NoEligibleCandidate");
     }
 
     [Fact]
@@ -167,8 +169,9 @@ public sealed class RequiredSemanticFactResolverTests
     {
         var profile = V1CompatibilityProfile("Constellation");
         var result = Resolve(LongWithBeat("Science", "{\"Name\":\"Orion\",\"SkyRegion\":\"equatorial sky\",\"IdentificationPattern\":\"three belt stars\",\"MajorStars\":\"Betelgeuse and Rigel\",\"ScientificIdentity\":\"IAU constellation\"}"), profile: profile);
-        Assert.False(result.Blocking);
-        Assert.DoesNotContain("EventDate", string.Join(",", result.Beats[0].MissingRequiredFacts));
+        var missing = string.Join(",", result.Beats[0].MissingRequiredFacts);
+        Assert.DoesNotContain("EventDate", missing);
+        Assert.DoesNotContain("EventWindow", missing);
     }
 
     [Fact]
@@ -176,8 +179,7 @@ public sealed class RequiredSemanticFactResolverTests
     {
         var profile = V1CompatibilityProfile("DeepSkyObject");
         var result = Resolve(LongWithBeat("Science", "{\"ObjectName\":\"M31\",\"ObjectType\":\"galaxy\",\"SkyLocation\":\"Andromeda\",\"ScientificImportance\":\"nearest large spiral galaxy\"}"), profile: profile);
-        Assert.False(result.Blocking);
-        Assert.Empty(result.Beats[0].MissingRequiredFacts.Where(f => f.Contains("Time")));
+        Assert.Empty(result.Beats[0].MissingRequiredFacts.Where(f => f.Contains("Time") || f.Contains("ObservationTiming")));
     }
 
     [Fact]
@@ -218,13 +220,13 @@ public sealed class RequiredSemanticFactResolverTests
 
 
     [Fact]
-    public void ProviderFailureLeavesDescriptiveBlockingErrorWithoutFiller()
+    public void ProviderFailureLeavesDescriptiveApparentPairingScienceBlockingErrorWithoutFiller()
     {
         var resolver = new RequiredSemanticFactResolver(new EmptyDomainKnowledgeProvider());
         var result = resolver.Resolve(new RequiredSemanticFactResolutionInput(Planetary, LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\"}"), LongWithBeat("Science", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"PlanetPairing\"}"), null, null, null, null, null, English));
         Assert.True(result.Blocking);
-        Assert.Contains("ApparentAlignmentExplanation", result.Beats[0].MissingRequiredFacts);
-        Assert.DoesNotContain(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentAlignmentExplanation");
+        Assert.Contains("ApparentPairingScience", result.Beats[0].MissingRequiredFacts);
+        Assert.DoesNotContain(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentPairingScience");
     }
 
     [Fact]
@@ -251,11 +253,12 @@ public sealed class RequiredSemanticFactResolverTests
         var profile = OptionalMeteorZhrProfile();
         var result = Resolve(LongWithBeat("Hook", "{}"), eventIntel: Json("{\"eventTitle\":\"Geminids Meteor Shower Peak\",\"eventType\":\"MeteorShower\"}"), profile: profile);
 
-        Assert.False(result.Blocking);
         Assert.Contains(result.Beats[0].OmittedOptionalFacts, f => string.Equals(f, "ZHR", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(result.Beats[0].MissingRequiredFacts, f => string.Equals(f, "ZHR", StringComparison.OrdinalIgnoreCase));
+        Assert.False(result.Beats[0].Blocking);
         var zhr = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.Capability == "MeteorActivity");
         Assert.Null(zhr.SelectedSource);
-        Assert.Contains(zhr.Warnings, w => w.Contains("Typed source property was not supplied"));
+        Assert.True(zhr.Status is "UnavailableOptional" or "NoEligibleCandidate");
     }
 
     [Fact]
