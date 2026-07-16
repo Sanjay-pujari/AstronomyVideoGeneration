@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catal
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
