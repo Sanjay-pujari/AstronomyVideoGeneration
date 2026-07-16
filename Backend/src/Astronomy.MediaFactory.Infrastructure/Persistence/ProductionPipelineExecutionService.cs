@@ -391,7 +391,8 @@ public sealed partial class ProductionPipelineExecutionService(
             var phase10TitleDiagnostics = phaseNo == 10
                 ? ReadPhase10TitleDiagnostics([Path.Combine(context.ExecutionContext.QuestionRoot!, "production-quality-validation-before-assembly.json")])
                 : null;
-            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], [], [], [ex.Message], ex.Message, true, cancellationToken, started, phase10TitleDiagnostics);
+            var failedOutputs = phaseNo == 7 ? ExistingPhase7DiagnosticOutputs(context) : [];
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], failedOutputs, [], [ex.Message], ex.Message, true, cancellationToken, started, phase10TitleDiagnostics);
         }
     }
 
@@ -15354,6 +15355,25 @@ public sealed partial class ProductionPipelineExecutionService(
             File.Delete(file);
     }
 
+    private static IReadOnlyList<string> ExistingPhase7DiagnosticOutputs(ProductionPhaseContext context)
+    {
+        var narrationRoot = BuildNarrationV5Root(context);
+        var candidates = new[]
+        {
+            Path.Combine(narrationRoot, "semantic-source-context-presence.json"),
+            Path.Combine(narrationRoot, "resolver-input-presence-diagnostics.json"),
+            Path.Combine(narrationRoot, "semantic-capability-diagnostics.json"),
+            Path.Combine(narrationRoot, "event-identity-diagnostics.json"),
+            Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json"),
+            Path.Combine(narrationRoot, "semantic-registry-validation-report.json"),
+            Path.Combine(narrationRoot, "domain-knowledge-diagnostics.json"),
+            BuildNarrationV5DiagnosticsPath(context),
+            BuildNarrationV5PromptPreviewPath(context),
+            BuildNarrationV5Path(context)
+        };
+        return candidates.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
     private static void PreservePhase7DiagnosticEvidenceForOverwrite(ProductionPhaseContext context)
     {
         var diagnosticsRoot = Path.Combine(context.ExecutionContext.ValidationRoot!, "phase-07-preserved-diagnostics");
@@ -15364,6 +15384,7 @@ public sealed partial class ProductionPipelineExecutionService(
             Path.Combine(narrationRoot, "resolver-input-presence-diagnostics.json"),
             Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json"),
             Path.Combine(narrationRoot, "semantic-capability-diagnostics.json"),
+            Path.Combine(narrationRoot, "event-identity-diagnostics.json"),
             Path.Combine(narrationRoot, "semantic-registry-validation-report.json"),
             Path.Combine(narrationRoot, "semantic-source-context-presence.json"),
             Path.Combine(narrationRoot, "domain-knowledge-diagnostics.json"),

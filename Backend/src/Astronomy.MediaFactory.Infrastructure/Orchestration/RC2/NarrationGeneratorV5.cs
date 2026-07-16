@@ -2623,14 +2623,26 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var eventType = FirstNonEmpty(request?.EventType, TryGetRootString(input.ProductionEventIntelligence, "eventType"), TryGetAllocatedFactString(input.LongDocumentaryContract, "EventType"), input.FamilyProfile.FamilyId);
         var canonicalType = FirstNonEmpty(input.CanonicalEventIdentity?.EventType, input.FamilyProfile.FamilyId, eventType) ?? input.FamilyProfile.FamilyId;
         var familyId = FirstNonEmpty(input.CanonicalEventIdentity?.EventFamily, input.FamilyProfile.FamilyId, canonicalType) ?? input.FamilyProfile.FamilyId;
-        var identity = new global::Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts.CanonicalAstronomyEventIdentity(canonicalType, familyId, familyId, eventType, input.CanonicalEventIdentity?.ResolutionSource ?? "RequiredSemanticFactResolver.Phase7CanonicalIdentity");
+        var requestPrimaryObjects = ReadPrimaryObjectsFromRequest(request);
+        var requestSecondaryObjects = ReadSecondaryObjectsFromRequest(request);
+        var identity = new global::Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts.CanonicalAstronomyEventIdentity(
+            canonicalType,
+            familyId,
+            familyId,
+            eventType,
+            input.CanonicalEventIdentity?.ResolutionSource ?? "RequiredSemanticFactResolver.Phase7CanonicalIdentity",
+            request?.SourceExternalEventId,
+            requestPrimaryObjects,
+            requestSecondaryObjects,
+            request?.RegionId,
+            input.LanguageProfile.LanguageCode);
         var productionEventWindow = ReadEventWindowFromRequest(request) ?? ReadEventWindow(input.ProductionEventIntelligence);
         var observationEventWindow = ReadEventWindow(input.ObservationMetadata);
         var documentaryEventWindow = ReadEventWindow(input.LongDocumentaryContract);
         var angularSeparation = ReadAngularSeparationFromRequest(request) ?? ReadAngularSeparation(input.ProductionEventIntelligence) ?? ReadAngularSeparation(input.LongDocumentaryContract);
         var observationAngularSeparation = ReadAngularSeparation(input.ObservationMetadata);
         var primaryObjects = ReadObjectsFromRequest(request, includeSecondary: true) ?? ReadPrimaryObjects(input.ProductionEventIntelligence) ?? ReadPrimaryObjects(input.LongDocumentaryContract);
-        var secondaryObjects = ReadSecondaryObjectsFromRequest(request);
+        var secondaryObjects = requestSecondaryObjects;
         var meteorActivity = ReadMeteorActivity(input.ProductionEventIntelligence);
         var requestLocation = ReadObservationLocationFromRequest(request);
         var eventSource = new ProductionEventIntelligenceSourceV1(
@@ -2659,6 +2671,10 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             .Select(i => new AstronomicalObjectValue(i.Name.Trim(), null, i.Role, null, [new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.ProductionEventIntelligence, nameof(ContentPlanProductionPipelineRequest), i.Path, true)])).ToImmutableArray();
         return values.Length == 0 ? null : values;
     }
+
+
+    private static ImmutableArray<AstronomicalObjectValue> ReadPrimaryObjectsFromRequest(ContentPlanProductionPipelineRequest? request)
+        => request?.PrimaryObjects.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).Select(n => new AstronomicalObjectValue(n.Trim(), null, "Primary", null, [new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.ProductionEventIntelligence, nameof(ContentPlanProductionPipelineRequest), "ProductionPipelineRequest.PrimaryObjects", true)])).ToImmutableArray() ?? [];
 
     private static ImmutableArray<AstronomicalObjectValue> ReadSecondaryObjectsFromRequest(ContentPlanProductionPipelineRequest? request)
         => request?.SecondaryObjects.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).Select(n => new AstronomicalObjectValue(n.Trim(), null, "Secondary", null, [new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.ProductionEventIntelligence, nameof(ContentPlanProductionPipelineRequest), "ProductionPipelineRequest.SecondaryObjects", true)])).ToImmutableArray() ?? [];
