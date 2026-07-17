@@ -10,6 +10,10 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Rendering;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
@@ -49,7 +53,8 @@ public sealed partial class ProductionPipelineExecutionService(
     INarrativeCompositionEngine? narrativeCompositionEngine = null,
     ILongStoryFramePlanner? longStoryFramePlanner = null,
     IShortStoryFramePlanner? shortStoryFramePlanner = null,
-    NarrationGeneratorV5? narrationGeneratorV5 = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    NarrationGeneratorV5? narrationGeneratorV5 = null,
+    ServiceRegistrationDiagnosticsSnapshot? serviceRegistrationDiagnostics = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -523,6 +528,15 @@ public sealed partial class ProductionPipelineExecutionService(
         ValidatePhase7ChronicleCoreInputs(context);
 
         var generator = narrationGeneratorV5 ?? throw new InvalidOperationException("Phase 7 NarrationGeneratorV5 must be resolved through AddMediaFactory DI so semantic source policies and adapters are populated.");
+        var resolver = generator.RuntimeRequiredSemanticFactResolver;
+        var engine = RuntimeCompositionDiagnostics.TryGetField<ISemanticResolutionEngineV1>(resolver, "_semanticResolutionEngine");
+        var registry = RuntimeCompositionDiagnostics.TryGetField<ISemanticSourceAdapterRegistryV1>(resolver, "_sourceAdapterRegistry");
+        var catalog = RuntimeCompositionDiagnostics.TryGetField<ISemanticSourcePolicyCatalogV1>(resolver, "_sourcePolicyCatalog");
+        if (registry is null || registry.Adapters.Count == 0) throw new InvalidOperationException("Phase 7 semantic registry is empty.");
+        if (!registry.Adapters.Any(a => a.AdapterId.Contains("MeteorActivity", StringComparison.OrdinalIgnoreCase) || a.SupportedCapabilityId.Value.Contains("MeteorActivity", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Phase 7 semantic registry has no active MeteorActivity adapter.");
+        if (catalog is null || !catalog.Policies.Any(p => p.SemanticCapabilityId.Value.Contains("MeteorActivity", StringComparison.OrdinalIgnoreCase))) throw new InvalidOperationException("Phase 7 source policy catalog is missing MeteorActivity policy.");
+        logger.LogInformation("PHASE7_RUNTIME_IDENTITY Marker={Marker} ResolverType={ResolverType} ResolverAssembly={ResolverAssembly} ResolverLocation={ResolverLocation} GeneratorType={GeneratorType} GeneratorLocation={GeneratorLocation} EngineType={EngineType} AdapterCount={AdapterCount} PolicyCount={PolicyCount}", MediaFactoryRuntimeIdentity.SemanticArchitectureMarker, resolver.GetType().FullName, resolver.GetType().Assembly.FullName, resolver.GetType().Assembly.Location, generator.GetType().FullName, generator.GetType().Assembly.Location, engine?.GetType().FullName, registry.Adapters.Count, catalog.Policies.Count);
+        await RuntimeCompositionDiagnostics.WriteAsync(context.OutputRoot, RuntimeCompositionDiagnostics.Build(this, generator, resolver, engine, registry, catalog, serviceRegistrationDiagnostics), cancellationToken);
         var request = new BatchGenerateFromPlansRequest(
             Year: (context.Request.ScheduledUtc ?? DateTimeOffset.UtcNow).Year,
             RegionId: context.Request.RegionId,
@@ -553,7 +567,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var result = await generator.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
             return result.GeneratedFiles
-                .Concat([BuildNarrationV5Path(context), BuildNarrationV5DiagnosticsPath(context), BuildNarrationV5PromptPreviewPath(context)])
+                .Concat([BuildNarrationV5Path(context), BuildNarrationV5DiagnosticsPath(context), BuildNarrationV5PromptPreviewPath(context), Path.Combine(context.OutputRoot, "narration-v5", RuntimeCompositionDiagnostics.FileName)])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }

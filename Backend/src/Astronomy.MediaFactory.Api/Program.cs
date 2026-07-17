@@ -21,6 +21,7 @@ using Astronomy.MediaFactory.Core.WeeklySkyForecast.NarrationEngine;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.TimelineComposition;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.Rendering;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AudioGeneration;
+using Astronomy.MediaFactory.Infrastructure;
 using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Azure.Core;
@@ -93,6 +94,7 @@ builder.Services.AddSingleton<ISkyfieldTemporalResolver, SkyfieldTemporalResolve
 var app = builder.Build();
 
 app.Logger.LogInformation("Starting Astronomy.MediaFactory.Api in {Environment}", app.Environment.EnvironmentName);
+app.Logger.LogInformation("MediaFactory runtime marker {RuntimeMarker} Assembly={AssemblyName} Location={AssemblyLocation} InformationalVersion={InformationalVersion}", MediaFactoryRuntimeIdentity.SemanticArchitectureMarker, MediaFactoryRuntimeIdentity.AssemblyName, MediaFactoryRuntimeIdentity.AssemblyLocation, MediaFactoryRuntimeIdentity.InformationalVersion);
 var renderingOptions = app.Services.GetRequiredService<IOptions<RenderingOptions>>().Value;
 var ffmpegConfigured = !string.IsNullOrWhiteSpace(renderingOptions.FfmpegPath);
 var ffprobeConfigured = !string.IsNullOrWhiteSpace(renderingOptions.FfprobePath);

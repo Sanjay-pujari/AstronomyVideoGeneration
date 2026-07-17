@@ -12,6 +12,7 @@ using Astronomy.MediaFactory.Infrastructure.Configuration;
 using Astronomy.MediaFactory.Infrastructure.Operations;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Identity;
@@ -94,6 +95,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine.ISemanticResolutionEngineV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine.SemanticResolutionEngineV1>();
         services.AddScoped<IRequiredSemanticFactResolver, RequiredSemanticFactResolver>();
         services.AddScoped<INarrationRealizer, NarrationRealizer>();
+        RuntimeCompositionDiagnostics.ValidateServiceRegistrations(services);
+        services.AddSingleton(RuntimeCompositionDiagnostics.CaptureServiceRegistrations(services));
         return services;
     }
 
