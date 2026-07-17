@@ -4,9 +4,11 @@ using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry;
 using Microsoft.Extensions.DependencyInjection;
@@ -73,7 +75,7 @@ public sealed class MeteorShowerExecutableFamilyCoverageTests
         var profile = new AstronomyFamilyProfileCatalogV1().GetRequired("MeteorShower");
         var request = new ContentPlanProductionPipelineRequest(
             PlanId: Guid.Parse("d338923a-b49c-4111-872c-a46f2720ccb8"), Category: "Astronomy", Title: "Geminids Meteor Shower Peak", ShortTitle: "Geminids", EventType: "MeteorShower", RegionId: "US", Language: "en", PrimaryObjects: ["Geminids"], SecondaryObjects: ["Meteors"], StartUtc: DateTimeOffset.Parse("2026-12-13T00:00:00Z"), PeakUtc: DateTimeOffset.Parse("2026-12-14T07:00:00Z"), EndUtc: DateTimeOffset.Parse("2026-12-15T12:00:00Z"), ScheduledUtc: DateTimeOffset.Parse("2026-12-13T12:00:00Z"), SourceExternalEventId: "geminids-2026", PlannedFormat: "long", RequestedOutputs: ["long", "short"], VisibilityScore: 90, RarityScore: 70, AudienceInterestScore: 85, ContentOpportunityScore: 90, VerificationStatus: "Verified", VerificationSource: "ProductionParityTest", ContentStrategy: "MeteorShower", LocalPeakTime: "after midnight", SkyDirectionHint: "east to overhead", VisibilityRegion: "United States", MoonInterference: "low moon interference", BestViewingWindowLocal: "midnight to pre-dawn", RadiantVisibilityNote: "Moonlight estimate computed by Skyfield at the provided meteor peak instant.", MoonIlluminationPercent: 10m, RecommendedPublishWindow: null, RecommendedContentTypes: [], Warnings: [], SourceNotes: [], TimeZone: "America/New_York", AngularSeparationDegrees: null);
-        var input = new RequiredSemanticFactResolutionInput(profile, Json("{\"beats\":[{\"sceneId\":\"scene-1\",\"documentaryBeatId\":\"hook\",\"narrativeRole\":\"Hook\",\"allocatedFacts\":{}}]}"), Json("{\"beats\":[{\"sceneId\":\"scene-1\",\"documentaryBeatId\":\"hook\",\"narrativeRole\":\"Hook\",\"allocatedFacts\":{}}]}"), null, null, Json("{\"eventType\":\"MeteorShower\"}"), null, null, LanguageProfileResolver.Resolve("en"), request, new CanonicalEventIdentity("MeteorShower", "MeteorShower", "ProductionParityTest"));
+        var input = new RequiredSemanticFactResolutionInput(profile, Json("{\"beats\":[{\"sceneId\":\"scene-1\",\"documentaryBeatId\":\"hook\",\"narrativeRole\":\"Hook\",\"allocatedFacts\":{}}]}"), Json("{\"beats\":[{\"sceneId\":\"scene-1\",\"documentaryBeatId\":\"hook\",\"narrativeRole\":\"Hook\",\"allocatedFacts\":{}}]}"), null, null, Json("{\"eventType\":\"MeteorShower\"}"), null, null, LanguageProfileResolver.Resolve("en"), request, CanonicalEventIdentityResolver.Resolve(new CanonicalEventIdentityResolutionInput("MeteorShower", "MeteorShower", "MeteorShower", [], "MeteorShower")));
         var method = resolver.GetType().GetMethod("CreateAdapterContext", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(method);
         var context = Assert.IsType<SemanticSourceAdapterContextV1>(method!.Invoke(resolver, [input]));
