@@ -260,7 +260,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         logger.LogInformation("phase7-resolver-call-complete Marker={Marker} ResolverType={ResolverType} ResultType={ResultType} Blocking={Blocking} BeatCount={BeatCount} RadiantCount={RadiantCount} PeakWindowCount={PeakWindowCount}", MediaFactoryRuntimeIdentity.SemanticArchitectureMarker, requiredSemanticFactResolver.GetType().FullName, semanticResolution.GetType().FullName, semanticResolution.Blocking, semanticResolution.Beats.Count, radiantCountAfterResolver, peakWindowCountAfterResolver);
         await RuntimeCompositionDiagnostics.WriteAsync(outputRoot, RuntimeCompositionDiagnostics.Build(this, this, requiredSemanticFactResolver, RuntimeCompositionDiagnostics.TryGetField<ISemanticResolutionEngineV1>(requiredSemanticFactResolver, "_semanticResolutionEngine"), RuntimeCompositionDiagnostics.TryGetField<ISemanticSourceAdapterRegistryV1>(requiredSemanticFactResolver, "_sourceAdapterRegistry"), RuntimeCompositionDiagnostics.TryGetField<ISemanticSourcePolicyCatalogV1>(requiredSemanticFactResolver, "_sourcePolicyCatalog"), null, resolverCallDiagnostics), cancellationToken);
         if (familyProfile.FamilyId.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) && (radiantCountAfterResolver == 0 || peakWindowCountAfterResolver == 0))
-            throw new InvalidOperationException($"Production resolver parity failure: Runtime resolver returned no Radiant/PeakWindow. ResolverType={requiredSemanticFactResolver.GetType().FullName} AssemblyLocation={requiredSemanticFactResolver.GetType().Assembly.Location} RuntimeMarker={MediaFactoryRuntimeIdentity.SemanticArchitectureMarker}");
+        {
+            var stage = "MeteorActivity beat-assignment parity failure: Projected Radiant/PeakWindow exist but were not retained in resolver Beats.";
+            var canonicalStatus = FindMeteorActivityCanonicalStatus(semanticResolution.Diagnostics);
+            var contextFingerprint = ReadContextFingerprint(Path.Combine(narrationRoot, "meteor-activity-context-diagnostics.json"));
+            throw new InvalidOperationException($"{stage} ResolverType={requiredSemanticFactResolver.GetType().FullName} AssemblyLocation={requiredSemanticFactResolver.GetType().Assembly.Location} RuntimeMarker={MediaFactoryRuntimeIdentity.SemanticArchitectureMarker} ContextFingerprint={contextFingerprint ?? "unknown"} AdapterId={MeteorActivityLifecycleDiagnostics.AdapterId} CanonicalStatus={canonicalStatus ?? "unknown"} RadiantCount={radiantCountAfterResolver} PeakWindowCount={peakWindowCountAfterResolver}");
+        }
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
         var semanticCapabilityDiagnosticsPath = Path.Combine(narrationRoot, "semantic-capability-diagnostics.json");
         await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolutionDiagnostics = familyProfileResolution.Diagnostics, semanticResolutionDiagnostics = semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
@@ -1472,6 +1477,30 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     }
 
 
+    private static string? ReadContextFingerprint(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            return doc.RootElement.TryGetProperty("contextFingerprint", out var value) ? value.GetString() : null;
+        }
+        catch { return null; }
+    }
+
+    private static string? FindMeteorActivityCanonicalStatus(object diagnostics)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(diagnostics, JsonOptions));
+            if (!doc.RootElement.TryGetProperty("requiredFactResultDiagnostics", out var items) || items.ValueKind != JsonValueKind.Array) return null;
+            foreach (var item in items.EnumerateArray())
+                if (item.TryGetProperty("canonicalCapabilityId", out var cap) && string.Equals(cap.GetString(), "MeteorActivity", StringComparison.OrdinalIgnoreCase) && item.TryGetProperty("finalResolutionStatus", out var status)) return status.GetString();
+        }
+        catch { }
+        return null;
+    }
+
     private static int CountCanonicalRequests(object diagnostics, string contains)
     {
         try
@@ -2534,14 +2563,23 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var resolvedByScope = supportedOccurrences
             .GroupBy(o => o.ScopeKey!)
             .ToDictionary(g => g.Key, g => _semanticResolutionEngine.Resolve(g.First().Request!));
+        foreach (var item in supportedOccurrences.Where(o => o.ScopeKey is not null && o.CapabilityId.Value.Equals(SemanticCapabilityVocabularyV1.MeteorActivity, StringComparison.OrdinalIgnoreCase)).GroupBy(o => o.ScopeKey!).Select(g => g.First()))
+            MeteorActivityLifecycleDiagnostics.RecordResolution(resolvedByScope[item.ScopeKey!], MeteorActivityLifecycleDiagnostics.Fingerprint(item.Request!.AdapterContext));
 
         var beats = new List<ResolvedBeatFacts>();
         foreach (var beatGroup in occurrences.GroupBy(o => new { o.Format, o.SceneId, o.BeatId, o.Role }))
         {
             var requiredOccurrences = beatGroup.Where(o => o.Required).ToArray();
             var optionalOccurrences = beatGroup.Where(o => !o.Required).ToArray();
-            var resolvedRequired = requiredOccurrences.Select(o => o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey].Fact, input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
-            var resolvedOptional = optionalOccurrences.Select(o => o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey].Fact, input)).Where(f => f is not null).Cast<ResolvedSemanticFact>().ToList();
+            var requiredProjected = requiredOccurrences.Select(o => new { Occurrence = o, Fact = o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey].Fact, input) }).ToArray();
+            var optionalProjected = optionalOccurrences.Select(o => new { Occurrence = o, Fact = o.ScopeKey is null ? null : Project(o, resolvedByScope[o.ScopeKey].Fact, input) }).ToArray();
+            var resolvedRequired = requiredProjected.Where(x => x.Fact is not null).Select(x => x.Fact!).ToList();
+            var resolvedOptional = optionalProjected.Where(x => x.Fact is not null).Select(x => x.Fact!).ToList();
+            foreach (var x in requiredProjected.Concat(optionalProjected).Where(x => x.Occurrence.CapabilityId.Value.Equals(SemanticCapabilityVocabularyV1.MeteorActivity, StringComparison.OrdinalIgnoreCase)))
+            {
+                var fp = x.Occurrence.Request is null ? string.Empty : MeteorActivityLifecycleDiagnostics.Fingerprint(x.Occurrence.Request.AdapterContext);
+                MeteorActivityLifecycleDiagnostics.RecordBeat(beatGroup.Key.Format, beatGroup.Key.SceneId, beatGroup.Key.Role, x.Occurrence.LegacyFactType, x.Fact is not null, x.Occurrence.Required && x.Fact is not null, !x.Occurrence.Required && x.Fact is not null, x.Fact is null, x.Fact is null ? "ProjectionUnavailable" : null, fp);
+            }
             var required = requiredOccurrences.Select(o => o.LegacyFactType).ToArray();
             var optional = optionalOccurrences.Select(o => o.LegacyFactType).ToArray();
             var missing = required.Where(t => !resolvedRequired.Any(f => Matches(t, f.FactType))).ToArray();
@@ -2692,6 +2730,8 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     private static ResolvedSemanticFact? Project(RequirementOccurrence occurrence, ResolvedSemanticFactV1 fact, RequiredSemanticFactResolutionInput input)
     {
         var legacy = LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, occurrence.LegacyFactType, occurrence.ScopeKind == SemanticFactScopeKindV1.BeatSpecific ? occurrence.BeatId : null, occurrence.Required ? "Required" : "Optional", input.LanguageProfile.LanguageCode);
+        if (fact.CapabilityId.Value.Equals(SemanticCapabilityVocabularyV1.MeteorActivity, StringComparison.OrdinalIgnoreCase) && (occurrence.LegacyFactType.Equals("Radiant", StringComparison.OrdinalIgnoreCase) || occurrence.LegacyFactType.Equals("PeakWindow", StringComparison.OrdinalIgnoreCase)))
+            MeteorActivityLifecycleDiagnostics.RecordProjection(occurrence.LegacyFactType, fact, legacy, occurrence.Request is null ? string.Empty : MeteorActivityLifecycleDiagnostics.Fingerprint(occurrence.Request.AdapterContext), legacy is null ? "MapperReturnedNull" : null);
         return legacy is null
             ? null
             : new ResolvedSemanticFact(
@@ -2879,7 +2919,11 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var documentarySource = new DocumentaryContractSourceV1(documentaryEventWindow);
         var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract, familyId) ?? ResolveDomainKnowledge(familyId, primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, input.LanguageProfile.LanguageCode));
         var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(VerifiedObjects: primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, familyId) ?? BuildStructuredObjectKnowledge(familyId, primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty));
-        return new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, DocumentaryContract: documentarySource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode, TimeZone: request?.TimeZone, LocationContext: requestLocation);
+        var context = new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, DocumentaryContract: documentarySource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode, TimeZone: request?.TimeZone, LocationContext: requestLocation);
+        var showerIdentity = FirstNonEmpty(request?.PrimaryObjects.FirstOrDefault(), request?.ShortTitle);
+        var normalizedMeteorShowerId = MeteorShowerKnowledgeCatalogV1.Normalize(showerIdentity);
+        MeteorActivityLifecycleDiagnostics.WriteContext(context, new { present = meteorActivity is not null, radiantConstellation = new { value = meteorActivity?.RadiantConstellation, source = meteorActivity is null ? null : ReadMeteorActivity(input.ProductionEventIntelligence) is not null ? "ProductionEventIntelligence" : "Derived annual meteor-shower metadata" }, peakWindow = new { present = meteorActivity?.PeakWindow is not null, value = meteorActivity?.PeakWindow?.LocalizedWindowDescription, source = meteorActivity?.PeakWindow is null ? null : ReadMeteorActivity(input.ProductionEventIntelligence) is not null ? "ProductionEventIntelligence" : "ContentPlanProductionPipelineRequest.EventWindow" } }, new { rawTitle = request?.Title, shortTitle = request?.ShortTitle, sourceExternalEventId = request?.SourceExternalEventId, normalizedMeteorShowerId, catalogLookupSucceeded = !string.IsNullOrWhiteSpace(normalizedMeteorShowerId) && new MeteorShowerKnowledgeCatalogV1().FindByCanonicalShowerIdentity(showerIdentity) is not null, matchedCatalogEntry = new MeteorShowerKnowledgeCatalogV1().FindByCanonicalShowerIdentity(showerIdentity)?.CanonicalShowerId, lookupKeyUsed = showerIdentity });
+        return context;
     }
 
     private static ImmutableArray<AstronomicalObjectValue>? ReadObjectsFromRequest(ContentPlanProductionPipelineRequest? request, bool includeSecondary)
