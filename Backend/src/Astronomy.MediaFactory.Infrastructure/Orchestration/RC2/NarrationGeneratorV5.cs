@@ -1727,7 +1727,9 @@ public sealed record NarrationSafeContext(string Format, string SceneId, string 
 public sealed record SpeakableFact(string FactKey, string CanonicalValue, string? CanonicalUnit, string FactType, string LocalizedDisplayValue, string SpeakableValue, string Language, string Culture, bool SafeForNarration, string SourceArtifact, string SourceField);
 public sealed record SemanticProducerNote(string NoteType, string SemanticInstruction, string SourceArtifact, string SourceField);
 public sealed record NarrationInputNormalizationResult(NarrationContextDocument Context, NarrationInputNormalizationDiagnostics Diagnostics, IReadOnlyList<NarrationSafeContext> SafeContexts);
-public sealed record NarrationInputNormalizationDiagnostics(int SourceFieldCount, int ClassifiedFactCount, int SafeFactCount, int OmittedOptionalFieldCount, int BlockedFieldCount, int LocalizedFieldCount, int ProducerNotesSanitized, int PublishingMetadataExcluded, int TimestampValuesNormalized, int RegionIdsResolved, int DirectionCodesResolved, string LanguageProfileUsed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, IReadOnlyList<NormalizationRecord>? NormalizedFields = null, IReadOnlyList<NormalizationRecord>? OmittedFields = null, IReadOnlyList<NormalizationRecord>? ExcludedPublishingFields = null, IReadOnlyList<NormalizationRecord>? UnresolvedFields = null, IReadOnlyList<NormalizationRecord>? FallbacksUsed = null);
+public sealed record NarrationInputNormalizationDiagnostics(int SourceFieldCount, int ClassifiedFactCount, int SafeFactCount, int OmittedOptionalFieldCount, int BlockedFieldCount, int LocalizedFieldCount, int ProducerNotesSanitized, int PublishingMetadataExcluded, int TimestampValuesNormalized, int RegionIdsResolved, int DirectionCodesResolved, string LanguageProfileUsed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, IReadOnlyList<NormalizationRecord>? NormalizedFields = null, IReadOnlyList<NormalizationRecord>? OmittedFields = null, IReadOnlyList<NormalizationRecord>? ExcludedPublishingFields = null, IReadOnlyList<NormalizationRecord>? UnresolvedFields = null, IReadOnlyList<NormalizationRecord>? FallbacksUsed = null, IReadOnlyList<NarrationSafeContextHandoffDiagnostic>? SafeContextHandoffDiagnostics = null);
+public sealed record NarrationSafeContextHandoffDiagnostic(string Format, string SceneId, string DocumentaryBeatId, int RequiredFactsCount, IReadOnlyList<string> FactTypesCopied, IReadOnlyList<NarrationSafeContextIgnoredFactDiagnostic> FactTypesIgnored, string SafeContextJson);
+public sealed record NarrationSafeContextIgnoredFactDiagnostic(string FactType, string Reason);
 public sealed record NormalizationRecord(string SourceArtifact, string SourceField, string Classification, string CanonicalValuePreview, string? NormalizedValue, string Language, string Result, string Reason);
 
 public enum NarrationFactType { ObjectName, EventDate, PeakTime, ViewingWindow, Direction, AngularSeparation, Location, ScienceMeaning, ObservationGuidance, VisibilityCondition, PublishMetadata, InternalMetadata }
@@ -1746,6 +1748,7 @@ public static class NarrationInputNormalizer
         var warnings = new List<string>();
         var errors = new List<string>();
         var safeContexts = new List<NarrationSafeContext>();
+        var handoffDiagnostics = new List<NarrationSafeContextHandoffDiagnostic>();
         var formats = new List<NarrationFormatContext>();
         var counters = new Counter();
         foreach (var format in source.Formats)
@@ -1754,17 +1757,20 @@ public static class NarrationInputNormalizer
             foreach (var beat in format.Beats)
             {
                 counters.SourceFieldCount += 12 + beat.VerifiedFacts.Count;
-                var facts = beat.VerifiedFacts.Select(f => NormalizeFact(f, languageProfile, counters, warnings)).Where(f => f is not null).Cast<SpeakableFact>().Where(f => f.SafeForNarration).ToArray();
+                var normalizedFacts = beat.VerifiedFacts.Select(f => new { Source = f, Normalized = NormalizeFact(f, languageProfile, counters, warnings) }).ToArray();
+                var facts = normalizedFacts.Where(f => f.Normalized is not null).Select(f => f.Normalized!).Where(f => f.SafeForNarration).ToArray();
+                var ignoredFacts = normalizedFacts.Where(f => f.Normalized is null || !f.Normalized.SafeForNarration).Select(f => new NarrationSafeContextIgnoredFactDiagnostic(f.Source.FactKey, f.Normalized is null ? "NormalizeFact returned null." : "SafeForNarration was false.")).ToArray();
                 counters.SafeFactCount += facts.Length;
                 var notes = ProducerNoteSanitizer.Sanitize(beat.OptionalProducerNotes, languageProfile, counters, warnings).ToArray();
                 var constraints = beat.ScientificConstraints.Select(v => SanitizeSemantic(v, languageProfile, counters, warnings, optional:true)).Where(v => !string.IsNullOrWhiteSpace(v)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 var safe = new NarrationSafeContext(format.Format, string.Empty, string.Empty, ResolveRole(facts, languageProfile), SemanticTemplate("knowledgeGoal", languageProfile), SemanticTemplate("audienceOutcome", languageProfile), SemanticTemplate("editorialIntent", languageProfile), SemanticTemplate("observationObjective", languageProfile), SemanticTemplate("scientificObjective", languageProfile), SemanticTemplate("transitionGoal", languageProfile), ResolveTone(languageProfile), ResolveRhythm(format.Format, languageProfile), format.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 35 : 95, facts, notes, constraints);
                 safeContexts.Add(safe);
+                handoffDiagnostics.Add(new NarrationSafeContextHandoffDiagnostic(format.Format, string.Empty, string.Empty, beat.VerifiedFacts.Count, facts.Select(f => f.FactKey).ToArray(), ignoredFacts, JsonSerializer.Serialize(new { scene = string.Empty, beat = string.Empty, facts = safe.SpeakableFacts.Select(f => new { factType = f.FactKey, value = f.SpeakableValue }) })));
                 beats.Add(new NarrationContextBeat(safe.KnowledgeGoal, safe.AudienceOutcome, safe.EditorialIntent, facts.Select(f => new NarrationVerifiedFact(f.FactKey, f.SpeakableValue, f.FactType, f.CanonicalUnit)).ToArray(), safe.Constraints, safe.ObservationObjective, safe.TransitionGoal, safe.Tone, safe.Rhythm, beat.SuccessCriteria.Select(_ => SemanticTemplate("successCriteria", languageProfile)).Distinct().ToArray(), notes.Length == 0 ? null : string.Join(" ", notes.Select(n => n.SemanticInstruction))));
             }
             formats.Add(new NarrationFormatContext(format.Format, beats));
         }
-        return new NarrationInputNormalizationResult(new NarrationContextDocument("AstroPulse-NarrationSafeContext-v1", orchestrationVersion, formats), new NarrationInputNormalizationDiagnostics(counters.SourceFieldCount, counters.ClassifiedFactCount, counters.SafeFactCount, counters.OmittedOptionalFieldCount, counters.BlockedFieldCount, counters.LocalizedFieldCount, counters.ProducerNotesSanitized, counters.PublishingMetadataExcluded, counters.TimestampValuesNormalized, counters.RegionIdsResolved, counters.DirectionCodesResolved, languageProfile.ProfileId, warnings.Distinct().ToArray(), errors, counters.NormalizedFields, counters.OmittedFields, counters.ExcludedPublishingFields, counters.UnresolvedFields, counters.FallbacksUsed), safeContexts);
+        return new NarrationInputNormalizationResult(new NarrationContextDocument("AstroPulse-NarrationSafeContext-v1", orchestrationVersion, formats), new NarrationInputNormalizationDiagnostics(counters.SourceFieldCount, counters.ClassifiedFactCount, counters.SafeFactCount, counters.OmittedOptionalFieldCount, counters.BlockedFieldCount, counters.LocalizedFieldCount, counters.ProducerNotesSanitized, counters.PublishingMetadataExcluded, counters.TimestampValuesNormalized, counters.RegionIdsResolved, counters.DirectionCodesResolved, languageProfile.ProfileId, warnings.Distinct().ToArray(), errors, counters.NormalizedFields, counters.OmittedFields, counters.ExcludedPublishingFields, counters.UnresolvedFields, counters.FallbacksUsed, handoffDiagnostics), safeContexts);
     }
 
     private static SpeakableFact? NormalizeFact(NarrationVerifiedFact fact, LanguageProfile languageProfile, Counter counters, List<string> warnings)
@@ -2532,6 +2538,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             }).ToArray(),
             sourcePrecedence = "capability-specific adapter precedence",
             blocking = beats.Any(b => b.Blocking),
+            semanticToNarrationHandoff = beats.Select(b => new { b.Format, b.SceneId, b.DocumentaryBeatId, b.NarrativeRole, requiredFacts = b.RequiredFacts.Select(f => new { f.FactType, f.SpeakableValue, canonicalValueType = f.CanonicalValue?.GetType().FullName, winningSource = f.SourceArtifact, winningAdapter = f.SourceField }), radiant = b.RequiredFacts.Concat(b.OptionalFacts).Where(f => f.FactType.Equals("Radiant", StringComparison.OrdinalIgnoreCase)).Select(f => new { f.FactType, f.SpeakableValue, canonicalValueType = f.CanonicalValue?.GetType().FullName, winningSource = f.SourceArtifact, winningAdapter = f.SourceField }), peakWindow = b.RequiredFacts.Concat(b.OptionalFacts).Where(f => f.FactType.Equals("PeakWindow", StringComparison.OrdinalIgnoreCase)).Select(f => new { f.FactType, f.SpeakableValue, canonicalValueType = f.CanonicalValue?.GetType().FullName, winningSource = f.SourceArtifact, winningAdapter = f.SourceField }) }),
             beats = beats.Select(b => new { input.FamilyProfile.FamilyId, b.Format, b.SceneId, b.DocumentaryBeatId, b.NarrativeRole, requiredCapabilities = RequiredTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedRequiredCapabilities = b.RequiredFacts.Select(f => f.FactType), b.MissingRequiredFacts, optionalCapabilities = OptionalTypes(input.FamilyProfile, b.NarrativeRole, b.Format), resolvedOptionalCapabilities = b.OptionalFacts.Select(f => f.FactType), b.OmittedOptionalFacts, candidateSources = CandidateSourcesByCapability(b.CapabilityResolutions), selectedSources = SelectedSourcesByCapability(b.CapabilityResolutions), rejectedSources = RejectedSourcesByCapability(b.CapabilityResolutions), substitutionsApplied = b.CapabilityResolutions.SelectMany(r => r.SubstitutionsApplied).Distinct(StringComparer.OrdinalIgnoreCase), capabilityStrength = CapabilityStrengthByCapability(b.CapabilityResolutions), beatAdaptations = b.ResolutionWarnings.Where(w => w.Contains("adapt", StringComparison.OrdinalIgnoreCase) || w.Contains("omitted", StringComparison.OrdinalIgnoreCase)), capabilityResolutions = b.CapabilityResolutions, sourceArtifacts = b.RequiredFacts.Concat(b.OptionalFacts).Select(f => f.SourceArtifact).Distinct(), b.Conflicts, derivedFacts = b.RequiredFacts.Concat(b.OptionalFacts).Where(f => f.FactOrigin == "Derived"), b.Blocking, warnings = b.ResolutionWarnings })
         };
         return new RequiredSemanticFactResolutionResult(beats, diagnostics);
@@ -3265,18 +3272,26 @@ public static class NarrationRealizedContextMapper
 
 public static class NarrationRealizationValidator
 {
+    public static IReadOnlyList<NarrationRealizerRequiredLookupDiagnostic> LastRequiredLookupDiagnostics { get; private set; } = [];
     private static readonly Regex Blocked = new(@"\b(explain|establish|use the verified|turn this into|producer notes?|scene goal|visual|camera|render|metadata|JSON|prompt|\d{4}-\d{2}-\d{2}T|[a-z]{2}-[A-Z]{2}-[a-z0-9-]+)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
     public static IReadOnlyList<NarrationRealizationIssue> Validate(IReadOnlyList<NarrationRealizationResult> results, AstronomyFamilyProfile profile)
     {
         var issues = new List<NarrationRealizationIssue>();
+        var lookupDiagnostics = new List<NarrationRealizerRequiredLookupDiagnostic>();
         foreach (var r in results)
         {
             foreach (var (field, value) in new[] { ("narrativePurpose", r.NarrativePurpose), ("openingGuidance", r.OpeningGuidance), ("transitionIntent", r.TransitionIntent?.Relationship ?? string.Empty) })
                 if (Blocked.IsMatch(value)) issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, field, "imperative editorial or raw metadata language detected", "narration-realization", field, "NarrationInputNormalizer", "NarrationRealizer"));
-            var labels = r.SpeakableFacts.Select(f => f.FactType).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var actualNames = r.SpeakableFacts.SelectMany(f => new[] { f.FactType, f.Label }).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             foreach (var req in RequiredForBeat(profile, r.BeatRole).Where(x => !x.Contains("when verified", StringComparison.OrdinalIgnoreCase)))
-                if (IsStrict(req) && !labels.Any(l => l.Contains(req, StringComparison.OrdinalIgnoreCase) || req.Contains(l, StringComparison.OrdinalIgnoreCase))) issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, req, "missing required profile fact", "narration-safe-context", req, "profile-requiredness", "NarrationRealizer"));
+            {
+                if (!IsStrict(req)) continue;
+                var matching = actualNames.Where(l => l.Contains(req, StringComparison.OrdinalIgnoreCase) || req.Contains(l, StringComparison.OrdinalIgnoreCase)).ToArray();
+                lookupDiagnostics.Add(new(req, "NarrationRealizationResult.SpeakableFacts(FactType, Label)", matching, ExpectedNames(req), actualNames));
+                if (matching.Length == 0) issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, req, "missing required profile fact", "narration-safe-context", req, "profile-requiredness", "NarrationRealizer"));
+            }
         }
+        LastRequiredLookupDiagnostics = lookupDiagnostics;
         return issues;
     }
     private static IEnumerable<string> RequiredForBeat(AstronomyFamilyProfile profile, string beatRole)
@@ -3285,8 +3300,11 @@ public static class NarrationRealizationValidator
             return beatRole.Contains("Science", StringComparison.OrdinalIgnoreCase) ? ["ApparentAlignmentExplanation", "PhysicalProximityClarification"] : [];
         return profile.RequiredFactTypes;
     }
+    private static IReadOnlyList<string> ExpectedNames(string req) => req switch { "Radiant" => ["Radiant", "ObservationRadiant"], "PeakWindow" => ["PeakWindow", "PeakViewingWindow"], _ => [req] };
     private static bool IsStrict(string req) => !Regex.IsMatch(req, "Date|Time|Direction|Angular|Safety|Start|End|Peak", RegexOptions.IgnoreCase);
 }
+
+public sealed record NarrationRealizerRequiredLookupDiagnostic(string FieldRequested, string CollectionSearched, IReadOnlyList<string> MatchingFactsFound, IReadOnlyList<string> ExpectedNames, IReadOnlyList<string> ActualNames);
 
 public static class RequiredSemanticFactPhase7Validator
 {
