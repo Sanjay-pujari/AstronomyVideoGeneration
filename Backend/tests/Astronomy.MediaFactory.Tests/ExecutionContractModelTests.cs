@@ -14,7 +14,8 @@ public class ExecutionContractModelTests
     public void FamilyAliasesAreTrimmedDeduplicatedAndCanonicalAliasIsRemoved()
     {
         var contract = new FamilyExecutionContract("MeteorShower", "v1", "Meteor Shower", Aliases: [" meteors ", "METEORS", "MeteorShower", " "]);
-        Assert.Equal(["meteors"], contract.Aliases);
+        Assert.Single(contract.Aliases);
+        Assert.Equal("meteors", contract.Aliases[0]);
     }
 
     [Fact]

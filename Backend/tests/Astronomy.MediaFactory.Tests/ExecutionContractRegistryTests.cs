@@ -37,7 +37,15 @@ public class ExecutionContractRegistryTests
     public void ResolutionResultsAreDeterministic()
     {
         var registry = Registry(Family("A", ["alias"]));
-        Assert.Equal(registry.ResolveFamily("alias"), registry.ResolveFamily("ALIAS"));
+        var first = registry.ResolveFamily("alias");
+        var second = registry.ResolveFamily("ALIAS");
+
+        Assert.Equal(first.Status, second.Status);
+        Assert.Equal(first.MatchedBy, second.MatchedBy);
+        Assert.Equal(first.ResolvedDomainId, second.ResolvedDomainId);
+        Assert.Equal(first.ResolvedFamilyId, second.ResolvedFamilyId);
+        Assert.Equal(first.Contract, second.Contract);
+        Assert.Equal(first.ContractVersion, second.ContractVersion);
     }
 
     [Fact]
