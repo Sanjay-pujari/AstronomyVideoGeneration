@@ -1,14 +1,17 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
@@ -29,7 +32,7 @@ public sealed class MeteorShowerProductionParityTests(ITestOutputHelper output)
         var context = (SemanticSourceAdapterContextV1)resolver.GetType().GetMethod("CreateAdapterContext", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(resolver, [input])!;
         var adapters = registry.GetAdapters(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.MeteorActivity)).ToArray();
         var adapterResults = adapters.Select(adapter => new { adapter.AdapterId, Result = adapter.TryExtract(context) }).ToArray();
-        var canonical = engine.Resolve(new SemanticResolutionRequestV1(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.MeteorActivity), true, SemanticRequirementLevelV1.Required, SemanticMissingValueBehaviorV1.BlockRequired, SemanticEvidenceStrengthV1.Weak, Enum.GetValues<SemanticEvidenceCategoryV1>(), context, "MeteorShower"));
+        var canonical = engine.Resolve(new SemanticResolutionRequestV1(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.MeteorActivity), true, SemanticRequirementLevelV1.Required, SemanticMissingValueBehaviorV1.BlockRequired, SemanticEvidenceStrengthV1.Weak, Enum.GetValues<SemanticEvidenceCategoryV1>().ToImmutableArray(), context, "MeteorShower"));
         var projected = new[] { "Radiant", "PeakWindow" }
             .Select(fact => new { Fact = fact, Projection = LegacyRequiredSemanticFactCompatibilityMapper.Map(canonical.Fact, fact, null, "Required", "en") })
             .ToArray();
