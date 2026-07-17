@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Infrastructure;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
