@@ -8,6 +8,7 @@ using System.Text.Unicode;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Diagnostics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptComposer;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Identity;
@@ -275,7 +276,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                 peakWindowCountAfterResolver,
                 resolverInput.ProductionPipelineRequest?.ContentStrategy,
                 resolverInput.ProductionPipelineRequest?.EventType);
-            var trace = MeteorActivityLifecycleDiagnostics.BuildTrace(failure);
+            var trace = SemanticExecutionDiagnostics.BuildTrace(failure);
             throw new InvalidOperationException($"SemanticLifecycleFailure Stage={failure.Stage} Reason={failure.Reason} ContentStrategy={resolverInput.ProductionPipelineRequest?.ContentStrategy ?? "unknown"} EventType={resolverInput.ProductionPipelineRequest?.EventType ?? "unknown"} MeteorActivity={(diagnosticContext?.ProductionEventIntelligence?.MeteorActivity is null ? "null" : "present")} ResolverType={requiredSemanticFactResolver.GetType().FullName} AssemblyLocation={requiredSemanticFactResolver.GetType().Assembly.Location} RuntimeMarker={MediaFactoryRuntimeIdentity.SemanticArchitectureMarker} ContextFingerprint={contextFingerprint ?? "unknown"} AdapterId={MeteorActivityLifecycleDiagnostics.AdapterId} CanonicalStatus={canonicalStatus ?? "unknown"} RadiantCount={radiantCountAfterResolver} PeakWindowCount={peakWindowCountAfterResolver}{Environment.NewLine}{trace}");
         }
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");

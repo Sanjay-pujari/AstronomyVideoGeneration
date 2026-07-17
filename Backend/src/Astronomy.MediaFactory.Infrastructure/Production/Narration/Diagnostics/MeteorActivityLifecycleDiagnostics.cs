@@ -1,29 +1,12 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Diagnostics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 
 namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
-
-internal enum SemanticLifecycleStage
-{
-    InputPopulation,
-    ContextPopulation,
-    AdapterDiscovery,
-    AdapterExecution,
-    CandidateSelection,
-    CanonicalResolution,
-    CompatibilityProjection,
-    BeatRetention,
-    NarrationGeneration
-}
-
-internal sealed record SemanticLifecycleStep(SemanticLifecycleStage Stage, bool Passed, string? Reason = null);
-
-internal sealed record SemanticLifecycleFailure(SemanticLifecycleStage Stage, string Reason, IReadOnlyDictionary<string, object?> AdditionalContext);
 
 public static class MeteorActivityLifecycleDiagnostics
 {
@@ -389,20 +372,6 @@ public static class MeteorActivityLifecycleDiagnostics
         }
 
         return Failure(SemanticLifecycleStage.NarrationGeneration, "MeteorActivity lifecycle reached narration generation without a known earlier blocker.", context, contentStrategy, eventType);
-    }
-
-    public static string BuildTrace(SemanticLifecycleFailure failure)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("SemanticLifecycleTrace");
-        foreach (var stage in Enum.GetValues<SemanticLifecycleStage>())
-        {
-            if (stage < failure.Stage) builder.AppendLine($"PASS  {stage}");
-            else if (stage == failure.Stage) builder.AppendLine($"FAIL  {stage}");
-        }
-        builder.AppendLine($"Reason: {failure.Reason}");
-        builder.Append("Execution stopped.");
-        return builder.ToString();
     }
 
     private static SemanticLifecycleFailure Failure(SemanticLifecycleStage stage, string reason, SemanticSourceAdapterContextV1? context, string? contentStrategy, string? eventType)
