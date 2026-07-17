@@ -950,6 +950,63 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         };
     }
 
+    private static EventWindowValue? ReadEventWindowFromRequest(ContentPlanProductionPipelineRequest? request)
+        => request is null || (!request.StartUtc.HasValue && !request.PeakUtc.HasValue && !request.EndUtc.HasValue && !request.ScheduledUtc.HasValue && string.IsNullOrWhiteSpace(request.LocalPeakTime) && string.IsNullOrWhiteSpace(request.BestViewingWindowLocal))
+            ? null
+            : new EventWindowValue(request.StartUtc, request.PeakUtc ?? request.ScheduledUtc, request.EndUtc, null, null, null, null, request.TimeZone, FirstNonEmpty(request.BestViewingWindowLocal, request.LocalPeakTime, (request.PeakUtc ?? request.ScheduledUtc)?.ToString("O", CultureInfo.InvariantCulture)));
+
+    private static EventWindowValue? ReadEventWindow(JsonElement? source)
+    {
+        var peakUtcText = TryGetRootString(source, "peakUtc");
+        DateTimeOffset? peakUtc = DateTimeOffset.TryParse(peakUtcText, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var peak) ? peak : null;
+        var local = TryGetRootString(source, "localPeakTime");
+        var best = TryGetRootString(source, "bestViewingWindowLocal");
+        return peakUtc is not null || !string.IsNullOrWhiteSpace(local) || !string.IsNullOrWhiteSpace(best)
+            ? new EventWindowValue(null, peakUtc, null, null, null, null, null, null, FirstNonEmpty(local, best, peakUtcText))
+            : null;
+    }
+
+    private static MeteorActivityValue? ReadMeteorActivity(JsonElement? source)
+    {
+        if (source is not { ValueKind: JsonValueKind.Object } root) return null;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, "zhr", StringComparison.OrdinalIgnoreCase)) continue;
+            var zhrText = property.Value.ValueKind == JsonValueKind.Object
+                ? GetString(property.Value, "value")
+                : property.Value.ValueKind == JsonValueKind.Number ? property.Value.GetRawText() : null;
+            return int.TryParse(zhrText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var zhr)
+                ? new MeteorActivityValue(null, null, null, zhr, null, null)
+                : null;
+        }
+
+        return null;
+    }
+
+    private static MeteorActivityValue? BuildMeteorActivityFromRequest(ContentPlanProductionPipelineRequest? request, EventWindowValue? eventWindow)
+    {
+        if (request is null || !string.Equals(request.ContentStrategy, "MeteorShower", StringComparison.OrdinalIgnoreCase)) return null;
+        var showerIdentity = FirstNonEmpty(request.PrimaryObjects.FirstOrDefault(), request.ShortTitle);
+        var catalog = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.MeteorShowerKnowledgeCatalogV1();
+        var record = catalog.FindByCanonicalShowerIdentity(showerIdentity);
+        if (record is null || !string.Equals(record.SupportedFamilyId, "MeteorShower", StringComparison.OrdinalIgnoreCase)) return null;
+        var provenance = $"MeteorShowerKnowledgeCatalogV1.{record.CanonicalShowerId}; {record.Provenance}";
+        var parent = record.ParentBodyAuthoritative ? record.ParentBody : null;
+        return new MeteorActivityValue(
+            record.RadiantConstellation,
+            eventWindow,
+            eventWindow,
+            record.ZenithalHourlyRate,
+            null,
+            parent,
+            "Earth crosses a stream of comet or asteroid debris; the radiant is a perspective point, not the viewing direction.",
+            record.DisplayName,
+            record.RadiantConstellation,
+            request.MoonInterference,
+            FirstNonEmpty(request.BestViewingWindowLocal, request.LocalPeakTime, request.RadiantVisibilityNote, provenance),
+            request.SkyDirectionHint);
+    }
+
     private static int CountDocumentaryBeats(JsonElement? contract)
     {
         if (!contract.HasValue || !contract.Value.TryGetProperty("beats", out var beats) || beats.ValueKind != JsonValueKind.Array) return 0;
