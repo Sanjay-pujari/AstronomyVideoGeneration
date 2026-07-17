@@ -3052,7 +3052,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         if (!catalog.TryGet(p.FamilyId, out var v1)) return p;
         var converted = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility.AstronomyFamilyProfileV1CompatibilityAdapter()
             .Convert(v1, new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility.FamilyProfileCompatibilityContext(p.FamilyId, p.FamilyId, p.FamilyId, false));
-        return converted.Success && converted.LegacyProfile is not null ? converted.LegacyProfile : p;
+        return converted.Succeeded && converted.LegacyProfile is not null ? converted.LegacyProfile : p;
     }
     [Obsolete("Legacy rollback-only path. Sprint 4B runtime conflict analysis is owned by SemanticResolutionEngineV1.")]
     private static IEnumerable<FactConflict> FindConflicts(IEnumerable<string> types, List<CandidateFact> all) => types.SelectMany(t => all.Where(c => Matches(t, c.Type)).GroupBy(c => c.Value.ToString(), StringComparer.OrdinalIgnoreCase).Count() > 1 ? [new FactConflict(t, all.Where(c => Matches(t, c.Type)).Select(c => c.Value).Distinct().ToArray(), all.Where(c => Matches(t, c.Type)).OrderByDescending(c => c.Confidence).First().SourceArtifact, false, $"Conflicting {t} values resolved by source precedence.")] : Array.Empty<FactConflict>()).DistinctBy(c => c.FactType);
