@@ -2516,6 +2516,31 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             policyCount = _sourcePolicyCatalog.Policies.Count,
             adapterCount = _sourceAdapterRegistry.Adapters.Count,
             sourceContextPresence = BuildPhase7SourceContextPresenceSnapshot(input),
+            resolutionPlan = supportedOccurrences.Select(o =>
+            {
+                var result = resolvedByScope[o.ScopeKey!];
+                var projected = Project(o, result.Fact, input);
+                var requestIssued = ReferenceEquals(supportedOccurrences.Where(x => x.ScopeKey is not null).GroupBy(x => x.ScopeKey!).First(g => Equals(g.Key, o.ScopeKey!)).First(), o);
+                return new
+                {
+                    familyId = input.FamilyProfile.FamilyId,
+                    format = o.Format,
+                    beatRole = o.Role,
+                    legacyRequiredFact = o.LegacyFactType,
+                    legacyFactType = o.LegacyFactType,
+                    canonicalCapabilityRequested = o.CapabilityId.Value,
+                    canonicalCapabilityId = o.CapabilityId.Value,
+                    projectionTarget = o.LegacyFactType,
+                    requestIssued,
+                    requestReusedFromScope = !requestIssued,
+                    requestScopeKey = o.ScopeKey?.ToString(),
+                    resolutionStatus = result.Fact.Status.ToString(),
+                    projectionSucceeded = projected is not null
+                };
+            }).ToArray(),
+            canonicalRequestsIssued = supportedOccurrences.Where(o => o.ScopeKey is not null).GroupBy(o => o.ScopeKey!).Select(g => g.First().CapabilityId.Value).ToArray(),
+            standaloneLegacyRequestsIssued = supportedOccurrences.Where(o => o.LegacyFactType.Equals(o.CapabilityId.Value, StringComparison.OrdinalIgnoreCase)).GroupBy(o => o.ScopeKey!).Select(g => g.First().LegacyFactType).ToArray(),
+            projectionFailures = supportedOccurrences.Select(o => new { occurrence = o, result = resolvedByScope[o.ScopeKey!] }).Where(x => Project(x.occurrence, x.result.Fact, input) is null).Select(x => new { legacyFactType = x.occurrence.LegacyFactType, canonicalCapabilityId = x.occurrence.CapabilityId.Value, resolutionStatus = x.result.Fact.Status.ToString() }).ToArray(),
             semanticCapabilityDiagnostics = beats.SelectMany(b => b.CapabilityResolutions.Select(r => new { r.Capability, capabilityId = r.Capability, registeredAdapterIds = r.Candidates.Select(c => c.Source).Distinct(), adaptersExecuted = r.Candidates.Select(c => c.Source).Concat(r.RejectedSources.Select(x => x.Source)).Distinct(), candidateSources = r.Candidates.Select(c => c.Source).Distinct(), candidatesFound = r.Candidates.Count, rejectedCandidates = r.RejectedSources, selectedAdapterId = r.SelectedSource, selectedSource = r.SelectedSource, selectedStrength = r.CapabilityStrength, selectionReason = r.Status, conversionApplied = r.SubstitutionsApplied.Any(x => x.Contains("converted", StringComparison.OrdinalIgnoreCase)), substitutionApplied = r.SubstitutionsApplied.Any(), unresolvedReason = r.Status.Equals("Resolved", StringComparison.OrdinalIgnoreCase) ? null : string.Join("; ", r.RejectedSources.Select(x => x.Reason).DefaultIfEmpty("NoApprovedSourceAvailable")) })),
             requiredFactResultDiagnostics = supportedOccurrences.Select(o =>
             {
@@ -3015,10 +3040,20 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     }
     private static IEnumerable<string> RequiredTypes(AstronomyFamilyProfile p, string role, string format)
     {
-        if (!p.ContentNature.Contains("Event", StringComparison.OrdinalIgnoreCase)) return p.RequiredFactTypes.Where(t => !Regex.IsMatch(t, "Date|Time|Peak|Window", RegexOptions.IgnoreCase));
-        return p.RequiredFactTypes.Distinct(StringComparer.OrdinalIgnoreCase);
+        var narrationFacing = NarrationFacingProfile(p).RequiredFactTypes;
+        if (!p.ContentNature.Contains("Event", StringComparison.OrdinalIgnoreCase)) return narrationFacing.Where(t => !Regex.IsMatch(t, "Date|Time|Peak|Window", RegexOptions.IgnoreCase));
+        return narrationFacing.Distinct(StringComparer.OrdinalIgnoreCase);
     }
-    private static IEnumerable<string> OptionalTypes(AstronomyFamilyProfile p, string role, string format) => p.OptionalFactTypes.Distinct(StringComparer.OrdinalIgnoreCase);
+    private static IEnumerable<string> OptionalTypes(AstronomyFamilyProfile p, string role, string format) => NarrationFacingProfile(p).OptionalFactTypes.Distinct(StringComparer.OrdinalIgnoreCase);
+
+    private static AstronomyFamilyProfile NarrationFacingProfile(AstronomyFamilyProfile p)
+    {
+        var catalog = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.AstronomyFamilyProfileCatalogV1();
+        if (!catalog.TryGet(p.FamilyId, out var v1)) return p;
+        var converted = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility.AstronomyFamilyProfileV1CompatibilityAdapter()
+            .Convert(v1, new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility.FamilyProfileCompatibilityContext(p.FamilyId, p.FamilyId, p.FamilyId, false));
+        return converted.Success && converted.LegacyProfile is not null ? converted.LegacyProfile : p;
+    }
     [Obsolete("Legacy rollback-only path. Sprint 4B runtime conflict analysis is owned by SemanticResolutionEngineV1.")]
     private static IEnumerable<FactConflict> FindConflicts(IEnumerable<string> types, List<CandidateFact> all) => types.SelectMany(t => all.Where(c => Matches(t, c.Type)).GroupBy(c => c.Value.ToString(), StringComparer.OrdinalIgnoreCase).Count() > 1 ? [new FactConflict(t, all.Where(c => Matches(t, c.Type)).Select(c => c.Value).Distinct().ToArray(), all.Where(c => Matches(t, c.Type)).OrderByDescending(c => c.Confidence).First().SourceArtifact, false, $"Conflicting {t} values resolved by source precedence.")] : Array.Empty<FactConflict>()).DistinctBy(c => c.FactType);
     [Obsolete("Legacy rollback-only path. Sprint 4B runtime must not scan documentary JSON for facts.")]
