@@ -8,4 +8,7 @@ public sealed record FamilyContractResolution(
     string? ResolvedFamilyId,
     FamilyContractMatchKind MatchedBy,
     FamilyExecutionContract? Contract,
-    string DiagnosticMessage);
+    string DiagnosticMessage)
+{
+    public string? ContractVersion => Contract?.ContractVersion;
+}
