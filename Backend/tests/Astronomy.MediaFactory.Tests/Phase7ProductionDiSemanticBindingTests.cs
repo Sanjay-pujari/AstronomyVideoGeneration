@@ -103,7 +103,8 @@ public sealed class ProductionSourcePolicyCatalogNonEmptyTests
         SemanticCapabilityVocabularyV1.AngularSeparation,
         SemanticCapabilityVocabularyV1.ObservationEquipment,
         SemanticCapabilityVocabularyV1.ObservationConditions,
-        SemanticCapabilityVocabularyV1.DomainScientificKnowledge
+        SemanticCapabilityVocabularyV1.DomainScientificKnowledge,
+        SemanticCapabilityVocabularyV1.MeteorActivity
     ];
 
     internal static SemanticSourceAdapterContextV1 BuildJupiterVenusProductionShapeContext()
@@ -192,6 +193,7 @@ public sealed class ProductionSemanticRegistryNonEmptyTests
         AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.ObservationEquipment, "v1.observation-equipment.domain-knowledge");
         AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.ObservationConditions, "v1.observation-conditions.observation-metadata");
         AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.DomainScientificKnowledge, "v1.domain-scientific-knowledge.domain-provider");
+        AssertPolicyAndAdapter(catalog, registry, SemanticCapabilityVocabularyV1.MeteorActivity, "v1.meteor-activity.production-event-intelligence");
     }
 
     internal static string BuildRegistryDiagnostic(IServiceCollection services, ISemanticSourceAdapterRegistryV1 registry, SemanticSourceAdapterRegistryV1? concreteRegistry = null)
