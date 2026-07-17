@@ -3278,17 +3278,32 @@ public static class NarrationRealizationValidator
     {
         var issues = new List<NarrationRealizationIssue>();
         var lookupDiagnostics = new List<NarrationRealizerRequiredLookupDiagnostic>();
+        var aggregateNames = results
+            .SelectMany(r => r.SpeakableFacts)
+            .SelectMany(f => new[] { f.FactType, f.Label })
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         foreach (var r in results)
         {
             foreach (var (field, value) in new[] { ("narrativePurpose", r.NarrativePurpose), ("openingGuidance", r.OpeningGuidance), ("transitionIntent", r.TransitionIntent?.Relationship ?? string.Empty) })
                 if (Blocked.IsMatch(value)) issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, field, "imperative editorial or raw metadata language detected", "narration-realization", field, "NarrationInputNormalizer", "NarrationRealizer"));
-            var actualNames = r.SpeakableFacts.SelectMany(f => new[] { f.FactType, f.Label }).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            foreach (var req in RequiredForBeat(profile, r.BeatRole).Where(x => !x.Contains("when verified", StringComparison.OrdinalIgnoreCase)))
+
+            var actualNames = r.SpeakableFacts
+                .SelectMany(f => new[] { f.FactType, f.Label })
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Concat(aggregateNames)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var requiredNames = RequiredForBeat(profile, r.BeatRole).Where(x => !x.Contains("when verified", StringComparison.OrdinalIgnoreCase)).ToArray();
+            var lookupNames = requiredNames.Concat(profile.OptionalFactTypes).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (var req in lookupNames)
             {
-                if (!IsStrict(req)) continue;
-                var matching = actualNames.Where(l => l.Contains(req, StringComparison.OrdinalIgnoreCase) || req.Contains(l, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var matching = actualNames.Where(l => MatchesRequiredName(req, l)).ToArray();
                 lookupDiagnostics.Add(new(req, "NarrationRealizationResult.SpeakableFacts(FactType, Label)", matching, ExpectedNames(req), actualNames));
-                if (matching.Length == 0) issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, req, "missing required profile fact", "narration-safe-context", req, "profile-requiredness", "NarrationRealizer"));
+                if (requiredNames.Contains(req, StringComparer.OrdinalIgnoreCase) && IsStrict(req) && matching.Length == 0)
+                    issues.Add(new(profile.FamilyId, r.Format, r.SceneId, r.BeatRole, req, "missing required profile fact", "narration-safe-context", req, "profile-requiredness", "NarrationRealizer"));
             }
         }
         LastRequiredLookupDiagnostics = lookupDiagnostics;
@@ -3301,6 +3316,8 @@ public static class NarrationRealizationValidator
         return profile.RequiredFactTypes;
     }
     private static IReadOnlyList<string> ExpectedNames(string req) => req switch { "Radiant" => ["Radiant", "ObservationRadiant"], "PeakWindow" => ["PeakWindow", "PeakViewingWindow"], _ => [req] };
+    private static bool MatchesRequiredName(string requested, string actual)
+        => ExpectedNames(requested).Any(expected => actual.Contains(expected, StringComparison.OrdinalIgnoreCase) || expected.Contains(actual, StringComparison.OrdinalIgnoreCase));
     private static bool IsStrict(string req) => !Regex.IsMatch(req, "Date|Time|Direction|Angular|Safety|Start|End|Peak", RegexOptions.IgnoreCase);
 }
 
