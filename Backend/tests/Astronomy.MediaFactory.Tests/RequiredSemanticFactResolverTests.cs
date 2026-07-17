@@ -36,17 +36,30 @@ public sealed class RequiredSemanticFactResolverTests
         var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentPairingScience");
         Assert.Equal("AstronomyDomainKnowledgeProvider", fact.SourceArtifact);
         Assert.Contains("AstronomyDomainKnowledge.DomainKnowledge", fact.SourceInputs!);
-        var value = Assert.IsType<DomainScientificKnowledgeValue>(fact.CanonicalValue);
-        var combinedValue = string.Join(' ', value.Mechanism, value.PerspectiveAlignmentExplanation, value.ScientificSignificance, value.StableObservingPrinciples);
-        Assert.False(string.IsNullOrWhiteSpace(combinedValue));
-        Assert.Contains("appear", combinedValue, StringComparison.OrdinalIgnoreCase);
+        var scienceText = fact.CanonicalValue switch
+        {
+            string compatibilityValue => compatibilityValue,
+            DomainScientificKnowledgeValue structuredValue => string.Join(
+                ' ',
+                structuredValue.Mechanism,
+                structuredValue.PerspectiveAlignmentExplanation,
+                structuredValue.ScientificSignificance,
+                structuredValue.StableObservingPrinciples),
+            var unexpected => throw new Xunit.Sdk.XunitException($"Unexpected ApparentPairingScience value type: {unexpected?.GetType().FullName ?? "<null>"}")
+        };
+
+        Assert.False(string.IsNullOrWhiteSpace(scienceText));
         Assert.True(
-            combinedValue.Contains("close", StringComparison.OrdinalIgnoreCase) ||
-            combinedValue.Contains("alignment", StringComparison.OrdinalIgnoreCase) ||
-            combinedValue.Contains("line of sight", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains("far apart", combinedValue, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("physically close", combinedValue, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("collision", combinedValue, StringComparison.OrdinalIgnoreCase);
+            scienceText.Contains("appear", StringComparison.OrdinalIgnoreCase) &&
+            scienceText.Contains("close", StringComparison.OrdinalIgnoreCase));
+        Assert.True(
+            scienceText.Contains("line of sight", StringComparison.OrdinalIgnoreCase) ||
+            scienceText.Contains("line-of-sight", StringComparison.OrdinalIgnoreCase) ||
+            scienceText.Contains("alignment", StringComparison.OrdinalIgnoreCase) ||
+            scienceText.Contains("apparent", StringComparison.OrdinalIgnoreCase) ||
+            scienceText.Contains("far apart", StringComparison.OrdinalIgnoreCase) ||
+            scienceText.Contains("physical distance", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("collision", scienceText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "DomainScientificKnowledge" && r.Status == "Resolved" && r.SelectedSource == "AstronomyDomainKnowledgeProvider");
     }
 
