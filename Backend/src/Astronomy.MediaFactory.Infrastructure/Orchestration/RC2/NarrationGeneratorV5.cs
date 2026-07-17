@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using System.Text.Unicode;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptComposer;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Identity;
@@ -29,6 +30,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 {
     public NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, NarrationPromptComposer? promptComposer = null, DocumentaryStyleDirector? styleDirector = null)
         : this(logger, SemanticDefaults.RequiredSemanticFactResolver, SemanticDefaults.NarrationRealizer, SemanticDefaults.FamilyProfileResolver, promptComposer, styleDirector) { }
+    internal IRequiredSemanticFactResolver RuntimeRequiredSemanticFactResolver => requiredSemanticFactResolver;
+    internal INarrationRealizer RuntimeNarrationRealizer => narrationRealizer;
+    internal IAstronomyFamilyProfileResolver RuntimeFamilyProfileResolver => familyProfileResolver;
+
     private const string PhaseName = "Narration Studio V5";
     private const string DefaultEnglishChannelEnding = "Until next time, keep looking up.";
     private static readonly UTF8Encoding JsonUtf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
@@ -235,7 +240,27 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var resolverInputPresencePath = Path.Combine(narrationRoot, "resolver-input-presence-diagnostics.json");
         await WriteAllTextUtf8Async(resolverInputPresencePath, JsonSerializer.Serialize(BuildResolverInputPresenceDiagnostic(resolverInput, requiredSemanticFactResolver), JsonOptions), cancellationToken);
         ValidateFullProductionSemanticInput(resolverInput);
+        logger.LogInformation("phase7-resolver-call-start Marker={Marker} ResolverType={ResolverType} ResolverLocation={ResolverLocation}", MediaFactoryRuntimeIdentity.SemanticArchitectureMarker, requiredSemanticFactResolver.GetType().FullName, requiredSemanticFactResolver.GetType().Assembly.Location);
         var semanticResolution = requiredSemanticFactResolver.Resolve(resolverInput);
+        var resolvedFactsAfterResolver = semanticResolution.Beats.SelectMany(b => b.RequiredFacts.Concat(b.OptionalFacts)).ToArray();
+        var radiantCountAfterResolver = resolvedFactsAfterResolver.Count(f => f.FactType.Equals("Radiant", StringComparison.OrdinalIgnoreCase));
+        var peakWindowCountAfterResolver = resolvedFactsAfterResolver.Count(f => f.FactType.Equals("PeakWindow", StringComparison.OrdinalIgnoreCase));
+        var resolverCallDiagnostics = new
+        {
+            markerBefore = "phase7-resolver-call-start",
+            markerAfter = "phase7-resolver-call-complete",
+            resultConcreteType = semanticResolution.GetType().FullName,
+            semanticResolution.Blocking,
+            beatCount = semanticResolution.Beats.Count,
+            resolvedFactTypes = resolvedFactsAfterResolver.Select(f => f.FactType).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToArray(),
+            radiantCount = radiantCountAfterResolver,
+            peakWindowCount = peakWindowCountAfterResolver,
+            meteorActivityCanonicalRequestCount = CountCanonicalRequests(semanticResolution.Diagnostics, "MeteorActivity")
+        };
+        logger.LogInformation("phase7-resolver-call-complete Marker={Marker} ResolverType={ResolverType} ResultType={ResultType} Blocking={Blocking} BeatCount={BeatCount} RadiantCount={RadiantCount} PeakWindowCount={PeakWindowCount}", MediaFactoryRuntimeIdentity.SemanticArchitectureMarker, requiredSemanticFactResolver.GetType().FullName, semanticResolution.GetType().FullName, semanticResolution.Blocking, semanticResolution.Beats.Count, radiantCountAfterResolver, peakWindowCountAfterResolver);
+        await RuntimeCompositionDiagnostics.WriteAsync(outputRoot, RuntimeCompositionDiagnostics.Build(this, this, requiredSemanticFactResolver, RuntimeCompositionDiagnostics.TryGetField<ISemanticResolutionEngineV1>(requiredSemanticFactResolver, "_semanticResolutionEngine"), RuntimeCompositionDiagnostics.TryGetField<ISemanticSourceAdapterRegistryV1>(requiredSemanticFactResolver, "_sourceAdapterRegistry"), RuntimeCompositionDiagnostics.TryGetField<ISemanticSourcePolicyCatalogV1>(requiredSemanticFactResolver, "_sourcePolicyCatalog"), null, resolverCallDiagnostics), cancellationToken);
+        if (familyProfile.FamilyId.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) && (radiantCountAfterResolver == 0 || peakWindowCountAfterResolver == 0))
+            throw new InvalidOperationException($"Production resolver parity failure: Runtime resolver returned no Radiant/PeakWindow. ResolverType={requiredSemanticFactResolver.GetType().FullName} AssemblyLocation={requiredSemanticFactResolver.GetType().Assembly.Location} RuntimeMarker={MediaFactoryRuntimeIdentity.SemanticArchitectureMarker}");
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
         var semanticCapabilityDiagnosticsPath = Path.Combine(narrationRoot, "semantic-capability-diagnostics.json");
         await WriteAllTextUtf8Async(requiredSemanticFactDiagnosticsPath, JsonSerializer.Serialize(new { familyProfileResolutionDiagnostics = familyProfileResolution.Diagnostics, semanticResolutionDiagnostics = semanticResolution.Diagnostics }, JsonOptions), cancellationToken);
@@ -1446,6 +1471,25 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         return fact.Name.Contains("altitude", StringComparison.OrdinalIgnoreCase) || fact.Name.Contains("azimuth", StringComparison.OrdinalIgnoreCase);
     }
 
+
+    private static int CountCanonicalRequests(object diagnostics, string contains)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(diagnostics));
+            return CountStrings(doc.RootElement, contains);
+        }
+        catch { return 0; }
+    }
+
+    private static int CountStrings(JsonElement element, string contains)
+    {
+        var count = 0;
+        if (element.ValueKind == JsonValueKind.String && (element.GetString()?.Contains(contains, StringComparison.OrdinalIgnoreCase) ?? false)) count++;
+        if (element.ValueKind == JsonValueKind.Object) foreach (var p in element.EnumerateObject()) count += CountStrings(p.Value, contains);
+        if (element.ValueKind == JsonValueKind.Array) foreach (var child in element.EnumerateArray()) count += CountStrings(child, contains);
+        return count;
+    }
 
     private static object BuildResolverInputPresenceDiagnostic(RequiredSemanticFactResolutionInput input, IRequiredSemanticFactResolver resolver)
     {
