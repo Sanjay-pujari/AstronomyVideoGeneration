@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Diagnostics;
@@ -318,7 +319,7 @@ public static class MeteorActivityLifecycleDiagnostics
     }
 
 
-    public static SemanticLifecycleFailure ClassifyMeteorActivityFailure(
+    internal static SemanticLifecycleFailure ClassifyMeteorActivityFailure(
         bool inputPopulated,
         SemanticSourceAdapterContextV1? context,
         IReadOnlyList<string> adapterIds,
