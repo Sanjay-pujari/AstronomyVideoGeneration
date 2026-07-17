@@ -107,6 +107,7 @@ public sealed class SemanticCandidateSelectorV1 : ISemanticCandidateSelectorV1
 
     private static int CollectionCompleteness(IEnumerable enumerable)
     {
+        if (IsDefaultImmutableArray(enumerable)) return 0;
         if (enumerable is ICollection collection) return collection.Count > 0 ? 1 : 0;
 
         var enumerator = enumerable.GetEnumerator();
@@ -118,6 +119,14 @@ public sealed class SemanticCandidateSelectorV1 : ISemanticCandidateSelectorV1
         {
             (enumerator as IDisposable)?.Dispose();
         }
+    }
+
+    private static bool IsDefaultImmutableArray(IEnumerable enumerable)
+    {
+        var type = enumerable.GetType();
+        return type.IsGenericType
+            && type.GetGenericTypeDefinition() == typeof(ImmutableArray<>)
+            && type.GetProperty(nameof(ImmutableArray<int>.IsDefault))?.GetValue(enumerable) is true;
     }
 
     private static int JsonElementCompleteness(JsonElement json) => json.ValueKind switch
