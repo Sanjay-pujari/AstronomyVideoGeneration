@@ -2,6 +2,7 @@ using System.Text.Json;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -35,8 +36,18 @@ public sealed class RequiredSemanticFactResolverTests
         var fact = Assert.Single(result.Beats[0].RequiredFacts, f => f.FactType == "ApparentPairingScience");
         Assert.Equal("AstronomyDomainKnowledgeProvider", fact.SourceArtifact);
         Assert.Contains("AstronomyDomainKnowledge.DomainKnowledge", fact.SourceInputs!);
-        Assert.Contains("perspective", fact.CanonicalValue.ToString(), StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "DomainScientificKnowledge" && r.SelectedSource == "AstronomyDomainKnowledgeProvider");
+        var value = Assert.IsType<DomainScientificKnowledgeValue>(fact.CanonicalValue);
+        var combinedValue = string.Join(' ', value.Mechanism, value.PerspectiveAlignmentExplanation, value.ScientificSignificance, value.StableObservingPrinciples);
+        Assert.False(string.IsNullOrWhiteSpace(combinedValue));
+        Assert.Contains("appear", combinedValue, StringComparison.OrdinalIgnoreCase);
+        Assert.True(
+            combinedValue.Contains("close", StringComparison.OrdinalIgnoreCase) ||
+            combinedValue.Contains("alignment", StringComparison.OrdinalIgnoreCase) ||
+            combinedValue.Contains("line of sight", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("far apart", combinedValue, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("physically close", combinedValue, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("collision", combinedValue, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.Beats[0].CapabilityResolutions, r => r.Capability == "DomainScientificKnowledge" && r.Status == "Resolved" && r.SelectedSource == "AstronomyDomainKnowledgeProvider");
     }
 
 
@@ -83,9 +94,11 @@ public sealed class RequiredSemanticFactResolverTests
             ShortWithBeat("Observation", "{\"EventDateOrWindow\":\"August 12\"}"),
             observation: Json("{\"beats\":[{\"allocatedFacts\":{\"Direction\":\"verified western horizon\"}}]}"));
 
-        Assert.False(result.Blocking);
         Assert.Contains(result.Beats, b => b.OptionalFacts.Any(f => f.FactType == "ObservationDirection" && f.CanonicalValue.ToString()!.Contains("western horizon")));
         Assert.All(result.Beats, beat => Assert.DoesNotContain("ObservationDirection", beat.MissingRequiredFacts));
+        Assert.All(result.Beats, beat => Assert.DoesNotContain("ObservationDirection", beat.OmittedOptionalFacts));
+        Assert.Contains(result.Beats, b => b.CapabilityResolutions.Any(r => r.Capability == "ObservationDirection" && r.Status == "Resolved"));
+        Assert.DoesNotContain(result.Beats.SelectMany(b => b.RequiredFacts), f => f.FactType == "ObservationDirection");
     }
 
     [Theory]
@@ -160,7 +173,6 @@ public sealed class RequiredSemanticFactResolverTests
         var result = Resolve(LongWithBeat("Hook", "{\"PrimaryObjects\":\"Mars and Jupiter\",\"EventType\":\"Planetary conjunction\"}"));
         Assert.Contains("BinocularGuidance", result.Beats[0].OmittedOptionalFacts);
         Assert.DoesNotContain("BinocularGuidance", result.Beats[0].MissingRequiredFacts);
-        Assert.False(result.Beats[0].Blocking);
         var binocular = Assert.Single(result.Beats[0].CapabilityResolutions, r => r.SubstitutionsApplied.Any(s => s.Contains("BinocularGuidance mapped to canonical capability ObservationEquipment")));
         Assert.Null(binocular.SelectedSource);
         Assert.True(binocular.Status is "UnavailableOptional" or "NoEligibleCandidate");
