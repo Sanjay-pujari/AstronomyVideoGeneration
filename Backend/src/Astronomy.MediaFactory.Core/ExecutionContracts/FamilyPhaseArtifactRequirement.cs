@@ -1,7 +1,10 @@
+using System.Collections.Immutable;
+
 namespace Astronomy.MediaFactory.Core.ExecutionContracts;
 
-public sealed record FamilyPhaseArtifactRequirement(
-    string ArtifactName,
-    FamilyArtifactClassification Classification,
-    string? PhaseId = null,
-    string? Description = null);
+public sealed record FamilyPhaseArtifactRequirement
+{
+    public FamilyPhaseArtifactRequirement(string RequirementId, string PhaseId, string ArtifactId, string RelativePathPattern, string Description = "", FamilyArtifactClassification Classification = FamilyArtifactClassification.Required, FamilyArtifactCardinality Cardinality = FamilyArtifactCardinality.ExactlyOne, FamilyRequirementScope Scope = FamilyRequirementScope.Artifact, FamilyRequirementStatus Status = FamilyRequirementStatus.Active, bool MustBeNonEmpty = true, string? ConditionKey = null, ImmutableDictionary<string, string>? Metadata = null)
+    { this.RequirementId = ExecutionContractGuard.RequireNonEmpty(RequirementId, nameof(RequirementId)); this.PhaseId = ExecutionContractGuard.RequireNonEmpty(PhaseId, nameof(PhaseId)); this.ArtifactId = ExecutionContractGuard.RequireNonEmpty(ArtifactId, nameof(ArtifactId)); this.RelativePathPattern = ExecutionContractGuard.RequireNonEmpty(RelativePathPattern, nameof(RelativePathPattern)); this.Description = ExecutionContractGuard.NormalizeText(Description); this.Classification = Classification; this.Cardinality = Cardinality; this.Scope = Scope; this.Status = Status; this.MustBeNonEmpty = MustBeNonEmpty; this.ConditionKey = ExecutionContractGuard.NormalizeOptional(ConditionKey); this.Metadata = ExecutionContractGuard.NormalizeMetadata(Metadata); }
+    public string RequirementId { get; init; } public string PhaseId { get; init; } public string ArtifactId { get; init; } public string RelativePathPattern { get; init; } public string Description { get; init; } public FamilyArtifactClassification Classification { get; init; } public FamilyArtifactCardinality Cardinality { get; init; } public FamilyRequirementScope Scope { get; init; } public FamilyRequirementStatus Status { get; init; } public bool MustBeNonEmpty { get; init; } public string? ConditionKey { get; init; } public ImmutableDictionary<string, string> Metadata { get; init; }
+}
