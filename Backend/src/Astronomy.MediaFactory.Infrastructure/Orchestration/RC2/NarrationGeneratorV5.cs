@@ -925,7 +925,28 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             documentaryContract = new { longPresent = input.LongDocumentaryContract.HasValue, shortPresent = input.ShortDocumentaryContract.HasValue },
             locationContext = new { present = request is not null && (!string.IsNullOrWhiteSpace(request.RegionId) || !string.IsNullOrWhiteSpace(request.VisibilityRegion)), regionId = request?.RegionId, visibilityRegion = request?.VisibilityRegion },
             languageAndFormat = new { language = input.LanguageProfile.LanguageCode, requestedFormats = request?.RequestedOutputs ?? Array.Empty<string>() },
-            beatOccurrence = new { longBeatCount = CountDocumentaryBeats(input.LongDocumentaryContract), shortBeatCount = CountDocumentaryBeats(input.ShortDocumentaryContract) }
+            beatOccurrence = new { longBeatCount = CountDocumentaryBeats(input.LongDocumentaryContract), shortBeatCount = CountDocumentaryBeats(input.ShortDocumentaryContract) },
+            meteorActivity = BuildMeteorActivityPresence(input)
+        };
+    }
+
+    private static object BuildMeteorActivityPresence(RequiredSemanticFactResolutionInput input)
+    {
+        var requestWindow = ReadEventWindowFromRequest(input.ProductionPipelineRequest) ?? ReadEventWindow(input.ProductionEventIntelligence);
+        var activity = ReadMeteorActivity(input.ProductionEventIntelligence) ?? BuildMeteorActivityFromRequest(input.ProductionPipelineRequest, requestWindow);
+        var sourceId = activity is null ? null : SemanticSourcePolicyVocabularyV1.ProductionEventIntelligence;
+        var catalogRecordId = Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.MeteorShowerKnowledgeCatalogV1.Normalize(activity?.ShowerName);
+        return new
+        {
+            present = activity is not null,
+            showerNamePresent = !string.IsNullOrWhiteSpace(activity?.ShowerName),
+            radiantPresent = !string.IsNullOrWhiteSpace(FirstNonEmpty(activity?.Radiant, activity?.RadiantConstellation)),
+            activityWindowPresent = activity?.ActivityWindow is not null,
+            peakWindowPresent = activity?.PeakWindow is not null,
+            zhrPresent = activity?.Zhr is not null,
+            parentBodyPresent = !string.IsNullOrWhiteSpace(activity?.ParentBody),
+            sourceId,
+            catalogRecordId = string.IsNullOrWhiteSpace(catalogRecordId) ? null : catalogRecordId
         };
     }
 
@@ -2477,7 +2498,28 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             documentaryContract = new { longPresent = input.LongDocumentaryContract.HasValue, shortPresent = input.ShortDocumentaryContract.HasValue },
             locationContext = new { present = request is not null && (!string.IsNullOrWhiteSpace(request.RegionId) || !string.IsNullOrWhiteSpace(request.VisibilityRegion)), regionId = request?.RegionId, visibilityRegion = request?.VisibilityRegion },
             languageAndFormat = new { language = input.LanguageProfile.LanguageCode, requestedFormats = request?.RequestedOutputs ?? Array.Empty<string>() },
-            beatOccurrence = new { longBeatCount = CountDocumentaryBeats(input.LongDocumentaryContract), shortBeatCount = CountDocumentaryBeats(input.ShortDocumentaryContract) }
+            beatOccurrence = new { longBeatCount = CountDocumentaryBeats(input.LongDocumentaryContract), shortBeatCount = CountDocumentaryBeats(input.ShortDocumentaryContract) },
+            meteorActivity = BuildMeteorActivityPresence(input)
+        };
+    }
+
+    private static object BuildMeteorActivityPresence(RequiredSemanticFactResolutionInput input)
+    {
+        var requestWindow = ReadEventWindowFromRequest(input.ProductionPipelineRequest) ?? ReadEventWindow(input.ProductionEventIntelligence);
+        var activity = ReadMeteorActivity(input.ProductionEventIntelligence) ?? BuildMeteorActivityFromRequest(input.ProductionPipelineRequest, requestWindow);
+        var sourceId = activity is null ? null : SemanticSourcePolicyVocabularyV1.ProductionEventIntelligence;
+        var catalogRecordId = Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.MeteorShowerKnowledgeCatalogV1.Normalize(activity?.ShowerName);
+        return new
+        {
+            present = activity is not null,
+            showerNamePresent = !string.IsNullOrWhiteSpace(activity?.ShowerName),
+            radiantPresent = !string.IsNullOrWhiteSpace(FirstNonEmpty(activity?.Radiant, activity?.RadiantConstellation)),
+            activityWindowPresent = activity?.ActivityWindow is not null,
+            peakWindowPresent = activity?.PeakWindow is not null,
+            zhrPresent = activity?.Zhr is not null,
+            parentBodyPresent = !string.IsNullOrWhiteSpace(activity?.ParentBody),
+            sourceId,
+            catalogRecordId = string.IsNullOrWhiteSpace(catalogRecordId) ? null : catalogRecordId
         };
     }
 
@@ -2802,21 +2844,25 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     private static MeteorActivityValue? BuildMeteorActivityFromRequest(ContentPlanProductionPipelineRequest? request, EventWindowValue? eventWindow)
     {
         if (request is null || !string.Equals(request.ContentStrategy, "MeteorShower", StringComparison.OrdinalIgnoreCase)) return null;
-        var shower = FirstNonEmpty(request.PrimaryObjects.FirstOrDefault(), request.ShortTitle, request.Title);
-        var key = NormalizeShowerName(shower);
-        var radiant = key switch { "geminids" => "Gemini", "perseids" => "Perseus", _ => null };
-        var parent = key switch { "geminids" => "3200 Phaethon", "perseids" => "109P/Swift–Tuttle", _ => null };
-        var zhr = key switch { "geminids" => 120, "perseids" => 100, _ => (int?)null };
-        if (string.IsNullOrWhiteSpace(radiant)) return null;
-        return new MeteorActivityValue(radiant, eventWindow, eventWindow, zhr, null, parent, "Earth crosses a stream of comet or asteroid debris; the radiant is a perspective point, not the viewing direction.", shower, radiant, request.MoonInterference, request.RadiantVisibilityNote, request.SkyDirectionHint);
-    }
-
-    private static string NormalizeShowerName(string? value)
-    {
-        var text = (value ?? string.Empty).Trim().ToLowerInvariant();
-        if (text.Contains("geminid")) return "geminids";
-        if (text.Contains("perseid")) return "perseids";
-        return text;
+        var showerIdentity = FirstNonEmpty(request.PrimaryObjects.FirstOrDefault(), request.ShortTitle);
+        var catalog = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.MeteorShowerKnowledgeCatalogV1();
+        var record = catalog.FindByCanonicalShowerIdentity(showerIdentity);
+        if (record is null || !string.Equals(record.SupportedFamilyId, "MeteorShower", StringComparison.OrdinalIgnoreCase)) return null;
+        var provenance = $"MeteorShowerKnowledgeCatalogV1.{record.CanonicalShowerId}; {record.Provenance}";
+        var parent = record.ParentBodyAuthoritative ? record.ParentBody : null;
+        return new MeteorActivityValue(
+            record.RadiantConstellation,
+            eventWindow,
+            eventWindow,
+            record.ZenithalHourlyRate,
+            null,
+            parent,
+            "Earth crosses a stream of comet or asteroid debris; the radiant is a perspective point, not the viewing direction.",
+            record.DisplayName,
+            record.RadiantConstellation,
+            request.MoonInterference,
+            FirstNonEmpty(request.BestViewingWindowLocal, request.LocalPeakTime, request.RadiantVisibilityNote, provenance),
+            request.SkyDirectionHint);
     }
 
     private DomainScientificKnowledgeValue? ResolveDomainKnowledge(string familyId, ImmutableArray<AstronomicalObjectValue> objects, string languageCode)

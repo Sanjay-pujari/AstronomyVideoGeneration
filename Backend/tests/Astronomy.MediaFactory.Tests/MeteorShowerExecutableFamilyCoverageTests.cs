@@ -1,9 +1,14 @@
+using System.Reflection;
+using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -51,6 +56,40 @@ public sealed class MeteorShowerExecutableFamilyCoverageTests
         Assert.Equal("Gemini", LegacyRequiredSemanticFactCompatibilityMapper.Map(geminids.Fact, "Radiant", null, "Required", "en")?.SpeakableValue);
         Assert.Equal("Perseus", LegacyRequiredSemanticFactCompatibilityMapper.Map(perseids.Fact, "Radiant", null, "Required", "en")?.SpeakableValue);
     }
+
+
+    [Fact]
+    public void RealProductionComposition_GeminidsMeteorActivityResolvesAndProjects()
+    {
+        using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
+        using var scope = provider.CreateScope();
+        var registry = scope.ServiceProvider.GetRequiredService<ISemanticSourceAdapterRegistryV1>();
+        var engine = scope.ServiceProvider.GetRequiredService<ISemanticResolutionEngineV1>();
+        var resolver = scope.ServiceProvider.GetRequiredService<IRequiredSemanticFactResolver>();
+        var adapter = Assert.Single(registry.GetAdapters(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.MeteorActivity)));
+        Assert.Equal("v1.meteor-activity.production-event-intelligence", adapter.AdapterId);
+        Assert.Equal(SemanticSourcePolicyVocabularyV1.ProductionEventIntelligence, adapter.SourceId);
+
+        var profile = new AstronomyFamilyProfileCatalogV1().GetRequired("MeteorShower");
+        var request = new ContentPlanProductionPipelineRequest(
+            PlanId: Guid.Parse("d338923a-b49c-4111-872c-a46f2720ccb8"), Category: "Astronomy", Title: "Geminids Meteor Shower Peak", ShortTitle: "Geminids", EventType: "MeteorShower", RegionId: "US", Language: "en", PrimaryObjects: ["Geminids"], SecondaryObjects: ["Meteors"], StartUtc: DateTimeOffset.Parse("2026-12-13T00:00:00Z"), PeakUtc: DateTimeOffset.Parse("2026-12-14T07:00:00Z"), EndUtc: DateTimeOffset.Parse("2026-12-15T12:00:00Z"), ScheduledUtc: DateTimeOffset.Parse("2026-12-13T12:00:00Z"), SourceExternalEventId: "geminids-2026", PlannedFormat: "long", RequestedOutputs: ["long", "short"], VisibilityScore: 90, RarityScore: 70, AudienceInterestScore: 85, ContentOpportunityScore: 90, VerificationStatus: "Verified", VerificationSource: "ProductionParityTest", ContentStrategy: "MeteorShower", LocalPeakTime: "after midnight", SkyDirectionHint: "east to overhead", VisibilityRegion: "United States", MoonInterference: "low moon interference", BestViewingWindowLocal: "midnight to pre-dawn", RadiantVisibilityNote: "Moonlight estimate computed by Skyfield at the provided meteor peak instant.", MoonIlluminationPercent: 10m, RecommendedPublishWindow: null, RecommendedContentTypes: [], Warnings: [], SourceNotes: [], TimeZone: "America/New_York", AngularSeparationDegrees: null);
+        var input = new RequiredSemanticFactResolutionInput(profile, Json("{\"beats\":[{\"sceneId\":\"scene-1\",\"documentaryBeatId\":\"hook\",\"narrativeRole\":\"Hook\",\"allocatedFacts\":{}}]}"), Json("{\"beats\":[{\"sceneId\":\"scene-1\",\"documentaryBeatId\":\"hook\",\"narrativeRole\":\"Hook\",\"allocatedFacts\":{}}]}"), null, null, Json("{\"eventType\":\"MeteorShower\"}"), null, null, LanguageProfileResolver.Resolve("en"), request, new CanonicalEventIdentity("MeteorShower", "MeteorShower", "ProductionParityTest"));
+        var method = resolver.GetType().GetMethod("CreateAdapterContext", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        var context = Assert.IsType<SemanticSourceAdapterContextV1>(method!.Invoke(resolver, [input]));
+        Assert.NotNull(context.ProductionEventIntelligence?.MeteorActivity);
+
+        var activity = Resolve(engine, SemanticCapabilityVocabularyV1.MeteorActivity, context);
+        Assert.Contains(adapter.AdapterId, activity.Diagnostics.InvokedAdapterIds);
+        Assert.True(activity.Diagnostics.CandidateCount > 0);
+        var value = Assert.IsType<MeteorActivityValue>(activity.Fact.TypedValue!.Value);
+        Assert.Equal("Gemini", value.RadiantConstellation);
+        Assert.NotNull(value.PeakWindow);
+        Assert.Equal("Gemini", LegacyRequiredSemanticFactCompatibilityMapper.Map(activity.Fact, "Radiant", null, "Required", "en")?.SpeakableValue);
+        Assert.False(string.IsNullOrWhiteSpace(LegacyRequiredSemanticFactCompatibilityMapper.Map(activity.Fact, "PeakWindow", null, "Required", "en")?.SpeakableValue));
+    }
+
+    private static System.Text.Json.JsonElement Json(string json) => System.Text.Json.JsonDocument.Parse(json).RootElement.Clone();
 
     private static SemanticResolutionResultV1 Resolve(ISemanticResolutionEngineV1 engine, string capability, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts.SemanticSourceAdapterContextV1 context)
     {
