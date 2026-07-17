@@ -49,6 +49,22 @@ public sealed class SemanticCandidateSelectorCompletenessV1Tests
     }
 
     [Fact]
+    public void DefaultImmutableArrayIsIncomplete()
+    {
+        var defaultArray = default(ImmutableArray<string>);
+        Assert.Equal(0, SemanticCandidateSelectorV1.Completeness(defaultArray));
+    }
+
+    [Fact]
+    public void RecordContainingDefaultImmutableArrayDoesNotThrowAndTreatsItAsIncomplete()
+    {
+        var ex = Record.Exception(() => SemanticCandidateSelectorV1.Completeness(new CollectionRecord(default)));
+
+        Assert.Null(ex);
+        Assert.Equal(0, SemanticCandidateSelectorV1.Completeness(new CollectionRecord(default)));
+    }
+
+    [Fact]
     public void IndependentlyAllocatedEquivalentValuesReceiveEqualCompleteness()
     {
         Assert.Equal(
@@ -130,6 +146,8 @@ public sealed class SemanticCandidateSelectorCompletenessV1Tests
         []);
 
     private sealed record SemanticRecord(string? Name, string? Kind, int? Rank);
+
+    private sealed record CollectionRecord(ImmutableArray<string> Values);
 
     private sealed class IndexerBearingValue
     {
