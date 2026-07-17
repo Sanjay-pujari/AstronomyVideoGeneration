@@ -261,10 +261,22 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         await RuntimeCompositionDiagnostics.WriteAsync(outputRoot, RuntimeCompositionDiagnostics.Build(this, this, requiredSemanticFactResolver, RuntimeCompositionDiagnostics.TryGetField<ISemanticResolutionEngineV1>(requiredSemanticFactResolver, "_semanticResolutionEngine"), RuntimeCompositionDiagnostics.TryGetField<ISemanticSourceAdapterRegistryV1>(requiredSemanticFactResolver, "_sourceAdapterRegistry"), RuntimeCompositionDiagnostics.TryGetField<ISemanticSourcePolicyCatalogV1>(requiredSemanticFactResolver, "_sourcePolicyCatalog"), null, resolverCallDiagnostics), cancellationToken);
         if (familyProfile.FamilyId.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) && (radiantCountAfterResolver == 0 || peakWindowCountAfterResolver == 0))
         {
-            var stage = "MeteorActivity beat-assignment parity failure: Projected Radiant/PeakWindow exist but were not retained in resolver Beats.";
             var canonicalStatus = FindMeteorActivityCanonicalStatus(semanticResolution.Diagnostics);
             var contextFingerprint = ReadContextFingerprint(Path.Combine(narrationRoot, "meteor-activity-context-diagnostics.json"));
-            throw new InvalidOperationException($"{stage} ResolverType={requiredSemanticFactResolver.GetType().FullName} AssemblyLocation={requiredSemanticFactResolver.GetType().Assembly.Location} RuntimeMarker={MediaFactoryRuntimeIdentity.SemanticArchitectureMarker} ContextFingerprint={contextFingerprint ?? "unknown"} AdapterId={MeteorActivityLifecycleDiagnostics.AdapterId} CanonicalStatus={canonicalStatus ?? "unknown"} RadiantCount={radiantCountAfterResolver} PeakWindowCount={peakWindowCountAfterResolver}");
+            var diagnosticContext = TryCreateAdapterContextForDiagnostics(requiredSemanticFactResolver, resolverInput);
+            var failure = MeteorActivityLifecycleDiagnostics.ClassifyMeteorActivityFailure(
+                resolverInput.ProductionPipelineRequest is not null || (resolverInput.ProductionEventIntelligence.HasValue && resolverInput.ProductionEventIntelligence.Value.ValueKind != JsonValueKind.Undefined),
+                diagnosticContext,
+                FindMeteorActivityInvokedAdapterIds(semanticResolution.Diagnostics),
+                FindMeteorActivityCandidateCount(semanticResolution.Diagnostics),
+                canonicalStatus,
+                resolvedFactsAfterResolver.Count(f => f.SemanticMeaning.Equals("MeteorActivity", StringComparison.OrdinalIgnoreCase)),
+                radiantCountAfterResolver,
+                peakWindowCountAfterResolver,
+                resolverInput.ProductionPipelineRequest?.ContentStrategy,
+                resolverInput.ProductionPipelineRequest?.EventType);
+            var trace = MeteorActivityLifecycleDiagnostics.BuildTrace(failure);
+            throw new InvalidOperationException($"SemanticLifecycleFailure Stage={failure.Stage} Reason={failure.Reason} ContentStrategy={resolverInput.ProductionPipelineRequest?.ContentStrategy ?? "unknown"} EventType={resolverInput.ProductionPipelineRequest?.EventType ?? "unknown"} MeteorActivity={(diagnosticContext?.ProductionEventIntelligence?.MeteorActivity is null ? "null" : "present")} ResolverType={requiredSemanticFactResolver.GetType().FullName} AssemblyLocation={requiredSemanticFactResolver.GetType().Assembly.Location} RuntimeMarker={MediaFactoryRuntimeIdentity.SemanticArchitectureMarker} ContextFingerprint={contextFingerprint ?? "unknown"} AdapterId={MeteorActivityLifecycleDiagnostics.AdapterId} CanonicalStatus={canonicalStatus ?? "unknown"} RadiantCount={radiantCountAfterResolver} PeakWindowCount={peakWindowCountAfterResolver}{Environment.NewLine}{trace}");
         }
         var requiredSemanticFactDiagnosticsPath = Path.Combine(narrationRoot, "required-semantic-fact-diagnostics.json");
         var semanticCapabilityDiagnosticsPath = Path.Combine(narrationRoot, "semantic-capability-diagnostics.json");
@@ -1476,6 +1488,46 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         return fact.Name.Contains("altitude", StringComparison.OrdinalIgnoreCase) || fact.Name.Contains("azimuth", StringComparison.OrdinalIgnoreCase);
     }
 
+
+
+    private static SemanticSourceAdapterContextV1? TryCreateAdapterContextForDiagnostics(IRequiredSemanticFactResolver resolver, RequiredSemanticFactResolutionInput input)
+    {
+        try
+        {
+            return resolver.GetType().GetMethod("CreateAdapterContext", BindingFlags.Instance | BindingFlags.NonPublic)?.Invoke(resolver, [input]) as SemanticSourceAdapterContextV1;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static IReadOnlyList<string> FindMeteorActivityInvokedAdapterIds(object diagnostics)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(diagnostics, JsonOptions));
+            if (!doc.RootElement.TryGetProperty("requiredFactResultDiagnostics", out var items) || items.ValueKind != JsonValueKind.Array) return [];
+            foreach (var item in items.EnumerateArray())
+                if (item.TryGetProperty("canonicalCapabilityId", out var cap) && string.Equals(cap.GetString(), "MeteorActivity", StringComparison.OrdinalIgnoreCase) && item.TryGetProperty("invokedAdapterIds", out var adapters) && adapters.ValueKind == JsonValueKind.Array)
+                    return adapters.EnumerateArray().Select(a => a.GetString()).Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a!).ToArray();
+        }
+        catch { }
+        return [];
+    }
+
+    private static int FindMeteorActivityCandidateCount(object diagnostics)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(diagnostics, JsonOptions));
+            if (!doc.RootElement.TryGetProperty("requiredFactResultDiagnostics", out var items) || items.ValueKind != JsonValueKind.Array) return 0;
+            foreach (var item in items.EnumerateArray())
+                if (item.TryGetProperty("canonicalCapabilityId", out var cap) && string.Equals(cap.GetString(), "MeteorActivity", StringComparison.OrdinalIgnoreCase) && item.TryGetProperty("candidateCount", out var count)) return count.GetInt32();
+        }
+        catch { }
+        return 0;
+    }
 
     private static string? ReadContextFingerprint(string path)
     {

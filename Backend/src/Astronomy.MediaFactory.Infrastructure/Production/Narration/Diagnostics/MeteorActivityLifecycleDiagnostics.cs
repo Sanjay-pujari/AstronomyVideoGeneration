@@ -8,6 +8,23 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sourc
 
 namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
 
+internal enum SemanticLifecycleStage
+{
+    InputPopulation,
+    ContextPopulation,
+    AdapterDiscovery,
+    AdapterExecution,
+    CandidateSelection,
+    CanonicalResolution,
+    CompatibilityProjection,
+    BeatRetention,
+    NarrationGeneration
+}
+
+internal sealed record SemanticLifecycleStep(SemanticLifecycleStage Stage, bool Passed, string? Reason = null);
+
+internal sealed record SemanticLifecycleFailure(SemanticLifecycleStage Stage, string Reason, IReadOnlyDictionary<string, object?> AdditionalContext);
+
 public static class MeteorActivityLifecycleDiagnostics
 {
     private static readonly JsonSerializerOptions Options = new()
@@ -316,6 +333,89 @@ public static class MeteorActivityLifecycleDiagnostics
                 .ThenBy(v => v.RequestedLegacyFact, StringComparer.Ordinal)
                 .ToArray());
     }
+
+
+    public static SemanticLifecycleFailure ClassifyMeteorActivityFailure(
+        bool inputPopulated,
+        SemanticSourceAdapterContextV1? context,
+        IReadOnlyList<string> adapterIds,
+        int candidateCount,
+        string? canonicalStatus,
+        int projectedFactCount,
+        int retainedRadiantCount,
+        int retainedPeakWindowCount,
+        string? contentStrategy,
+        string? eventType)
+    {
+        if (!inputPopulated)
+        {
+            return Failure(SemanticLifecycleStage.InputPopulation, "MeteorActivity input was not populated before semantic resolution.", context, contentStrategy, eventType);
+        }
+
+        if (context?.ProductionEventIntelligence?.MeteorActivity is null)
+        {
+            return Failure(SemanticLifecycleStage.ContextPopulation, "MeteorActivity was not populated into SemanticSourceAdapterContextV1.", context, contentStrategy, eventType);
+        }
+
+        if (adapterIds.Count == 0)
+        {
+            return Failure(SemanticLifecycleStage.AdapterDiscovery, "No MeteorActivity adapter was discovered.", context, contentStrategy, eventType);
+        }
+
+        if (!adapterIds.Contains(AdapterId, StringComparer.Ordinal))
+        {
+            return Failure(SemanticLifecycleStage.AdapterExecution, "MeteorActivity production adapter was not executed.", context, contentStrategy, eventType);
+        }
+
+        if (candidateCount == 0)
+        {
+            return Failure(SemanticLifecycleStage.CandidateSelection, "No MeteorActivity candidate produced.", context, contentStrategy, eventType);
+        }
+
+        if (!string.Equals(canonicalStatus, "Resolved", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(canonicalStatus, "ResolvedByCombination", StringComparison.OrdinalIgnoreCase))
+        {
+            return Failure(SemanticLifecycleStage.CanonicalResolution, $"MeteorActivity canonical resolution status was {canonicalStatus ?? "unknown"}.", context, contentStrategy, eventType);
+        }
+
+        if (projectedFactCount == 0)
+        {
+            return Failure(SemanticLifecycleStage.CompatibilityProjection, "MeteorActivity did not project required legacy facts.", context, contentStrategy, eventType);
+        }
+
+        if (retainedRadiantCount == 0 || retainedPeakWindowCount == 0)
+        {
+            return Failure(SemanticLifecycleStage.BeatRetention, "Projected Radiant/PeakWindow facts were not retained in resolver beats.", context, contentStrategy, eventType);
+        }
+
+        return Failure(SemanticLifecycleStage.NarrationGeneration, "MeteorActivity lifecycle reached narration generation without a known earlier blocker.", context, contentStrategy, eventType);
+    }
+
+    public static string BuildTrace(SemanticLifecycleFailure failure)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("SemanticLifecycleTrace");
+        foreach (var stage in Enum.GetValues<SemanticLifecycleStage>())
+        {
+            if (stage < failure.Stage) builder.AppendLine($"PASS  {stage}");
+            else if (stage == failure.Stage) builder.AppendLine($"FAIL  {stage}");
+        }
+        builder.AppendLine($"Reason: {failure.Reason}");
+        builder.Append("Execution stopped.");
+        return builder.ToString();
+    }
+
+    private static SemanticLifecycleFailure Failure(SemanticLifecycleStage stage, string reason, SemanticSourceAdapterContextV1? context, string? contentStrategy, string? eventType)
+        => new(stage, reason, new Dictionary<string, object?>
+        {
+            ["ContentStrategy"] = contentStrategy,
+            ["EventType"] = eventType ?? context?.EventIdentity?.SourceEventType,
+            ["MeteorActivity"] = context?.ProductionEventIntelligence?.MeteorActivity,
+            ["SourceExternalEventId"] = context?.EventIdentity?.SourceEventId,
+            ["TimeZone"] = context?.TimeZone,
+            ["PrimaryObjects"] = context?.ProductionEventIntelligence?.PrimaryObjects.Select(o => o.Name).ToArray() ?? [],
+            ["SecondaryObjects"] = context?.ProductionEventIntelligence?.SecondaryObjects.Select(o => o.Name).ToArray() ?? []
+        });
 
     private static IEnumerable<string> Missing(MeteorActivityValue? meteorActivity)
     {
