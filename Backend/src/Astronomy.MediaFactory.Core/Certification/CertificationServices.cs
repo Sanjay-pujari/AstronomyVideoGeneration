@@ -213,7 +213,7 @@ public sealed class Phase7Certifier(IPhaseArtifactRegistry r, ICertificationArti
         {
             var n = p.Name;
             var isQuality = n.Equals("requiredFactsPreserved", StringComparison.OrdinalIgnoreCase) || n.Equals("longNarrationQualityAccepted", StringComparison.OrdinalIgnoreCase) || n.Equals("shortNarrationQualityAccepted", StringComparison.OrdinalIgnoreCase) || n.Equals("finalDecision", StringComparison.OrdinalIgnoreCase) || n.Equals("publicationDecision", StringComparison.OrdinalIgnoreCase) || n.Contains("warning", StringComparison.OrdinalIgnoreCase) || n.Contains("status", StringComparison.OrdinalIgnoreCase) || n.Contains("result", StringComparison.OrdinalIgnoreCase);
-            if (isQuality && p.Value.ValueKind == JsonValueKind.Bool) yield return p.Value.GetBoolean();
+            if (isQuality && (p.Value.ValueKind == JsonValueKind.True || p.Value.ValueKind == JsonValueKind.False)) yield return p.Value.GetBoolean();
             if (isQuality && p.Value.ValueKind == JsonValueKind.String) yield return p.Value.GetString() ?? string.Empty;
             foreach (var x in QualityValues(p.Value)) yield return x;
         }
