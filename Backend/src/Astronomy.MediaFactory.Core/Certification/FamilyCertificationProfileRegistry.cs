@@ -49,6 +49,7 @@ public static class CgA1CertificationFoundationServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddSingleton<IFamilyCertificationProfileRegistry, FamilyCertificationProfileRegistry>();
+        services.AddCgA1PhaseCertification();
         return services;
     }
 }
