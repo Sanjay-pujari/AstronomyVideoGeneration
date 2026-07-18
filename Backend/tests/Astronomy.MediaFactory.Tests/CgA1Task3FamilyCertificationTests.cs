@@ -31,6 +31,57 @@ public sealed class CgA1Task3FamilyCertificationTests
         profile.GetRequiredFacts(Context("unused", eventType, language)).Select(f => f.FactId).Should().NotContain("MeteorActivity");
     }
 
+
+    [Fact]
+    public void CertificationCatalog_HasUniqueFacts_And_EnglishHindiParity()
+    {
+        var catalog = new CertificationSemanticFactCatalog();
+        catalog.Facts.Select(f => f.FactId).Should().OnlyHaveUniqueItems();
+        var en = new MeteorShowerCertificationProfile(catalog).GetRequiredFacts(Context("unused", "MeteorShower", "en")).Select(f => f.FactId);
+        var hi = new MeteorShowerCertificationProfile(catalog).GetRequiredFacts(Context("unused", "MeteorShower", "hi")).Select(f => f.FactId);
+        en.Should().Equal(hi);
+        catalog.ResolveCanonicalValue("PLANET_CONJUNCTION").Should().Be("PlanetPairing");
+        catalog.ResolveDisplayName("EventWindow").Should().Be("Event window");
+        catalog.ResolveRequiredStatus("MeteorShower", "MeteorActivity").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task SemanticEvidenceReader_PrefersStructuredCanonical_And_RecordsFallback()
+    {
+        using var temp = Temp();
+        Directory.CreateDirectory(Path.Combine(temp.Path, "narration-v5"));
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "narration-v5", "required-semantic-fact-diagnostics.json"), "{\"familyId\":\"PlanetConjunction\",\"canonicalSemanticValueId\":\"PlanetPairing\",\"text\":\"MeteorActivity\"}");
+        var structured = await new SemanticCertificationEvidenceReader().ReadAsync(Context(temp.Path, "PlanetConjunction", "en"), CancellationToken.None);
+        structured.CanonicalSemanticValueId.Should().Be("PlanetPairing");
+        structured.Diagnostics.Should().NotContain(d => d.Contains("fallback:canonical-semantic-value", StringComparison.OrdinalIgnoreCase));
+
+        using var fallbackTemp = Temp();
+        Directory.CreateDirectory(Path.Combine(fallbackTemp.Path, "narration-v5"));
+        await File.WriteAllTextAsync(Path.Combine(fallbackTemp.Path, "narration-v5", "narration-context.json"), "{\"familyId\":\"MeteorShower\"}");
+        var fallback = await new SemanticCertificationEvidenceReader().ReadAsync(Context(fallbackTemp.Path, "MeteorShower", "en"), CancellationToken.None);
+        fallback.CanonicalSemanticValueId.Should().Be("MeteorActivity");
+        fallback.Diagnostics.Should().Contain(d => d == "fallback:canonical-semantic-value:text-matching");
+    }
+
+    [Fact]
+    public async Task Phase7_QualityParsing_UsesTypedProperties_NotJsonFormatting()
+    {
+        using var temp = Temp(); WriteSuccessArtifacts(temp.Path, "MeteorShower", "MeteorActivity");
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "narration-v5", "narration-validation-diagnostics.json"), "{\"requiredFactsPreserved\" : false, \"finalDecision\" : \"Publish\"}");
+        var certifier = new Phase7Certifier(new PhaseArtifactRegistry(), new CertificationArtifactVerifier(), new FamilyCertificationProfileRegistry([new MeteorShowerCertificationProfile(), new PlanetConjunctionCertificationProfile()]), new SemanticCertificationEvidenceReader(), new ForbiddenConceptValidator(), new StoryBeatCoverageValidator());
+        var result = await certifier.CertifyAsync(Context(temp.Path, "MeteorShower", "en"), CancellationToken.None);
+        result.QualityStatus.Should().Be(CertificationStatus.Failed);
+    }
+
+    [Fact]
+    public async Task StoryBeatValidator_UsesStructuredRoles_WhenAvailable()
+    {
+        using var temp = Temp(); WriteSuccessArtifacts(temp.Path, "MeteorShower", "MeteorActivity");
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "narration-v5", "narration-plan.json"), "{\"beats\":[" + string.Join(',', new[] { "Hook", "Orientation", "Timing", "Observation", "Science", "Closing" }.Select(r => $"{{\"storyRole\":\"{r}\"}}")) + "]}");
+        var evidence = await new SemanticCertificationEvidenceReader().ReadAsync(Context(temp.Path, "MeteorShower", "en"), CancellationToken.None);
+        new StoryBeatCoverageValidator().Validate(new MeteorShowerCertificationProfile(), Context(temp.Path, "MeteorShower", "en"), evidence).Should().BeEmpty();
+    }
+
     [Fact]
     public async Task SemanticEvidenceReader_NormalizesLifecycleEvidence()
     {

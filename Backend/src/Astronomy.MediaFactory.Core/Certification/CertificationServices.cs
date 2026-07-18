@@ -149,10 +149,11 @@ public sealed class Phase3Certifier(IPhaseArtifactRegistry r, ICertificationArti
 public sealed class Phase4Certifier(IPhaseArtifactRegistry r, ICertificationArtifactVerifier v) : PhaseCertifierBase(r,v) { public override int PhaseNumber => 4; protected override string PhaseName => "Story Intelligence"; protected override async Task<IEnumerable<CertificationIssue>> ValidateAsync(FamilyCertificationContext c, CancellationToken t){ var d=await Read(c,"editorial/story-graph.json",t); var list=new List<CertificationIssue>(); if(d is null){list.Add(Issue("P4.StoryGraphMissing","StoryGraph is required.")); return list;} var nodes=Arr(d.RootElement,"nodes","Nodes").ToArray(); if(nodes.Length==0)list.Add(Issue("P4.GraphEmpty","Story graph must contain nodes.")); var ids=nodes.Select(n=>Str(n,"id","nodeId","NodeId")).Where(x=>!string.IsNullOrWhiteSpace(x)).ToArray(); if(ids.Length!=ids.Distinct(StringComparer.OrdinalIgnoreCase).Count())list.Add(Issue("P4.DuplicateNodeId","Duplicate node ids detected.")); return list;} }
 public sealed class Phase5Certifier(IPhaseArtifactRegistry r, ICertificationArtifactVerifier v) : PhaseCertifierBase(r,v) { public override int PhaseNumber => 5; protected override string PhaseName => "Editorial Intelligence"; protected override async Task<IEnumerable<CertificationIssue>> ValidateAsync(FamilyCertificationContext c, CancellationToken t){ var list=new List<CertificationIssue>(); foreach(var p in new[]{"editorial/observation-metadata.json","editorial/scene-intents.json","editorial/editorial-contract.json"}) if(await Read(c,p,t) is null) list.Add(Issue("P5.RequiredArtifactMissing",$"Required editorial artifact missing: {p}")); var si=await Read(c,"editorial/scene-intents.json",t); if(si!=null){var intents=Arr(si.RootElement,"intents","sceneIntents","SceneIntents").ToArray(); if(intents.Length==0)list.Add(Issue("P5.EmptyIntentCollection","Scene intents are required.")); var ids=intents.Select(i=>Str(i,"id","intentId","sceneId")).Where(x=>!string.IsNullOrWhiteSpace(x)).ToArray(); if(ids.Length!=ids.Distinct(StringComparer.OrdinalIgnoreCase).Count())list.Add(Issue("P5.DuplicateIntentId","Duplicate intent ids detected."));} return list;} }
 public sealed class Phase6Certifier(IPhaseArtifactRegistry r, ICertificationArtifactVerifier v) : PhaseCertifierBase(r,v) { public override int PhaseNumber => 6; protected override string PhaseName => "Creative Intelligence / Story Frames"; protected override async Task<IEnumerable<CertificationIssue>> ValidateAsync(FamilyCertificationContext c, CancellationToken t){ var list=new List<CertificationIssue>(); foreach(var folder in new[]{"story-frames/short","story-frames/long"}){var dir=CertificationPathHelpers.ResolveArtifactPath(c,folder); if(!Directory.Exists(dir))continue; var scenes=new List<(string path,string? id)>(); foreach(var f in Directory.EnumerateFiles(dir,"scene-*.json").Where(f=>!Path.GetFileName(f).Contains("manifest",StringComparison.OrdinalIgnoreCase)&&!Path.GetFileName(f).Contains("diagnostic",StringComparison.OrdinalIgnoreCase)&&!Path.GetFileName(f).Contains("tmp",StringComparison.OrdinalIgnoreCase))){var rr=await new CertificationJsonReader().ReadAsync(f,t); if(!rr.ValidJson||rr.Document is null){list.Add(Issue("P6.InvalidSceneJson","Scene JSON is invalid.",f)); continue;} var id=Str(rr.Document.RootElement,"sceneId","id","SceneId"); if(string.IsNullOrWhiteSpace(id))list.Add(Issue("P6.SceneMissing","Scene identity is missing.",f)); if(!rr.Document.RootElement.ToString().Contains("intent",StringComparison.OrdinalIgnoreCase))list.Add(Issue("P6.NarrationIntentsMissing","Required narration intent collections are missing.",f)); scenes.Add((f,id));} var dups=scenes.Select(s=>s.id).Where(x=>!string.IsNullOrWhiteSpace(x)).GroupBy(x=>x!,StringComparer.OrdinalIgnoreCase).Where(g=>g.Count()>1); foreach(var _ in dups)list.Add(Issue("P6.DuplicateSceneId","Duplicate scene ids detected.")); var mf=Path.Combine(dir,"manifest.json"); var m=await new CertificationJsonReader().ReadAsync(mf,t); if(m.Exists&&m.ValidJson&&m.Document!=null){var refs=Arr(m.Document.RootElement,"scenes","sceneIds","Scenes").ToArray(); var count=refs.Length>0?refs.Length:(int?)null; if(count.HasValue&&count.Value!=scenes.Count)list.Add(Issue("P6.ManifestCountMismatch","Manifest scene count does not match physical scene count.",mf)); foreach(var rj in refs){var rid=rj.ValueKind==JsonValueKind.String?rj.GetString():Str(rj,"sceneId","id"); if(!string.IsNullOrWhiteSpace(rid)&&!scenes.Any(s=>string.Equals(s.id,rid,StringComparison.OrdinalIgnoreCase)))list.Add(Issue("P6.InvalidManifestReference","Manifest references a missing scene.",mf));}}} return list;} }
-public sealed class Phase7Certifier(IPhaseArtifactRegistry r, ICertificationArtifactVerifier v, IFamilyCertificationProfileRegistry profiles, ISemanticCertificationEvidenceReader evidenceReader, IForbiddenConceptValidator forbidden, IStoryBeatCoverageValidator storyBeat) : PhaseCertifierBase(r,v)
+public sealed class Phase7Certifier(IPhaseArtifactRegistry r, ICertificationArtifactVerifier v, IFamilyCertificationProfileRegistry profiles, ISemanticCertificationEvidenceReader evidenceReader, IForbiddenConceptValidator forbidden, IStoryBeatCoverageValidator storyBeat, ISemanticFactCatalog? factCatalog = null) : PhaseCertifierBase(r,v)
 {
     public override int PhaseNumber => 7;
     protected override string PhaseName => "Narration Studio V5";
+    private readonly ISemanticFactCatalog factCatalog = factCatalog ?? new CertificationSemanticFactCatalog();
     public override async Task<PhaseCertificationResult> CertifyAsync(FamilyCertificationContext context, CancellationToken cancellationToken)
     {
         IFamilyCertificationProfile? profile = null;
@@ -166,7 +167,7 @@ public sealed class Phase7Certifier(IPhaseArtifactRegistry r, ICertificationArti
         if (profile is not null)
         {
             if (!string.IsNullOrWhiteSpace(evidence.FamilyId) && !profile.FamilyId.Equals(evidence.FamilyId, StringComparison.OrdinalIgnoreCase) && !profile.SupportedEventTypeAliases.Contains(evidence.FamilyId)) semanticIssues.Add(SIssue(CertificationIssueCategory.FamilyMismatch, "P7.FamilyProfileMismatch", $"Evidence family '{evidence.FamilyId}' does not match profile '{profile.FamilyId}'.", null));
-            if (!evidence.CanonicalIdentityPresent) semanticIssues.Add(SIssue(CertificationIssueCategory.MissingSemanticFact, "P7.RequiredFactUnresolved", "Canonical event identity evidence is missing.", "EventIdentity"));
+            if (!evidence.CanonicalIdentityPresent) semanticIssues.Add(SIssue(CertificationIssueCategory.MissingSemanticFact, "P7.RequiredFactUnresolved", "Canonical event identity evidence is missing.", factCatalog.ResolveFactId("EventIdentity").FactId));
             if (profile.CanonicalSemanticValueId is not null && (!evidence.CanonicalFamilyValuePresent || !string.Equals(profile.CanonicalSemanticValueId, evidence.CanonicalSemanticValueId, StringComparison.OrdinalIgnoreCase))) semanticIssues.Add(SIssue(CertificationIssueCategory.MissingCanonicalValue, "P7.CanonicalFamilyValueMissing", $"Canonical semantic value '{profile.CanonicalSemanticValueId}' is missing.", profile.CanonicalSemanticValueId));
             foreach (var req in profile.GetRequiredFacts(context).Where(f=>f.Required))
             {
@@ -193,11 +194,30 @@ public sealed class Phase7Certifier(IPhaseArtifactRegistry r, ICertificationArti
     {
         var docs = new[] { await Read(c,"narration-v5/narration-validation-diagnostics.json",t), await Read(c,"narration-v5/narration-diagnostics.json",t), await Read(c,"validation/phase-07-validation.json",t) }.Where(d=>d is not null).ToArray();
         if (docs.Length == 0) return CertificationStatus.NotEvaluated;
-        var text = string.Join("\n", docs.Select(d=>d!.RootElement.ToString()));
-        if (text.Contains("Do Not Publish", StringComparison.OrdinalIgnoreCase) || text.Contains("doNotPublish", StringComparison.OrdinalIgnoreCase) || text.Contains("\"requiredFactsPreserved\": false", StringComparison.OrdinalIgnoreCase) || text.Contains("\"longNarrationQualityAccepted\": false", StringComparison.OrdinalIgnoreCase) || text.Contains("\"shortNarrationQualityAccepted\": false", StringComparison.OrdinalIgnoreCase) || text.Contains("\"finalDecision\": \"Failed", StringComparison.OrdinalIgnoreCase)) return CertificationStatus.Failed;
-        if (text.Contains("warning", StringComparison.OrdinalIgnoreCase)) return CertificationStatus.PassedWithWarnings;
-        if (text.Contains("requiredFactsPreserved", StringComparison.OrdinalIgnoreCase) || text.Contains("finalDecision", StringComparison.OrdinalIgnoreCase) || text.Contains("publish", StringComparison.OrdinalIgnoreCase)) return CertificationStatus.Passed;
-        return CertificationStatus.NotEvaluated;
+        var sawQuality = false; var sawWarning = false;
+        foreach (var doc in docs) foreach (var value in QualityValues(doc!.RootElement))
+        {
+            sawQuality = true;
+            if (value is bool b && !b) return CertificationStatus.Failed;
+            if (value is string s)
+            {
+                if (s.Equals("Do Not Publish", StringComparison.OrdinalIgnoreCase) || s.Contains("Failed", StringComparison.OrdinalIgnoreCase) || s.Contains("Fail", StringComparison.OrdinalIgnoreCase)) return CertificationStatus.Failed;
+                if (s.Contains("warning", StringComparison.OrdinalIgnoreCase)) sawWarning = true;
+            }
+        }
+        return sawWarning ? CertificationStatus.PassedWithWarnings : sawQuality ? CertificationStatus.Passed : CertificationStatus.NotEvaluated;
+    }
+    private static IEnumerable<object> QualityValues(JsonElement e)
+    {
+        if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject())
+        {
+            var n = p.Name;
+            var isQuality = n.Equals("requiredFactsPreserved", StringComparison.OrdinalIgnoreCase) || n.Equals("longNarrationQualityAccepted", StringComparison.OrdinalIgnoreCase) || n.Equals("shortNarrationQualityAccepted", StringComparison.OrdinalIgnoreCase) || n.Equals("finalDecision", StringComparison.OrdinalIgnoreCase) || n.Equals("publicationDecision", StringComparison.OrdinalIgnoreCase) || n.Contains("warning", StringComparison.OrdinalIgnoreCase) || n.Contains("status", StringComparison.OrdinalIgnoreCase) || n.Contains("result", StringComparison.OrdinalIgnoreCase);
+            if (isQuality && p.Value.ValueKind == JsonValueKind.Bool) yield return p.Value.GetBoolean();
+            if (isQuality && p.Value.ValueKind == JsonValueKind.String) yield return p.Value.GetString() ?? string.Empty;
+            foreach (var x in QualityValues(p.Value)) yield return x;
+        }
+        else if (e.ValueKind == JsonValueKind.Array) foreach (var a in e.EnumerateArray()) foreach (var x in QualityValues(a)) yield return x;
     }
 }
 
@@ -205,7 +225,7 @@ public static class CgA1CertificationTask2ServiceCollectionExtensions
 {
     public static IServiceCollection AddCgA1PhaseCertification(this IServiceCollection services)
     {
-        services.AddSingleton<ICertificationJsonReader, CertificationJsonReader>(); services.AddSingleton<ICertificationArtifactVerifier, CertificationArtifactVerifier>(); services.AddSingleton<IPhaseArtifactRegistry, PhaseArtifactRegistry>(); services.AddSingleton<ISemanticCertificationEvidenceReader, SemanticCertificationEvidenceReader>(); services.AddSingleton<IForbiddenConceptValidator, ForbiddenConceptValidator>(); services.AddSingleton<IStoryBeatCoverageValidator, StoryBeatCoverageValidator>();
+        services.AddSingleton<ISemanticFactCatalog, CertificationSemanticFactCatalog>(); services.AddSingleton<ICertificationJsonReader, CertificationJsonReader>(); services.AddSingleton<ICertificationArtifactVerifier, CertificationArtifactVerifier>(); services.AddSingleton<IPhaseArtifactRegistry, PhaseArtifactRegistry>(); services.AddSingleton<ISemanticCertificationEvidenceReader, SemanticCertificationEvidenceReader>(); services.AddSingleton<IForbiddenConceptValidator, ForbiddenConceptValidator>(); services.AddSingleton<IStoryBeatCoverageValidator, StoryBeatCoverageValidator>();
         services.AddSingleton<IPhaseCertifier, Phase1Certifier>(); services.AddSingleton<IPhaseCertifier, Phase2Certifier>(); services.AddSingleton<IPhaseCertifier, Phase3Certifier>(); services.AddSingleton<IPhaseCertifier, Phase4Certifier>(); services.AddSingleton<IPhaseCertifier, Phase5Certifier>(); services.AddSingleton<IPhaseCertifier, Phase6Certifier>(); services.AddSingleton<IPhaseCertifier, Phase7Certifier>();
         return services;
     }
