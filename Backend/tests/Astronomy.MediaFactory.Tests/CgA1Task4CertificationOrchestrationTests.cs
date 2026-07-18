@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core.Certification;
+using CertificationPublicationDecision = Astronomy.MediaFactory.Core.Certification.PublicationDecision;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -53,7 +54,7 @@ public sealed class CgA1Task4CertificationOrchestrationTests
         calls.Should().Equal(1, 2);
         summary.Phases.Single(p => p.PhaseNumber == 1).Issues.Should().Contain(i => i.Code == "CERT.PhaseExecutionException");
         summary.CertificationDecision.Should().Be(CertificationDecision.NotCertified);
-        summary.PublicationDecision.Should().Be(PublicationDecision.DoNotPublish);
+        summary.PublicationDecision.Should().Be(CertificationPublicationDecision.DoNotPublish);
     }
 
     [Fact]
@@ -73,7 +74,7 @@ public sealed class CgA1Task4CertificationOrchestrationTests
         summary.SemanticStatus.Should().Be(CertificationStatus.Passed);
         summary.QualityStatus.Should().Be(CertificationStatus.Failed);
         summary.CertificationDecision.Should().Be(CertificationDecision.Certified);
-        summary.PublicationDecision.Should().Be(PublicationDecision.DoNotPublish);
+        summary.PublicationDecision.Should().Be(CertificationPublicationDecision.DoNotPublish);
     }
 
     [Fact]
