@@ -33,6 +33,11 @@ public sealed class PipelineRun : EntityBase
     public string? EventTitle { get; set; }
     public string? EventDescription { get; set; }
     public string? DecisionType { get; set; }
+    public string? CertificationSummaryPath { get; set; }
+    public string? CertificationDashboardPath { get; set; }
+    public string? CertificationReportPath { get; set; }
+    public string? CertificationDecision { get; set; }
+    public string? PublicationDecision { get; set; }
     public bool InjectedIntoDailyGuide { get; set; }
     public bool SpecialEventGuideGenerated { get; set; }
 }

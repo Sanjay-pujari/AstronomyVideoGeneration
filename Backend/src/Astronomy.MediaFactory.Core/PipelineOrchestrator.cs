@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core.Certification;
 using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -56,6 +57,8 @@ public sealed class PipelineOrchestrator
     private readonly IAIOptimizationPipelineService? _aiOptimizationPipelineService;
     private readonly ISafeAnalyticsExecutor? _safeAnalyticsExecutor;
     private readonly IVisualIntelligenceOrchestrator? _visualIntelligenceOrchestrator;
+    private readonly ICertificationCoordinator? _certificationCoordinator;
+    private readonly CertificationOptions _certificationOptions;
 
     public PipelineOrchestrator(
         IAstronomyContextProvider contextProvider,
@@ -102,7 +105,9 @@ public sealed class PipelineOrchestrator
         ICinematicThumbnailService? cinematicThumbnailService = null,
         IAIOptimizationPipelineService? aiOptimizationPipelineService = null,
         ISafeAnalyticsExecutor? safeAnalyticsExecutor = null,
-        IVisualIntelligenceOrchestrator? visualIntelligenceOrchestrator = null)
+        IVisualIntelligenceOrchestrator? visualIntelligenceOrchestrator = null,
+        ICertificationCoordinator? certificationCoordinator = null,
+        IOptions<CertificationOptions>? certificationOptions = null)
     {
         _contextProvider = contextProvider;
         _topicRankingService = topicRankingService;
@@ -149,6 +154,8 @@ public sealed class PipelineOrchestrator
         _aiOptimizationPipelineService = aiOptimizationPipelineService;
         _safeAnalyticsExecutor = safeAnalyticsExecutor;
         _visualIntelligenceOrchestrator = visualIntelligenceOrchestrator;
+        _certificationCoordinator = certificationCoordinator;
+        _certificationOptions = certificationOptions?.Value ?? new CertificationOptions();
     }
 
     public async Task<PipelineRun> RunAsync(RunPipelineRequest request, CancellationToken cancellationToken, Guid? pipelineRunId = null)
@@ -1159,6 +1166,39 @@ public sealed class PipelineOrchestrator
                 analyticsRecordsCreated = analyticsRecordCount,
                 errors = intelligenceErrors
             }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+
+            if (_certificationOptions.Enabled && _certificationCoordinator is not null)
+            {
+                try
+                {
+                    var certificationSummary = await _certificationCoordinator.CertifyAsync(new FamilyCertificationContext
+                    {
+                        OutputRoot = outputDir,
+                        ValidationRoot = Path.Combine(outputDir, "validation"),
+                        PlanId = run.Id.ToString(),
+                        EventTitle = run.EventTitle ?? request.EventTitle ?? request.ContentType.ToString(),
+                        EventType = run.EventType ?? request.EventType ?? request.ContentType.ToString(),
+                        Language = run.Language,
+                        RegionId = run.RegionId,
+                        RequestedStartPhase = 1,
+                        RequestedEndPhase = 7
+                    }, cancellationToken);
+
+                    run.CertificationSummaryPath = certificationSummary.ReportPaths.GetValueOrDefault("summary");
+                    run.CertificationDashboardPath = certificationSummary.ReportPaths.GetValueOrDefault("dashboard");
+                    run.CertificationReportPath = certificationSummary.ReportPaths.GetValueOrDefault("markdown");
+                    run.CertificationDecision = certificationSummary.CertificationDecision.ToString();
+                    run.PublicationDecision = certificationSummary.PublicationDecision.ToString();
+                    if (_certificationOptions.FailPipelineOnCertificationFailure && certificationSummary.CertificationDecision == CertificationDecision.NotCertified)
+                        throw new InvalidOperationException("Certification completed with NotCertified decision.");
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) when (!_certificationOptions.FailPipelineOnCertificationFailure)
+                {
+                    intelligenceErrors.Add($"Certification technical failure: {ex.Message}");
+                    _logger.LogWarning(ex, "Certification failed technically for pipeline run {PipelineRunId}", run.Id);
+                }
+            }
 
             if (_pipelineStageExecutor is not null)
             {

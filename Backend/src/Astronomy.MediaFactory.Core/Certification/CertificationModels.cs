@@ -48,6 +48,7 @@ public sealed record SemanticFactCertificationResult
 
 public sealed record PhaseCertificationResult
 {
+    public string SchemaVersion { get; init; } = "cg-a1-certification.v1";
     public required int PhaseNumber { get; init; }
     public required string PhaseName { get; init; }
     public required CertificationStatus StructuralStatus { get; init; }
@@ -63,17 +64,26 @@ public sealed record PhaseCertificationResult
 
 public sealed record FamilyCertificationSummary
 {
+    public string SchemaVersion { get; init; } = "cg-a1-certification.v1";
     public required string PlanId { get; init; }
     public required string EventTitle { get; init; }
     public required string EventType { get; init; }
     public required string FamilyId { get; init; }
     public required string Language { get; init; }
     public required string RegionId { get; init; }
+    public int RequestedStartPhase { get; init; }
+    public int RequestedEndPhase { get; init; }
     public required CertificationStatus ExecutionStatus { get; init; }
+    public CertificationStatus StructuralStatus { get; init; }
     public required CertificationStatus SemanticStatus { get; init; }
     public required CertificationStatus QualityStatus { get; init; }
+    public CertificationDecision CertificationDecision { get; init; }
+    public PublicationDecision PublicationDecision { get; init; }
     public IReadOnlyList<PhaseCertificationResult> Phases { get; init; } = [];
     public IReadOnlyList<CertificationIssue> BlockingIssues { get; init; } = [];
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+    public IReadOnlyList<int> FailedPhaseNumbers { get; init; } = [];
+    public IReadOnlyDictionary<string, string?> ReportPaths { get; init; } = new Dictionary<string, string?>();
     public bool ExecutionCertified { get; init; }
     public bool SemanticCertified { get; init; }
     public bool PublicationCertified { get; init; }

@@ -5,6 +5,7 @@ using Astronomy.MediaFactory.AstroData.Services;
 using Astronomy.MediaFactory.ContentGen;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.Certification;
 using Astronomy.MediaFactory.Infrastructure;
 using Astronomy.MediaFactory.Infrastructure.Alerting;
 using Astronomy.MediaFactory.Infrastructure.Analytics;
@@ -117,6 +118,10 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(ProductionPipelineOptions.SectionName))
             .Validate(options => options.StaleRunningThresholdMinutes > 0, "ProductionPipeline:StaleRunningThresholdMinutes must be greater than zero.")
             .ValidateOnStart();
+        services.AddOptions<CertificationOptions>()
+            .Bind(configuration.GetSection(CertificationOptions.SectionName))
+            .ValidateOnStart();
+        services.AddCgA1CertificationFoundation();
 
         services.AddOptions<RenderingOptions>()
             .Bind(configuration.GetSection(RenderingOptions.SectionName))
