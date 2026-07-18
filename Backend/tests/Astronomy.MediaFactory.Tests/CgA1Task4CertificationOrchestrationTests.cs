@@ -40,7 +40,16 @@ public sealed class CgA1Task4CertificationOrchestrationTests
         File.Exists(Path.Combine(temp.Path, "certification", "certification-report.md")).Should().BeTrue();
         using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(temp.Path, "certification", "certification-summary.json")));
         doc.RootElement.GetProperty("schemaVersion").GetString().Should().Be("cg-a1-certification.v1");
-        doc.RootElement.GetProperty("certificationDecision").GetString().Should().Be("Certified");
+        doc.RootElement.GetProperty("certificationDecision")
+     .GetString()
+     .Should()
+     .Be("NotEvaluated");
+        
+        summary.StructuralStatus.Should().Be(CertificationStatus.Passed);
+        summary.SemanticStatus.Should().Be(CertificationStatus.NotEvaluated);
+        summary.QualityStatus.Should().Be(CertificationStatus.NotEvaluated);
+        summary.CertificationDecision.Should().Be(CertificationDecision.NotEvaluated);
+        summary.PublicationDecision.Should().Be(Core.Certification.PublicationDecision.NotEvaluated);
     }
 
     [Fact]
@@ -83,7 +92,10 @@ public sealed class CgA1Task4CertificationOrchestrationTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
         var coordinator = Build([new StubCertifier(1, [], CertificationStatus.Passed)]);
-        await Assert.ThrowsAsync<OperationCanceledException>(() => coordinator.CertifyAsync(Context(temp.Path, 1, 1, "MeteorShower"), cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+      () => coordinator.CertifyAsync(
+          Context(temp.Path, 1, 1, "MeteorShower"),
+          cts.Token));
     }
 
     private static ICertificationCoordinator Build(IReadOnlyList<IPhaseCertifier> certifiers)
