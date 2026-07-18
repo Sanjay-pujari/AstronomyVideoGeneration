@@ -8,9 +8,10 @@ public sealed record ForbiddenConceptValidationResult(string ConceptId, string M
 public interface IForbiddenConceptValidator { Task<IReadOnlyList<ForbiddenConceptValidationResult>> ValidateAsync(FamilyCertificationContext context, IFamilyCertificationProfile profile, CancellationToken cancellationToken); }
 public interface IStoryBeatCoverageValidator { IReadOnlyList<CertificationIssue> Validate(IFamilyCertificationProfile profile, FamilyCertificationContext context, SemanticCertificationEvidence evidence); }
 
-public sealed class SemanticCertificationEvidenceReader(ICertificationJsonReader? reader = null) : ISemanticCertificationEvidenceReader
+public sealed class SemanticCertificationEvidenceReader(ICertificationJsonReader? reader = null, ISemanticFactCatalog? catalog = null) : ISemanticCertificationEvidenceReader
 {
     private readonly ICertificationJsonReader reader = reader ?? new CertificationJsonReader();
+    private readonly ISemanticFactCatalog catalog = catalog ?? new CertificationSemanticFactCatalog();
     private static readonly string[] EvidencePaths = ["narration-v5/event-identity-diagnostics.json", "narration-v5/family-profile-v1-compatibility-diagnostics.json", "narration-v5/semantic-registry-validation-report.json", "narration-v5/semantic-capability-diagnostics.json", "narration-v5/required-semantic-fact-diagnostics.json", "narration-v5/meteor-shower-shadow-validation.json", "narration-v5/narration-context.json", "narration-v5/narration-plan.json", "narration-v5/narration-briefs.json", "narration-v5/scene-fact-cards/long/scene-fact-cards.json", "narration-v5/scene-fact-cards/short/scene-fact-cards.json", "narration-v5/documentary-script/long/documentary-script.json", "narration-v5/documentary-script/short/documentary-script.json", "narration-v5/long/narration.json", "narration-v5/short/narration.json", "narration-v5/narration-diagnostics.json", "narration-v5/narration-validation-diagnostics.json", "narration-v5/runtime-composition-diagnostics.json", "validation/phase-07-validation.json"];
     public async Task<SemanticCertificationEvidence> ReadAsync(FamilyCertificationContext context, CancellationToken cancellationToken)
     {
@@ -22,10 +23,26 @@ public sealed class SemanticCertificationEvidenceReader(ICertificationJsonReader
         }
         var all = docs.Select(d => d.Doc.RootElement).ToArray();
         var family = FirstString(all, "familyId", "FamilyId", "canonicalFamilyId", "CanonicalFamilyId", "eventType", "EventType") ?? context.EventType;
-        var canonical = ContainsAny(all, "MeteorActivity") ? "MeteorActivity" : ContainsAny(all, "PlanetPairing", "PlanetConjunction", "AstronomicalObjects") ? "PlanetPairing" : null;
-        var facts = new[] { "EventIdentity", "EventWindow", "ObservationDirection", "MeteorActivity", "DomainScientificKnowledge", "AstronomicalObjects", "AngularSeparation", "SecondaryAstronomicalObjects" }
-            .Select(f => BuildFact(f, docs)).Where(f => f.Resolved || f.Projected || f.Retained || f.BeatAssigned || f.NarrationEvidenceFound).ToArray();
-        return new SemanticCertificationEvidence { CanonicalIdentityPresent = HasFact("EventIdentity", facts) || ContainsAny(all, "canonicalIdentityPresent", context.EventTitle), CanonicalFamilyValuePresent = canonical is not null, FamilyId = family, CanonicalSemanticValueId = canonical, Facts = facts, Diagnostics = docs.Select(d => d.Path).Concat(docs.SelectMany(d => FlattenValues(d.Doc.RootElement))).ToArray() };
+        var diagnostics = docs.Select(d => d.Path).ToList();
+        var canonical = ResolveCanonicalSemanticValue(all, family, context, diagnostics);
+        var factIds = catalog.Facts.Select(f => f.FactId).ToArray();
+        var facts = factIds.Select(f => BuildFact(f, docs)).Where(f => f.Resolved || f.Projected || f.Retained || f.BeatAssigned || f.NarrationEvidenceFound).ToArray();
+        diagnostics.AddRange(docs.SelectMany(d => StructuredRoleValues(d.Doc.RootElement).Select(v => $"structured-story-role:{v}")));
+        diagnostics.AddRange(docs.SelectMany(d => FlattenValues(d.Doc.RootElement)));
+        return new SemanticCertificationEvidence { CanonicalIdentityPresent = HasFact(catalog.ResolveFactId("EventIdentity").FactId, facts) || ContainsAny(all, "canonicalIdentityPresent", context.EventTitle), CanonicalFamilyValuePresent = canonical is not null, FamilyId = family, CanonicalSemanticValueId = canonical, Facts = facts, Diagnostics = diagnostics.ToArray() };
+    }
+
+    private string? ResolveCanonicalSemanticValue(IEnumerable<JsonElement> roots, string? family, FamilyCertificationContext context, List<string> diagnostics)
+    {
+        var direct = FirstString(roots, "canonicalSemanticValueId", "CanonicalSemanticValueId");
+        if (!string.IsNullOrWhiteSpace(direct)) return direct;
+        var fromObject = FirstString(roots, "canonicalSemanticValue", "canonicalEventType", "canonicalProfile", "canonicalFamily");
+        if (!string.IsNullOrWhiteSpace(fromObject)) return catalog.ResolveCanonicalValueOrNull(fromObject) ?? fromObject;
+        var diag = FirstString(roots, "resolvedCanonicalSemanticValueId", "resolvedFamilyId", "resolvedProfileId");
+        if (!string.IsNullOrWhiteSpace(diag)) return catalog.ResolveCanonicalValueOrNull(diag) ?? diag;
+        diagnostics.Add("fallback:canonical-semantic-value:text-matching");
+        if (!string.IsNullOrWhiteSpace(family)) return catalog.ResolveCanonicalValueOrNull(family);
+        return catalog.ResolveCanonicalValueOrNull(context.EventType);
     }
     private static SemanticFactCertificationResult BuildFact(string fact, IReadOnlyList<(string Path, JsonDocument Doc)> docs)
     {
@@ -42,6 +59,7 @@ public sealed class SemanticCertificationEvidenceReader(ICertificationJsonReader
     private static bool HasFact(string id, IEnumerable<SemanticFactCertificationResult> facts) => facts.Any(f => f.FactId.Equals(id, StringComparison.OrdinalIgnoreCase) && f.Resolved);
     internal static bool ContainsAny(IEnumerable<JsonElement> roots, params string[] terms) => roots.Any(r => FlattenValues(r).Any(v => terms.Any(t => v.Contains(t, StringComparison.OrdinalIgnoreCase))));
     internal static IEnumerable<string> FlattenValues(JsonElement e) { if (e.ValueKind == JsonValueKind.String) yield return e.GetString() ?? ""; else if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject()) foreach (var s in FlattenValues(p.Value)) yield return s; else if (e.ValueKind == JsonValueKind.Array) foreach (var a in e.EnumerateArray()) foreach (var s in FlattenValues(a)) yield return s; }
+    internal static IEnumerable<string> StructuredRoleValues(JsonElement e) => StringsNamed(e, "storyRole", "roleId", "beatRole", "documentaryRole", "scenePurpose", "requiredRoleIds");
     internal static IEnumerable<string> StringsNamed(JsonElement e, params string[] names) { if (e.ValueKind == JsonValueKind.Object) foreach (var p in e.EnumerateObject()) { if (names.Contains(p.Name, StringComparer.OrdinalIgnoreCase) && p.Value.ValueKind == JsonValueKind.String) yield return p.Value.GetString()!; foreach (var s in StringsNamed(p.Value, names)) yield return s; } else if (e.ValueKind == JsonValueKind.Array) foreach (var a in e.EnumerateArray()) foreach (var s in StringsNamed(a, names)) yield return s; }
     private static string? FirstString(IEnumerable<JsonElement> roots, params string[] names) => roots.SelectMany(r => StringsNamed(r, names)).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
     private static double? FirstNumber(IEnumerable<JsonElement> roots, params string[] names) { foreach (var r in roots) foreach (var n in NumbersNamed(r, names)) return n; return null; }
@@ -62,6 +80,19 @@ public sealed class ForbiddenConceptValidator(ICertificationJsonReader? reader =
 public sealed class StoryBeatCoverageValidator : IStoryBeatCoverageValidator
 {
     public IReadOnlyList<CertificationIssue> Validate(IFamilyCertificationProfile profile, FamilyCertificationContext context, SemanticCertificationEvidence evidence)
-    { var issues = new List<CertificationIssue>(); foreach (var r in profile.GetStoryRequirements(context).Where(r=>r.Required)) if (!SemanticCertificationEvidenceReader.ContainsAny(evidence.Facts.Select(f => JsonSerializer.SerializeToElement(f)), r.StoryRole) && !evidence.Diagnostics.Any(d => d.Contains(r.StoryRole, StringComparison.OrdinalIgnoreCase))) issues.Add(Issue(CertificationIssueCategory.StoryStructureFailure, "P7.StoryRoleMissing", $"Required story role '{r.StoryRole}' was not found.", null)); foreach (var req in profile.GetBeatCoverageRequirements(context).Where(r=>r.Required)) { var fact = evidence.Facts.FirstOrDefault(f=>f.FactId.Equals(req.FactId,StringComparison.OrdinalIgnoreCase)); if (fact is null || !fact.BeatAssigned) issues.Add(Issue(CertificationIssueCategory.BeatAssignmentFailure, "P7.RequiredFactNotBeatAssigned", $"Required fact '{req.FactId}' was not assigned to an allowed beat.", req.FactId)); else if (fact.BeatIds.Count > 0 && !fact.BeatIds.Any(b=>req.AllowedBeatRoles.Any(a=>b.Contains(a,StringComparison.OrdinalIgnoreCase)))) issues.Add(Issue(CertificationIssueCategory.BeatAssignmentFailure, "P7.RequiredFactNotBeatAssigned", $"Required fact '{req.FactId}' was assigned only to disallowed beats.", req.FactId)); } return issues; }
+    {
+        var issues = new List<CertificationIssue>();
+        var structuredRoles = evidence.Diagnostics.Where(d => d.StartsWith("structured-story-role:", StringComparison.OrdinalIgnoreCase)).Select(d => d[22..]).ToArray();
+        foreach (var r in profile.GetStoryRequirements(context).Where(r=>r.Required))
+        {
+            var found = structuredRoles.Length > 0
+                ? structuredRoles.Any(role => role.Equals(r.StoryRole, StringComparison.OrdinalIgnoreCase))
+                : evidence.Diagnostics.Any(d => d.Contains(r.StoryRole, StringComparison.OrdinalIgnoreCase));
+            if (!found) issues.Add(Issue(CertificationIssueCategory.StoryStructureFailure, "P7.StoryRoleMissing", $"Required story role '{r.StoryRole}' was not found.", null));
+        }
+        foreach (var req in profile.GetBeatCoverageRequirements(context).Where(r=>r.Required)) { var fact = evidence.Facts.FirstOrDefault(f=>f.FactId.Equals(req.FactId,StringComparison.OrdinalIgnoreCase)); if (fact is null || !fact.BeatAssigned) issues.Add(Issue(CertificationIssueCategory.BeatAssignmentFailure, "P7.RequiredFactNotBeatAssigned", $"Required fact '{req.FactId}' was not assigned to an allowed beat.", req.FactId)); else if (fact.BeatIds.Count > 0 && !fact.BeatIds.Any(b=>req.AllowedBeatRoles.Any(a=>b.Contains(a,StringComparison.OrdinalIgnoreCase)))) issues.Add(Issue(CertificationIssueCategory.BeatAssignmentFailure, "P7.RequiredFactNotBeatAssigned", $"Required fact '{req.FactId}' was assigned only to disallowed beats.", req.FactId)); } return issues;
+    }
     private static CertificationIssue Issue(CertificationIssueCategory category, string code, string message, string? fact) => new() { Category = category, Code = code, Message = message, SemanticFactId = fact, IsBlocking = true, Source = "Phase7SemanticCertification" };
 }
+
+file static class SemanticFactCatalogExtensions { public static string? ResolveCanonicalValueOrNull(this ISemanticFactCatalog catalog, string value) { try { return catalog.ResolveCanonicalValue(value); } catch { return null; } } }
