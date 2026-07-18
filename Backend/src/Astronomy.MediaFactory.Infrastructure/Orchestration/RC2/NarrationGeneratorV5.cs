@@ -1887,7 +1887,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             EventIdentity: ObservedText(FirstNonEmpty(request?.SourceExternalEventId, request?.ShortTitle, request?.Title), "request.eventIdentity"),
             EventStart: ObservedScalar(request?.StartUtc, "request.startUtc"),
             EventEnd: ObservedScalar(request?.EndUtc, "request.endUtc"),
-            ObserverLocation: ObservedText(FirstNonEmpty(request?.RegionName, request?.RegionId), "request.observerLocation"),
+            ObserverLocation: ObservedText(FirstNonEmpty(request?.VisibilityRegion, request?.RegionId), "request.observerLocation"),
             Language: ObservedText(input.LanguageProfile.LanguageCode, "languageProfile.languageCode"),
             Format: ObservedText(request?.PlannedFormat, "request.plannedFormat"),
             LocalViewingGuide: ObservedText(FirstNonEmpty(request?.BestViewingWindowLocal, request?.LocalPeakTime), "request.localViewingGuide"),
@@ -1901,7 +1901,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 
     private static MeteorShowerObservedValue? ObservedText(string? value, string sourceId) => string.IsNullOrWhiteSpace(value) ? null : new MeteorShowerObservedValue(value, "string", sourceId);
     private static MeteorShowerObservedValue? ObservedScalar(object? value, string sourceId) => value is null ? null : new MeteorShowerObservedValue(value, value.GetType().Name, sourceId);
-    private static MeteorShowerObservedValue ObservedFact(ResolvedSemanticFact fact) => new(fact.CanonicalValue, fact.FactType, fact.SourceArtifact, fact.SourceInputs ?? ImmutableArray<string>.Empty, ImmutableDictionary<string, string>.Empty.Add("factKey", fact.FactKey).Add("semanticMeaning", fact.SemanticMeaning));
+    private static MeteorShowerObservedValue ObservedFact(ResolvedSemanticFact fact) => new(fact.CanonicalValue, fact.FactType, fact.SourceArtifact, fact.SourceInputs?.ToImmutableArray() ?? ImmutableArray<string>.Empty, ImmutableDictionary<string, string>.Empty.Add("factKey", fact.FactKey).Add("semanticMeaning", fact.SemanticMeaning));
 
     private sealed record MeteorShowerShadowValidationReport(string ReportType, string Mode, string ExecutionId, string FamilyId, string ContractVersion, ImmutableArray<MeteorShowerShadowBoundaryReport> Boundaries, ImmutableDictionary<string, string> DiagnosticFields);
     private sealed record MeteorShowerShadowBoundaryReport(FamilyValidationBoundary Boundary, ExecutionValidationStatus Status, ImmutableArray<MeteorShowerShadowEvaluationReport> Evaluations, ImmutableArray<MeteorShowerShadowIssueReport> Issues);
