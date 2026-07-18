@@ -48,5 +48,16 @@ public sealed class ExecutionValidationPipeline : IExecutionValidationPipeline
 }
 public static class ExecutionValidationPipelineFactory
 {
-    public static IExecutionValidationPipeline CreateDefault(IExecutionClock? clock = null) => new ExecutionValidationPipeline(new IExecutionRequirementValidator[] { new ArtifactRequirementValidator(), new ContractValidationRuleValidator(), new InputRequirementValidator(), new ProjectionRequirementValidator(), new SemanticRequirementValidator() }, clock);
+    public static IExecutionValidationPipeline CreateDefault(IExecutionClock? clock = null) => new ExecutionValidationPipeline(new IExecutionRequirementValidator[]
+    {
+        new ArtifactRequirementValidator(),
+        new ContractValidationRuleValidator(FamilyValidationBoundary.PreExecution),
+        new ContractValidationRuleValidator(FamilyValidationBoundary.SemanticResolution),
+        new ContractValidationRuleValidator(FamilyValidationBoundary.Projection),
+        new ContractValidationRuleValidator(FamilyValidationBoundary.ArtifactGeneration),
+        new ContractValidationRuleValidator(FamilyValidationBoundary.PostExecution),
+        new InputRequirementValidator(),
+        new ProjectionRequirementValidator(),
+        new SemanticRequirementValidator()
+    }, clock);
 }
