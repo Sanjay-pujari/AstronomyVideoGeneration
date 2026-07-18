@@ -8,6 +8,8 @@ using System.Text.Json.Serialization;
 using System.Text.Unicode;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.ExecutionContracts;
+using Astronomy.MediaFactory.Core.ExecutionValidation;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Diagnostics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptComposer;
@@ -261,6 +263,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         };
         logger.LogInformation("phase7-resolver-call-complete Marker={Marker} ResolverType={ResolverType} ResultType={ResultType} Blocking={Blocking} BeatCount={BeatCount} RadiantCount={RadiantCount} PeakWindowCount={PeakWindowCount}", MediaFactoryRuntimeIdentity.SemanticArchitectureMarker, requiredSemanticFactResolver.GetType().FullName, semanticResolution.GetType().FullName, semanticResolution.Blocking, semanticResolution.Beats.Count, radiantCountAfterResolver, peakWindowCountAfterResolver);
         await RuntimeCompositionDiagnostics.WriteAsync(outputRoot, RuntimeCompositionDiagnostics.Build(this, this, requiredSemanticFactResolver, RuntimeCompositionDiagnostics.TryGetField<ISemanticResolutionEngineV1>(requiredSemanticFactResolver, "_semanticResolutionEngine"), RuntimeCompositionDiagnostics.TryGetField<ISemanticSourceAdapterRegistryV1>(requiredSemanticFactResolver, "_sourceAdapterRegistry"), RuntimeCompositionDiagnostics.TryGetField<ISemanticSourcePolicyCatalogV1>(requiredSemanticFactResolver, "_sourcePolicyCatalog"), null, resolverCallDiagnostics), cancellationToken);
+        if (familyProfile.FamilyId.Equals(MeteorShowerExecutionKeys.FamilyId, StringComparison.OrdinalIgnoreCase))
+            await WriteMeteorShowerShadowValidationAsync(narrationRoot, resolverInput, semanticResolution, radiantCountAfterResolver, peakWindowCountAfterResolver, cancellationToken);
         if (familyProfile.FamilyId.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase) && (radiantCountAfterResolver == 0 || peakWindowCountAfterResolver == 0))
         {
             var canonicalStatus = FindMeteorActivityCanonicalStatus(semanticResolution.Diagnostics);
@@ -1825,6 +1829,85 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         }
     }
 
+    private static async Task WriteMeteorShowerShadowValidationAsync(string narrationRoot, RequiredSemanticFactResolutionInput resolverInput, RequiredSemanticFactResolutionResult semanticResolution, int radiantFactCount, int peakWindowFactCount, CancellationToken cancellationToken)
+    {
+        var domain = AstronomyExecutionContractCatalog.Create();
+        var contract = domain.Families.Single(f => f.FamilyId.Equals(MeteorShowerExecutionKeys.FamilyId, StringComparison.OrdinalIgnoreCase));
+        var observation = BuildMeteorShowerProductionObservation(resolverInput, semanticResolution, radiantFactCount, peakWindowFactCount);
+        var context = new MeteorShowerExecutionContextBuilder().Build(observation, contract);
+        var pipeline = ExecutionValidationPipelineFactory.CreateDefault();
+        var boundaries = new[]
+        {
+            FamilyValidationBoundary.PreExecution,
+            FamilyValidationBoundary.SemanticResolution,
+            FamilyValidationBoundary.Projection,
+            FamilyValidationBoundary.PostExecution
+        };
+        var results = boundaries.Select(boundary => pipeline.Validate(new ExecutionValidationRequest(domain, contract, context, boundary))).ToArray();
+        var report = new MeteorShowerShadowValidationReport(
+            "MeteorShowerShadowValidation-v1",
+            "ObserveOnly",
+            context.ExecutionId,
+            context.FamilyId,
+            context.ContractVersion,
+            results.Select(r => new MeteorShowerShadowBoundaryReport(r.Boundary, r.Status, r.Evaluations.Select(e => new MeteorShowerShadowEvaluationReport(e.RequirementId, e.Outcome, e.Severity, e.SourceKey)).ToImmutableArray(), r.Issues.Select(i => new MeteorShowerShadowIssueReport(i.RequirementId, i.IssueCode, i.Severity, i.Outcome, i.SourceKey, i.Expected, i.Actual, i.Message)).ToImmutableArray())).ToImmutableArray(),
+            ImmutableDictionary<string, string>.Empty
+                .Add("productionAuthoritative", "true")
+                .Add("observeOnly", "true")
+                .Add("enforcementMode", "none")
+                .Add("semanticAdaptersInvoked", "false")
+                .Add("semanticResolutionInvoked", "false")
+                .Add("projectionMappersInvoked", "false"));
+
+        await WriteAllTextUtf8Async(Path.Combine(narrationRoot, "meteor-shower-shadow-validation.json"), JsonSerializer.Serialize(report, JsonOptions), cancellationToken);
+    }
+
+    private static MeteorShowerProductionObservation BuildMeteorShowerProductionObservation(RequiredSemanticFactResolutionInput input, RequiredSemanticFactResolutionResult semanticResolution, int radiantFactCount, int peakWindowFactCount)
+    {
+        var request = input.ProductionPipelineRequest;
+        var facts = semanticResolution.Beats.SelectMany(b => b.RequiredFacts.Concat(b.OptionalFacts)).ToArray();
+        var meteorActivity = facts.FirstOrDefault(f => f.SemanticMeaning.Equals(MeteorShowerExecutionKeys.Semantic.MeteorActivity, StringComparison.OrdinalIgnoreCase));
+        var radiant = facts.FirstOrDefault(f => f.FactType.Equals(MeteorShowerExecutionKeys.Semantic.Radiant, StringComparison.OrdinalIgnoreCase));
+        var peakWindow = facts.FirstOrDefault(f => f.FactType.Equals(MeteorShowerExecutionKeys.Semantic.PeakWindow, StringComparison.OrdinalIgnoreCase));
+        var projections = ImmutableDictionary.CreateBuilder<string, MeteorShowerObservedValue>(StringComparer.OrdinalIgnoreCase);
+        if (radiant is not null) projections[MeteorShowerExecutionKeys.Projection.RadiantFact] = ObservedFact(radiant);
+        if (peakWindow is not null) projections[MeteorShowerExecutionKeys.Projection.PeakWindowFact] = ObservedFact(peakWindow);
+
+        var rules = ImmutableDictionary.CreateBuilder<string, MeteorShowerObservedRuleValue>(StringComparer.OrdinalIgnoreCase);
+        var strategyConsistent = request is null || string.Equals(request.EventType, MeteorShowerExecutionKeys.FamilyId, StringComparison.OrdinalIgnoreCase) || string.Equals(request.ContentStrategy, MeteorShowerExecutionKeys.FamilyId, StringComparison.OrdinalIgnoreCase);
+        rules[MeteorShowerExecutionKeys.Rules.FamilyStrategyConsistency] = new MeteorShowerObservedRuleValue(strategyConsistent, $"EventType={request?.EventType}; ContentStrategy={request?.ContentStrategy}", "MeteorShower family observed without requiring a MeteorShower strategy literal", strategyConsistent ? null : "Production request did not expose a MeteorShower event family signal.");
+        rules[MeteorShowerExecutionKeys.Rules.ActivityObserved] = new MeteorShowerObservedRuleValue(meteorActivity is not null, meteorActivity is null ? "missing" : "present", "present", meteorActivity is null ? "MeteorActivity was not observed in production semantic output." : null);
+        rules[MeteorShowerExecutionKeys.Rules.SemanticLifecycleComplete] = new MeteorShowerObservedRuleValue(meteorActivity is not null && radiantFactCount > 0 && peakWindowFactCount > 0, $"MeteorActivity={(meteorActivity is null ? "missing" : "present")}; Radiant={radiantFactCount}; PeakWindow={peakWindowFactCount}", "MeteorActivity present with Radiant and PeakWindow facts", "Observed production semantic lifecycle did not retain all MeteorActivity-derived facts.");
+        rules[MeteorShowerExecutionKeys.Rules.RequiredFactsRetained] = new MeteorShowerObservedRuleValue(radiantFactCount > 0 && peakWindowFactCount > 0, $"Radiant={radiantFactCount}; PeakWindow={peakWindowFactCount}", "Radiant>0; PeakWindow>0", "Observed production output is missing required Meteor Shower facts.");
+
+        return new MeteorShowerProductionObservation(
+            ExecutionId: FirstNonEmpty(request?.SourceExternalEventId, request?.Title, Guid.NewGuid().ToString("N"))!,
+            ObservedUtc: DateTimeOffset.UtcNow,
+            ContentStrategy: request?.ContentStrategy,
+            EventIdentity: ObservedText(FirstNonEmpty(request?.SourceExternalEventId, request?.ShortTitle, request?.Title), "request.eventIdentity"),
+            EventStart: ObservedScalar(request?.StartUtc, "request.startUtc"),
+            EventEnd: ObservedScalar(request?.EndUtc, "request.endUtc"),
+            ObserverLocation: ObservedText(FirstNonEmpty(request?.RegionName, request?.RegionId), "request.observerLocation"),
+            Language: ObservedText(input.LanguageProfile.LanguageCode, "languageProfile.languageCode"),
+            Format: ObservedText(request?.PlannedFormat, "request.plannedFormat"),
+            LocalViewingGuide: ObservedText(FirstNonEmpty(request?.BestViewingWindowLocal, request?.LocalPeakTime), "request.localViewingGuide"),
+            ObservedMeteorActivity: meteorActivity is null ? null : ObservedFact(meteorActivity),
+            ObservedRadiant: radiant is null ? null : ObservedFact(radiant),
+            ObservedPeakWindow: peakWindow is null ? null : ObservedFact(peakWindow),
+            ObservedProjectedFacts: projections.ToImmutable(),
+            ObservedRuleValues: rules.ToImmutable(),
+            Metadata: ImmutableDictionary<string, string>.Empty.Add("source", "NarrationGeneratorV5.productionObservation"));
+    }
+
+    private static MeteorShowerObservedValue? ObservedText(string? value, string sourceId) => string.IsNullOrWhiteSpace(value) ? null : new MeteorShowerObservedValue(value, "string", sourceId);
+    private static MeteorShowerObservedValue? ObservedScalar(object? value, string sourceId) => value is null ? null : new MeteorShowerObservedValue(value, value.GetType().Name, sourceId);
+    private static MeteorShowerObservedValue ObservedFact(ResolvedSemanticFact fact) => new(fact.CanonicalValue, fact.FactType, fact.SourceArtifact, fact.SourceInputs ?? ImmutableArray<string>.Empty, ImmutableDictionary<string, string>.Empty.Add("factKey", fact.FactKey).Add("semanticMeaning", fact.SemanticMeaning));
+
+    private sealed record MeteorShowerShadowValidationReport(string ReportType, string Mode, string ExecutionId, string FamilyId, string ContractVersion, ImmutableArray<MeteorShowerShadowBoundaryReport> Boundaries, ImmutableDictionary<string, string> DiagnosticFields);
+    private sealed record MeteorShowerShadowBoundaryReport(FamilyValidationBoundary Boundary, ExecutionValidationStatus Status, ImmutableArray<MeteorShowerShadowEvaluationReport> Evaluations, ImmutableArray<MeteorShowerShadowIssueReport> Issues);
+    private sealed record MeteorShowerShadowEvaluationReport(string RequirementId, ExecutionRequirementOutcome Outcome, FamilyValidationSeverity Severity, string? SourceKey);
+    private sealed record MeteorShowerShadowIssueReport(string RequirementId, ExecutionValidationIssueCode IssueCode, FamilyValidationSeverity Severity, ExecutionRequirementOutcome Outcome, string? SourceKey, string? Expected, string? Actual, string Message);
+
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
@@ -2917,6 +3000,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         .Where(r => r.SelectedSource is not null)
         .GroupBy(r => r.Capability, StringComparer.OrdinalIgnoreCase)
         .ToDictionary(g => g.Key, g => g.Select(r => r.SelectedSource!).First(), StringComparer.OrdinalIgnoreCase);
+
 
     private static Dictionary<string, SemanticCapabilityRejection[]> RejectedSourcesByCapability(IEnumerable<SemanticCapabilityResolution> resolutions) => resolutions
         .GroupBy(r => r.Capability, StringComparer.OrdinalIgnoreCase)
