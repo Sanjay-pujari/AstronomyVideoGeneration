@@ -52,6 +52,12 @@ public static class CgA1CertificationFoundationServiceCollectionExtensions
         services.AddSingleton<IFamilyCertificationProfile, PlanetConjunctionCertificationProfile>();
         services.AddSingleton<IFamilyCertificationProfileRegistry, FamilyCertificationProfileRegistry>();
         services.AddCgA1PhaseCertification();
+        services.AddSingleton<ICertificationPathService, CertificationPathService>();
+        services.AddSingleton<ICertificationOutputLock, CertificationOutputLock>();
+        services.AddSingleton<ICertificationSummaryAggregator, CertificationSummaryAggregator>();
+        services.AddSingleton<ICertificationDashboardMapper, CertificationDashboardMapper>();
+        services.AddSingleton<ICertificationReportWriter, CertificationReportWriter>();
+        services.AddSingleton<ICertificationCoordinator, CertificationCoordinator>();
         return services;
     }
 }
