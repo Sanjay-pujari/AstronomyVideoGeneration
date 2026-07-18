@@ -9,9 +9,9 @@ public static class AstronomyExecutionContractCatalog
         ContractVersion: "AstronomyExecutionContracts-v1",
         DisplayName: "Astronomy Media Factory",
         Description: "Declarative execution contracts for astronomy content families.",
-        Families: ImmutableArray<FamilyExecutionContract>.Empty,
+        Families: ImmutableArray.Create(MeteorShowerExecutionContractFactory.Create()),
         Metadata: ImmutableDictionary<string, string>.Empty
-            .Add("frameworkStatus", "dormant")
-            .Add("runtimeWiring", "none")
-            .Add("milestone", "2A"));
+            .Add("frameworkMilestone", "2C")
+            .Add("validationMode", "shadow")
+            .Add("runtimeAuthority", "production"));
 }
