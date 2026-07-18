@@ -48,6 +48,8 @@ public static class CgA1CertificationFoundationServiceCollectionExtensions
     public static IServiceCollection AddCgA1CertificationFoundation(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        services.AddSingleton<IFamilyCertificationProfile, MeteorShowerCertificationProfile>();
+        services.AddSingleton<IFamilyCertificationProfile, PlanetConjunctionCertificationProfile>();
         services.AddSingleton<IFamilyCertificationProfileRegistry, FamilyCertificationProfileRegistry>();
         services.AddCgA1PhaseCertification();
         return services;
