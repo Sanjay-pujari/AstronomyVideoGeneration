@@ -72,3 +72,60 @@ public sealed class CgA1PhaseCertificationTests
         RequestedEndPhase = 7
     };
 }
+
+public sealed class CgA1PhaseCertificationCompletionTests
+{
+    [Fact]
+    public async Task JsonReader_ReturnsStructuredInvalidJsonResult()
+    {
+        var root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "cg-a1-" + Guid.NewGuid())).FullName;
+        var path = Path.Combine(root, "bad.json");
+        await File.WriteAllTextAsync(path, "{ bad");
+        var result = await new CertificationJsonReader().ReadAsync(path, CancellationToken.None);
+        result.Exists.Should().BeTrue();
+        result.Length.Should().BeGreaterThan(0);
+        result.ValidJson.Should().BeFalse();
+        result.Document.Should().BeNull();
+        result.Error.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public void PathHelpers_RejectDirectoryTraversal()
+    {
+        var root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "cg-a1-" + Guid.NewGuid())).FullName;
+        var context = new FamilyCertificationContext { OutputRoot = root, ValidationRoot = Path.Combine(root, "validation"), PlanId = "p", EventTitle = "e", EventType = "t", Language = "en", RegionId = "US", RequestedStartPhase = 1, RequestedEndPhase = 7 };
+        Action act = () => CertificationPathHelpers.ResolveArtifactPath(context, "../../secret.json");
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task PhaseSixDiscoversScenes_AndFlagsManifestCountMismatchAndDuplicateIds()
+    {
+        var root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "cg-a1-" + Guid.NewGuid())).FullName;
+        Directory.CreateDirectory(Path.Combine(root, "validation")); Directory.CreateDirectory(Path.Combine(root, "creative")); Directory.CreateDirectory(Path.Combine(root, "story-frames", "short"));
+        foreach (var p in new[] { "validation/phase-06-validation.json", "creative/creative-storyboard.json", "creative/documentary-contract.long.json", "creative/documentary-contract.short.json", "creative/documentary-architecture-diagnostics.json", "creative/documentary-decision-log.json" })
+        { var full = Path.Combine(root, p.Replace('/', Path.DirectorySeparatorChar)); Directory.CreateDirectory(Path.GetDirectoryName(full)!); await File.WriteAllTextAsync(full, "{}"); }
+        await File.WriteAllTextAsync(Path.Combine(root, "story-frames", "short", "manifest.json"), "{\"scenes\":[{\"sceneId\":\"a\"},{\"sceneId\":\"b\"},{\"sceneId\":\"missing\"}]}");
+        await File.WriteAllTextAsync(Path.Combine(root, "story-frames", "short", "scene-001.json"), "{\"sceneId\":\"a\",\"narrationIntents\":[]}");
+        await File.WriteAllTextAsync(Path.Combine(root, "story-frames", "short", "scene-002.json"), "{\"sceneId\":\"a\",\"narrationIntents\":[]}");
+        var result = await new Phase6Certifier(new PhaseArtifactRegistry(), new CertificationArtifactVerifier()).CertifyAsync(new FamilyCertificationContext { OutputRoot = root, ValidationRoot = Path.Combine(root, "validation"), PlanId = "p", EventTitle = "e", EventType = "t", Language = "en", RegionId = "US", RequestedStartPhase = 1, RequestedEndPhase = 7 }, CancellationToken.None);
+        result.Issues.Select(i => i.Code).Should().Contain(new[] { "P6.ManifestCountMismatch", "P6.DuplicateSceneId", "P6.InvalidManifestReference" });
+    }
+
+    [Fact]
+    public void PhaseSevenRegistry_UsesNarrationV5PathsOnly()
+    {
+        var root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "cg-a1-" + Guid.NewGuid())).FullName;
+        var context = new FamilyCertificationContext { OutputRoot = root, ValidationRoot = Path.Combine(root, "validation"), PlanId = "p", EventTitle = "e", EventType = "t", Language = "en", RegionId = "US", RequestedStartPhase = 1, RequestedEndPhase = 7 };
+        var paths = new PhaseArtifactRegistry().GetDefinitions(7, context).Select(d => d.RelativePath).ToArray();
+        paths.Should().OnlyContain(p => p.StartsWith("narration-v5/", StringComparison.Ordinal));
+        paths.Should().NotContain(p => p.StartsWith("narration/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void StatusAggregation_ReturnsSemanticNotEvaluatedAndQualityNotApplicable()
+    {
+        CertificationStatusAggregator.SemanticUnavailable().Should().Be(CertificationStatus.NotEvaluated);
+        CertificationStatusAggregator.QualityFromDiagnostics().Should().Be(CertificationStatus.NotApplicable);
+    }
+}
