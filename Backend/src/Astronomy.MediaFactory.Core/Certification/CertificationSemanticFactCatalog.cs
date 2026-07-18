@@ -35,16 +35,16 @@ public sealed class CertificationSemanticFactCatalog : ISemanticFactCatalog
             Fact("SecondaryAstronomicalObjects", "Secondary astronomical objects", "AstronomicalObjectList", 80, false)
         }.ToDictionary(f => f.FactId, StringComparer.OrdinalIgnoreCase);
 
-        var sharedRoles = new[] { "Hook", "Orientation", "Timing", "Observation", "Science", "Closing" };
+        IReadOnlyList<string> sharedRoles = new[] { "Hook", "Orientation", "Timing", "Observation", "Science", "Closing" };
         families = new[]
         {
-            Family("MeteorShower", ["Meteor Shower"], "MeteorActivity", ["EventIdentity", "EventWindow", "ObservationDirection", "MeteorActivity", "DomainScientificKnowledge"], [],
-                [new() { ConceptId = "planet-conjunction-leakage", Terms = ["Venus", "Jupiter", "conjunction", "planet conjunction", "planet pairing", "western sky after sunset", "look west", "युति", "ग्रह-युति", "बृहस्पति", "शुक्र"], Blocking = true }], sharedRoles,
-                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["EventIdentity"] = ["Hook", "Identity"], ["EventWindow"] = ["Timing", "Observation"], ["ObservationDirection"] = ["Orientation", "Observation"], ["MeteorActivity"] = ["Orientation", "Timing", "Observation", "Science"], ["DomainScientificKnowledge"] = ["Science"] },
-                [new() { ArtifactId = "meteor-shower-shadow-validation", PhaseNumber = 7, RelativePath = "narration-v5/meteor-shower-shadow-validation.json", Required = false, ValidateJson = true, RequireNonEmpty = true }]),
-            Family("PlanetConjunction", ["PlanetPairing", "PlanetaryConjunction", "PLANET_CONJUNCTION", "PLANET_PAIRING"], "PlanetPairing", ["EventIdentity", "AstronomicalObjects", "EventWindow", "DomainScientificKnowledge"], [],
-                [new() { ConceptId = "meteor-shower-leakage", Terms = ["meteor shower", "radiant", "meteors per hour", "ZHR", "shooting stars", "meteor parent body", "meteor peak activity", "उल्का वर्षा", "टूटते तारे"], Blocking = true }], sharedRoles,
-                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["EventIdentity"] = ["Hook"], ["AstronomicalObjects"] = ["Hook", "Orientation", "Observation"], ["EventWindow"] = ["Timing", "Observation"], ["DomainScientificKnowledge"] = ["Science"] }, [])
+            Family("MeteorShower", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Meteor Shower" }, "MeteorActivity", new[] { "EventIdentity", "EventWindow", "ObservationDirection", "MeteorActivity", "DomainScientificKnowledge" }, Array.Empty<string>(),
+                new[] { new ForbiddenConceptDefinition { ConceptId = "planet-conjunction-leakage", Terms = new[] { "Venus", "Jupiter", "conjunction", "planet conjunction", "planet pairing", "western sky after sunset", "look west", "युति", "ग्रह-युति", "बृहस्पति", "शुक्र" }, Blocking = true } }, sharedRoles,
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["EventIdentity"] = new[] { "Hook", "Identity" }, ["EventWindow"] = new[] { "Timing", "Observation" }, ["ObservationDirection"] = new[] { "Orientation", "Observation" }, ["MeteorActivity"] = new[] { "Orientation", "Timing", "Observation", "Science" }, ["DomainScientificKnowledge"] = new[] { "Science" } },
+                new[] { new PhaseArtifactDefinition { ArtifactId = "meteor-shower-shadow-validation", PhaseNumber = 7, RelativePath = "narration-v5/meteor-shower-shadow-validation.json", Required = false, ValidateJson = true, RequireNonEmpty = true } }),
+            Family("PlanetConjunction", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "PlanetPairing", "PlanetaryConjunction", "PLANET_CONJUNCTION", "PLANET_PAIRING" }, "PlanetPairing", new[] { "EventIdentity", "AstronomicalObjects", "EventWindow", "DomainScientificKnowledge" }, Array.Empty<string>(),
+                new[] { new ForbiddenConceptDefinition { ConceptId = "meteor-shower-leakage", Terms = new[] { "meteor shower", "radiant", "meteors per hour", "ZHR", "shooting stars", "meteor parent body", "meteor peak activity", "उल्का वर्षा", "टूटते तारे" }, Blocking = true } }, sharedRoles,
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["EventIdentity"] = new[] { "Hook" }, ["AstronomicalObjects"] = new[] { "Hook", "Orientation", "Observation" }, ["EventWindow"] = new[] { "Timing", "Observation" }, ["DomainScientificKnowledge"] = new[] { "Science" } }, Array.Empty<PhaseArtifactDefinition>())
         }.SelectMany(f => new[] { f }.Concat(f.Aliases.Select(a => f with { FamilyId = a }))).ToDictionary(f => f.FamilyId, StringComparer.OrdinalIgnoreCase);
     }
 
