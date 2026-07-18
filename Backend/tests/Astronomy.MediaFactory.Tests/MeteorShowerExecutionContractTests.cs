@@ -42,10 +42,28 @@ public sealed class MeteorShowerExecutionContractTests
         var first = MeteorShowerExecutionContractFactory.Create();
         var second = MeteorShowerExecutionContractFactory.Create();
 
-        Assert.Equal(first, second);
+        Assert.Equal(first.FamilyId, second.FamilyId);
+        Assert.Equal(first.ContractVersion, second.ContractVersion);
+        Assert.Equal(first.DisplayName, second.DisplayName);
+        Assert.Equal(first.Description, second.Description);
+        Assert.Equal(first.Status, second.Status);
+
+        Assert.Equal(first.Aliases.ToArray(), second.Aliases.ToArray());
+        Assert.Equal(first.InputRequirements.ToArray(), second.InputRequirements.ToArray());
+        Assert.Equal(first.SemanticRequirements.ToArray(), second.SemanticRequirements.ToArray());
+        Assert.Equal(first.ProjectionRequirements.ToArray(), second.ProjectionRequirements.ToArray());
+        Assert.Equal(first.ArtifactRequirements.ToArray(), second.ArtifactRequirements.ToArray());
+        Assert.Equal(first.ValidationRequirements.ToArray(), second.ValidationRequirements.ToArray());
+        Assert.Equal(first.Metadata.OrderBy(x => x.Key).ToArray(), second.Metadata.OrderBy(x => x.Key).ToArray());
+
         Assert.True(first.InputRequirements.GetType().IsValueType);
         Assert.True(first.Metadata.GetType().Name.Contains("Immutable", StringComparison.Ordinal));
+        Assert.Equal(first.Aliases.Select(a => a), second.Aliases.Select(a => a));
         Assert.Equal(first.InputRequirements.Select(r => r.RequirementId), second.InputRequirements.Select(r => r.RequirementId));
+        Assert.Equal(first.SemanticRequirements.Select(r => r.RequirementId), second.SemanticRequirements.Select(r => r.RequirementId));
+        Assert.Equal(first.ProjectionRequirements.Select(r => r.RequirementId), second.ProjectionRequirements.Select(r => r.RequirementId));
+        Assert.Equal(first.ArtifactRequirements.Select(r => r.RequirementId), second.ArtifactRequirements.Select(r => r.RequirementId));
+        Assert.Equal(first.ValidationRequirements.Select(r => r.RequirementId), second.ValidationRequirements.Select(r => r.RequirementId));
         Assert.Equal(first.ValidationRequirements.Select(r => r.RuleId), second.ValidationRequirements.Select(r => r.RuleId));
     }
 
