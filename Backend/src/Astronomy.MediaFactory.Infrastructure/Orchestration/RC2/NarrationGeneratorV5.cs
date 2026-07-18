@@ -1033,7 +1033,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 
     private static MeteorActivityValue? BuildMeteorActivityFromRequest(ContentPlanProductionPipelineRequest? request, EventWindowValue? eventWindow)
     {
-        if (request is null || !string.Equals(request.ContentStrategy, "MeteorShower", StringComparison.OrdinalIgnoreCase)) return null;
+        if (request is null) return null;
+        var isMeteorFamily =
+            string.Equals(request.EventType, MeteorShowerExecutionKeys.FamilyId, StringComparison.OrdinalIgnoreCase) ||
+            (string.IsNullOrWhiteSpace(request.EventType) &&
+             string.Equals(request.ContentStrategy, MeteorShowerExecutionKeys.FamilyId, StringComparison.OrdinalIgnoreCase));
+        if (!isMeteorFamily) return null;
         var showerIdentity = FirstNonEmpty(request.PrimaryObjects.FirstOrDefault(), request.ShortTitle);
         var catalog = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.MeteorShowerKnowledgeCatalogV1();
         var record = catalog.FindByCanonicalShowerIdentity(showerIdentity);
@@ -3158,7 +3163,12 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
 
     private static MeteorActivityValue? BuildMeteorActivityFromRequest(ContentPlanProductionPipelineRequest? request, EventWindowValue? eventWindow)
     {
-        if (request is null || !string.Equals(request.ContentStrategy, "MeteorShower", StringComparison.OrdinalIgnoreCase)) return null;
+        if (request is null) return null;
+        var isMeteorFamily =
+            string.Equals(request.EventType, MeteorShowerExecutionKeys.FamilyId, StringComparison.OrdinalIgnoreCase) ||
+            (string.IsNullOrWhiteSpace(request.EventType) &&
+             string.Equals(request.ContentStrategy, MeteorShowerExecutionKeys.FamilyId, StringComparison.OrdinalIgnoreCase));
+        if (!isMeteorFamily) return null;
         var showerIdentity = FirstNonEmpty(request.PrimaryObjects.FirstOrDefault(), request.ShortTitle);
         var catalog = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.MeteorShowerKnowledgeCatalogV1();
         var record = catalog.FindByCanonicalShowerIdentity(showerIdentity);
