@@ -74,7 +74,11 @@ public sealed class ArtifactRequirementValidator : IExecutionRequirementValidato
 }
 public sealed class ContractValidationRuleValidator : IExecutionRequirementValidator
 {
-    public string ValidatorId => "core.validation-rules"; public FamilyValidationBoundary Boundary => FamilyValidationBoundary.PostExecution; public bool CanValidate(FamilyExecutionContract c, FamilyExecutionContext _) => !c.ValidationRequirements.IsDefaultOrEmpty;
-    public ImmutableArray<ExecutionRequirementEvaluation> Validate(ExecutionValidationRequest r) => r.FamilyContract.ValidationRequirements.Where(x=>x.Boundary==r.Boundary).OrderBy(x=>x.RequirementId,StringComparer.OrdinalIgnoreCase).Select(req => V(r, req)).ToImmutableArray();
+    public ContractValidationRuleValidator() : this(FamilyValidationBoundary.PostExecution) { }
+    public ContractValidationRuleValidator(FamilyValidationBoundary boundary) => Boundary = boundary;
+    public string ValidatorId => $"core.validation-rules:{Boundary}";
+    public FamilyValidationBoundary Boundary { get; }
+    public bool CanValidate(FamilyExecutionContract c, FamilyExecutionContext _) => !c.ValidationRequirements.IsDefaultOrEmpty && c.ValidationRequirements.Any(r => r.Boundary == Boundary);
+    public ImmutableArray<ExecutionRequirementEvaluation> Validate(ExecutionValidationRequest r) => r.FamilyContract.ValidationRequirements.Where(x=>x.Boundary==Boundary).OrderBy(x=>x.RequirementId,StringComparer.OrdinalIgnoreCase).Select(req => V(r, req)).ToImmutableArray();
     static ExecutionRequirementEvaluation V(ExecutionValidationRequest r, FamilyValidationRequirement req){ var applies = true; if(req.ConditionKey is not null&&!ValidatorSupport.TryCondition(r,req.ConditionKey,out applies)) return ValidatorSupport.NotEvaluated(req.RequirementId,req.Boundary,req.RuleId); if(req.ConditionKey is not null&&!applies) return ValidatorSupport.Eval(req.RequirementId,req.Boundary,ExecutionRequirementOutcome.ConditionalNotApplicable,FamilyValidationSeverity.Information,req.RuleId); if(!r.Context.ValidationRuleValues.TryGetValue(req.RuleId,out var v)) return ValidatorSupport.NotEvaluated(req.RequirementId,req.Boundary,req.RuleId); if(v.Passed) return ValidatorSupport.Eval(req.RequirementId,req.Boundary,ExecutionRequirementOutcome.Satisfied,req.Severity,req.RuleId, metadata:v.Metadata); var i=new ExecutionValidationIssue(ExecutionValidationIssueCode.ValidationRuleFailed,req.RequirementId,req.Boundary,req.Severity,ExecutionRequirementOutcome.Invalid,v.Message ?? "Validation rule observation failed.",v.Expected,v.Actual,req.RuleId,v.Evidence); return ValidatorSupport.Eval(req.RequirementId,req.Boundary,ExecutionRequirementOutcome.Invalid,req.Severity,req.RuleId,i); }
 }

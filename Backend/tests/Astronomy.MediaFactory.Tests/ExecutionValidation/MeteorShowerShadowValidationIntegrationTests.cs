@@ -30,17 +30,24 @@ public sealed class MeteorShowerShadowValidationIntegrationTests
         var post = pipeline.Validate(new ExecutionValidationRequest(domain, contract, context, FamilyValidationBoundary.PostExecution, StartedUtc: DateTimeOffset.UnixEpoch));
 
         Assert.Equal(ExecutionValidationStatus.Invalid, semantic.Status);
+        var missingSemanticKeys = semantic.Issues
+            .Where(i => i.IssueCode == ExecutionValidationIssueCode.RequiredSemanticValueMissing)
+            .Select(i => i.SourceKey)
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+
         Assert.Equal(new[]
         {
             MeteorShowerExecutionKeys.Semantic.MeteorActivity,
             MeteorShowerExecutionKeys.Semantic.PeakWindow,
             MeteorShowerExecutionKeys.Semantic.Radiant
-        }, semantic.Issues.Select(i => i.SourceKey).OrderBy(x => x, StringComparer.Ordinal).ToArray());
+        }, missingSemanticKeys);
         Assert.Empty(context.SemanticValues.ToArray());
         Assert.Empty(context.ProjectionValues.ToArray());
-        Assert.Contains(post.Issues.Select(i => new { i.RequirementId, i.SourceKey, i.IssueCode }).ToArray(), i =>
+        Assert.Contains(semantic.Issues.Select(i => new { i.RequirementId, i.SourceKey, i.IssueCode }).ToArray(), i =>
             i.SourceKey == MeteorShowerExecutionKeys.Rules.ActivityObserved &&
             i.IssueCode == ExecutionValidationIssueCode.ValidationRuleFailed);
+        Assert.DoesNotContain(post.Issues, i => i.SourceKey == MeteorShowerExecutionKeys.Rules.ActivityObserved);
     }
 
     [Fact]
