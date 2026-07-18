@@ -24,7 +24,34 @@ public sealed class InputRequirementValidator : IExecutionRequirementValidator
 {
     public string ValidatorId => "core.input-requirements"; public FamilyValidationBoundary Boundary => FamilyValidationBoundary.PreExecution; public bool CanValidate(FamilyExecutionContract c, FamilyExecutionContext _) => !c.InputRequirements.IsDefaultOrEmpty;
     public ImmutableArray<ExecutionRequirementEvaluation> Validate(ExecutionValidationRequest r) => r.FamilyContract.InputRequirements.OrderBy(x=>x.RequirementId,StringComparer.OrdinalIgnoreCase).SelectMany(req => ValidateOne(r, req)).ToImmutableArray();
-    private static IEnumerable<ExecutionRequirementEvaluation> ValidateOne(ExecutionValidationRequest r, FamilyInputRequirement req) { if (!ValidatorSupport.Include(req.Level, r.IncludeOptionalRequirements)) yield break; var applies = true; if (req.Level==FamilyRequirementLevel.Conditional && !ValidatorSupport.TryCondition(r, req.ConditionKey, out applies)) { yield return ValidatorSupport.NotEvaluated(req.RequirementId, FamilyValidationBoundary.PreExecution, req.InputKey); yield break; } if (req.Level==FamilyRequirementLevel.Conditional && !applies) { yield return ValidatorSupport.Eval(req.RequirementId,FamilyValidationBoundary.PreExecution,ExecutionRequirementOutcome.ConditionalNotApplicable,FamilyValidationSeverity.Information,req.InputKey); yield break; } var present = r.Context.InputValues.TryGetValue(req.InputKey, out var v) && v.IsPresent; yield return present ? ValidatorSupport.Eval(req.RequirementId,FamilyValidationBoundary.PreExecution,ExecutionRequirementOutcome.Satisfied,ValidatorSupport.Severity(req.Level),req.InputKey) : ValidatorSupport.Missing(req.RequirementId,FamilyValidationBoundary.PreExecution,ValidatorSupport.Severity(req.Level),ExecutionValidationIssueCode.RequiredInputMissing,req.InputKey,"input"); }
+    private static IEnumerable<ExecutionRequirementEvaluation> ValidateOne(ExecutionValidationRequest r, FamilyInputRequirement req)
+    {
+        if (!ValidatorSupport.Include(req.Level, r.IncludeOptionalRequirements)) yield break;
+
+        var severity = ValidatorSupport.Severity(req.Level);
+
+        if (req.Level == FamilyRequirementLevel.Conditional)
+        {
+            if (!ValidatorSupport.TryCondition(r, req.ConditionKey, out var applies))
+            {
+                yield return ValidatorSupport.NotEvaluated(req.RequirementId, FamilyValidationBoundary.PreExecution, req.InputKey);
+                yield break;
+            }
+
+            if (!applies)
+            {
+                yield return ValidatorSupport.Eval(req.RequirementId, FamilyValidationBoundary.PreExecution, ExecutionRequirementOutcome.ConditionalNotApplicable, FamilyValidationSeverity.Information, req.InputKey);
+                yield break;
+            }
+
+            severity = FamilyValidationSeverity.Blocking;
+        }
+
+        var present = r.Context.InputValues.TryGetValue(req.InputKey, out var v) && v.IsPresent;
+        yield return present
+            ? ValidatorSupport.Eval(req.RequirementId, FamilyValidationBoundary.PreExecution, ExecutionRequirementOutcome.Satisfied, severity, req.InputKey)
+            : ValidatorSupport.Missing(req.RequirementId, FamilyValidationBoundary.PreExecution, severity, ExecutionValidationIssueCode.RequiredInputMissing, req.InputKey, "input");
+    }
 }
 public sealed class SemanticRequirementValidator : IExecutionRequirementValidator
 {
