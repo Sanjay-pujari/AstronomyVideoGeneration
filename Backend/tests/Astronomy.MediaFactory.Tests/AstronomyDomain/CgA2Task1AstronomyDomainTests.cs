@@ -117,7 +117,18 @@ public sealed class CgA2Task1AstronomyDomainTests
         (await c.SearchAsync(new(IncludeDeprecated: false))).Should().HaveCount(2);
         (await c.SearchAsync(new(IncludeDeprecated: true))).Should().HaveCount(3);
         new Action(() => new InMemoryAstronomyDomainCatalog([Ent(), Ent()])).Should().Throw<InvalidOperationException>();
-        new Action(() => new InMemoryAstronomyDomainCatalog([Ent("a"), new AstronomyDomainEntity(Id("b", aliases: ["Synthetic Alias a"]), Cls)])).Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Catalog_constructor_rejects_alias_conflicts_across_different_entities()
+    {
+        var original = Ent("synthetic.event.original");
+        var conflict = new AstronomyDomainEntity(
+            Id("synthetic.event.conflict", aliases: ["Synthetic Alias synthetic.event.original"]),
+            Cls,
+            [new("en", "Conflict", SearchAliases: ["Conflict EN"])]);
+
+        new Action(() => new InMemoryAstronomyDomainCatalog([original, conflict])).Should().Throw<InvalidOperationException>();
     }
 
     [Fact]
@@ -185,13 +196,45 @@ public sealed class CgA2Task1AstronomyDomainTests
     public void Architecture_boundary_has_no_production_or_certification_dependencies()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/Astronomy.MediaFactory.Core/AstronomyDomain"));
-        var files = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories).OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToArray();
-        var text = string.Join('\n', files.Select(File.ReadAllText));
+        var files = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+            .Where(file => !file.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase))
+            .Where(file => !file.EndsWith(".Generated.cs", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
-        text.Should().NotMatchRegex(@"using\s+Astronomy\.MediaFactory\.(Infrastructure|Publishing|Rendering|Api)\b");
-        text.Should().NotMatchRegex(@"\b(NarrationGeneratorV5|IRenderer|Renderer|IPublisher|IContentPublishService|IYouTubePublishingService|CertificationCoordinator)\b");
-        text.Should().NotMatchRegex(@"\bContentStrategy\b");
-        text.Should().Contain("EventType");
+        files.Should().OnlyContain(file => file.Contains($"src{Path.DirectorySeparatorChar}Astronomy.MediaFactory.Core{Path.DirectorySeparatorChar}AstronomyDomain{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+        files.Should().Contain(file => Path.GetFileName(file).Equals("Families.cs", StringComparison.OrdinalIgnoreCase));
+
+        var forbiddenNamespaceImports = new[]
+        {
+            "Astronomy.MediaFactory.Infrastructure",
+            "Astronomy.MediaFactory.Publishing",
+            "Astronomy.MediaFactory.Rendering",
+            "Astronomy.MediaFactory.Api",
+            "Astronomy.MediaFactory.Core.Certification"
+        };
+        var forbiddenTypeReferences = new[]
+        {
+            "NarrationGeneratorV5",
+            "IRenderer",
+            "Renderer",
+            "IPublisher",
+            "IContentPublishService",
+            "IYouTubePublishingService",
+            "CertificationCoordinator",
+            "ContentStrategy"
+        };
+
+        foreach (var file in files)
+        {
+            var text = File.ReadAllText(file);
+            foreach (var forbiddenNamespace in forbiddenNamespaceImports)
+                text.Should().NotMatchRegex($@"(^|[;=({{,])\s*(using\s+)?{System.Text.RegularExpressions.Regex.Escape(forbiddenNamespace)}(\.|\s*;)");
+            foreach (var forbiddenType in forbiddenTypeReferences)
+                text.Should().NotMatchRegex($@"\b{System.Text.RegularExpressions.Regex.Escape(forbiddenType)}\b");
+        }
     }
 
     private sealed class SyntheticFamily(string id, IReadOnlySet<string> aliases) : IAstronomyDomainFamily
