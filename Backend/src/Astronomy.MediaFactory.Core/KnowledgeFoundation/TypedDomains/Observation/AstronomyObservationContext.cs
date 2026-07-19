@@ -12,6 +12,7 @@ public sealed record AstronomyObservationContext
         string observerLocationReference,
         DateTimeOffset observationTimeUtc,
         AstronomyReferenceFrame referenceFrame = AstronomyReferenceFrame.Unspecified,
+        AstronomyReferenceOrigin referenceOrigin = AstronomyReferenceOrigin.Unspecified,
         AstronomyCoordinateSystem? coordinateSystem = null,
         decimal? altitudeMetres = null)
     {
@@ -20,6 +21,7 @@ public sealed record AstronomyObservationContext
             throw new ArgumentException("Observation time must use UTC (zero offset).", nameof(observationTimeUtc));
         ObservationTimeUtc = observationTimeUtc;
         ReferenceFrame = TypedKnowledgeEnumGuard.RequireDefined(referenceFrame, nameof(referenceFrame));
+        ReferenceOrigin = TypedKnowledgeEnumGuard.RequireDefined(referenceOrigin, nameof(referenceOrigin));
         CoordinateSystem = coordinateSystem.HasValue ? TypedKnowledgeEnumGuard.RequireDefined(coordinateSystem.Value, nameof(coordinateSystem)) : null;
         AltitudeMetres = altitudeMetres;
     }
@@ -27,6 +29,7 @@ public sealed record AstronomyObservationContext
     public string ObserverLocationReference { get; }
     public DateTimeOffset ObservationTimeUtc { get; }
     public AstronomyReferenceFrame ReferenceFrame { get; }
+    public AstronomyReferenceOrigin ReferenceOrigin { get; }
     public AstronomyCoordinateSystem? CoordinateSystem { get; }
     public decimal? AltitudeMetres { get; }
 }

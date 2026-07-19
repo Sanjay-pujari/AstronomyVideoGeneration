@@ -6,12 +6,5 @@ public enum AstronomyReferenceFrame
     ICRS,
     FK5,
     FK4,
-    Ecliptic,
-    Galactic,
-    Supergalactic,
-    Heliocentric,
-    Barycentric,
-    Geocentric,
-    Topocentric,
     BodyFixed
 }
