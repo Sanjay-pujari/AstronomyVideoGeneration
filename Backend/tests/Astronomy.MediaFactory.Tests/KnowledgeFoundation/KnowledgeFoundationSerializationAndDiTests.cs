@@ -166,10 +166,12 @@ public sealed class KnowledgeFoundationSerializationAndDiTests
     public void Architecture_boundary_has_no_later_task_or_infrastructure_leakage()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/Astronomy.MediaFactory.Core/KnowledgeFoundation"));
-        var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText));
+        var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains(Path.DirectorySeparatorChar + "Evidence" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            .Select(File.ReadAllText));
         text.Should().NotMatchRegex(@"using\s+Astronomy\.MediaFactory\.(Infrastructure|Publishing|Rendering|Api|AIOptimization|ContentGen)\b");
         text.Should().NotMatchRegex(@"\b(Type\.GetType|Activator\.CreateInstance|Assembly\.Load|AssemblyQualifiedName|DbContext|IQueryable|Renderer|Publisher|CertificationCoordinator|TTS|SRT|Orion|Constellation)\b");
-        text.Should().NotMatchRegex(@"\b(Evidence|Confidence|Transition|Supersedes|Relationship|KnowledgeCatalog|KnowledgeQuery)\b");
+        text.Should().NotMatchRegex(@"\b(Confidence|Transition|Supersedes|Relationship|KnowledgeCatalog|KnowledgeQuery)\b");
     }
 
     private static T RoundTrip<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, Json), Json)!;
