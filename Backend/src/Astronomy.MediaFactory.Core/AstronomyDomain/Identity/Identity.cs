@@ -1,0 +1,3 @@
+using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
+namespace Astronomy.MediaFactory.Core.AstronomyDomain.Identity;
+public sealed record AstronomyEntityIdentity(string EntityId,string CanonicalName,AstronomyEntityKind EntityKind,string FamilyId,AstronomyDomainCategory DomainCategory,string? OfficialName=null,string? CanonicalCode=null,IReadOnlyList<string>? Aliases=null,IReadOnlyDictionary<string,string>? AlternateCatalogIds=null,bool IsOfficiallyRecognized=false,string? Authority=null,string SchemaVersion="1.0"){ public IReadOnlyList<string> Aliases{get;init;}=Aliases??[]; public IReadOnlyDictionary<string,string> AlternateCatalogIds{get;init;}=AlternateCatalogIds??new Dictionary<string,string>(); public string Version{get;init;}=SchemaVersion; }
