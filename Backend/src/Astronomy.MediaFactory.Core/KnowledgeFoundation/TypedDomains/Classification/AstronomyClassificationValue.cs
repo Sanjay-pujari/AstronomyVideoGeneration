@@ -16,16 +16,49 @@ public sealed record AstronomyClassificationValue
     }
 
     public string Code { get; }
+
     public string DisplayName { get; }
+
     public string? Description { get; }
 
-    private static string? NormalizeText(string? value, string parameterName, string displayName, int maxLength, bool required)
+    private static string? NormalizeText(
+        string? value,
+        string parameterName,
+        string displayName,
+        int maxLength,
+        bool required)
     {
-        if (value is null) { if (required) throw new ArgumentException($"{displayName} is required.", parameterName); return null; }
+        if (value is null)
+        {
+            if (required)
+            {
+                throw new ArgumentException($"{displayName} is required.", parameterName);
+            }
+
+            return null;
+        }
+
         var normalized = value.Trim();
-        if (normalized.Length == 0) { if (required) throw new ArgumentException($"{displayName} is required.", parameterName); return null; }
-        if (normalized.Length > maxLength) throw new ArgumentException($"{displayName} must be {maxLength} characters or fewer.", parameterName);
-        if (normalized.Any(char.IsControl)) throw new ArgumentException($"{displayName} must not contain control characters.", parameterName);
+        if (normalized.Length == 0)
+        {
+            if (required)
+            {
+                throw new ArgumentException($"{displayName} is required.", parameterName);
+            }
+
+            return null;
+        }
+
+        if (normalized.Length > maxLength)
+        {
+            throw new ArgumentException($"{displayName} must be {maxLength} characters or fewer.", parameterName);
+        }
+
+        if (normalized.Any(char.IsControl))
+        {
+            throw new ArgumentException($"{displayName} must not contain control characters.", parameterName);
+        }
+
         return normalized;
     }
 }
