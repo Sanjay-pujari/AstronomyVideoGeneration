@@ -1,11 +1,15 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Confidence;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Serialization;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Extensions;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Validation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Serialization;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation;
 
@@ -30,14 +34,60 @@ public sealed class EvidenceAndConfidenceSerializationTests
     [Fact]
     public void Task22_enums_are_strict_symbolic_names()
     {
-        JsonSerializer.Serialize(AstronomyEvidenceType.Observation, Json).Should().Be("\"Observation\"");
-        JsonSerializer.Serialize(EvidenceFoundationStatus.Verified, Json).Should().Be("\"Verified\"");
-        JsonSerializer.Serialize(KnowledgeEvidenceRole.Primary, Json).Should().Be("\"Primary\"");
-        JsonSerializer.Serialize(KnowledgeConfidenceLevel.High, Json).Should().Be("\"High\"");
-        JsonSerializer.Serialize(ConfidenceAssessmentMethod.HumanExpertReview, Json).Should().Be("\"HumanExpertReview\"");
-        JsonSerializer.Serialize(ConfidenceAssessorType.HumanExpert, Json).Should().Be("\"HumanExpert\"");
-        JsonSerializer.Serialize(ConfidenceFactorDirection.Supports, Json).Should().Be("\"Supports\"");
-        foreach (var bad in new[] { "0", "\"observation\"", "\"UnknownValue\"" }) new Action(() => JsonSerializer.Deserialize<AstronomyEvidenceType>(bad, Json)).Should().Throw<JsonException>();
+        AssertStrictEnum(AstronomyEvidenceType.Observation, "Observation", "observation");
+        AssertStrictEnum(AstronomyEvidenceSourceType.Observatory, "Observatory", "observatory");
+        AssertStrictEnum(EvidenceFoundationStatus.Verified, "Verified", "verified");
+        AssertStrictEnum(KnowledgeEvidenceRole.Primary, "Primary", "primary");
+        AssertStrictEnum(KnowledgeConfidenceLevel.High, "High", "high");
+        AssertStrictEnum(ConfidenceAssessmentMethod.HumanExpertReview, "HumanExpertReview", "humanExpertReview");
+        AssertStrictEnum(ConfidenceAssessorType.HumanExpert, "HumanExpert", "humanExpert");
+        AssertStrictEnum(ConfidenceFactorDirection.Supports, "Supports", "supports");
+        new Action(() => JsonSerializer.Serialize((AstronomyEvidenceType)999, Json)).Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void Task22_converter_registration_is_idempotent_and_precedes_enum_fallback()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter());
+
+        options.AddAstronomyEvidenceAndConfidenceJson().AddAstronomyEvidenceAndConfidenceJson();
+
+        AssertSingleConverter<StrictAstronomyEvidenceTypeJsonConverter>(options);
+        AssertSingleConverter<StrictAstronomyEvidenceSourceTypeJsonConverter>(options);
+        AssertSingleConverter<StrictEvidenceFoundationStatusJsonConverter>(options);
+        AssertSingleConverter<StrictKnowledgeEvidenceRoleJsonConverter>(options);
+        AssertSingleConverter<StrictKnowledgeConfidenceLevelJsonConverter>(options);
+        AssertSingleConverter<StrictConfidenceAssessmentMethodJsonConverter>(options);
+        AssertSingleConverter<StrictConfidenceAssessorTypeJsonConverter>(options);
+        AssertSingleConverter<StrictConfidenceFactorDirectionJsonConverter>(options);
+        StrictConvertersShouldPrecedeFallback(options);
+
+        var reverseOrderOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            .AddAstronomyKnowledgeFoundationJson()
+            .AddAstronomyEvidenceAndConfidenceJson();
+        StrictConvertersShouldPrecedeFallback(reverseOrderOptions);
+    }
+
+    [Fact]
+    public void Di_resolved_options_apply_same_task22_strict_enum_behavior()
+    {
+        using var provider = new ServiceCollection().AddCgA2AstronomyKnowledgeFoundation().BuildServiceProvider();
+        var options = provider.GetRequiredService<JsonSerializerOptions>();
+
+        JsonSerializer.Serialize(AstronomyEvidenceType.Observation, options).Should().Be("\"Observation\"");
+        new Action(() => JsonSerializer.Deserialize<AstronomyEvidenceType>("\"observation\"", options)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Deserialize<AstronomyEvidenceType>("0", options)).Should().Throw<JsonException>();
+        StrictConvertersShouldPrecedeFallback(options);
+    }
+
+    [Fact]
+    public void Task21_and_task1_enum_serialization_contracts_are_preserved()
+    {
+        JsonSerializer.Serialize(AstronomyEntityKind.Planet, Json).Should().Be("\"Planet\"");
+        JsonSerializer.Serialize(AstronomyFamilyKind.Event, Json).Should().Be("\"Event\"");
+        new Action(() => JsonSerializer.Deserialize<KnowledgeStatementKind>("0", Json)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Deserialize<KnowledgeFoundationStatus>("0", Json)).Should().Throw<JsonException>();
     }
 
     [Fact]
@@ -67,6 +117,36 @@ public sealed class EvidenceAndConfidenceSerializationTests
         new AstronomyKnowledgeConfidenceAssessmentValidator().Validate(assessmentCopy).IsValid.Should().BeTrue();
         var policyInvalid = JsonSerializer.Deserialize<AstronomyKnowledgeConfidenceAssessment>(JsonSerializer.Serialize(assessment, Json).Replace("\"level\":\"High\"", "\"level\":\"Unknown\""), Json)!;
         new AstronomyKnowledgeConfidenceAssessmentValidator().Validate(policyInvalid).Issues.Should().Contain(i => i.Code == AstronomyEvidenceValidationCodes.AssessmentUnknownLevelHasScore);
+    }
+
+    private static void AssertStrictEnum<TEnum>(TEnum value, string exact, string wrongCase) where TEnum : struct, Enum
+    {
+        JsonSerializer.Serialize(value, Json).Should().Be($"\"{exact}\"");
+        JsonSerializer.Deserialize<TEnum>($"\"{exact}\"", Json).Should().Be(value);
+        foreach (var bad in new[] { "0", $"\"{wrongCase}\"", "\"UnknownValue\"", "null" })
+            new Action(() => JsonSerializer.Deserialize<TEnum>(bad, Json)).Should().Throw<JsonException>();
+    }
+
+    private static void AssertSingleConverter<TConverter>(JsonSerializerOptions options) where TConverter : JsonConverter
+        => options.Converters.Count(converter => converter.GetType() == typeof(TConverter)).Should().Be(1);
+
+    private static void StrictConvertersShouldPrecedeFallback(JsonSerializerOptions options)
+    {
+        var fallbackIndex = options.Converters.Select((converter, index) => new { converter, index }).First(entry => entry.converter is JsonStringEnumConverter).index;
+        foreach (var converterType in new[]
+        {
+            typeof(StrictAstronomyEvidenceTypeJsonConverter),
+            typeof(StrictAstronomyEvidenceSourceTypeJsonConverter),
+            typeof(StrictEvidenceFoundationStatusJsonConverter),
+            typeof(StrictKnowledgeEvidenceRoleJsonConverter),
+            typeof(StrictKnowledgeConfidenceLevelJsonConverter),
+            typeof(StrictConfidenceAssessmentMethodJsonConverter),
+            typeof(StrictConfidenceAssessorTypeJsonConverter),
+            typeof(StrictConfidenceFactorDirectionJsonConverter)
+        })
+        {
+            options.Converters.Select((converter, index) => new { converter, index }).Single(entry => entry.converter.GetType() == converterType).index.Should().BeLessThan(fallbackIndex);
+        }
     }
 
     private static AstronomyEvidenceRecord Record() => new(new EvidenceId("evidence.synthetic.a"), AstronomyEvidenceType.Observation, EvidenceFoundationStatus.Verified, new AstronomyEvidenceSourceReference("source.synthetic", AstronomyEvidenceSourceType.SpaceAgency, "Synthetic Source", new Uri("https://example.test/evidence"), new EvidenceExternalIdentifier("doi", "10.test/example")), new EvidenceTemporalMetadata(publishedAtUtc: Created, retrievedAtUtc: Created.AddHours(1)), new KnowledgeAuditMetadata(Created, "author"), new EvidenceAttribution(["Contributor"], organizationName:"Org"), "Synthetic title", "Synthetic summary", [new EvidenceExternalIdentifier("bibcode", "2026Test")], [new KnowledgeTag("moon")]);

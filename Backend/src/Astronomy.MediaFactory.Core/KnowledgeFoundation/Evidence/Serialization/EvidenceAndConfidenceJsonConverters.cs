@@ -6,14 +6,14 @@ using Astronomy.MediaFactory.Core.KnowledgeFoundation.Serialization;
 
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Serialization;
 
-public sealed class StrictAstronomyEvidenceTypeJsonConverter : JsonStringEnumConverter<AstronomyEvidenceType> { public StrictAstronomyEvidenceTypeJsonConverter() : base(null, false) { } }
-public sealed class StrictAstronomyEvidenceSourceTypeJsonConverter : JsonStringEnumConverter<AstronomyEvidenceSourceType> { public StrictAstronomyEvidenceSourceTypeJsonConverter() : base(null, false) { } }
-public sealed class StrictEvidenceFoundationStatusJsonConverter : JsonStringEnumConverter<EvidenceFoundationStatus> { public StrictEvidenceFoundationStatusJsonConverter() : base(null, false) { } }
-public sealed class StrictKnowledgeEvidenceRoleJsonConverter : JsonStringEnumConverter<KnowledgeEvidenceRole> { public StrictKnowledgeEvidenceRoleJsonConverter() : base(null, false) { } }
-public sealed class StrictKnowledgeConfidenceLevelJsonConverter : JsonStringEnumConverter<KnowledgeConfidenceLevel> { public StrictKnowledgeConfidenceLevelJsonConverter() : base(null, false) { } }
-public sealed class StrictConfidenceAssessmentMethodJsonConverter : JsonStringEnumConverter<ConfidenceAssessmentMethod> { public StrictConfidenceAssessmentMethodJsonConverter() : base(null, false) { } }
-public sealed class StrictConfidenceAssessorTypeJsonConverter : JsonStringEnumConverter<ConfidenceAssessorType> { public StrictConfidenceAssessorTypeJsonConverter() : base(null, false) { } }
-public sealed class StrictConfidenceFactorDirectionJsonConverter : JsonStringEnumConverter<ConfidenceFactorDirection> { public StrictConfidenceFactorDirectionJsonConverter() : base(null, false) { } }
+public sealed class StrictAstronomyEvidenceTypeJsonConverter : StrictExactStringEnumJsonConverter<AstronomyEvidenceType> { }
+public sealed class StrictAstronomyEvidenceSourceTypeJsonConverter : StrictExactStringEnumJsonConverter<AstronomyEvidenceSourceType> { }
+public sealed class StrictEvidenceFoundationStatusJsonConverter : StrictExactStringEnumJsonConverter<EvidenceFoundationStatus> { }
+public sealed class StrictKnowledgeEvidenceRoleJsonConverter : StrictExactStringEnumJsonConverter<KnowledgeEvidenceRole> { }
+public sealed class StrictKnowledgeConfidenceLevelJsonConverter : StrictExactStringEnumJsonConverter<KnowledgeConfidenceLevel> { }
+public sealed class StrictConfidenceAssessmentMethodJsonConverter : StrictExactStringEnumJsonConverter<ConfidenceAssessmentMethod> { }
+public sealed class StrictConfidenceAssessorTypeJsonConverter : StrictExactStringEnumJsonConverter<ConfidenceAssessorType> { }
+public sealed class StrictConfidenceFactorDirectionJsonConverter : StrictExactStringEnumJsonConverter<ConfidenceFactorDirection> { }
 
 public sealed class EvidenceIdJsonConverter : JsonConverter<EvidenceId>
 {
