@@ -41,6 +41,7 @@ public static class AstronomyEvidenceValidationCodes
     public const string AssessmentAuditMissing = "A2.KNOWLEDGE.CONFIDENCE.ASSESSMENT.AuditMissing";
     public const string AssessmentAuditInvalid = "A2.KNOWLEDGE.CONFIDENCE.ASSESSMENT.AuditInvalid";
     public const string AssessmentEvidenceCollectionMissing = "A2.KNOWLEDGE.CONFIDENCE.ASSESSMENT.EvidenceCollectionMissing";
+    public const string AssessmentEvidenceOrderingInvalid = "A2.KNOWLEDGE.CONFIDENCE.ASSESSMENT.EvidenceOrderingInvalid";
     public const string AssessmentEvidenceIdMissing = "A2.KNOWLEDGE.CONFIDENCE.ASSESSMENT.EvidenceIdMissing";
     public const string AssessmentDuplicateEvidence = "A2.KNOWLEDGE.CONFIDENCE.ASSESSMENT.DuplicateEvidence";
     public const string AssessmentFactorCollectionMissing = "A2.KNOWLEDGE.CONFIDENCE.ASSESSMENT.FactorCollectionMissing";
@@ -55,6 +56,6 @@ public static class AstronomyEvidenceValidationCodes
 
     public const string ConsistencyStatementOwnerMismatch = "A2.KNOWLEDGE.CONFIDENCE.CONSISTENCY.StatementOwnerMismatch";
     public const string ConsistencyReferencedEvidenceNotInSet = "A2.KNOWLEDGE.CONFIDENCE.CONSISTENCY.ReferencedEvidenceNotInSet";
-    public const string ConsistencyEvidenceSetMissing = "A2.KNOWLEDGE.CONFIDENCE.CONSISTENCY.EvidenceSetMissing";
+    public const string ConsistencyEvidenceSetEmpty = "A2.KNOWLEDGE.CONFIDENCE.CONSISTENCY.EvidenceSetEmpty";
     public const string ConsistencyContradictingEvidenceNotReferenced = "A2.KNOWLEDGE.CONFIDENCE.CONSISTENCY.ContradictingEvidenceNotReferenced";
 }
