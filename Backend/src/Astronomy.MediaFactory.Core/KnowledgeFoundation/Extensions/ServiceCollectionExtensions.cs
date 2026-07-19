@@ -9,8 +9,8 @@ public static class CgA2AstronomyKnowledgeFoundationServiceCollectionExtensions
     public static IServiceCollection AddCgA2AstronomyKnowledgeFoundation(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.TryAddSingleton<IAstronomyKnowledgeStatementValidator, AstronomyKnowledgeStatementValidator>();
         services.TryAddSingleton<AstronomyKnowledgeStatementValidator>();
+        services.TryAddSingleton<IAstronomyKnowledgeStatementValidator>(provider => provider.GetRequiredService<AstronomyKnowledgeStatementValidator>());
         return services;
     }
 }

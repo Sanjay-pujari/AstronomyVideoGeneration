@@ -39,6 +39,33 @@ public sealed class KnowledgeFoundationSerializationAndDiTests
     }
 
     [Fact]
+    public void Numeric_knowledge_enums_are_rejected_directly_and_in_complete_statements()
+    {
+        new Action(() => JsonSerializer.Deserialize<KnowledgeStatementKind>("0", Json)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Deserialize<KnowledgeFoundationStatus>("0", Json)).Should().Throw<JsonException>();
+
+        var json = JsonSerializer.Serialize(CreateStatement(), Json);
+        new Action(() => JsonSerializer.Deserialize<AstronomyKnowledgeStatement<SyntheticPayload>>(json.Replace("\"Scientific\"", "0"), Json)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Deserialize<AstronomyKnowledgeStatement<SyntheticPayload>>(json.Replace("\"Draft\"", "0"), Json)).Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void Invalid_default_ids_and_versions_are_rejected_during_serialization()
+    {
+        new Action(() => JsonSerializer.Serialize(default(KnowledgeId), Json)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Serialize(default(KnowledgeVersion), Json)).Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void Wrong_scalar_json_token_types_are_rejected()
+    {
+        new Action(() => JsonSerializer.Deserialize<KnowledgeId>("42", Json)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Deserialize<KnowledgeVersion>("\"1\"", Json)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Deserialize<KnowledgeLanguageTag>("42", Json)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Deserialize<KnowledgeTag>("42", Json)).Should().Throw<JsonException>();
+    }
+
+    [Fact]
     public void Complete_statement_round_trips_and_validates_without_clr_metadata()
     {
         var statement = CreateStatement();
@@ -99,7 +126,26 @@ public sealed class KnowledgeFoundationSerializationAndDiTests
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web).AddAstronomyKnowledgePayload<SyntheticPayload>("synthetic.payload").AddAstronomyKnowledgePayload<SyntheticPayload>("synthetic.payload");
         options.Converters.Count(c => c is KnowledgeIdJsonConverter).Should().Be(1);
+        options.Converters.Count(c => c is AstronomyKnowledgePayloadJsonConverter<SyntheticPayload>).Should().Be(1);
         JsonSerializer.Serialize(AstronomyEntityKind.DwarfPlanet, options).Should().Be("\"DwarfPlanet\"");
+    }
+
+    [Fact]
+    public void Payload_registration_rejects_conflicting_or_invalid_discriminators()
+    {
+        new Action(() => new JsonSerializerOptions(JsonSerializerDefaults.Web).AddAstronomyKnowledgePayload<SyntheticPayload>("different.payload").AddAstronomyKnowledgePayload<SyntheticPayload>("synthetic.payload")).Should().Throw<InvalidOperationException>();
+        new Action(() => new JsonSerializerOptions(JsonSerializerDefaults.Web).AddAstronomyKnowledgePayload<SyntheticPayload>("synthetic.payload").AddAstronomyKnowledgePayload<OtherSyntheticPayload>("synthetic.payload")).Should().Throw<InvalidOperationException>();
+
+        foreach (var invalid in new[] { "", "   ", "bad token", "bad\n", new string('a', 129) })
+            new Action(() => new JsonSerializerOptions(JsonSerializerDefaults.Web).AddAstronomyKnowledgePayload<SyntheticPayload>(invalid)).Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Payload_serialization_rejects_reserved_discriminator_property_collisions_and_null_payloads()
+    {
+        var collisionOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web).AddAstronomyKnowledgePayload<CollisionPayload>("collision.payload");
+        new Action(() => JsonSerializer.Serialize(new CollisionPayload("collision"), collisionOptions)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Serialize<SyntheticPayload>(null!, Json)).Should().Throw<JsonException>();
     }
 
     [Fact]
@@ -107,8 +153,11 @@ public sealed class KnowledgeFoundationSerializationAndDiTests
     {
         var services = new ServiceCollection().AddCgA2AstronomyKnowledgeFoundation().AddCgA2AstronomyKnowledgeFoundation().AddCgA2AstronomyDomainFoundation().AddCgA1CertificationFoundation();
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IAstronomyKnowledgeStatementValidator>().Should().BeOfType<AstronomyKnowledgeStatementValidator>();
-        provider.GetRequiredService<AstronomyKnowledgeStatementValidator>().Should().NotBeNull();
+        var interfaceValidator = provider.GetRequiredService<IAstronomyKnowledgeStatementValidator>();
+        var concreteValidator = provider.GetRequiredService<AstronomyKnowledgeStatementValidator>();
+        interfaceValidator.Should().BeOfType<AstronomyKnowledgeStatementValidator>();
+        concreteValidator.Should().NotBeNull();
+        interfaceValidator.Should().BeSameAs(concreteValidator);
         provider.GetServices<IAstronomyKnowledgeStatementValidator>().Should().HaveCount(1);
         services.Where(d => d.ServiceType.Namespace?.Contains("KnowledgeFoundation", StringComparison.Ordinal) == true).Should().OnlyContain(d => d.ServiceType == typeof(IAstronomyKnowledgeStatementValidator) || d.ServiceType == typeof(AstronomyKnowledgeStatementValidator));
     }
@@ -127,4 +176,6 @@ public sealed class KnowledgeFoundationSerializationAndDiTests
     private static AstronomyKnowledgeStatement<SyntheticPayload> CreateStatement(IEnumerable<KnowledgeTag>? tags = null) => new(new KnowledgeId("knowledge.moon.identity"), KnowledgeVersion.Initial, KnowledgeStatementKind.Scientific, KnowledgeFoundationStatus.Draft, new AstronomyEntityReference("moon", AstronomyEntityKind.Moon, "Moon"), new SyntheticPayload("moon.meaning", 42), new KnowledgeAuditMetadata(Created, "author", Created.AddHours(1), "reviewer"), new AstronomyFamilyReference("solar-system", AstronomyFamilyKind.PlanetarySystem), [new(new KnowledgeLanguageTag("HI"), "moon.name", true), new(new KnowledgeLanguageTag("en-us"), "moon.name", false, true)], tags ?? [new KnowledgeTag("Moon"), new KnowledgeTag("Lunar")], new KnowledgeValidityRange(Created, Created.AddDays(1)));
     private static string RemoveProperty(string json, string propertyName) { using var doc = JsonDocument.Parse(json); using var stream = new MemoryStream(); using (var writer = new Utf8JsonWriter(stream)) { writer.WriteStartObject(); foreach (var p in doc.RootElement.EnumerateObject()) if (!string.Equals(p.Name, propertyName, StringComparison.Ordinal)) p.WriteTo(writer); writer.WriteEndObject(); } return System.Text.Encoding.UTF8.GetString(stream.ToArray()); }
     private sealed record SyntheticPayload(string SemanticKey, int Weight) : IAstronomyKnowledgePayload;
+    private sealed record OtherSyntheticPayload(string SemanticKey) : IAstronomyKnowledgePayload;
+    private sealed record CollisionPayload(string PayloadKind) : IAstronomyKnowledgePayload;
 }
