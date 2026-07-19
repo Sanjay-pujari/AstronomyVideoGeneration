@@ -141,7 +141,6 @@ public sealed class EvidenceFoundationPrimitivesTests
         var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.TopDirectoryOnly).Select(File.ReadAllText));
         Assert.DoesNotContain("KnowledgeConfidence", text, StringComparison.Ordinal);
         Assert.Contains("EvidenceId", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("JsonConverter", text, StringComparison.Ordinal);
         Assert.DoesNotContain("IServiceCollection", text, StringComparison.Ordinal);
         Assert.DoesNotContain("DbContext", text, StringComparison.Ordinal);
         Assert.DoesNotContain("HttpClient", text, StringComparison.Ordinal);

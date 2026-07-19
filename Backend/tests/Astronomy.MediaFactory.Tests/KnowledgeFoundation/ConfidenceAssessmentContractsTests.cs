@@ -255,7 +255,7 @@ public sealed class ConfidenceAssessmentContractsTests
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/Astronomy.MediaFactory.Core/KnowledgeFoundation/Evidence/Confidence"));
         var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText));
-        foreach (var forbidden in new[] { "ConfidenceCalculator", "ConfidenceEngine", "EvidenceWeight", "WeightedAverage", "Bayesian", "ConsensusAlgorithm", "EvidenceValidator", "ConfidenceValidator", "ValidationCodes", "JsonConverter", "JsonSerializerOptions", "IServiceCollection", "DbContext", "IQueryable", "HttpClient", "DateTimeOffset.UtcNow", "CertificationCoordinator", "OpenAI", "MachineLearning" })
+        foreach (var forbidden in new[] { "ConfidenceCalculator", "ConfidenceEngine", "EvidenceWeight", "WeightedAverage", "Bayesian", "ConsensusAlgorithm", "EvidenceValidator", "ConfidenceValidator", "ValidationCodes", "IServiceCollection", "DbContext", "IQueryable", "HttpClient", "DateTimeOffset.UtcNow", "CertificationCoordinator", "OpenAI", "MachineLearning" })
             Assert.DoesNotContain(forbidden, text, StringComparison.Ordinal);
     }
 

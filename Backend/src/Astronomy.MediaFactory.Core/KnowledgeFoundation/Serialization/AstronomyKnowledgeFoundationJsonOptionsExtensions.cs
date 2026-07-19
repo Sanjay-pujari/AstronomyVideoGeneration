@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Serialization;
 
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Serialization;
 
@@ -19,6 +20,34 @@ public static class AstronomyKnowledgeFoundationJsonOptionsExtensions
         AddIfMissing(options, new StrictKnowledgeStatementKindJsonConverter());
         AddIfMissing(options, new StrictKnowledgeFoundationStatusJsonConverter());
         if (!options.Converters.Any(c => c is JsonStringEnumConverter)) options.Converters.Add(new JsonStringEnumConverter());
+        return options;
+    }
+
+    public static JsonSerializerOptions AddAstronomyEvidenceAndConfidenceJson(this JsonSerializerOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        options.AddAstronomyKnowledgeFoundationJson();
+        AddIfMissing(options, new EvidenceIdJsonConverter());
+        AddIfMissing(options, new ConfidenceAssessmentIdJsonConverter());
+        AddIfMissing(options, new KnowledgeConfidenceScoreJsonConverter());
+        AddIfMissing(options, new EvidenceExternalIdentifierJsonConverter());
+        AddIfMissing(options, new AstronomyEvidenceSourceReferenceJsonConverter());
+        AddIfMissing(options, new EvidenceAttributionJsonConverter());
+        AddIfMissing(options, new EvidenceTemporalMetadataJsonConverter());
+        AddIfMissing(options, new AstronomyEvidenceRecordJsonConverter());
+        AddIfMissing(options, new KnowledgeStatementEvidenceReferenceJsonConverter());
+        AddIfMissing(options, new AstronomyKnowledgeStatementEvidenceSetJsonConverter());
+        AddIfMissing(options, new ConfidenceAssessorReferenceJsonConverter());
+        AddIfMissing(options, new ConfidenceAssessmentFactorJsonConverter());
+        AddIfMissing(options, new AstronomyKnowledgeConfidenceAssessmentJsonConverter());
+        AddIfMissing(options, new StrictAstronomyEvidenceTypeJsonConverter());
+        AddIfMissing(options, new StrictAstronomyEvidenceSourceTypeJsonConverter());
+        AddIfMissing(options, new StrictEvidenceFoundationStatusJsonConverter());
+        AddIfMissing(options, new StrictKnowledgeEvidenceRoleJsonConverter());
+        AddIfMissing(options, new StrictKnowledgeConfidenceLevelJsonConverter());
+        AddIfMissing(options, new StrictConfidenceAssessmentMethodJsonConverter());
+        AddIfMissing(options, new StrictConfidenceAssessorTypeJsonConverter());
+        AddIfMissing(options, new StrictConfidenceFactorDirectionJsonConverter());
         return options;
     }
 
