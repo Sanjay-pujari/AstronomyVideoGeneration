@@ -5,6 +5,7 @@ public enum AstronomyCoordinateSystem
     Equatorial,
     Ecliptic,
     Galactic,
+    Supergalactic,
     Horizontal,
     Cartesian,
     Spherical,

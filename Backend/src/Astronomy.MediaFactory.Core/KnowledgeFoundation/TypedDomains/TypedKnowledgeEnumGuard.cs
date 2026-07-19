@@ -23,6 +23,9 @@ public static class TypedKnowledgeEnumGuard
     public static AstronomyReferenceFrame RequireDefined(AstronomyReferenceFrame value, string parameterName = "referenceFrame")
         => Enum.IsDefined(value) ? value : throw new ArgumentOutOfRangeException(parameterName, value, "Astronomy reference frame is not defined.");
 
+    public static AstronomyReferenceOrigin RequireDefined(AstronomyReferenceOrigin value, string parameterName = "referenceOrigin")
+        => Enum.IsDefined(value) ? value : throw new ArgumentOutOfRangeException(parameterName, value, "Astronomy reference origin is not defined.");
+
     public static AstronomyCoordinateSystem RequireDefined(AstronomyCoordinateSystem value, string parameterName = "coordinateSystem")
         => Enum.IsDefined(value) ? value : throw new ArgumentOutOfRangeException(parameterName, value, "Astronomy coordinate system is not defined.");
 
