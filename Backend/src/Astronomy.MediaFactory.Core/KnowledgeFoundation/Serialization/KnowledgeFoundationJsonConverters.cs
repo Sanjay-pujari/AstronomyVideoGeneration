@@ -47,6 +47,38 @@ public sealed class KnowledgeTagJsonConverter : JsonConverter<KnowledgeTag>
     private static KnowledgeTag Wrap(Func<KnowledgeTag> create, string message) { try { return create(); } catch (ArgumentException ex) { throw new JsonException(message, ex); } }
 }
 
+public sealed class KnowledgeValidityRangeJsonConverter : JsonConverter<KnowledgeValidityRange>
+{
+    public override KnowledgeValidityRange Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        try
+        {
+            var dto = JsonSerializer.Deserialize<KnowledgeValidityRangeDto>(ref reader, options) ?? throw new JsonException("Knowledge validity range cannot be null.");
+            return new KnowledgeValidityRange(dto.EffectiveFromUtc, dto.EffectiveToUtc);
+        }
+        catch (ArgumentException ex) { throw new JsonException("Invalid knowledge validity range JSON value.", ex); }
+    }
+
+    public override void Write(Utf8JsonWriter writer, KnowledgeValidityRange value, JsonSerializerOptions options) => JsonSerializer.Serialize(writer, new KnowledgeValidityRangeDto(value.EffectiveFromUtc, value.EffectiveToUtc), options);
+    private sealed record KnowledgeValidityRangeDto(DateTimeOffset? EffectiveFromUtc, DateTimeOffset? EffectiveToUtc);
+}
+
+public sealed class KnowledgeAuditMetadataJsonConverter : JsonConverter<KnowledgeAuditMetadata>
+{
+    public override KnowledgeAuditMetadata Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        try
+        {
+            var dto = JsonSerializer.Deserialize<KnowledgeAuditMetadataDto>(ref reader, options) ?? throw new JsonException("Knowledge audit metadata cannot be null.");
+            return new KnowledgeAuditMetadata(dto.CreatedUtc, dto.CreatedBy, dto.UpdatedUtc, dto.UpdatedBy);
+        }
+        catch (ArgumentException ex) { throw new JsonException("Invalid knowledge audit metadata JSON value.", ex); }
+    }
+
+    public override void Write(Utf8JsonWriter writer, KnowledgeAuditMetadata value, JsonSerializerOptions options) => JsonSerializer.Serialize(writer, new KnowledgeAuditMetadataDto(value.CreatedUtc, value.CreatedBy, value.UpdatedUtc, value.UpdatedBy), options);
+    private sealed record KnowledgeAuditMetadataDto(DateTimeOffset CreatedUtc, string? CreatedBy, DateTimeOffset? UpdatedUtc, string? UpdatedBy);
+}
+
 public sealed class AstronomyKnowledgePayloadJsonConverter<TPayload>(string discriminator) : JsonConverter<TPayload> where TPayload : IAstronomyKnowledgePayload
 {
     private const string DiscriminatorPropertyName = "payloadKind";

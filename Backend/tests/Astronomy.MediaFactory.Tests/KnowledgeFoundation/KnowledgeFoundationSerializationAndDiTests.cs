@@ -110,7 +110,7 @@ public sealed class KnowledgeFoundationSerializationAndDiTests
         provider.GetRequiredService<IAstronomyKnowledgeStatementValidator>().Should().BeOfType<AstronomyKnowledgeStatementValidator>();
         provider.GetRequiredService<AstronomyKnowledgeStatementValidator>().Should().NotBeNull();
         provider.GetServices<IAstronomyKnowledgeStatementValidator>().Should().HaveCount(1);
-        services.Any(d => d.ServiceType.Name.Contains("Evidence", StringComparison.OrdinalIgnoreCase) || d.ServiceType.Name.Contains("Confidence", StringComparison.OrdinalIgnoreCase) || d.ServiceType.Name.Contains("Catalog", StringComparison.OrdinalIgnoreCase) && d.ServiceType.Namespace?.Contains("KnowledgeFoundation") == true || d.ServiceType.Name.Contains("Query", StringComparison.OrdinalIgnoreCase)).Should().BeFalse();
+        services.Where(d => d.ServiceType.Namespace?.Contains("KnowledgeFoundation", StringComparison.Ordinal) == true).Should().OnlyContain(d => d.ServiceType == typeof(IAstronomyKnowledgeStatementValidator) || d.ServiceType == typeof(AstronomyKnowledgeStatementValidator));
     }
 
     [Fact]

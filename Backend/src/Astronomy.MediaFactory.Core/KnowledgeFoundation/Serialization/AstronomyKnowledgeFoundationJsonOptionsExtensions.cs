@@ -12,6 +12,8 @@ public static class AstronomyKnowledgeFoundationJsonOptionsExtensions
         AddIfMissing(options, new KnowledgeVersionJsonConverter());
         AddIfMissing(options, new KnowledgeLanguageTagJsonConverter());
         AddIfMissing(options, new KnowledgeTagJsonConverter());
+        AddIfMissing(options, new KnowledgeValidityRangeJsonConverter());
+        AddIfMissing(options, new KnowledgeAuditMetadataJsonConverter());
         if (!options.Converters.Any(c => c is JsonStringEnumConverter)) options.Converters.Add(new JsonStringEnumConverter());
         return options;
     }
