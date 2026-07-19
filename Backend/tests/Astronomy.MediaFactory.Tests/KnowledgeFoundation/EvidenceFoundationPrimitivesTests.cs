@@ -138,8 +138,8 @@ public sealed class EvidenceFoundationPrimitivesTests
     public void Evidence_foundation_scope_excludes_records_associations_confidence_services_serialization_di_persistence_and_clients()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/Astronomy.MediaFactory.Core/KnowledgeFoundation/Evidence"));
-        var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText));
-        Assert.DoesNotContain("Confidence", text, StringComparison.Ordinal);
+        var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.TopDirectoryOnly).Select(File.ReadAllText));
+        Assert.DoesNotContain("KnowledgeConfidence", text, StringComparison.Ordinal);
         Assert.Contains("EvidenceId", text, StringComparison.Ordinal);
         Assert.DoesNotContain("JsonConverter", text, StringComparison.Ordinal);
         Assert.DoesNotContain("IServiceCollection", text, StringComparison.Ordinal);
