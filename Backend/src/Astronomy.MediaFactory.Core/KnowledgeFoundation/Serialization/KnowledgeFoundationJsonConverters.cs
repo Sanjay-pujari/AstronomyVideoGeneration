@@ -6,7 +6,12 @@ namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Serialization;
 
 public sealed class KnowledgeIdJsonConverter : JsonConverter<KnowledgeId>
 {
-    public override KnowledgeId Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.TokenType == JsonTokenType.String ? Wrap(() => new KnowledgeId(reader.GetString()!), "Invalid knowledge ID JSON value.") : throw new JsonException("Knowledge ID must be a JSON string.");
+    public override KnowledgeId Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String) throw new JsonException("Knowledge ID must be a JSON string.");
+        var value = reader.GetString()!;
+        return Wrap(() => new KnowledgeId(value), "Invalid knowledge ID JSON value.");
+    }
     public override void Write(Utf8JsonWriter writer, KnowledgeId value, JsonSerializerOptions options) => writer.WriteStringValue(value.Value);
     private static KnowledgeId Wrap(Func<KnowledgeId> create, string message) { try { return create(); } catch (ArgumentException ex) { throw new JsonException(message, ex); } }
 }
@@ -20,14 +25,24 @@ public sealed class KnowledgeVersionJsonConverter : JsonConverter<KnowledgeVersi
 
 public sealed class KnowledgeLanguageTagJsonConverter : JsonConverter<KnowledgeLanguageTag>
 {
-    public override KnowledgeLanguageTag Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.TokenType == JsonTokenType.String ? Wrap(() => new KnowledgeLanguageTag(reader.GetString()!), "Invalid knowledge language tag JSON value.") : throw new JsonException("Knowledge language tag must be a JSON string.");
+    public override KnowledgeLanguageTag Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String) throw new JsonException("Knowledge language tag must be a JSON string.");
+        var value = reader.GetString()!;
+        return Wrap(() => new KnowledgeLanguageTag(value), "Invalid knowledge language tag JSON value.");
+    }
     public override void Write(Utf8JsonWriter writer, KnowledgeLanguageTag value, JsonSerializerOptions options) => writer.WriteStringValue(value.Value);
     private static KnowledgeLanguageTag Wrap(Func<KnowledgeLanguageTag> create, string message) { try { return create(); } catch (ArgumentException ex) { throw new JsonException(message, ex); } }
 }
 
 public sealed class KnowledgeTagJsonConverter : JsonConverter<KnowledgeTag>
 {
-    public override KnowledgeTag Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.TokenType == JsonTokenType.String ? Wrap(() => new KnowledgeTag(reader.GetString()!), "Invalid knowledge tag JSON value.") : throw new JsonException("Knowledge tag must be a JSON string.");
+    public override KnowledgeTag Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String) throw new JsonException("Knowledge tag must be a JSON string.");
+        var value = reader.GetString()!;
+        return Wrap(() => new KnowledgeTag(value), "Invalid knowledge tag JSON value.");
+    }
     public override void Write(Utf8JsonWriter writer, KnowledgeTag value, JsonSerializerOptions options) => writer.WriteStringValue(value.Value);
     private static KnowledgeTag Wrap(Func<KnowledgeTag> create, string message) { try { return create(); } catch (ArgumentException ex) { throw new JsonException(message, ex); } }
 }
