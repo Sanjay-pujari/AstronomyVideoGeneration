@@ -1,5 +1,167 @@
-using Astronomy.MediaFactory.Core.AstronomyDomain.Entities; using Astronomy.MediaFactory.Core.AstronomyDomain.Relationships; using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
+using Astronomy.MediaFactory.Core.AstronomyDomain.Entities;
+using Astronomy.MediaFactory.Core.AstronomyDomain.Relationships;
+using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
+
 namespace Astronomy.MediaFactory.Core.AstronomyDomain.Catalog;
-public sealed record AstronomyDomainQuery(IReadOnlySet<AstronomyEntityKind>? EntityKinds=null,IReadOnlySet<string>? FamilyIds=null,IReadOnlySet<AstronomyDomainCategory>? DomainCategories=null,string? LanguageCode=null,string? SearchText=null,IReadOnlySet<string>? Tags=null,bool IncludeDeprecated=false,int Limit=100);
-public interface IAstronomyDomainCatalog{Task<IAstronomyDomainEntity?> GetByIdAsync(string entityId,CancellationToken cancellationToken=default);Task<IReadOnlyList<IAstronomyDomainEntity>> SearchAsync(AstronomyDomainQuery query,CancellationToken cancellationToken=default);Task<IReadOnlyList<AstronomyRelationship>> GetRelationshipsAsync(string entityId,CancellationToken cancellationToken=default);} 
-public sealed class InMemoryAstronomyDomainCatalog:IAstronomyDomainCatalog{private readonly Dictionary<string,IAstronomyDomainEntity> _byId=new(StringComparer.OrdinalIgnoreCase);private readonly Dictionary<string,string> _aliasToId=new(StringComparer.OrdinalIgnoreCase); private readonly object _gate=new(); public InMemoryAstronomyDomainCatalog(IEnumerable<IAstronomyDomainEntity>? entities=null){foreach(var e in entities??[])Add(e);} public void Add(IAstronomyDomainEntity e){lock(_gate){if(!_byId.TryAdd(e.Identity.EntityId,e))throw new InvalidOperationException($"Duplicate astronomy EntityId '{e.Identity.EntityId}'."); foreach(var a in e.Identity.Aliases.Concat(e.Localizations.SelectMany(l=>l.SearchAliases))){if(string.IsNullOrWhiteSpace(a))continue;if(_aliasToId.TryGetValue(a,out var id)&&!string.Equals(id,e.Identity.EntityId,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException($"Conflicting astronomy alias '{a}'.");_aliasToId[a]=e.Identity.EntityId;}}} public Task<IAstronomyDomainEntity?> GetByIdAsync(string entityId,CancellationToken cancellationToken=default){lock(_gate){if(_byId.TryGetValue(entityId.Trim(),out var e))return Task.FromResult<IAstronomyDomainEntity?>(e); if(_aliasToId.TryGetValue(entityId.Trim(),out var id)&&_byId.TryGetValue(id,out e))return Task.FromResult<IAstronomyDomainEntity?>(e); return Task.FromResult<IAstronomyDomainEntity?>(null);}} public Task<IReadOnlyList<IAstronomyDomainEntity>> SearchAsync(AstronomyDomainQuery q,CancellationToken cancellationToken=default){lock(_gate){IEnumerable<IAstronomyDomainEntity> r=_byId.Values; if(!q.IncludeDeprecated)r=r.Where(e=>e.Metadata.Status!=AstronomyContentStatus.Deprecated&&e.Metadata.Status!=AstronomyContentStatus.Archived); if(q.FamilyIds?.Count>0)r=r.Where(e=>q.FamilyIds.Contains(e.Identity.FamilyId,StringComparer.OrdinalIgnoreCase)); if(q.EntityKinds?.Count>0)r=r.Where(e=>q.EntityKinds.Contains(e.Identity.EntityKind)); if(q.DomainCategories?.Count>0)r=r.Where(e=>q.DomainCategories.Contains(e.Identity.DomainCategory)); if(q.Tags?.Count>0)r=r.Where(e=>q.Tags.All(t=>e.Classification.Tags.Contains(t,StringComparer.OrdinalIgnoreCase)||e.Metadata.Keywords.Contains(t,StringComparer.OrdinalIgnoreCase))); if(!string.IsNullOrWhiteSpace(q.SearchText)){var s=q.SearchText.Trim(); r=r.Where(e=>e.Identity.CanonicalName.Contains(s,StringComparison.OrdinalIgnoreCase)||e.Identity.Aliases.Any(a=>a.Contains(s,StringComparison.OrdinalIgnoreCase))||e.Localizations.Any(l=>(string.IsNullOrWhiteSpace(q.LanguageCode)||l.LanguageCode.Equals(q.LanguageCode,StringComparison.OrdinalIgnoreCase))&&(l.DisplayName.Contains(s,StringComparison.OrdinalIgnoreCase)||l.SearchAliases.Any(a=>a.Contains(s,StringComparison.OrdinalIgnoreCase)))));} return Task.FromResult<IReadOnlyList<IAstronomyDomainEntity>>(r.OrderBy(e=>e.Identity.EntityId,StringComparer.OrdinalIgnoreCase).Take(q.Limit<=0?100:q.Limit).ToArray());}} public Task<IReadOnlyList<AstronomyRelationship>> GetRelationshipsAsync(string entityId,CancellationToken cancellationToken=default){lock(_gate){var r=_byId.Values.SelectMany(e=>e.Relationships).Where(x=>x.SourceEntityId.Equals(entityId,StringComparison.OrdinalIgnoreCase)||x.TargetEntityId.Equals(entityId,StringComparison.OrdinalIgnoreCase)).OrderBy(x=>x.RelationshipId,StringComparer.OrdinalIgnoreCase).ToArray(); return Task.FromResult<IReadOnlyList<AstronomyRelationship>>(r);}}}
+
+public sealed record AstronomyDomainQuery(
+    IReadOnlySet<AstronomyEntityKind>? EntityKinds = null,
+    IReadOnlySet<string>? FamilyIds = null,
+    IReadOnlySet<AstronomyDomainCategory>? DomainCategories = null,
+    string? LanguageCode = null,
+    string? SearchText = null,
+    IReadOnlySet<string>? Tags = null,
+    bool IncludeDeprecated = false,
+    int Limit = InMemoryAstronomyDomainCatalog.DefaultQueryLimit);
+
+public interface IAstronomyDomainCatalog
+{
+    Task<IAstronomyDomainEntity?> GetByIdAsync(string entityId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<IAstronomyDomainEntity>> SearchAsync(AstronomyDomainQuery query, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<AstronomyRelationship>> GetRelationshipsAsync(string entityId, CancellationToken cancellationToken = default);
+}
+
+public sealed class InMemoryAstronomyDomainCatalog : IAstronomyDomainCatalog
+{
+    public const int DefaultQueryLimit = 100;
+
+    private readonly Dictionary<string, IAstronomyDomainEntity> _byId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _aliasToId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _gate = new();
+
+    public InMemoryAstronomyDomainCatalog(IEnumerable<IAstronomyDomainEntity>? entities = null)
+    {
+        foreach (var entity in entities ?? [])
+            Add(entity);
+    }
+
+    public void Add(IAstronomyDomainEntity entity)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+
+        var entityId = entity.Identity.EntityId;
+        var aliases = GetLookupAliases(entity).ToArray();
+
+        lock (_gate)
+        {
+            if (_byId.ContainsKey(entityId))
+                throw new InvalidOperationException($"Duplicate astronomy EntityId '{entityId}'.");
+
+            var duplicateAlias = aliases
+                .GroupBy(alias => alias, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1)?.Key;
+            if (duplicateAlias is not null)
+                throw new InvalidOperationException($"Duplicate astronomy alias '{duplicateAlias}'.");
+
+            foreach (var alias in aliases)
+            {
+                if (_aliasToId.TryGetValue(alias, out var existingId)
+                    && !string.Equals(existingId, entityId, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException($"Conflicting astronomy alias '{alias}'.");
+
+                if (_byId.ContainsKey(alias))
+                    throw new InvalidOperationException($"Astronomy alias '{alias}' conflicts with an existing EntityId.");
+            }
+
+            if (_aliasToId.ContainsKey(entityId))
+                throw new InvalidOperationException($"Astronomy EntityId '{entityId}' conflicts with an existing alias.");
+
+            _byId.Add(entityId, entity);
+            foreach (var alias in aliases)
+                _aliasToId[alias] = entityId;
+        }
+    }
+
+    public Task<IAstronomyDomainEntity?> GetByIdAsync(string entityId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(entityId);
+
+        var lookup = entityId.Trim();
+        if (lookup.Length == 0)
+            return Task.FromResult<IAstronomyDomainEntity?>(null);
+
+        lock (_gate)
+        {
+            if (_byId.TryGetValue(lookup, out var entity))
+                return Task.FromResult<IAstronomyDomainEntity?>(entity);
+
+            if (_aliasToId.TryGetValue(lookup, out var id) && _byId.TryGetValue(id, out entity))
+                return Task.FromResult<IAstronomyDomainEntity?>(entity);
+
+            return Task.FromResult<IAstronomyDomainEntity?>(null);
+        }
+    }
+
+    public Task<IReadOnlyList<IAstronomyDomainEntity>> SearchAsync(AstronomyDomainQuery query, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(query);
+
+        lock (_gate)
+        {
+            IEnumerable<IAstronomyDomainEntity> results = _byId.Values;
+
+            if (!query.IncludeDeprecated)
+                results = results.Where(e => e.Metadata.Status != AstronomyContentStatus.Deprecated && e.Metadata.Status != AstronomyContentStatus.Archived);
+
+            if (query.FamilyIds?.Count > 0)
+                results = results.Where(e => query.FamilyIds.Contains(e.Identity.FamilyId, StringComparer.OrdinalIgnoreCase));
+
+            if (query.EntityKinds?.Count > 0)
+                results = results.Where(e => query.EntityKinds.Contains(e.Identity.EntityKind));
+
+            if (query.DomainCategories?.Count > 0)
+                results = results.Where(e => query.DomainCategories.Contains(e.Identity.DomainCategory));
+
+            if (query.Tags?.Count > 0)
+                results = results.Where(e => query.Tags.All(t => e.Classification.Tags.Contains(t, StringComparer.OrdinalIgnoreCase) || e.Metadata.Keywords.Contains(t, StringComparer.OrdinalIgnoreCase)));
+
+            if (!string.IsNullOrWhiteSpace(query.SearchText))
+            {
+                var searchText = query.SearchText.Trim();
+                results = results.Where(e =>
+                    e.Identity.CanonicalName.Contains(searchText, StringComparison.OrdinalIgnoreCase)
+                    || e.Identity.Aliases.Any(a => a.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                    || e.Localizations.Any(l =>
+                        (string.IsNullOrWhiteSpace(query.LanguageCode) || l.LanguageCode.Equals(query.LanguageCode.Trim(), StringComparison.OrdinalIgnoreCase))
+                        && (l.DisplayName.Contains(searchText, StringComparison.OrdinalIgnoreCase) || l.SearchAliases.Any(a => a.Contains(searchText, StringComparison.OrdinalIgnoreCase)))));
+            }
+
+            var limit = query.Limit <= 0 ? DefaultQueryLimit : query.Limit;
+            return Task.FromResult<IReadOnlyList<IAstronomyDomainEntity>>(results
+                .OrderBy(e => e.Identity.EntityId, StringComparer.OrdinalIgnoreCase)
+                .Take(limit)
+                .ToArray());
+        }
+    }
+
+    public Task<IReadOnlyList<AstronomyRelationship>> GetRelationshipsAsync(string entityId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(entityId);
+
+        var lookup = entityId.Trim();
+        if (lookup.Length == 0)
+            return Task.FromResult<IReadOnlyList<AstronomyRelationship>>([]);
+
+        lock (_gate)
+        {
+            var relationships = _byId.Values
+                .SelectMany(e => e.Relationships)
+                .Where(x => x.SourceEntityId.Equals(lookup, StringComparison.OrdinalIgnoreCase) || x.TargetEntityId.Equals(lookup, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(x => x.RelationshipId, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            return Task.FromResult<IReadOnlyList<AstronomyRelationship>>(relationships);
+        }
+    }
+
+    private static IEnumerable<string> GetLookupAliases(IAstronomyDomainEntity entity)
+    {
+        return entity.Identity.Aliases
+            .Concat(entity.Localizations.SelectMany(l => l.SearchAliases))
+            .Select(alias => alias?.Trim() ?? string.Empty)
+            .Where(alias => alias.Length > 0);
+    }
+}
