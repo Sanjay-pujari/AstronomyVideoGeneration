@@ -159,7 +159,8 @@ public sealed class KnowledgeFoundationSerializationAndDiTests
         concreteValidator.Should().NotBeNull();
         interfaceValidator.Should().BeSameAs(concreteValidator);
         provider.GetServices<IAstronomyKnowledgeStatementValidator>().Should().HaveCount(1);
-        services.Where(d => d.ServiceType.Namespace?.Contains("KnowledgeFoundation", StringComparison.Ordinal) == true).Should().OnlyContain(d => d.ServiceType == typeof(IAstronomyKnowledgeStatementValidator) || d.ServiceType == typeof(AstronomyKnowledgeStatementValidator));
+        provider.GetRequiredService<System.Text.Json.JsonSerializerOptions>().Converters.Should().Contain(c => c is Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Serialization.AstronomyEvidenceRecordJsonConverter);
+        provider.GetRequiredService<Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Validation.IAstronomyEvidenceRecordValidator>().Should().BeSameAs(provider.GetRequiredService<Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Validation.AstronomyEvidenceRecordValidator>());
     }
 
     [Fact]

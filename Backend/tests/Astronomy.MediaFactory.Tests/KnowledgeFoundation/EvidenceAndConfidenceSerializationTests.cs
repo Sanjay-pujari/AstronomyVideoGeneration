@@ -1,0 +1,74 @@
+using System.Text.Json;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Confidence;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Serialization;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Validation;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Serialization;
+using FluentAssertions;
+
+namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation;
+
+public sealed class EvidenceAndConfidenceSerializationTests
+{
+    private static readonly DateTimeOffset Created = new(2026,1,1,0,0,0,TimeSpan.Zero);
+    private static JsonSerializerOptions Json => new JsonSerializerOptions(JsonSerializerDefaults.Web).AddAstronomyEvidenceAndConfidenceJson();
+
+    [Fact]
+    public void Strong_ids_and_score_use_stable_scalar_shapes_and_reject_bad_tokens()
+    {
+        JsonSerializer.Serialize(new EvidenceId("evidence.synthetic.a"), Json).Should().Be("\"evidence.synthetic.a\"");
+        JsonSerializer.Deserialize<EvidenceId>("\"evidence.synthetic.a\"", Json).Value.Should().Be("evidence.synthetic.a");
+        JsonSerializer.Serialize(new ConfidenceAssessmentId("confidence.synthetic.moon.v1"), Json).Should().Be("\"confidence.synthetic.moon.v1\"");
+        JsonSerializer.Serialize(new KnowledgeConfidenceScore(.5), Json).Should().Be("0.5");
+        JsonSerializer.Deserialize<KnowledgeConfidenceScore>("0", Json).Value.Should().Be(0);
+        JsonSerializer.Deserialize<KnowledgeConfidenceScore>("1", Json).Value.Should().Be(1);
+        foreach (var bad in new[] { "null", "\"\"", "\"bad id\"", "42", "{}" }) new Action(() => JsonSerializer.Deserialize<EvidenceId>(bad, Json)).Should().Throw<JsonException>();
+        foreach (var bad in new[] { "-0.1", "1.1", "\"0.5\"", "null" }) new Action(() => JsonSerializer.Deserialize<KnowledgeConfidenceScore>(bad, Json)).Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void Task22_enums_are_strict_symbolic_names()
+    {
+        JsonSerializer.Serialize(AstronomyEvidenceType.Observation, Json).Should().Be("\"Observation\"");
+        JsonSerializer.Serialize(EvidenceFoundationStatus.Verified, Json).Should().Be("\"Verified\"");
+        JsonSerializer.Serialize(KnowledgeEvidenceRole.Primary, Json).Should().Be("\"Primary\"");
+        JsonSerializer.Serialize(KnowledgeConfidenceLevel.High, Json).Should().Be("\"High\"");
+        JsonSerializer.Serialize(ConfidenceAssessmentMethod.HumanExpertReview, Json).Should().Be("\"HumanExpertReview\"");
+        JsonSerializer.Serialize(ConfidenceAssessorType.HumanExpert, Json).Should().Be("\"HumanExpert\"");
+        JsonSerializer.Serialize(ConfidenceFactorDirection.Supports, Json).Should().Be("\"Supports\"");
+        foreach (var bad in new[] { "0", "\"observation\"", "\"UnknownValue\"" }) new Action(() => JsonSerializer.Deserialize<AstronomyEvidenceType>(bad, Json)).Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void Evidence_record_round_trips_with_stable_shape_and_strict_properties()
+    {
+        var record = Record();
+        var json = JsonSerializer.Serialize(record, Json);
+        json.Should().Contain("\"id\":\"evidence.synthetic.a\"").And.Contain("\"canonicalUri\":\"https://example.test/evidence\"").And.NotContain("$type");
+        var copy = JsonSerializer.Deserialize<AstronomyEvidenceRecord>(json, Json)!;
+        copy.Id.Should().Be(record.Id); copy.Type.Should().Be(record.Type); copy.Status.Should().Be(record.Status); copy.Source.Should().Be(record.Source); copy.TemporalMetadata.PublishedAtUtc.Should().Be(record.TemporalMetadata.PublishedAtUtc); copy.Audit.Should().Be(record.Audit); copy.ExternalIdentifiers.Should().Equal(record.ExternalIdentifiers); copy.Tags.Should().Equal(record.Tags);
+        JsonSerializer.Serialize(record, Json).Should().Be(json);
+        new Action(() => JsonSerializer.Deserialize<AstronomyEvidenceRecord>(json.Replace("\"tags\":[\"moon\"]", "\"tags\":[\"moon\",\"moon\"]"), Json)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Deserialize<AstronomyEvidenceRecord>(json.Replace("\"title\":\"Synthetic title\"", "\"unknown\":1,\"title\":\"Synthetic title\""), Json)).Should().Throw<JsonException>();
+        new Action(() => JsonSerializer.Deserialize<AstronomyEvidenceRecord>(json.Replace("\"id\":\"evidence.synthetic.a\"", "\"id\":\"evidence.synthetic.a\",\"id\":\"evidence.synthetic.b\""), Json)).Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void Evidence_set_and_confidence_assessment_round_trip_and_policy_validation_remains_explicit()
+    {
+        var set = new AstronomyKnowledgeStatementEvidenceSet(new KnowledgeId("knowledge.synthetic.moon"), new KnowledgeVersion(1), [new(new KnowledgeId("knowledge.synthetic.moon"), new KnowledgeVersion(1), new EvidenceId("evidence.synthetic.a"), KnowledgeEvidenceRole.Primary)]);
+        var assessment = Assessment();
+        var setCopy = JsonSerializer.Deserialize<AstronomyKnowledgeStatementEvidenceSet>(JsonSerializer.Serialize(set, Json), Json)!;
+        var assessmentCopy = JsonSerializer.Deserialize<AstronomyKnowledgeConfidenceAssessment>(JsonSerializer.Serialize(assessment, Json), Json)!;
+        setCopy.Should().Be(set);
+        assessmentCopy.Id.Should().Be(assessment.Id); assessmentCopy.KnowledgeId.Should().Be(assessment.KnowledgeId); assessmentCopy.Score.Should().Be(assessment.Score); assessmentCopy.Assessor.Should().Be(assessment.Assessor); assessmentCopy.EvidenceIds.Should().Equal(assessment.EvidenceIds); assessmentCopy.Factors.Should().Equal(assessment.Factors); assessmentCopy.Rationale.Should().Be(assessment.Rationale);
+        new AstronomyEvidenceConfidenceConsistencyValidator().Validate(assessmentCopy, setCopy).IsValid.Should().BeTrue();
+        new AstronomyKnowledgeConfidenceAssessmentValidator().Validate(assessmentCopy).IsValid.Should().BeTrue();
+        var policyInvalid = JsonSerializer.Deserialize<AstronomyKnowledgeConfidenceAssessment>(JsonSerializer.Serialize(assessment, Json).Replace("\"level\":\"High\"", "\"level\":\"Unknown\""), Json)!;
+        new AstronomyKnowledgeConfidenceAssessmentValidator().Validate(policyInvalid).Issues.Should().Contain(i => i.Code == AstronomyEvidenceValidationCodes.AssessmentUnknownLevelHasScore);
+    }
+
+    private static AstronomyEvidenceRecord Record() => new(new EvidenceId("evidence.synthetic.a"), AstronomyEvidenceType.Observation, EvidenceFoundationStatus.Verified, new AstronomyEvidenceSourceReference("source.synthetic", AstronomyEvidenceSourceType.SpaceAgency, "Synthetic Source", new Uri("https://example.test/evidence"), new EvidenceExternalIdentifier("doi", "10.test/example")), new EvidenceTemporalMetadata(publishedAtUtc: Created, retrievedAtUtc: Created.AddHours(1)), new KnowledgeAuditMetadata(Created, "author"), new EvidenceAttribution(["Contributor"], organizationName:"Org"), "Synthetic title", "Synthetic summary", [new EvidenceExternalIdentifier("bibcode", "2026Test")], [new KnowledgeTag("moon")]);
+    private static AstronomyKnowledgeConfidenceAssessment Assessment() => new(new ConfidenceAssessmentId("confidence.synthetic.moon.v1"), new KnowledgeId("knowledge.synthetic.moon"), new KnowledgeVersion(1), KnowledgeConfidenceLevel.High, new KnowledgeConfidenceScore(.82), ConfidenceAssessmentMethod.HumanExpertReview, new ConfidenceAssessorReference("expert.synthetic.one", ConfidenceAssessorType.HumanExpert, "Synthetic Expert"), new KnowledgeAuditMetadata(Created, "author"), [new EvidenceId("evidence.synthetic.a")], [new ConfidenceAssessmentFactor("multiple-independent-sources", ConfidenceFactorDirection.Supports)], "Synthetic rationale.");
+}

@@ -186,7 +186,7 @@ public sealed class EvidenceRecordsAndSetsTests
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/Astronomy.MediaFactory.Core/KnowledgeFoundation/Evidence"));
         var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText));
-        foreach (var forbidden in new[] { "ConfidenceScore", "ConfidenceAssessment", "EvidenceValidator", "EvidenceValidationCodes", "JsonConverter", "JsonSerializerOptions", "IServiceCollection", "DbContext", "IQueryable", "HttpClient", "DateTimeOffset.UtcNow" })
+        foreach (var forbidden in new[] { "EvidenceValidator", "EvidenceValidationCodes", "DbContext", "IQueryable", "HttpClient", "DateTimeOffset.UtcNow" })
             Assert.DoesNotContain(forbidden, text, StringComparison.Ordinal);
     }
 
