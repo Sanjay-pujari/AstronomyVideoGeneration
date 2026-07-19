@@ -70,13 +70,14 @@ public readonly record struct KnowledgeId
         if (string.IsNullOrWhiteSpace(value))
             throw new ArgumentException($"{displayName} is required.", parameterName);
 
+        if (value.Any(char.IsControl))
+            throw new ArgumentException($"{displayName} must not contain control characters.", parameterName);
+
         var normalized = value.Trim();
         if (normalized.Length > maxLength)
             throw new ArgumentException($"{displayName} must be {maxLength} characters or fewer.", parameterName);
         if (normalized.Any(char.IsWhiteSpace))
             throw new ArgumentException($"{displayName} must not contain whitespace.", parameterName);
-        if (normalized.Any(char.IsControl))
-            throw new ArgumentException($"{displayName} must not contain control characters.", parameterName);
 
         return normalized;
     }
