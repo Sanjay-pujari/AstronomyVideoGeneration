@@ -114,13 +114,88 @@ public sealed class ConfidenceAssessmentContractsTests
     [Fact]
     public void Required_field_guards_reject_default_ids_invalid_enums_null_assessor_and_null_audit()
     {
-        Assert.Throws<ArgumentException>(() => CreateAssessment(id: default));
-        Assert.Throws<ArgumentException>(() => CreateAssessment(knowledgeId: default));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreateAssessment(knowledgeVersion: default));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreateAssessment(level: (KnowledgeConfidenceLevel)999));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreateAssessment(method: (ConfidenceAssessmentMethod)999));
-        Assert.Throws<ArgumentNullException>(() => new AstronomyKnowledgeConfidenceAssessment(new ConfidenceAssessmentId("confidence.synthetic.null-assessor"), new KnowledgeId("knowledge.synthetic.moon"), new KnowledgeVersion(2), KnowledgeConfidenceLevel.Unknown, null, ConfidenceAssessmentMethod.Imported, null!, KnowledgeAuditMetadata.Create(Created, "tester"), [], []));
-        Assert.Throws<ArgumentNullException>(() => new AstronomyKnowledgeConfidenceAssessment(new ConfidenceAssessmentId("confidence.synthetic.null-audit"), new KnowledgeId("knowledge.synthetic.moon"), new KnowledgeVersion(2), KnowledgeConfidenceLevel.Unknown, null, ConfidenceAssessmentMethod.Imported, new ConfidenceAssessorReference("external.synthetic", ConfidenceAssessorType.ExternalAuthority, "External Synthetic"), null!, [], []));
+        Assert.Throws<ArgumentException>(() =>
+            new AstronomyKnowledgeConfidenceAssessment(
+                default(ConfidenceAssessmentId),
+                new KnowledgeId("knowledge.synthetic.moon"),
+                new KnowledgeVersion(2),
+                KnowledgeConfidenceLevel.High,
+                new KnowledgeConfidenceScore(.82d),
+                ConfidenceAssessmentMethod.HumanExpertReview,
+                new ConfidenceAssessorReference(
+                    "expert.synthetic.one",
+                    ConfidenceAssessorType.HumanExpert,
+                    "Synthetic Expert"),
+                KnowledgeAuditMetadata.Create(Created, "tester"),
+                [],
+                []));
+
+        Assert.Throws<ArgumentException>(() =>
+            new AstronomyKnowledgeConfidenceAssessment(
+                new ConfidenceAssessmentId("confidence.synthetic.moon.v1"),
+                default(KnowledgeId),
+                new KnowledgeVersion(2),
+                KnowledgeConfidenceLevel.High,
+                new KnowledgeConfidenceScore(.82d),
+                ConfidenceAssessmentMethod.HumanExpertReview,
+                new ConfidenceAssessorReference(
+                    "expert.synthetic.one",
+                    ConfidenceAssessorType.HumanExpert,
+                    "Synthetic Expert"),
+                KnowledgeAuditMetadata.Create(Created, "tester"),
+                [],
+                []));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new AstronomyKnowledgeConfidenceAssessment(
+                new ConfidenceAssessmentId("confidence.synthetic.moon.v1"),
+                new KnowledgeId("knowledge.synthetic.moon"),
+                default(KnowledgeVersion),
+                KnowledgeConfidenceLevel.High,
+                new KnowledgeConfidenceScore(.82d),
+                ConfidenceAssessmentMethod.HumanExpertReview,
+                new ConfidenceAssessorReference(
+                    "expert.synthetic.one",
+                    ConfidenceAssessorType.HumanExpert,
+                    "Synthetic Expert"),
+                KnowledgeAuditMetadata.Create(Created, "tester"),
+                [],
+                []));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            CreateAssessment(level: (KnowledgeConfidenceLevel)999));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            CreateAssessment(method: (ConfidenceAssessmentMethod)999));
+
+        Assert.Throws<ArgumentNullException>(() =>
+            new AstronomyKnowledgeConfidenceAssessment(
+                new ConfidenceAssessmentId("confidence.synthetic.null-assessor"),
+                new KnowledgeId("knowledge.synthetic.moon"),
+                new KnowledgeVersion(2),
+                KnowledgeConfidenceLevel.Unknown,
+                null,
+                ConfidenceAssessmentMethod.Imported,
+                null!,
+                KnowledgeAuditMetadata.Create(Created, "tester"),
+                [],
+                []));
+
+        Assert.Throws<ArgumentNullException>(() =>
+            new AstronomyKnowledgeConfidenceAssessment(
+                new ConfidenceAssessmentId("confidence.synthetic.null-audit"),
+                new KnowledgeId("knowledge.synthetic.moon"),
+                new KnowledgeVersion(2),
+                KnowledgeConfidenceLevel.Unknown,
+                null,
+                ConfidenceAssessmentMethod.Imported,
+                new ConfidenceAssessorReference(
+                    "external.synthetic",
+                    ConfidenceAssessorType.ExternalAuthority,
+                    "External Synthetic"),
+                null!,
+                [],
+                []));
     }
 
     [Fact]
