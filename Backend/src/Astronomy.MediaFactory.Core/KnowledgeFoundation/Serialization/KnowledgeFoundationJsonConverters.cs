@@ -108,6 +108,7 @@ public sealed class AstronomyKnowledgePayloadJsonConverter<TPayload>(string disc
     private const string DiscriminatorPropertyName = "payloadKind";
     public Type PayloadType => typeof(TPayload);
     public string Discriminator => discriminator;
+    public override bool HandleNull => true;
     public override TPayload Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var document = JsonDocument.ParseValue(ref reader);
