@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Serialization;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core.AstronomyDomain.Families;
@@ -6,7 +7,7 @@ using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
 
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation;
 
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(StrictKnowledgeFoundationStatusJsonConverter))]
 public enum KnowledgeFoundationStatus
 {
     Draft,
@@ -16,7 +17,7 @@ public enum KnowledgeFoundationStatus
     Archived
 }
 
-[JsonConverter(typeof(JsonStringEnumConverter))]
+[JsonConverter(typeof(StrictKnowledgeStatementKindJsonConverter))]
 public enum KnowledgeStatementKind
 {
     Scientific,

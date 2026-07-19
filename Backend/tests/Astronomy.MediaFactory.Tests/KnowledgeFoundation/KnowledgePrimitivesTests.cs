@@ -76,6 +76,7 @@ public sealed class KnowledgePrimitivesTests
         Assert.Throws<ArgumentOutOfRangeException>(() => KnowledgeFoundationEnumGuard.RequireDefined((KnowledgeFoundationStatus)999));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<KnowledgeFoundationStatus>("\"Candidate\""));
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<KnowledgeFoundationStatus>("\"Accepted\""));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<KnowledgeFoundationStatus>("0"));
     }
 
     [Fact]
@@ -89,6 +90,7 @@ public sealed class KnowledgePrimitivesTests
         Assert.Throws<ArgumentOutOfRangeException>(() => KnowledgeFoundationEnumGuard.RequireDefined((KnowledgeStatementKind)999));
         foreach (var invalid in new[] { "General", "Identity", "Classification", "Education", "Visualization" })
             Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<KnowledgeStatementKind>($"\"{invalid}\""));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<KnowledgeStatementKind>("0"));
     }
 
     [Fact]

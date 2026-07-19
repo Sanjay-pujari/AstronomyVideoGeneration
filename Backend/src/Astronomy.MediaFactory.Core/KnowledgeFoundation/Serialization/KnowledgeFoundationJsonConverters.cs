@@ -4,6 +4,22 @@ using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
 
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Serialization;
 
+public sealed class StrictKnowledgeFoundationStatusJsonConverter : JsonStringEnumConverter<KnowledgeFoundationStatus>
+{
+    public StrictKnowledgeFoundationStatusJsonConverter() : base(namingPolicy: null, allowIntegerValues: false) { }
+}
+
+public sealed class StrictKnowledgeStatementKindJsonConverter : JsonStringEnumConverter<KnowledgeStatementKind>
+{
+    public StrictKnowledgeStatementKindJsonConverter() : base(namingPolicy: null, allowIntegerValues: false) { }
+}
+
+internal interface IAstronomyKnowledgePayloadConverterRegistration
+{
+    Type PayloadType { get; }
+    string Discriminator { get; }
+}
+
 public sealed class KnowledgeIdJsonConverter : JsonConverter<KnowledgeId>
 {
     public override KnowledgeId Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -12,14 +28,22 @@ public sealed class KnowledgeIdJsonConverter : JsonConverter<KnowledgeId>
         var value = reader.GetString()!;
         return Wrap(() => new KnowledgeId(value), "Invalid knowledge ID JSON value.");
     }
-    public override void Write(Utf8JsonWriter writer, KnowledgeId value, JsonSerializerOptions options) => writer.WriteStringValue(value.Value);
+    public override void Write(Utf8JsonWriter writer, KnowledgeId value, JsonSerializerOptions options)
+    {
+        if (string.IsNullOrEmpty(value.Value)) throw new JsonException("Knowledge ID must be valid before serialization.");
+        writer.WriteStringValue(value.Value);
+    }
     private static KnowledgeId Wrap(Func<KnowledgeId> create, string message) { try { return create(); } catch (ArgumentException ex) { throw new JsonException(message, ex); } }
 }
 
 public sealed class KnowledgeVersionJsonConverter : JsonConverter<KnowledgeVersion>
 {
     public override KnowledgeVersion Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var revision) ? Wrap(() => new KnowledgeVersion(revision), "Invalid knowledge version JSON value.") : throw new JsonException("Knowledge version must be a JSON integer.");
-    public override void Write(Utf8JsonWriter writer, KnowledgeVersion value, JsonSerializerOptions options) => writer.WriteNumberValue(value.Revision);
+    public override void Write(Utf8JsonWriter writer, KnowledgeVersion value, JsonSerializerOptions options)
+    {
+        if (value.Revision <= 0) throw new JsonException("Knowledge version must be valid before serialization.");
+        writer.WriteNumberValue(value.Revision);
+    }
     private static KnowledgeVersion Wrap(Func<KnowledgeVersion> create, string message) { try { return create(); } catch (ArgumentException ex) { throw new JsonException(message, ex); } }
 }
 
@@ -79,9 +103,11 @@ public sealed class KnowledgeAuditMetadataJsonConverter : JsonConverter<Knowledg
     private sealed record KnowledgeAuditMetadataDto(DateTimeOffset CreatedUtc, string? CreatedBy, DateTimeOffset? UpdatedUtc, string? UpdatedBy);
 }
 
-public sealed class AstronomyKnowledgePayloadJsonConverter<TPayload>(string discriminator) : JsonConverter<TPayload> where TPayload : IAstronomyKnowledgePayload
+public sealed class AstronomyKnowledgePayloadJsonConverter<TPayload>(string discriminator) : JsonConverter<TPayload>, IAstronomyKnowledgePayloadConverterRegistration where TPayload : IAstronomyKnowledgePayload
 {
     private const string DiscriminatorPropertyName = "payloadKind";
+    public Type PayloadType => typeof(TPayload);
+    public string Discriminator => discriminator;
     public override TPayload Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var document = JsonDocument.ParseValue(ref reader);
@@ -94,13 +120,14 @@ public sealed class AstronomyKnowledgePayloadJsonConverter<TPayload>(string disc
     }
     public override void Write(Utf8JsonWriter writer, TPayload value, JsonSerializerOptions options)
     {
-        ArgumentNullException.ThrowIfNull(value);
+        if (value is null) throw new JsonException("Knowledge payload cannot be null.");
         var clone = new JsonSerializerOptions(options);
         RemoveConverter<AstronomyKnowledgePayloadJsonConverter<TPayload>>(clone);
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(value, clone));
         if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException("Knowledge payload must serialize as a JSON object.");
+        if (document.RootElement.TryGetProperty(DiscriminatorPropertyName, out _)) throw new JsonException($"Knowledge payload property '{DiscriminatorPropertyName}' is reserved for the discriminator.");
         writer.WriteStartObject(); writer.WriteString(DiscriminatorPropertyName, discriminator);
-        foreach (var property in document.RootElement.EnumerateObject()) if (!string.Equals(property.Name, DiscriminatorPropertyName, StringComparison.Ordinal)) property.WriteTo(writer);
+        foreach (var property in document.RootElement.EnumerateObject()) property.WriteTo(writer);
         writer.WriteEndObject();
     }
     private static void RemoveConverter<TConverter>(JsonSerializerOptions options) where TConverter : JsonConverter { for (var i = options.Converters.Count - 1; i >= 0; i--) if (options.Converters[i] is TConverter) options.Converters.RemoveAt(i); }
