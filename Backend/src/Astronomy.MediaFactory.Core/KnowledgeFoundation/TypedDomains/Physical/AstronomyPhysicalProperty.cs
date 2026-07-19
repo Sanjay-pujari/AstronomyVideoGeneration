@@ -1,3 +1,5 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
+
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Physical;
 
 public sealed record AstronomyPhysicalProperty
@@ -35,27 +37,10 @@ public sealed record AstronomyPhysicalProperty
 
     private static string? NormalizeNote(string? value)
     {
-        if (value is null)
-        {
-            return null;
-        }
-
-        var normalized = value.Trim();
-        if (normalized.Length == 0)
-        {
-            return null;
-        }
-
-        if (normalized.Length > MaxNoteLength)
-        {
-            throw new ArgumentException($"Physical property note must be {MaxNoteLength} characters or fewer.", nameof(value));
-        }
-
-        if (normalized.Any(char.IsControl))
-        {
-            throw new ArgumentException("Physical property note must not contain control characters.", nameof(value));
-        }
-
-        return normalized;
+        return TypedKnowledgeTextGuards.NormalizeOptionalText(
+            value,
+            MaxNoteLength,
+            nameof(value),
+            "Physical property note");
     }
 }

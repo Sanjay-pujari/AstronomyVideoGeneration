@@ -1,3 +1,5 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
+
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Physical;
 
 public sealed record AstronomyTextPhysicalPropertyValue : AstronomyPhysicalPropertyValue
@@ -6,23 +8,11 @@ public sealed record AstronomyTextPhysicalPropertyValue : AstronomyPhysicalPrope
 
     public AstronomyTextPhysicalPropertyValue(string value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException("Physical property text value is required.", nameof(value));
-        }
-
-        var normalized = value.Trim();
-        if (normalized.Length > MaxLength)
-        {
-            throw new ArgumentException($"Physical property text value must be {MaxLength} characters or fewer.", nameof(value));
-        }
-
-        if (normalized.Any(char.IsControl))
-        {
-            throw new ArgumentException("Physical property text value must not contain control characters.", nameof(value));
-        }
-
-        Value = normalized;
+        Value = TypedKnowledgeTextGuards.RequireText(
+            value,
+            MaxLength,
+            nameof(value),
+            "Physical property text value");
     }
 
     public override AstronomyPhysicalPropertyValueKind Kind => AstronomyPhysicalPropertyValueKind.Text;

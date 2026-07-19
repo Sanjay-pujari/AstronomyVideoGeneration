@@ -27,6 +27,8 @@ public sealed class Task23BRc1TypedKnowledgeTests
         Assert.False(default(AstronomyClassificationSchemeId).IsValid);
         Assert.Throws<ArgumentException>(() => new AstronomyClassificationSchemeId(" "));
         Assert.Throws<ArgumentException>(() => new AstronomyClassificationSchemeId("bad token"));
+        Assert.Throws<ArgumentException>(() => new AstronomyClassificationSchemeId("bad\ttoken"));
+        Assert.Throws<ArgumentException>(() => new AstronomyClassificationSchemeId("bad\r"));
         Assert.Throws<ArgumentException>(() => new AstronomyClassificationSchemeId("bad\n"));
         Assert.Equal(new string('a', 128), new AstronomyClassificationSchemeId(new string('A', 128)).Value);
         Assert.Throws<ArgumentException>(() => new AstronomyClassificationSchemeId(new string('a', 129)));
@@ -84,6 +86,8 @@ public sealed class Task23BRc1TypedKnowledgeTests
         Assert.Null(new AstronomyClassificationAssignment(scheme, value, AstronomyClassificationQualifier.Secondary, " ").Note);
         Assert.Equal(512, new AstronomyClassificationAssignment(scheme, value, AstronomyClassificationQualifier.Secondary, new string('n', 512)).Note!.Length);
         Assert.Throws<ArgumentException>(() => new AstronomyClassificationAssignment(scheme, value, AstronomyClassificationQualifier.Secondary, new string('n', 513)));
+        Assert.Throws<ArgumentException>(() => new AstronomyClassificationAssignment(scheme, value, AstronomyClassificationQualifier.Secondary, "bad\t"));
+        Assert.Throws<ArgumentException>(() => new AstronomyClassificationAssignment(scheme, value, AstronomyClassificationQualifier.Secondary, "bad\r"));
         Assert.Throws<ArgumentException>(() => new AstronomyClassificationAssignment(scheme, value, AstronomyClassificationQualifier.Secondary, "bad\n"));
         Assert.Equal(assignment, equivalent);
     }
@@ -144,6 +148,8 @@ public sealed class Task23BRc1TypedKnowledgeTests
         Assert.Equal("physical.radius", id.ToString());
         Assert.Throws<ArgumentException>(() => new AstronomyPhysicalPropertyId(" "));
         Assert.Throws<ArgumentException>(() => new AstronomyPhysicalPropertyId("bad token"));
+        Assert.Throws<ArgumentException>(() => new AstronomyPhysicalPropertyId("bad\ttoken"));
+        Assert.Throws<ArgumentException>(() => new AstronomyPhysicalPropertyId("bad\r"));
         Assert.Throws<ArgumentException>(() => new AstronomyPhysicalPropertyId("bad\n"));
         Assert.Equal(128, new AstronomyPhysicalPropertyId(new string('A', 128)).Value.Length);
         Assert.Throws<ArgumentException>(() => new AstronomyPhysicalPropertyId(new string('a', 129)));
@@ -197,7 +203,10 @@ public sealed class Task23BRc1TypedKnowledgeTests
         Assert.Throws<ArgumentNullException>(() => new AstronomyScalarPhysicalPropertyValue(null!));
         Assert.Throws<ArgumentNullException>(() => new AstronomyRangePhysicalPropertyValue(null!));
         Assert.Equal("Text", new AstronomyTextPhysicalPropertyValue(" Text ").Value);
+        Assert.Equal("Hydrogen rich", new AstronomyTextPhysicalPropertyValue("Hydrogen rich").Value);
         Assert.Throws<ArgumentException>(() => new AstronomyTextPhysicalPropertyValue(" "));
+        Assert.Throws<ArgumentException>(() => new AstronomyTextPhysicalPropertyValue("bad\t"));
+        Assert.Throws<ArgumentException>(() => new AstronomyTextPhysicalPropertyValue("bad\r"));
         Assert.Throws<ArgumentException>(() => new AstronomyTextPhysicalPropertyValue("bad\n"));
         Assert.Equal(512, new AstronomyTextPhysicalPropertyValue(new string('t', 512)).Value.Length);
         Assert.Throws<ArgumentException>(() => new AstronomyTextPhysicalPropertyValue(new string('t', 513)));
@@ -240,6 +249,8 @@ public sealed class Task23BRc1TypedKnowledgeTests
         Assert.Null(Property("physical.radius", AstronomyPhysicalPropertyCategory.Size, note: " ").Note);
         Assert.Equal(512, Property("physical.radius", AstronomyPhysicalPropertyCategory.Size, note: new string('n', 512)).Note!.Length);
         Assert.Throws<ArgumentException>(() => Property("physical.radius", AstronomyPhysicalPropertyCategory.Size, note: new string('n', 513)));
+        Assert.Throws<ArgumentException>(() => Property("physical.radius", AstronomyPhysicalPropertyCategory.Size, note: "bad\t"));
+        Assert.Throws<ArgumentException>(() => Property("physical.radius", AstronomyPhysicalPropertyCategory.Size, note: "bad\r"));
         Assert.Throws<ArgumentException>(() => Property("physical.radius", AstronomyPhysicalPropertyCategory.Size, note: "bad\n"));
         Assert.Equal(property, equivalent);
     }
