@@ -36,8 +36,24 @@ public sealed class KnowledgeStatementTests
     [Fact]
     public void Constructor_rejects_missing_default_or_undefined_required_state()
     {
-        Assert.Throws<ArgumentException>(() => CreateStatement(id: default));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreateStatement(version: default));
+        Assert.Throws<ArgumentException>(() =>
+            new AstronomyKnowledgeStatement<SyntheticPayload>(
+                default(KnowledgeId),
+                KnowledgeVersion.Initial,
+                KnowledgeStatementKind.Scientific,
+                KnowledgeFoundationStatus.Draft,
+                new AstronomyEntityReference("moon", AstronomyEntityKind.Moon, "Moon"),
+                new SyntheticPayload("moon.meaning"),
+                new KnowledgeAuditMetadata(Created, "author")));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new AstronomyKnowledgeStatement<SyntheticPayload>(
+                new KnowledgeId("knowledge.moon.identity"),
+                default(KnowledgeVersion),
+                KnowledgeStatementKind.Scientific,
+                KnowledgeFoundationStatus.Draft,
+                new AstronomyEntityReference("moon", AstronomyEntityKind.Moon, "Moon"),
+                new SyntheticPayload("moon.meaning"),
+                new KnowledgeAuditMetadata(Created, "author")));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreateStatement(kind: (KnowledgeStatementKind)999));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreateStatement(status: (KnowledgeFoundationStatus)999));
         Assert.Throws<ArgumentNullException>(() => new AstronomyKnowledgeStatement<SyntheticPayload>(
