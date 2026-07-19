@@ -38,7 +38,7 @@ public sealed class EvidenceRecordsAndSetsTests
     [Fact]
     public void Evidence_record_rejects_invalid_required_fields()
     {
-        Assert.Throws<ArgumentException>(() => CreateRecord(id: default));
+        Assert.Throws<ArgumentException>(() => new AstronomyEvidenceRecord(default(EvidenceId), AstronomyEvidenceType.Observation, EvidenceFoundationStatus.Draft, CreateSource(), new EvidenceTemporalMetadata(), new KnowledgeAuditMetadata(Created, "author")));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreateRecord(type: (AstronomyEvidenceType)999));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreateRecord(status: (EvidenceFoundationStatus)999));
         Assert.Throws<ArgumentNullException>(() => new AstronomyEvidenceRecord(new EvidenceId("evidence.synthetic.one"), AstronomyEvidenceType.Observation, EvidenceFoundationStatus.Draft, null!, new EvidenceTemporalMetadata(), new KnowledgeAuditMetadata(Created, "author")));
@@ -87,6 +87,7 @@ public sealed class EvidenceRecordsAndSetsTests
         Assert.True(first.HasSameEvidenceIdentityAs(sameIdDifferentMetadata));
         Assert.False(first.HasSameEvidenceIdentityAs(differentId));
         Assert.Equal(first, sameIdDifferentMetadata);
+        Assert.Equal(first.GetHashCode(), sameIdDifferentMetadata.GetHashCode());
         Assert.NotEqual(first, differentId);
     }
 
@@ -104,9 +105,9 @@ public sealed class EvidenceRecordsAndSetsTests
     [Fact]
     public void Association_rejects_invalid_state_and_optional_note()
     {
-        Assert.Throws<ArgumentException>(() => CreateAssociation(knowledgeId: default));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreateAssociation(knowledgeVersion: default));
-        Assert.Throws<ArgumentException>(() => CreateAssociation(evidenceId: default));
+        Assert.Throws<ArgumentException>(() => new KnowledgeStatementEvidenceReference(default(KnowledgeId), new KnowledgeVersion(2), new EvidenceId("evidence.synthetic.one"), KnowledgeEvidenceRole.Primary));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new KnowledgeStatementEvidenceReference(new KnowledgeId("knowledge.synthetic.one"), default(KnowledgeVersion), new EvidenceId("evidence.synthetic.one"), KnowledgeEvidenceRole.Primary));
+        Assert.Throws<ArgumentException>(() => new KnowledgeStatementEvidenceReference(new KnowledgeId("knowledge.synthetic.one"), new KnowledgeVersion(2), default(EvidenceId), KnowledgeEvidenceRole.Primary));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreateAssociation(role: (KnowledgeEvidenceRole)999));
         Assert.Null(CreateAssociation(note: " ").Note);
         Assert.Throws<ArgumentException>(() => CreateAssociation(note: new string('a', KnowledgeStatementEvidenceReference.MaxNoteLength + 1)));
@@ -136,6 +137,36 @@ public sealed class EvidenceRecordsAndSetsTests
         Assert.DoesNotContain(noPrimary.Associations, a => a.Role == KnowledgeEvidenceRole.Primary);
         _ = new AstronomyKnowledgeStatementEvidenceSet(new KnowledgeId("knowledge.synthetic.one"), new KnowledgeVersion(2), [CreateAssociation(role: KnowledgeEvidenceRole.Primary)]);
         Assert.Throws<ArgumentException>(() => new AstronomyKnowledgeStatementEvidenceSet(new KnowledgeId("knowledge.synthetic.one"), new KnowledgeVersion(2), [CreateAssociation(evidenceId: new EvidenceId("evidence.a"), role: KnowledgeEvidenceRole.Primary), CreateAssociation(evidenceId: new EvidenceId("evidence.b"), role: KnowledgeEvidenceRole.Primary)]));
+    }
+
+    [Fact]
+    public void Evidence_set_equality_uses_owner_identity_and_ordered_associations()
+    {
+        var first = new AstronomyKnowledgeStatementEvidenceSet(
+            new KnowledgeId("knowledge.synthetic.one"),
+            new KnowledgeVersion(2),
+            [
+                CreateAssociation(evidenceId: new EvidenceId("evidence.z"), role: KnowledgeEvidenceRole.Supporting, note: "z"),
+                CreateAssociation(evidenceId: new EvidenceId("evidence.a"), role: KnowledgeEvidenceRole.Primary, note: "a")
+            ]);
+        var sameOwnerSameOrderedAssociations = new AstronomyKnowledgeStatementEvidenceSet(
+            new KnowledgeId("knowledge.synthetic.one"),
+            new KnowledgeVersion(2),
+            [
+                CreateAssociation(evidenceId: new EvidenceId("evidence.a"), role: KnowledgeEvidenceRole.Primary, note: "a"),
+                CreateAssociation(evidenceId: new EvidenceId("evidence.z"), role: KnowledgeEvidenceRole.Supporting, note: "z")
+            ]);
+        var differentAssociations = new AstronomyKnowledgeStatementEvidenceSet(
+            new KnowledgeId("knowledge.synthetic.one"),
+            new KnowledgeVersion(2),
+            [
+                CreateAssociation(evidenceId: new EvidenceId("evidence.a"), role: KnowledgeEvidenceRole.Primary, note: "a"),
+                CreateAssociation(evidenceId: new EvidenceId("evidence.y"), role: KnowledgeEvidenceRole.Supporting, note: "y")
+            ]);
+
+        Assert.Equal(first, sameOwnerSameOrderedAssociations);
+        Assert.Equal(first.GetHashCode(), sameOwnerSameOrderedAssociations.GetHashCode());
+        Assert.NotEqual(first, differentAssociations);
     }
 
     [Fact]
