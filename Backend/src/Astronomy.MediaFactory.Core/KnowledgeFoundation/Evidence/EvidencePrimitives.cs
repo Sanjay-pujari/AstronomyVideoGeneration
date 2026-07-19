@@ -51,6 +51,9 @@ public static class EvidenceFoundationEnumGuard
 
     public static EvidenceFoundationStatus RequireDefined(EvidenceFoundationStatus status, string parameterName = "status")
         => Enum.IsDefined(status) ? status : throw new ArgumentOutOfRangeException(parameterName, status, "Evidence status is not defined.");
+
+    public static KnowledgeEvidenceRole RequireDefined(KnowledgeEvidenceRole role, string parameterName = "role")
+        => Enum.IsDefined(role) ? role : throw new ArgumentOutOfRangeException(parameterName, role, "Knowledge evidence role is not defined.");
 }
 
 public readonly record struct EvidenceId

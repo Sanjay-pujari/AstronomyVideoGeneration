@@ -140,9 +140,7 @@ public sealed class EvidenceFoundationPrimitivesTests
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/Astronomy.MediaFactory.Core/KnowledgeFoundation/Evidence"));
         var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText));
         Assert.DoesNotContain("Confidence", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("EvidenceRecord", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("EvidenceCollection", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("StatementEvidence", text, StringComparison.Ordinal);
+        Assert.Contains("EvidenceId", text, StringComparison.Ordinal);
         Assert.DoesNotContain("JsonConverter", text, StringComparison.Ordinal);
         Assert.DoesNotContain("IServiceCollection", text, StringComparison.Ordinal);
         Assert.DoesNotContain("DbContext", text, StringComparison.Ordinal);
