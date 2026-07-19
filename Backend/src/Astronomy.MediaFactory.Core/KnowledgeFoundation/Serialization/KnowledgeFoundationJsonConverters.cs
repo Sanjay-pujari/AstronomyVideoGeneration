@@ -4,15 +4,36 @@ using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
 
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Serialization;
 
-public sealed class StrictKnowledgeFoundationStatusJsonConverter : JsonStringEnumConverter<KnowledgeFoundationStatus>
+public abstract class StrictExactStringEnumJsonConverter<TEnum> : JsonConverter<TEnum>
+    where TEnum : struct, Enum
 {
-    public StrictKnowledgeFoundationStatusJsonConverter() : base(namingPolicy: null, allowIntegerValues: false) { }
+    public override TEnum Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String)
+            throw new JsonException($"{typeof(TEnum).Name} must be a JSON string.");
+
+        var text = reader.GetString();
+        if (string.IsNullOrEmpty(text)
+            || !Enum.TryParse<TEnum>(text, ignoreCase: false, out var value)
+            || !Enum.IsDefined(value)
+            || !string.Equals(text, value.ToString(), StringComparison.Ordinal))
+            throw new JsonException($"Unknown {typeof(TEnum).Name} value '{text}'.");
+
+        return value;
+    }
+
+    public override void Write(Utf8JsonWriter writer, TEnum value, JsonSerializerOptions options)
+    {
+        if (!Enum.IsDefined(value))
+            throw new JsonException($"{typeof(TEnum).Name} value is not defined.");
+
+        writer.WriteStringValue(value.ToString());
+    }
 }
 
-public sealed class StrictKnowledgeStatementKindJsonConverter : JsonStringEnumConverter<KnowledgeStatementKind>
-{
-    public StrictKnowledgeStatementKindJsonConverter() : base(namingPolicy: null, allowIntegerValues: false) { }
-}
+public sealed class StrictKnowledgeFoundationStatusJsonConverter : StrictExactStringEnumJsonConverter<KnowledgeFoundationStatus> { }
+
+public sealed class StrictKnowledgeStatementKindJsonConverter : StrictExactStringEnumJsonConverter<KnowledgeStatementKind> { }
 
 internal interface IAstronomyKnowledgePayloadConverterRegistration
 {

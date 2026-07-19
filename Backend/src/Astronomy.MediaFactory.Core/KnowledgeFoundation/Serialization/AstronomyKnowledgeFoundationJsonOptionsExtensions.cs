@@ -17,8 +17,8 @@ public static class AstronomyKnowledgeFoundationJsonOptionsExtensions
         AddIfMissing(options, new KnowledgeTagJsonConverter());
         AddIfMissing(options, new KnowledgeValidityRangeJsonConverter());
         AddIfMissing(options, new KnowledgeAuditMetadataJsonConverter());
-        AddIfMissing(options, new StrictKnowledgeStatementKindJsonConverter());
-        AddIfMissing(options, new StrictKnowledgeFoundationStatusJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictKnowledgeStatementKindJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictKnowledgeFoundationStatusJsonConverter());
         if (!options.Converters.Any(c => c is JsonStringEnumConverter)) options.Converters.Add(new JsonStringEnumConverter());
         return options;
     }
@@ -40,14 +40,14 @@ public static class AstronomyKnowledgeFoundationJsonOptionsExtensions
         AddIfMissing(options, new ConfidenceAssessorReferenceJsonConverter());
         AddIfMissing(options, new ConfidenceAssessmentFactorJsonConverter());
         AddIfMissing(options, new AstronomyKnowledgeConfidenceAssessmentJsonConverter());
-        AddIfMissing(options, new StrictAstronomyEvidenceTypeJsonConverter());
-        AddIfMissing(options, new StrictAstronomyEvidenceSourceTypeJsonConverter());
-        AddIfMissing(options, new StrictEvidenceFoundationStatusJsonConverter());
-        AddIfMissing(options, new StrictKnowledgeEvidenceRoleJsonConverter());
-        AddIfMissing(options, new StrictKnowledgeConfidenceLevelJsonConverter());
-        AddIfMissing(options, new StrictConfidenceAssessmentMethodJsonConverter());
-        AddIfMissing(options, new StrictConfidenceAssessorTypeJsonConverter());
-        AddIfMissing(options, new StrictConfidenceFactorDirectionJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictAstronomyEvidenceTypeJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictAstronomyEvidenceSourceTypeJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictEvidenceFoundationStatusJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictKnowledgeEvidenceRoleJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictKnowledgeConfidenceLevelJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictConfidenceAssessmentMethodJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictConfidenceAssessorTypeJsonConverter());
+        InsertBeforeEnumFallbackIfMissing(options, new StrictConfidenceFactorDirectionJsonConverter());
         return options;
     }
 
@@ -85,5 +85,19 @@ public static class AstronomyKnowledgeFoundationJsonOptionsExtensions
     private static void AddIfMissing<TConverter>(JsonSerializerOptions options, TConverter converter) where TConverter : JsonConverter
     {
         if (!options.Converters.Any(existing => existing.GetType() == typeof(TConverter))) options.Converters.Add(converter);
+    }
+
+    private static void InsertBeforeEnumFallbackIfMissing<TConverter>(JsonSerializerOptions options, TConverter converter) where TConverter : JsonConverter
+    {
+        if (options.Converters.Any(existing => existing.GetType() == typeof(TConverter))) return;
+
+        var fallbackIndex = options.Converters
+            .Select((item, index) => new { item, index })
+            .Where(entry => entry.item is JsonStringEnumConverter)
+            .Select(entry => entry.index)
+            .DefaultIfEmpty(options.Converters.Count)
+            .First();
+
+        options.Converters.Insert(fallbackIndex, converter);
     }
 }

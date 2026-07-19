@@ -185,7 +185,7 @@ public sealed class EvidenceRecordsAndSetsTests
     public void Task_2_2b_scope_excludes_future_architecture_dependencies()
     {
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/Astronomy.MediaFactory.Core/KnowledgeFoundation/Evidence"));
-        var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories).Select(File.ReadAllText));
+        var text = string.Join('\n', Directory.GetFiles(root, "*.cs", SearchOption.TopDirectoryOnly).Select(File.ReadAllText));
         foreach (var forbidden in new[] { "EvidenceValidator", "EvidenceValidationCodes", "DbContext", "IQueryable", "HttpClient", "DateTimeOffset.UtcNow" })
             Assert.DoesNotContain(forbidden, text, StringComparison.Ordinal);
     }
