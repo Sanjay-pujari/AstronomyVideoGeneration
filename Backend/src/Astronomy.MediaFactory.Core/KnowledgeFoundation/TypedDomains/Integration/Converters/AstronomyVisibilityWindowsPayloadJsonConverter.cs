@@ -10,13 +10,12 @@ internal sealed class AstronomyVisibilityWindowsPayloadJsonConverter : JsonConve
     public override AstronomyVisibilityWindowsPayload Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var document = JsonDocument.ParseValue(ref reader);
-        var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object) throw new JsonException("Visibility-windows payload must be a JSON object.");
-        EnsureNoDuplicateProperties(root);
+        var root = AstronomyJsonObjectReader.RequireObject(document.RootElement, "Visibility-windows payload");
+        AstronomyJsonObjectReader.EnsureNoDuplicateProperties(root);
 
-        var typeId = DeserializeRequired<AstronomyKnowledgeTypeId>(root, nameof(AstronomyVisibilityWindowsPayload.TypeId), options);
-        var observationContext = DeserializeRequired<AstronomyObservationContext>(root, nameof(AstronomyVisibilityWindowsPayload.ObservationContext), options);
-        var windows = DeserializeRequired<AstronomyVisibilityWindow[]>(root, nameof(AstronomyVisibilityWindowsPayload.Windows), options);
+        var typeId = AstronomyJsonObjectReader.DeserializeRequired<AstronomyKnowledgeTypeId>(root, nameof(AstronomyVisibilityWindowsPayload.TypeId), options);
+        var observationContext = AstronomyJsonObjectReader.DeserializeRequired<AstronomyObservationContext>(root, nameof(AstronomyVisibilityWindowsPayload.ObservationContext), options);
+        var windows = AstronomyJsonObjectReader.DeserializeRequired<AstronomyVisibilityWindow[]>(root, nameof(AstronomyVisibilityWindowsPayload.Windows), options);
 
         try
         {
@@ -38,42 +37,10 @@ internal sealed class AstronomyVisibilityWindowsPayloadJsonConverter : JsonConve
         writer.WriteEndObject();
     }
 
-    private static T DeserializeRequired<T>(JsonElement root, string clrPropertyName, JsonSerializerOptions options)
-    {
-        var jsonPropertyName = GetJsonPropertyName(options, clrPropertyName);
-        if (!root.TryGetProperty(jsonPropertyName, out var property) || property.ValueKind == JsonValueKind.Null)
-        {
-            throw new JsonException($"Visibility-windows payload property '{jsonPropertyName}' is required.");
-        }
-
-        try
-        {
-            return property.Deserialize<T>(options) ?? throw new JsonException($"Visibility-windows payload property '{jsonPropertyName}' cannot be null.");
-        }
-        catch (JsonException)
-        {
-            throw;
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or NotSupportedException)
-        {
-            throw new JsonException($"Visibility-windows payload property '{jsonPropertyName}' is invalid.", exception);
-        }
-    }
-
     private static void WriteProperty<T>(Utf8JsonWriter writer, JsonSerializerOptions options, string clrPropertyName, T value)
     {
-        writer.WritePropertyName(GetJsonPropertyName(options, clrPropertyName));
+        writer.WritePropertyName(AstronomyJsonObjectReader.GetJsonPropertyName(clrPropertyName, options));
         JsonSerializer.Serialize(writer, value, options);
     }
 
-    private static string GetJsonPropertyName(JsonSerializerOptions options, string clrPropertyName) => options.PropertyNamingPolicy?.ConvertName(clrPropertyName) ?? clrPropertyName;
-
-    private static void EnsureNoDuplicateProperties(JsonElement root)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var property in root.EnumerateObject())
-        {
-            if (!names.Add(property.Name)) throw new JsonException($"Duplicate visibility-windows payload property '{property.Name}' is not allowed.");
-        }
-    }
 }

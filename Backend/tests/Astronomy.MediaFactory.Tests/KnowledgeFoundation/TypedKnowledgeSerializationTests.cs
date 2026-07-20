@@ -197,6 +197,30 @@ public sealed class TypedKnowledgeSerializationTests
     }
 
     [Fact]
+    public void Observation_conditions_payload_round_trips_through_concrete_converter()
+    {
+        var options = CreateOptions();
+        var original = ObservationConditionsPayload();
+
+        var json = JsonSerializer.Serialize(original, options);
+        var result = JsonSerializer.Deserialize<AstronomyObservationConditionsPayload>(json, options);
+
+        Assert.NotNull(result);
+        Assert.Equal(original, result);
+        Assert.Equal(original.GetHashCode(), result.GetHashCode());
+    }
+
+    [Fact]
+    public void Immutable_payload_converters_round_trip_direct_concrete_types()
+    {
+        var options = CreateOptions();
+
+        AssertConcreteRoundTrip(OrbitalParametersPayload(), options);
+        AssertConcreteRoundTrip(ObservationConditionsPayload(), options);
+        AssertConcreteRoundTrip(VisibilityPayload(), options);
+    }
+
+    [Fact]
     public void Enums_SerializeAsCamelCaseStringsAndRejectNumbersAndUnknownStrings()
     {
         var options = CreateOptions();
@@ -291,6 +315,15 @@ public sealed class TypedKnowledgeSerializationTests
         var typedResult = Assert.IsAssignableFrom<TBase>(result);
         Assert.Equal(original, typedResult);
         return typedResult;
+    }
+
+    private static void AssertConcreteRoundTrip<T>(T original, JsonSerializerOptions options)
+    {
+        var json = JsonSerializer.Serialize(original, options);
+        var result = JsonSerializer.Deserialize<T>(json, options);
+
+        Assert.NotNull(result);
+        Assert.Equal(original, result);
     }
 
     private static void AssertHierarchy<T>(T original, AstronomyPhysicalPropertyValueKind kind, JsonSerializerOptions options) where T : AstronomyPhysicalPropertyValue
