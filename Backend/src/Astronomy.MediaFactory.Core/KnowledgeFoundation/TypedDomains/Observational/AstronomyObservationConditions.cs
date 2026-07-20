@@ -13,6 +13,10 @@ public sealed record AstronomyObservationConditions
         Transparency = EnumGuard.RequireDefined(transparency, nameof(transparency));
         LimitingMagnitude = limitingMagnitude;
         SkyBrightness = skyBrightness;
+        if (note is not null && string.IsNullOrWhiteSpace(note))
+        {
+            throw new ArgumentException("Observation conditions note must not be blank when supplied.", nameof(note));
+        }
         Note = TypedKnowledgeTextGuards.NormalizeOptionalText(note, MaxNoteLength, nameof(note), "Observation conditions note");
     }
     public AstronomySkyConditionKind SkyCondition { get; }
