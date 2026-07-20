@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Events;
 
 public sealed record AstronomyEvent : IEquatable<AstronomyEvent>
@@ -15,6 +17,12 @@ public sealed record AstronomyEvent : IEquatable<AstronomyEvent>
         Significance = EnumGuard.RequireDefined(significance, nameof(significance));
         Name = EventText.Optional(name, EventText.MaxNameLength, nameof(name), "Event name");
         Summary = EventText.Optional(summary, EventText.MaxSummaryLength, nameof(summary), "Event summary");
+    }
+
+    [JsonConstructor]
+    private AstronomyEvent(AstronomyEventId eventId, AstronomyEventKind kind, AstronomyEventTemporalExtent temporalExtent, AstronomyEventReferenceContext referenceContext, IReadOnlyList<AstronomyEventParticipant> participants, IReadOnlyList<AstronomyEventPhaseMarker>? phaseMarkers = null, IReadOnlyList<AstronomyEventGeometryQuantity>? geometry = null, IReadOnlyList<AstronomyEventCircumstance>? circumstances = null, AstronomyEventSignificance significance = AstronomyEventSignificance.Unspecified, string? name = null, string? summary = null)
+        : this(eventId, kind, temporalExtent, referenceContext, (IEnumerable<AstronomyEventParticipant>)participants, phaseMarkers, geometry, circumstances, significance, name, summary)
+    {
     }
     public AstronomyEventId EventId { get; }
     public AstronomyEventKind Kind { get; }

@@ -31,7 +31,7 @@ public static class AstronomyTypedKnowledgeJsonOptionsExtensions
         AddIfMissing(options, new AstronomyKnowledgeStatementJsonConverter<ITypedAstronomyKnowledgePayload>());
         // This integration-owned enum converter is appended after payload converters and added only once.
         // If callers inserted an earlier enum converter, System.Text.Json precedence still honors that earlier converter.
-        if (!options.Converters.Any(existing => ReferenceEquals(existing, SafeEnumJsonConverter))) options.Converters.Add(SafeEnumJsonConverter);
+        if (!options.Converters.Any(existing => existing is JsonStringEnumConverter)) options.Converters.Add(SafeEnumJsonConverter);
         return options;
     }
 
