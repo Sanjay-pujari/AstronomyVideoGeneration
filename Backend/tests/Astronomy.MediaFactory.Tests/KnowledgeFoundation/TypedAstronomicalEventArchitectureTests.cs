@@ -35,8 +35,50 @@ public sealed class TypedAstronomicalEventArchitectureTests
             Assert.DoesNotContain(type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly), m => new[] { "Calculate", "Compute", "Detect", "Discover", "Convert", "Transform", "Predict", "Forecast", "Recommend", "Rank", "Score" }.Any(term => m.Name.Contains(term, StringComparison.Ordinal)));
         }
         Assert.All(typeof(AstronomyEvent).GetProperties().Where(p => typeof(System.Collections.IEnumerable).IsAssignableFrom(p.PropertyType) && p.PropertyType != typeof(string)), p => Assert.True(p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == typeof(IReadOnlyList<>)));
-        Assert.True(typeof(AstronomyEventTemporalExtent).GetConstructors(BindingFlags.Public | BindingFlags.Instance).Length == 0);
-        Assert.Equal(new[] { typeof(AstronomyInstantEventTemporalExtent), typeof(AstronomyIntervalEventTemporalExtent) }, typeof(AstronomyEventTemporalExtent).Assembly.GetTypes().Where(t => t.BaseType == typeof(AstronomyEventTemporalExtent)).OrderBy(t => t.Name).ToArray());
+        var constructors = typeof(AstronomyEventTemporalExtent).GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Assert.NotEmpty(constructors);
+
+        var parameterlessConstructors = constructors.Where(constructor => constructor.GetParameters().Length == 0).ToArray();
+        Assert.Single(parameterlessConstructors);
+        var parameterlessConstructor = parameterlessConstructors[0];
+
+        Assert.False(parameterlessConstructor.IsPublic);
+        Assert.False(parameterlessConstructor.IsFamily);
+        Assert.False(parameterlessConstructor.IsFamilyOrAssembly);
+        Assert.True(parameterlessConstructor.IsFamilyAndAssembly);
+
+        var copyConstructors = constructors
+            .Where(
+                constructor =>
+                {
+                    var parameters = constructor.GetParameters();
+
+                    return parameters.Length == 1 &&
+                           parameters[0].ParameterType == typeof(AstronomyEventTemporalExtent);
+                })
+            .ToArray();
+        Assert.Single(copyConstructors);
+        var copyConstructor = copyConstructors[0];
+
+        Assert.False(copyConstructor.IsPublic);
+        Assert.True(copyConstructor.IsFamily || copyConstructor.IsFamilyAndAssembly);
+
+        var expectedVariants = new[]
+            {
+                typeof(AstronomyInstantEventTemporalExtent),
+                typeof(AstronomyIntervalEventTemporalExtent)
+            }
+            .OrderBy(type => type.Name)
+            .ToArray();
+
+        var actualVariants = typeof(AstronomyEventTemporalExtent)
+            .Assembly
+            .GetTypes()
+            .Where(type => type.BaseType == typeof(AstronomyEventTemporalExtent))
+            .OrderBy(type => type.Name)
+            .ToArray();
+
+        Assert.Equal(expectedVariants, actualVariants);
     }
 
     private static string FindRepositoryRoot()

@@ -112,6 +112,118 @@ public sealed class TypedAstronomicalEventKnowledgeTests
     }
 
     [Fact]
+    public void Event_geometry_identity_uses_quantity_id_and_epoch_value_semantics()
+    {
+        var temporalExtent = new AstronomyInstantEventTemporalExtent(Utc(2026, 8, 1));
+        var referenceContext = new AstronomyEventReferenceContext(AstronomyEventScope.Global);
+        var participants = new[]
+        {
+            new AstronomyEventParticipant(
+                new AstronomyEntityReference("body.jupiter"),
+                AstronomyEventParticipantRole.Primary)
+        };
+        var measurement = new AstronomyMeasurement(
+            1.2m,
+            new AstronomyMeasurementUnit("degree", "deg", AstronomyMeasurementDimension.Angle));
+        var anotherMeasurement = new AstronomyMeasurement(
+            1.3m,
+            new AstronomyMeasurementUnit("degree", "deg", AstronomyMeasurementDimension.Angle));
+
+        var first = new AstronomyEventGeometryQuantity(
+            new("event.angular-separation"),
+            AstronomyEventGeometryCategory.AngularSeparation,
+            measurement,
+            AstronomyEpochReference.J2000);
+        var duplicate = new AstronomyEventGeometryQuantity(
+            new("event.angular-separation"),
+            AstronomyEventGeometryCategory.AngularSeparation,
+            anotherMeasurement,
+            AstronomyEpochReference.J2000);
+
+        Assert.Throws<ArgumentException>(
+            () => new AstronomyEvent(
+                new("event.geometry-duplicate"),
+                AstronomyEventKind.Conjunction,
+                temporalExtent,
+                referenceContext,
+                participants,
+                geometry: [first, duplicate]));
+
+        var j2000 = new AstronomyEventGeometryQuantity(
+            new("event.angular-separation"),
+            AstronomyEventGeometryCategory.AngularSeparation,
+            measurement,
+            AstronomyEpochReference.J2000);
+        var b1950 = new AstronomyEventGeometryQuantity(
+            new("event.angular-separation"),
+            AstronomyEventGeometryCategory.AngularSeparation,
+            measurement,
+            AstronomyEpochReference.B1950);
+        var eventWithDifferentPredefinedEpochs = new AstronomyEvent(
+            new("event.geometry-predefined-epochs"),
+            AstronomyEventKind.Conjunction,
+            temporalExtent,
+            referenceContext,
+            participants,
+            geometry: [j2000, b1950]);
+
+        Assert.Equal([AstronomyEpochReference.J2000, AstronomyEpochReference.B1950], eventWithDifferentPredefinedEpochs.Geometry.Select(x => x.Epoch).ToArray());
+
+        var custom1 = AstronomyEpochReference.Custom(Utc(2026, 8, 1));
+        var custom1DuplicateValue = AstronomyEpochReference.Custom(Utc(2026, 8, 1));
+        var custom2 = AstronomyEpochReference.Custom(Utc(2026, 8, 2));
+        var customGeometry1 = new AstronomyEventGeometryQuantity(
+            new("event.angular-separation"),
+            AstronomyEventGeometryCategory.AngularSeparation,
+            measurement,
+            custom1);
+        var customGeometry1DuplicateValue = new AstronomyEventGeometryQuantity(
+            new("event.angular-separation"),
+            AstronomyEventGeometryCategory.AngularSeparation,
+            anotherMeasurement,
+            custom1DuplicateValue);
+        var customGeometry2 = new AstronomyEventGeometryQuantity(
+            new("event.angular-separation"),
+            AstronomyEventGeometryCategory.AngularSeparation,
+            measurement,
+            custom2);
+
+        Assert.Throws<ArgumentException>(
+            () => new AstronomyEvent(
+                new("event.geometry-custom-duplicate"),
+                AstronomyEventKind.Conjunction,
+                temporalExtent,
+                referenceContext,
+                participants,
+                geometry: [customGeometry1, customGeometry1DuplicateValue]));
+
+        var otherQuantityEarlier = new AstronomyEventGeometryQuantity(
+            new("event.a-other"),
+            AstronomyEventGeometryCategory.AngularSeparation,
+            measurement,
+            custom2);
+        var eventWithDifferentCustomEpochs = new AstronomyEvent(
+            new("event.geometry-custom-epochs"),
+            AstronomyEventKind.Conjunction,
+            temporalExtent,
+            referenceContext,
+            participants,
+            geometry: [customGeometry2, otherQuantityEarlier, customGeometry1, b1950]);
+
+        Assert.Equal(
+            [
+                new AstronomyEventGeometryQuantityId("event.a-other"),
+                new AstronomyEventGeometryQuantityId("event.angular-separation"),
+                new AstronomyEventGeometryQuantityId("event.angular-separation"),
+                new AstronomyEventGeometryQuantityId("event.angular-separation")
+            ],
+            eventWithDifferentCustomEpochs.Geometry.Select(x => x.QuantityId).ToArray());
+        Assert.Equal(
+            [custom2, AstronomyEpochReference.B1950, custom1, custom2],
+            eventWithDifferentCustomEpochs.Geometry.Select(x => x.Epoch).ToArray());
+    }
+
+    [Fact]
     public void Observer_specific_reference_context_requires_observation_context()
     {
         Assert.Throws<ArgumentException>(() => new AstronomyEventReferenceContext(AstronomyEventScope.ObserverSpecific));
