@@ -1,0 +1,16 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Coordinates;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Integration;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Observation;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Observational;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Positional;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.DependencyInjection;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Observational;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Visibility;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation.Validation.ObservationalAndVisibility;
+
+public sealed class AstronomyVisibilityContextValidationRuleTests{[Fact] public void Valid_visibility_context_passes()=>Assert.Empty(new AstronomyVisibilityContextValidationRule().Validate(ObservationalVisibilityValidationFixture.ValidVisibilityPayload(),ObservationalVisibilityValidationFixture.Context()));[Fact] public void Horizontal_visibility_context_requires_topocentric_origin(){var p=new AstronomyVisibilityWindowsPayload(new("typed.observational.visibility-windows.v1"),ObservationalVisibilityValidationFixture.ObservationContext(origin:AstronomyReferenceOrigin.Geocentric),[ObservationalVisibilityValidationFixture.VisibilityWindow()]);var i=Assert.Single(new AstronomyVisibilityContextValidationRule().Validate(p,ObservationalVisibilityValidationFixture.Context()));ObservationalVisibilityValidationFixture.AssertIssue(i,AstronomyVisibilityValidationCodes.ContextInvalid,AstronomyKnowledgeValidationSeverity.Error,"$.observationContext.coordinateSystem",AstronomyVisibilityContextValidationRule.Id,AstronomyKnowledgeDomain.Observational,AstronomyKnowledgePayloadFamily.VisibilityWindow);}[Fact] public void Visibility_context_time_must_be_utc_or_is_constructor_protected()=>Assert.Throws<ArgumentException>(()=>ObservationalVisibilityValidationFixture.ObservationContext(observationTimeUtc:new DateTimeOffset(2026,8,1,0,0,0,TimeSpan.FromHours(1))));[Fact] public void Context_issue_uses_visibility_code_and_not_observational_code()=>Horizontal_visibility_context_requires_topocentric_origin();[Fact] public void Visibility_context_rule_is_deterministic(){var p=new AstronomyVisibilityWindowsPayload(new("typed.observational.visibility-windows.v1"),ObservationalVisibilityValidationFixture.ObservationContext(origin:AstronomyReferenceOrigin.Geocentric),[ObservationalVisibilityValidationFixture.VisibilityWindow()]);Assert.Equal(new AstronomyVisibilityContextValidationRule().Validate(p,ObservationalVisibilityValidationFixture.Context()),new AstronomyVisibilityContextValidationRule().Validate(p,ObservationalVisibilityValidationFixture.Context()));}}
