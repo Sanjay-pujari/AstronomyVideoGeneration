@@ -13,6 +13,7 @@ using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Classification;
 
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.CrossDomain;
 
