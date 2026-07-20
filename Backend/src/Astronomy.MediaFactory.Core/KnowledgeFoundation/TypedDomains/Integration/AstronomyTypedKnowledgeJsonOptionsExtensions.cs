@@ -14,6 +14,7 @@ public static class AstronomyTypedKnowledgeJsonOptionsExtensions
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(registry);
         options.AddAstronomyEvidenceAndConfidenceJson();
+        AddIfMissing(options, new AstronomyClassificationSchemeIdJsonConverter());
         AddIfMissing(options, new AstronomyKnowledgeTypeIdJsonConverter());
         AddIfMissing(options, new AstronomyPhysicalPropertyIdJsonConverter());
         AddIfMissing(options, new AstronomyOrbitalParameterIdJsonConverter());
@@ -27,6 +28,7 @@ public static class AstronomyTypedKnowledgeJsonOptionsExtensions
         AddIfMissing(options, new AstronomyPositionValueJsonConverter());
         AddIfMissing(options, new AstronomyEventTemporalExtentJsonConverter());
         AddIfMissing(options, new AstronomyTemporalAnchorJsonConverter());
+        AddIfMissing(options, new AstronomyVisibilityWindowsPayloadJsonConverter());
         if (!options.Converters.Any(c => c is AstronomyTypedKnowledgePayloadJsonConverter)) options.Converters.Add(new AstronomyTypedKnowledgePayloadJsonConverter(registry));
         AddIfMissing(options, new AstronomyKnowledgeStatementJsonConverter<ITypedAstronomyKnowledgePayload>());
         // This integration-owned enum converter is appended after payload converters and added only once.

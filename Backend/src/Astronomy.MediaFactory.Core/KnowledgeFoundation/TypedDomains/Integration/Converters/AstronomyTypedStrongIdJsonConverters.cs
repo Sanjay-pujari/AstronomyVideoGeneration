@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Classification;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Events;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Observational;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Orbital;
@@ -18,6 +19,7 @@ internal abstract class AstronomyStringValueJsonConverter<T>(Func<string, T> cre
     public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options) => writer.WriteStringValue(getValue(value));
 }
 
+internal sealed class AstronomyClassificationSchemeIdJsonConverter() : AstronomyStringValueJsonConverter<AstronomyClassificationSchemeId>(v => new AstronomyClassificationSchemeId(v), v => v.Value, "astronomy classification scheme ID");
 internal sealed class AstronomyKnowledgeTypeIdJsonConverter() : AstronomyStringValueJsonConverter<AstronomyKnowledgeTypeId>(v => new AstronomyKnowledgeTypeId(v), v => v.Value, "astronomy knowledge type ID");
 internal sealed class AstronomyPhysicalPropertyIdJsonConverter() : AstronomyStringValueJsonConverter<AstronomyPhysicalPropertyId>(v => new AstronomyPhysicalPropertyId(v), v => v.Value, "astronomy physical property ID");
 internal sealed class AstronomyOrbitalParameterIdJsonConverter() : AstronomyStringValueJsonConverter<AstronomyOrbitalParameterId>(v => new AstronomyOrbitalParameterId(v), v => v.Value, "astronomy orbital parameter ID");

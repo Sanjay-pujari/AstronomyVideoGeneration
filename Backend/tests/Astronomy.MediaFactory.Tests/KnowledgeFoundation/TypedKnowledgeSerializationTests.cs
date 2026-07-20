@@ -143,6 +143,45 @@ public sealed class TypedKnowledgeSerializationTests
         pattern.GetProperty("phases")[0].GetProperty("phaseId").ValueKind.Should().Be(JsonValueKind.String);
     }
 
+
+    [Fact]
+    public void Classification_scheme_id_round_trips_as_string()
+    {
+        var options = CreateOptions();
+        var original = new AstronomyClassificationSchemeId("taxonomy.iau.body");
+
+        var json = JsonSerializer.Serialize(original, options);
+
+        Assert.Equal("\"taxonomy.iau.body\"", json);
+        var result = JsonSerializer.Deserialize<AstronomyClassificationSchemeId>(json, options);
+        Assert.Equal(original, result);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("123")]
+    [InlineData("{}")]
+    [InlineData("\" \"")]
+    [InlineData("\"bad token\"")]
+    public void Classification_scheme_id_rejects_malformed_json(string json)
+    {
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<AstronomyClassificationSchemeId>(json, CreateOptions()));
+    }
+
+    [Fact]
+    public void Visibility_windows_payload_round_trips_through_concrete_converter()
+    {
+        var options = CreateOptions();
+        var original = VisibilityPayload();
+
+        var json = JsonSerializer.Serialize(original, options);
+        var result = JsonSerializer.Deserialize<AstronomyVisibilityWindowsPayload>(json, options);
+
+        Assert.NotNull(result);
+        Assert.Equal(original, result);
+        Assert.Equal(original.GetHashCode(), result.GetHashCode());
+    }
+
     [Fact]
     public void Enums_SerializeAsCamelCaseStringsAndRejectNumbersAndUnknownStrings()
     {
