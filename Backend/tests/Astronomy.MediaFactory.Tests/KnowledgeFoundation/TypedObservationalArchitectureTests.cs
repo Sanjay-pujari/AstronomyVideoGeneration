@@ -32,12 +32,13 @@ public class TypedObservationalArchitectureTests
 
     private static string FindRepositoryRoot()
     {
-        var current = AppContext.BaseDirectory;
-        while (!string.IsNullOrEmpty(current))
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
         {
-            if (File.Exists(Path.Combine(current, "AstronomyVideoGeneration.sln"))) return current;
-            current = Directory.GetParent(current)?.FullName;
+            if (File.Exists(Path.Combine(directory.FullName, "Backend", "Astronomy.MediaFactory.slnx"))) return directory.FullName;
+            directory = directory.Parent;
         }
+
         throw new InvalidOperationException("Repository root not found.");
     }
 }
