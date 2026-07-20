@@ -1,0 +1,3 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Positional;
+namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation.Validation.OrbitalAndPositional;
+public sealed class AstronomyPositionalValidationIntegrationTests { [Fact] public void Rule_execution_is_deterministic() { var rule = new AstronomyAngularPositionValidationRule(); Assert.Equal(rule.Validate(OrbitalPositionalValidationFixture.AngularPayload(), OrbitalPositionalValidationFixture.Context()).ToArray(), rule.Validate(OrbitalPositionalValidationFixture.AngularPayload(), OrbitalPositionalValidationFixture.Context()).ToArray()); } }

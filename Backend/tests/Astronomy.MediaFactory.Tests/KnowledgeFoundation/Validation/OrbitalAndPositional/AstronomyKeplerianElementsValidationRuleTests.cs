@@ -1,0 +1,15 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Orbital;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Orbital;
+
+namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation.Validation.OrbitalAndPositional;
+
+public sealed class AstronomyKeplerianElementsValidationRuleTests
+{
+    [Fact] public void Valid_standard_payload_passes() => Assert.Empty(new AstronomyKeplerianElementsValidationRule().Validate(OrbitalPositionalValidationFixture.ValidKeplerian(), OrbitalPositionalValidationFixture.Context()));
+    [Fact] public void Missing_standard_element_warns_and_strict_errors() { var payload = new AstronomyKeplerianElementsPayload(new("typed.orbital.keplerian-elements.v1"), OrbitalPositionalValidationFixture.OrbitalContext(), [OrbitalPositionalValidationFixture.Element(AstronomyKeplerianElementType.SemiMajorAxis, AstronomyMeasurementDimension.Distance)]); Assert.Contains(new AstronomyKeplerianElementsValidationRule().Validate(payload, OrbitalPositionalValidationFixture.Context()), i => i.Code == AstronomyOrbitalValidationCodes.ElementMissing && i.Severity == AstronomyKnowledgeValidationSeverity.Warning); Assert.Contains(new AstronomyKeplerianElementsValidationRule().Validate(payload, OrbitalPositionalValidationFixture.Context(AstronomyKnowledgeValidationMode.Strict)), i => i.Code == AstronomyOrbitalValidationCodes.ElementMissing && i.Severity == AstronomyKnowledgeValidationSeverity.Error); }
+    [Fact] public void Complete_six_element_set_passes_strict() => Assert.Empty(new AstronomyKeplerianElementsValidationRule().Validate(OrbitalPositionalValidationFixture.CompleteKeplerian(), OrbitalPositionalValidationFixture.Context(AstronomyKnowledgeValidationMode.Strict)));
+    [Fact] public void Dimension_mismatches_and_negative_eccentricity_are_detected() { var payload = new AstronomyKeplerianElementsPayload(new("typed.orbital.keplerian-elements.v1"), OrbitalPositionalValidationFixture.OrbitalContext(), [OrbitalPositionalValidationFixture.Element(AstronomyKeplerianElementType.SemiMajorAxis, AstronomyMeasurementDimension.Angle), OrbitalPositionalValidationFixture.Element(AstronomyKeplerianElementType.Eccentricity, AstronomyMeasurementDimension.Dimensionless, -1)]); var issues = new AstronomyKeplerianElementsValidationRule().Validate(payload, OrbitalPositionalValidationFixture.Context()).ToArray(); Assert.Contains(issues, i => i.Code == AstronomyOrbitalValidationCodes.ElementDimensionMismatch && i.Path == "$.elements[0].measurement.unit.dimension"); Assert.Contains(issues, i => i.Code == AstronomyOrbitalValidationCodes.ElementValueOutOfRange); }
+    [Fact] public void Duplicate_elements_are_constructor_protected() { var e = OrbitalPositionalValidationFixture.Element(AstronomyKeplerianElementType.SemiMajorAxis, AstronomyMeasurementDimension.Distance); Assert.Throws<ArgumentException>(() => new AstronomyKeplerianElementsPayload(new("typed.orbital.keplerian-elements.v1"), OrbitalPositionalValidationFixture.OrbitalContext(), [e, e])); }
+}

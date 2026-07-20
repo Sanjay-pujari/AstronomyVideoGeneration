@@ -1,0 +1,5 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Positional;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Positional;
+namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation.Validation.OrbitalAndPositional;
+public sealed class AstronomySphericalPositionValidationRuleTests { [Fact] public void Valid_ecliptic_spherical_position_passes() => Assert.Empty(new AstronomySphericalPositionValidationRule().Validate(OrbitalPositionalValidationFixture.SphericalPayload(), OrbitalPositionalValidationFixture.Context())); [Fact] public void Spherical_distance_dimension_mismatch_is_constructor_protected() => Assert.Throws<ArgumentException>(() => new AstronomySphericalCoordinate(OrbitalPositionalValidationFixture.Angular(AstronomyAngularCoordinateComponent.Longitude), OrbitalPositionalValidationFixture.Angular(AstronomyAngularCoordinateComponent.Latitude), OrbitalPositionalValidationFixture.Measure(1, AstronomyMeasurementDimension.Angle))); }

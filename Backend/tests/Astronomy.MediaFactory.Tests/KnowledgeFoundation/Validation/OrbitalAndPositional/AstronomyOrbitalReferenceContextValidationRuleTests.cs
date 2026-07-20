@@ -1,0 +1,5 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Orbital;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Coordinates;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Orbital;
+namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation.Validation.OrbitalAndPositional;
+public sealed class AstronomyOrbitalReferenceContextValidationRuleTests { [Fact] public void Valid_context_passes() => Assert.Empty(new AstronomyOrbitalReferenceContextValidationRule().Validate(OrbitalPositionalValidationFixture.ValidKeplerian(), OrbitalPositionalValidationFixture.Context())); [Fact] public void Topocentric_orbit_is_rejected() { var payload = new AstronomyKeplerianElementsPayload(new("typed.orbital.keplerian-elements.v1"), OrbitalPositionalValidationFixture.OrbitalContext(AstronomyReferenceOrigin.Topocentric), OrbitalPositionalValidationFixture.ValidKeplerian().Elements); Assert.Contains(new AstronomyOrbitalReferenceContextValidationRule().Validate(payload, OrbitalPositionalValidationFixture.Context()), i => i.Code == AstronomyOrbitalValidationCodes.FrameOriginMismatch); } }
