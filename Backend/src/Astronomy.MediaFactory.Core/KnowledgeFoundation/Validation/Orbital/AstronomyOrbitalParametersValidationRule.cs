@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Coordinates;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Orbital;
 
@@ -24,11 +25,12 @@ public sealed class AstronomyOrbitalParametersValidationRule : AstronomyKnowledg
             if (p.Epoch is not null && !Enum.IsDefined(p.Epoch.Kind)) yield return Issue(AstronomyOrbitalValidationCodes.ParameterEpochInvalid, AstronomyKnowledgeValidationSeverity.Error, "Orbital parameter epoch is not defined.", $"$.parameters[{i}].epoch");
             if (p.Note is not null && string.IsNullOrWhiteSpace(p.Note)) yield return Issue(AstronomyOrbitalValidationCodes.ParameterNoteBlank, AstronomyKnowledgeValidationSeverity.Warning, "Orbital parameter note cannot be blank when supplied.", $"$.parameters[{i}].note");
             if (!seen.Add(new(p.ParameterId, p.Qualifier, p.Epoch))) yield return Issue(AstronomyOrbitalValidationCodes.ParameterDuplicate, AstronomyKnowledgeValidationSeverity.Error, "Orbital parameters must be unique by parameter ID, qualifier and epoch.", $"$.parameters[{i}]");
+            foreach (var issue in AstronomyOrbitalMeasurementValidator.Validate(p.Measurement, $"$.parameters[{i}].measurement", RuleId, Domain, Family)) yield return issue;
             if (AstronomyOrbitalParameterDimensionCatalog.TryGetExpectedDimension(p.Category, out var expected) && !AstronomyOrbitalMeasurementValidator.HasDimension(p.Measurement, expected)) yield return Issue(AstronomyOrbitalValidationCodes.ParameterDimensionMismatch, AstronomyKnowledgeValidationSeverity.Error, "Orbital parameter measurement dimension does not match the category.", $"$.parameters[{i}].measurement.unit.dimension");
         }
     }
     private AstronomyKnowledgeValidationIssue Issue(string code, AstronomyKnowledgeValidationSeverity severity, string message, string path) => new(code, severity, message, path, RuleId, Domain, Family);
-    private readonly record struct ParameterIdentity(AstronomyOrbitalParameterId Id, AstronomyOrbitalParameterQualifier? Qualifier, object? Epoch);
+    private readonly record struct ParameterIdentity(AstronomyOrbitalParameterId Id, AstronomyOrbitalParameterQualifier? Qualifier, AstronomyEpochReference? Epoch);
 }
 
 internal static class AstronomyOrbitalParameterDimensionCatalog
