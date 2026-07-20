@@ -27,7 +27,19 @@ public sealed class AstronomyTypedKnowledgePayloadJsonConverter : JsonConverter<
         if (!value.HasValue || value.Value.ValueKind == JsonValueKind.Null) throw new JsonException("Typed payload value is required.");
         if (!registry.TryGetByDiscriminator(discriminator, out var descriptor)) throw new JsonException($"Unknown typed astronomy knowledge payload discriminator '{discriminator}'.");
         var clone = CreatePayloadOptions(options);
-        var result = (ITypedAstronomyKnowledgePayload?)JsonSerializer.Deserialize(value.Value.GetRawText(), descriptor.PayloadType, clone) ?? throw new JsonException("Typed payload value cannot be null.");
+        ITypedAstronomyKnowledgePayload result;
+        try
+        {
+            result = (ITypedAstronomyKnowledgePayload?)JsonSerializer.Deserialize(value.Value.GetRawText(), descriptor.PayloadType, clone) ?? throw new JsonException("Typed payload value cannot be null.");
+        }
+        catch (JsonException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or NotSupportedException)
+        {
+            throw new JsonException($"Typed payload '{discriminator}' could not be deserialized.", exception);
+        }
         VerifyCompatibility(result, descriptor);
         return result;
     }
