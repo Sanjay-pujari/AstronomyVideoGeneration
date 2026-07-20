@@ -23,6 +23,15 @@ public sealed class AstronomyTypedPayloadRegistry : IAstronomyTypedPayloadRegist
 
     public IReadOnlyCollection<AstronomyTypedPayloadDescriptor> Descriptors { get; }
     public bool TryGetByDiscriminator(string discriminator, out AstronomyTypedPayloadDescriptor descriptor) => byDiscriminator.TryGetValue(discriminator ?? string.Empty, out descriptor!);
-    public bool TryGetByPayloadType(Type payloadType, out AstronomyTypedPayloadDescriptor descriptor) => payloadType is not null && byType.TryGetValue(payloadType, out descriptor!);
+    public bool TryGetByPayloadType(Type payloadType, out AstronomyTypedPayloadDescriptor descriptor)
+    {
+        if (payloadType is null)
+        {
+            descriptor = null!;
+            return false;
+        }
+
+        return byType.TryGetValue(payloadType, out descriptor!);
+    }
     public AstronomyTypedPayloadDescriptor GetRequiredByDiscriminator(string discriminator) => TryGetByDiscriminator(discriminator, out var descriptor) ? descriptor : throw new KeyNotFoundException($"Unknown typed astronomy knowledge payload discriminator '{discriminator}'.");
 }
