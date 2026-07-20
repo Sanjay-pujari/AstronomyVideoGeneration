@@ -1,9 +1,17 @@
 using System.Collections.ObjectModel;
+using System.Text.Json.Serialization;
+
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Temporal;
 public sealed record AstronomyTemporalPattern : IEquatable<AstronomyTemporalPattern>
 {
     public AstronomyTemporalPattern(AstronomyTemporalPatternId patternId, AstronomyTemporalPatternKind kind, AstronomyTemporalPatternReferenceContext referenceContext, AstronomyRecurrenceDescription recurrence, AstronomyCyclePeriod? cyclePeriod = null, IEnumerable<AstronomyCyclePhase>? phases = null, IEnumerable<AstronomyTemporalOccurrence>? suppliedOccurrences = null, AstronomySeasonalPattern? season = null, AstronomyTemporalApplicability? applicability = null, string? name = null, string? summary = null)
     { if (!patternId.IsValid) throw new ArgumentException("Temporal pattern ID is required.", nameof(patternId)); PatternId = patternId; Kind = TemporalGuards.Defined(kind, nameof(kind)); ReferenceContext = referenceContext ?? throw new ArgumentNullException(nameof(referenceContext)); Recurrence = recurrence ?? throw new ArgumentNullException(nameof(recurrence)); CyclePeriod = cyclePeriod; Phases = CopyPhases(phases ?? []); SuppliedOccurrences = CopyOccurrences(suppliedOccurrences ?? []); Season = season; Applicability = applicability; Name = TemporalGuards.OptionalText(name, TemporalGuards.MaxNameLength, nameof(name), "Temporal pattern name"); Summary = TemporalGuards.OptionalText(summary, TemporalGuards.MaxTextLength, nameof(summary), "Temporal pattern summary"); }
+
+    [JsonConstructor]
+    private AstronomyTemporalPattern(AstronomyTemporalPatternId patternId, AstronomyTemporalPatternKind kind, AstronomyTemporalPatternReferenceContext referenceContext, AstronomyRecurrenceDescription recurrence, AstronomyCyclePeriod? cyclePeriod = null, IReadOnlyList<AstronomyCyclePhase>? phases = null, IReadOnlyList<AstronomyTemporalOccurrence>? suppliedOccurrences = null, AstronomySeasonalPattern? season = null, AstronomyTemporalApplicability? applicability = null, string? name = null, string? summary = null)
+        : this(patternId, kind, referenceContext, recurrence, cyclePeriod, (IEnumerable<AstronomyCyclePhase>?)phases, (IEnumerable<AstronomyTemporalOccurrence>?)suppliedOccurrences, season, applicability, name, summary)
+    {
+    }
     public AstronomyTemporalPatternId PatternId { get; }
     public AstronomyTemporalPatternKind Kind { get; }
     public AstronomyTemporalPatternReferenceContext ReferenceContext { get; }
