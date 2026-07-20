@@ -43,10 +43,71 @@ public sealed class TypedPositionalKnowledgeTests
         Assert.Equal(AstronomyPositionRepresentationKind.Angular, angular.Kind);
         Assert.Equal(AstronomyPositionRepresentationKind.Spherical, spherical.Kind);
         Assert.Equal(AstronomyPositionRepresentationKind.Cartesian, cartesian.Kind);
-        var constructors = typeof(AstronomyPositionValue).GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        Assert.Contains(constructors, c => c.IsFamilyAndAssembly);
-        Assert.DoesNotContain(constructors, c => c.IsPublic || c.IsFamily);
-        Assert.Equal([typeof(AstronomyAngularPositionValue), typeof(AstronomyCartesianPositionValue), typeof(AstronomySphericalPositionValue)], typeof(AstronomyPositionValue).Assembly.GetTypes().Where(t => t.BaseType == typeof(AstronomyPositionValue)).OrderBy(t => t.Name).ToArray());
+        var constructors = typeof(AstronomyPositionValue)
+            .GetConstructors(
+                BindingFlags.Instance |
+                BindingFlags.Public |
+                BindingFlags.NonPublic);
+
+        Assert.NotEmpty(constructors);
+
+        var parameterlessConstructors = constructors
+            .Where(
+                constructor =>
+                    constructor.GetParameters().Length == 0)
+            .ToArray();
+
+        Assert.Single(parameterlessConstructors);
+
+        var parameterlessConstructor = parameterlessConstructors[0];
+
+        Assert.False(parameterlessConstructor.IsPublic);
+        Assert.False(parameterlessConstructor.IsFamily);
+        Assert.False(parameterlessConstructor.IsFamilyOrAssembly);
+        Assert.True(parameterlessConstructor.IsFamilyAndAssembly);
+
+        var copyConstructors = constructors
+            .Where(
+                constructor =>
+                {
+                    var parameters = constructor.GetParameters();
+
+                    return parameters.Length == 1 &&
+                           parameters[0].ParameterType ==
+                           typeof(AstronomyPositionValue);
+                })
+            .ToArray();
+
+        Assert.Single(copyConstructors);
+
+        var copyConstructor = copyConstructors[0];
+
+        Assert.False(copyConstructor.IsPublic);
+
+        Assert.True(
+            copyConstructor.IsFamily ||
+            copyConstructor.IsFamilyAndAssembly);
+
+        var supportedVariants = typeof(AstronomyPositionValue)
+            .Assembly
+            .GetTypes()
+            .Where(
+                type =>
+                    type.BaseType ==
+                    typeof(AstronomyPositionValue))
+            .OrderBy(type => type.Name)
+            .ToArray();
+
+        var expectedVariants = new[]
+            {
+                typeof(AstronomyAngularPositionValue),
+                typeof(AstronomyCartesianPositionValue),
+                typeof(AstronomySphericalPositionValue)
+            }
+            .OrderBy(type => type.Name)
+            .ToArray();
+
+        Assert.Equal(expectedVariants, supportedVariants);
     }
 
     [Fact]
