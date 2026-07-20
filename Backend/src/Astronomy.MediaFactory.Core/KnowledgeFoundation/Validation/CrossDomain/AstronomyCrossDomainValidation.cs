@@ -1,6 +1,6 @@
 using Astronomy.MediaFactory.Core.KnowledgeFoundation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Extensions;
-using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
+using AstronomyEntityKind = Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy.AstronomyEntityKind;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Coordinates;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Events;
