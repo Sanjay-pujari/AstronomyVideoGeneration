@@ -16,4 +16,7 @@ public static class AstronomyOrbitalValidationCodes
     public const string ParameterQualifierInvalid = "orbital.parameter.qualifier.invalid";
     public const string ParameterEpochInvalid = "orbital.parameter.epoch.invalid";
     public const string ParameterNoteBlank = "orbital.parameter.note.blank";
+    public const string MeasurementUnitInvalid = "orbital.measurement.unit.invalid";
+    public const string MeasurementPrecisionInvalid = "orbital.measurement.precision.invalid";
+    public const string MeasurementUncertaintyInvalid = "orbital.measurement.uncertainty.invalid";
 }

@@ -22,6 +22,7 @@ public sealed class AstronomyKeplerianElementsValidationRule : AstronomyKnowledg
             var e = payload.Elements[i];
             if (!Enum.IsDefined(e.ElementType)) { yield return Issue(AstronomyOrbitalValidationCodes.ElementMissing, AstronomyKnowledgeValidationSeverity.Error, "Keplerian element type is not defined.", $"$.elements[{i}].elementType"); continue; }
             if (!seen.Add(e.ElementType)) yield return Issue(AstronomyOrbitalValidationCodes.ElementDuplicate, AstronomyKnowledgeValidationSeverity.Error, "Keplerian elements must be unique by element type.", $"$.elements[{i}]");
+            foreach (var issue in AstronomyOrbitalMeasurementValidator.Validate(e.Measurement, $"$.elements[{i}].measurement", RuleId, Domain, Family)) yield return issue;
             if (AstronomyKeplerianElementDimensionCatalog.TryGetExpectedDimension(e.ElementType, out var expected) && !AstronomyOrbitalMeasurementValidator.HasDimension(e.Measurement, expected))
                 yield return Issue(AstronomyOrbitalValidationCodes.ElementDimensionMismatch, AstronomyKnowledgeValidationSeverity.Error, "Keplerian element measurement dimension does not match the element type.", $"$.elements[{i}].measurement.unit.dimension");
             if (e.ElementType == AstronomyKeplerianElementType.Eccentricity && e.Measurement.Value < 0m) yield return Issue(AstronomyOrbitalValidationCodes.ElementValueOutOfRange, AstronomyKnowledgeValidationSeverity.Error, "Eccentricity cannot be negative.", $"$.elements[{i}].measurement.value");
@@ -33,18 +34,36 @@ public sealed class AstronomyKeplerianElementsValidationRule : AstronomyKnowledg
     private AstronomyKnowledgeValidationIssue Issue(string code, AstronomyKnowledgeValidationSeverity severity, string message, string path) => new(code, severity, message, path, RuleId, Domain, Family);
 }
 
-internal static class AstronomyKeplerianElementDimensionCatalog
+public static class AstronomyKeplerianElementDimensionCatalog
 {
     public static bool TryGetExpectedDimension(AstronomyKeplerianElementType type, out AstronomyMeasurementDimension dimension)
     {
-        dimension = type switch
+        switch (type)
         {
-            AstronomyKeplerianElementType.SemiMajorAxis or AstronomyKeplerianElementType.PeriapsisDistance or AstronomyKeplerianElementType.ApoapsisDistance => AstronomyMeasurementDimension.Distance,
-            AstronomyKeplerianElementType.Eccentricity => AstronomyMeasurementDimension.Dimensionless,
-            AstronomyKeplerianElementType.Inclination or AstronomyKeplerianElementType.LongitudeOfAscendingNode or AstronomyKeplerianElementType.ArgumentOfPeriapsis or AstronomyKeplerianElementType.MeanAnomaly or AstronomyKeplerianElementType.TrueAnomaly or AstronomyKeplerianElementType.EccentricAnomaly or AstronomyKeplerianElementType.MeanLongitude or AstronomyKeplerianElementType.LongitudeOfPeriapsis => AstronomyMeasurementDimension.Angle,
-            AstronomyKeplerianElementType.OrbitalPeriod => AstronomyMeasurementDimension.Time,
-            _ => default
-        };
-        return Enum.IsDefined(type);
+            case AstronomyKeplerianElementType.SemiMajorAxis:
+            case AstronomyKeplerianElementType.PeriapsisDistance:
+            case AstronomyKeplerianElementType.ApoapsisDistance:
+                dimension = AstronomyMeasurementDimension.Distance;
+                return true;
+            case AstronomyKeplerianElementType.Eccentricity:
+                dimension = AstronomyMeasurementDimension.Dimensionless;
+                return true;
+            case AstronomyKeplerianElementType.Inclination:
+            case AstronomyKeplerianElementType.LongitudeOfAscendingNode:
+            case AstronomyKeplerianElementType.ArgumentOfPeriapsis:
+            case AstronomyKeplerianElementType.MeanAnomaly:
+            case AstronomyKeplerianElementType.TrueAnomaly:
+            case AstronomyKeplerianElementType.EccentricAnomaly:
+            case AstronomyKeplerianElementType.MeanLongitude:
+            case AstronomyKeplerianElementType.LongitudeOfPeriapsis:
+                dimension = AstronomyMeasurementDimension.Angle;
+                return true;
+            case AstronomyKeplerianElementType.OrbitalPeriod:
+                dimension = AstronomyMeasurementDimension.Time;
+                return true;
+            default:
+                dimension = default;
+                return false;
+        }
     }
 }
