@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.CrossDomain;
 
@@ -22,8 +23,8 @@ public sealed class AstronomyClassificationConsistencyValidationRuleTests
         Assert.Equal(rule.RuleId, issues[0].RuleId);
         Assert.Equal(AstronomyCrossDomainValidationCodes.ClassificationSubjectMismatch, issues[0].Code);
         Assert.Equal(AstronomyKnowledgeValidationSeverity.Error, issues[0].Severity);
-        Assert.NotEqual(default, issues[0].Domain);
-        Assert.NotEqual(default, issues[0].Family);
+        Assert.Equal(AstronomyKnowledgeDomain.Classification, issues[0].Domain);
+        Assert.Equal(AstronomyKnowledgePayloadFamily.EntityClassification, issues[0].Family);
         Assert.Contains("$.payloads[", issues[0].Path);
     }
 
