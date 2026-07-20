@@ -9,13 +9,12 @@ internal sealed class AstronomyOrbitalParametersPayloadJsonConverter : JsonConve
     public override AstronomyOrbitalParametersPayload Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var document = JsonDocument.ParseValue(ref reader);
-        var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object) throw new JsonException("Orbital parameters payload must be a JSON object.");
-        EnsureNoDuplicateProperties(root);
+        var root = AstronomyJsonObjectReader.RequireObject(document.RootElement, "Orbital parameters payload");
+        AstronomyJsonObjectReader.EnsureNoDuplicateProperties(root);
 
-        var typeId = DeserializeRequired<AstronomyKnowledgeTypeId>(root, nameof(AstronomyOrbitalParametersPayload.TypeId), options);
-        var referenceContext = DeserializeRequired<AstronomyOrbitalReferenceContext>(root, nameof(AstronomyOrbitalParametersPayload.ReferenceContext), options);
-        var parameters = DeserializeRequired<AstronomyOrbitalParameter[]>(root, nameof(AstronomyOrbitalParametersPayload.Parameters), options);
+        var typeId = AstronomyJsonObjectReader.DeserializeRequired<AstronomyKnowledgeTypeId>(root, nameof(AstronomyOrbitalParametersPayload.TypeId), options);
+        var referenceContext = AstronomyJsonObjectReader.DeserializeRequired<AstronomyOrbitalReferenceContext>(root, nameof(AstronomyOrbitalParametersPayload.ReferenceContext), options);
+        var parameters = AstronomyJsonObjectReader.DeserializeRequired<AstronomyOrbitalParameter[]>(root, nameof(AstronomyOrbitalParametersPayload.Parameters), options);
 
         try
         {
@@ -37,42 +36,10 @@ internal sealed class AstronomyOrbitalParametersPayloadJsonConverter : JsonConve
         writer.WriteEndObject();
     }
 
-    private static T DeserializeRequired<T>(JsonElement root, string clrPropertyName, JsonSerializerOptions options)
-    {
-        var jsonPropertyName = GetJsonPropertyName(options, clrPropertyName);
-        if (!root.TryGetProperty(jsonPropertyName, out var property) || property.ValueKind == JsonValueKind.Null)
-        {
-            throw new JsonException($"Orbital parameters payload property '{jsonPropertyName}' is required.");
-        }
-
-        try
-        {
-            return property.Deserialize<T>(options) ?? throw new JsonException($"Orbital parameters payload property '{jsonPropertyName}' cannot be null.");
-        }
-        catch (JsonException)
-        {
-            throw;
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException or NotSupportedException)
-        {
-            throw new JsonException($"Orbital parameters payload property '{jsonPropertyName}' is invalid.", exception);
-        }
-    }
-
     private static void WriteProperty<T>(Utf8JsonWriter writer, JsonSerializerOptions options, string clrPropertyName, T value)
     {
-        writer.WritePropertyName(GetJsonPropertyName(options, clrPropertyName));
+        writer.WritePropertyName(AstronomyJsonObjectReader.GetJsonPropertyName(clrPropertyName, options));
         JsonSerializer.Serialize(writer, value, options);
     }
 
-    private static string GetJsonPropertyName(JsonSerializerOptions options, string clrPropertyName) => options.PropertyNamingPolicy?.ConvertName(clrPropertyName) ?? clrPropertyName;
-
-    private static void EnsureNoDuplicateProperties(JsonElement root)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var property in root.EnumerateObject())
-        {
-            if (!names.Add(property.Name)) throw new JsonException($"Duplicate orbital parameters payload property '{property.Name}' is not allowed.");
-        }
-    }
 }
