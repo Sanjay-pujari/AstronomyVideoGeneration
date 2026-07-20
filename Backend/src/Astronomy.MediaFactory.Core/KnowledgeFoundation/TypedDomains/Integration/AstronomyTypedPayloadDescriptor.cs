@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
 
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Integration;
@@ -5,6 +6,9 @@ namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Integrati
 public sealed record AstronomyTypedPayloadDescriptor
 {
     private const int MaxDiscriminatorLength = 128;
+    private static readonly Regex DiscriminatorPattern = new(
+        @"^[a-z0-9]+(?:[.-][a-z0-9]+)*\.v[1-9][0-9]*$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public AstronomyTypedPayloadDescriptor(string discriminator, Type payloadType, AstronomyKnowledgeDomain domain, AstronomyKnowledgePayloadFamily family)
     {
@@ -21,8 +25,17 @@ public sealed record AstronomyTypedPayloadDescriptor
 
     private static string ValidateDiscriminator(string discriminator)
     {
-        if (string.IsNullOrWhiteSpace(discriminator) || discriminator.Length > MaxDiscriminatorLength || discriminator.Any(char.IsWhiteSpace) || discriminator.Any(char.IsControl) || !discriminator.Contains(".v", StringComparison.Ordinal))
-            throw new ArgumentException("Typed payload discriminator must be a stable versioned token with no whitespace or control characters.", nameof(discriminator));
+        ArgumentNullException.ThrowIfNull(discriminator);
+
+        if (discriminator.Length == 0 ||
+            discriminator.Length > MaxDiscriminatorLength ||
+            !DiscriminatorPattern.IsMatch(discriminator))
+        {
+            throw new ArgumentException(
+                "Typed payload discriminator must be a lowercase, versioned token ending in '.v' followed by a positive integer.",
+                nameof(discriminator));
+        }
+
         return discriminator;
     }
 

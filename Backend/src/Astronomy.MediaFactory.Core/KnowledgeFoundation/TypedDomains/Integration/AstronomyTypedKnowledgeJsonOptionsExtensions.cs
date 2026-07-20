@@ -7,6 +7,8 @@ namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Integrati
 
 public static class AstronomyTypedKnowledgeJsonOptionsExtensions
 {
+    private static readonly JsonStringEnumConverter SafeEnumJsonConverter = new(JsonNamingPolicy.CamelCase, allowIntegerValues: false);
+
     public static JsonSerializerOptions AddAstronomyTypedKnowledgeJson(this JsonSerializerOptions options, IAstronomyTypedPayloadRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -27,7 +29,9 @@ public static class AstronomyTypedKnowledgeJsonOptionsExtensions
         AddIfMissing(options, new AstronomyTemporalAnchorJsonConverter());
         if (!options.Converters.Any(c => c is AstronomyTypedKnowledgePayloadJsonConverter)) options.Converters.Add(new AstronomyTypedKnowledgePayloadJsonConverter(registry));
         AddIfMissing(options, new AstronomyKnowledgeStatementJsonConverter<ITypedAstronomyKnowledgePayload>());
-        if (!options.Converters.Any(c => c is JsonStringEnumConverter)) options.Converters.Add(new JsonStringEnumConverter());
+        // This integration-owned enum converter is appended after payload converters and added only once.
+        // If callers inserted an earlier enum converter, System.Text.Json precedence still honors that earlier converter.
+        if (!options.Converters.Any(existing => ReferenceEquals(existing, SafeEnumJsonConverter))) options.Converters.Add(SafeEnumJsonConverter);
         return options;
     }
 
