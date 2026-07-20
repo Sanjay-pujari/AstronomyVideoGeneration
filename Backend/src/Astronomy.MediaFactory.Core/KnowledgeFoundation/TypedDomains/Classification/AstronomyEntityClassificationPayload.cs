@@ -1,13 +1,15 @@
+using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
 
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Classification;
 
 public sealed record AstronomyEntityClassificationPayload : ITypedAstronomyKnowledgePayload, IEquatable<AstronomyEntityClassificationPayload>
 {
+    [JsonConstructor]
     public AstronomyEntityClassificationPayload(
         AstronomyKnowledgeTypeId typeId,
         AstronomyEntityKind subjectKind,
-        IEnumerable<AstronomyClassificationAssignment> assignments)
+        IReadOnlyList<AstronomyClassificationAssignment> assignments)
     {
         if (!typeId.IsValid)
         {

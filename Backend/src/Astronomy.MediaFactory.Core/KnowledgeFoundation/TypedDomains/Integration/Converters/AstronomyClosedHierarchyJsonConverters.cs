@@ -12,6 +12,7 @@ internal abstract class AstronomyDiscriminatedJsonConverter<TBase> : JsonConvert
     private const string TypePropertyName = "type";
     private const string ValuePropertyName = "value";
     protected abstract bool TryGetType(TBase value, out string discriminator, out Type concreteType);
+    public override bool HandleNull => true;
     protected abstract bool TryGetConcreteType(string discriminator, out Type concreteType);
 
     public override TBase Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
