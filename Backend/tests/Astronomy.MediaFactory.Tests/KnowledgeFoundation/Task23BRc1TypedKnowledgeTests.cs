@@ -221,27 +221,37 @@ public sealed class Task23BRc1TypedKnowledgeTests
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
         Assert.NotEmpty(constructors);
-        Assert.All(
-            constructors,
-            constructor =>
-            {
-                Assert.False(
-                    constructor.IsPublic,
-                    "The physical property value hierarchy must not expose a public base constructor.");
-                Assert.False(
-                    constructor.IsFamily,
-                    "The physical property value hierarchy must not expose a protected base constructor.");
-                Assert.False(
-                    constructor.IsFamilyOrAssembly,
-                    "The physical property value hierarchy must not expose a protected-internal base constructor.");
-            });
 
         var parameterlessConstructors = constructors
             .Where(constructor => constructor.GetParameters().Length == 0)
             .ToArray();
 
         Assert.Single(parameterlessConstructors);
-        Assert.True(parameterlessConstructors[0].IsFamilyAndAssembly);
+
+        var parameterlessConstructor = parameterlessConstructors[0];
+
+        Assert.False(parameterlessConstructor.IsPublic);
+        Assert.False(parameterlessConstructor.IsFamily);
+        Assert.False(parameterlessConstructor.IsFamilyOrAssembly);
+        Assert.True(parameterlessConstructor.IsFamilyAndAssembly);
+
+        var copyConstructors = constructors
+            .Where(
+                constructor =>
+                {
+                    var parameters = constructor.GetParameters();
+
+                    return parameters.Length == 1 &&
+                           parameters[0].ParameterType == typeof(AstronomyPhysicalPropertyValue);
+                })
+            .ToArray();
+
+        Assert.Single(copyConstructors);
+
+        var copyConstructor = copyConstructors[0];
+
+        Assert.False(copyConstructor.IsPublic);
+        Assert.True(copyConstructor.IsFamily || copyConstructor.IsFamilyAndAssembly);
         var supportedVariants = typeof(AstronomyPhysicalPropertyValue).Assembly
             .GetTypes()
             .Where(type => type.BaseType == typeof(AstronomyPhysicalPropertyValue))
