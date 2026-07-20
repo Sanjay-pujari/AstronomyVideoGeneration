@@ -1,10 +1,13 @@
+using System.Text.Json.Serialization;
+
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Observational;
 
 public sealed record AstronomyVisibilityAssessment : IEquatable<AstronomyVisibilityAssessment>
 {
     private const int MaxSummaryLength = 512;
-    public AstronomyVisibilityAssessment(AstronomyVisibilityStatus status, AstronomyVisibilityMethod method, IEnumerable<AstronomyVisibilityLimitation>? limitations = null, string? summary = null)
+    [JsonConstructor]
+    public AstronomyVisibilityAssessment(AstronomyVisibilityStatus status, AstronomyVisibilityMethod method, IReadOnlyList<AstronomyVisibilityLimitation>? limitations = null, string? summary = null)
     {
         Status = EnumGuard.RequireDefined(status, nameof(status));
         Method = EnumGuard.RequireDefined(method, nameof(method));
