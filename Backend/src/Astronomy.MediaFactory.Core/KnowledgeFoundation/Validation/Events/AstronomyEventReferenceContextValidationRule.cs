@@ -1,0 +1,6 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Coordinates;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Events;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
+namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Events;
+public sealed class AstronomyEventReferenceContextValidationRule:EventRuleBase{public const string Id="event.reference-context.compatibility"; public override string RuleId=>Id; public override int Order=>300; protected override IEnumerable<AstronomyKnowledgeValidationIssue> ValidateTyped(AstronomyEventPayload p,AstronomyKnowledgeValidationContext c){var r=p.Event.ReferenceContext; var ok=r.Scope switch{AstronomyEventScope.Global=>r.ReferenceFrame is null&&r.ReferenceOrigin is null&&r.CoordinateSystem is null, AstronomyEventScope.ReferenceFrameSpecific=>r.ReferenceFrame.HasValue&&r.ReferenceOrigin.HasValue&&r.CoordinateSystem.HasValue, AstronomyEventScope.ObserverSpecific=>r.ObservationContext is not null, _=>true}; if(!ok) yield return Issue(AstronomyEventValidationCodes.ReferenceContextIncompatible,"Event reference context is incompatible with its scope/frame/origin/coordinate combination.","$.event.referenceContext",RuleId);}}

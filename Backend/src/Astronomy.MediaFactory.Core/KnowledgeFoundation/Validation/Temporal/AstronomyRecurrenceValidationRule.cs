@@ -1,0 +1,5 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Temporal;
+namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Temporal;
+public sealed class AstronomyRecurrenceValidationRule:TemporalRuleBase{public const string Id="temporal.recurrence.matrix"; public override string RuleId=>Id; public override int Order=>300; protected override IEnumerable<AstronomyKnowledgeValidationIssue> ValidateTyped(AstronomyTemporalPatternPayload p,AstronomyKnowledgeValidationContext c){var r=p.Pattern.Recurrence; if(!Enum.IsDefined(r.Kind)) yield return Issue(AstronomyTemporalValidationCodes.RecurrenceKindInvalid,"Recurrence kind must be defined.","$.pattern.recurrence.kind",RuleId); if((r.Kind==AstronomyRecurrenceKind.FixedPeriod)!=(r.FixedPeriod is not null)||(r.Kind==AstronomyRecurrenceKind.CalendarInterval)!=(r.CalendarInterval is not null)) yield return Issue(AstronomyTemporalValidationCodes.RecurrenceFieldsInvalid,"Recurrence fields must match recurrence kind.","$.pattern.recurrence",RuleId);}}
