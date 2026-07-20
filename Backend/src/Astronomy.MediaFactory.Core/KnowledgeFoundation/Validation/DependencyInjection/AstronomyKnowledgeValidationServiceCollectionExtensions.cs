@@ -30,7 +30,14 @@ public static class AstronomyKnowledgeValidationServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         var descriptor = new AstronomyKnowledgeValidationRuleDescriptor(ruleId, typeof(TRule), typeof(TPayload), domain, family, order);
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAstronomyKnowledgeValidationRule, TRule>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton(descriptor));
+        if (!services.Any(service =>
+                service.ServiceType == typeof(AstronomyKnowledgeValidationRuleDescriptor)
+                && service.ImplementationInstance is AstronomyKnowledgeValidationRuleDescriptor existing
+                && existing == descriptor))
+        {
+            services.AddSingleton(descriptor);
+        }
+
         return services;
     }
 }

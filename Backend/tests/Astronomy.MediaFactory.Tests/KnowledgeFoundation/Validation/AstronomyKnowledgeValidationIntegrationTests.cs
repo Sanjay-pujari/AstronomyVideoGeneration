@@ -11,7 +11,11 @@ public sealed class AstronomyKnowledgeValidationIntegrationTests
     public void ServiceRegistration_IsIdempotentAndExecutesRegisteredRule()
     {
         var services = new ServiceCollection();
-        services.AddAstronomyKnowledgeValidation().AddAstronomyKnowledgeValidation().AddAstronomyKnowledgeValidationRule<AlwaysWarningRule, TestPayload>("test.always-warning", AstronomyKnowledgeDomain.Classification, AstronomyKnowledgePayloadFamily.EntityClassification, 10);
+        services
+            .AddAstronomyKnowledgeValidation()
+            .AddAstronomyKnowledgeValidation()
+            .AddAstronomyKnowledgeValidationRule<AlwaysWarningRule, TestPayload>("test.always-warning", AstronomyKnowledgeDomain.Classification, AstronomyKnowledgePayloadFamily.EntityClassification, 10)
+            .AddAstronomyKnowledgeValidationRule<AlwaysWarningRule, TestPayload>("test.always-warning", AstronomyKnowledgeDomain.Classification, AstronomyKnowledgePayloadFamily.EntityClassification, 10);
         using var provider = services.BuildServiceProvider();
         Assert.NotNull(provider.GetRequiredService<IAstronomyTypedKnowledgeValidator>());
         var registry = provider.GetRequiredService<IAstronomyKnowledgeValidationRuleRegistry>();
