@@ -2,6 +2,12 @@ namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
 
 public static class AstronomyKnowledgeValidationCodes
 {
+
+    public const string PayloadUnregistered = "foundation.payload.unregistered";
+    public const string PayloadTypeIdMismatch = "foundation.payload.type-id-mismatch";
+    public const string PayloadDomainMismatch = "foundation.payload.domain-mismatch";
+    public const string PayloadFamilyMismatch = "foundation.payload.family-mismatch";
+    public const string PayloadRuntimeTypeMismatch = "foundation.payload.runtime-type-mismatch";
     public const string IdMissing = "A2.KNOWLEDGE.STATEMENT.IdMissing";
     public const string VersionInvalid = "A2.KNOWLEDGE.STATEMENT.VersionInvalid";
     public const string KindUndefined = "A2.KNOWLEDGE.STATEMENT.KindUndefined";
