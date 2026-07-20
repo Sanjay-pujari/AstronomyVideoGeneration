@@ -4,6 +4,8 @@ using Astronomy.MediaFactory.Core.KnowledgeFoundation.Extensions;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Events;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Integration;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Physical;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Temporal;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,15 +60,28 @@ public sealed class TypedKnowledgeIntegrationTests
                 AstronomyTemporalPatternKind.Periodic,
                 new AstronomyTemporalPatternReferenceContext(AstronomyTemporalReferenceBasis.Utc),
                 new AstronomyRecurrenceDescription(AstronomyRecurrenceKind.None))), options);
+
+        var physical = RoundTrip(new AstronomyPhysicalPropertiesPayload(
+            new("typed.physical.properties.v1"),
+            [new AstronomyPhysicalProperty(
+                new("physical.radius.mean"),
+                AstronomyPhysicalPropertyCategory.Size,
+                new AstronomyScalarPhysicalPropertyValue(new AstronomyMeasurement(
+                    3389.5m,
+                    new AstronomyMeasurementUnit("km", "km", AstronomyMeasurementDimension.Distance))),
+                AstronomyPhysicalPropertyQualifier.Mean)]), options);
+
+        physical.Properties.Single().Value.Should().BeOfType<AstronomyScalarPhysicalPropertyValue>();
     }
 
-    private static void RoundTrip<TPayload>(TPayload original, JsonSerializerOptions options)
+    private static TPayload RoundTrip<TPayload>(TPayload original, JsonSerializerOptions options)
         where TPayload : ITypedAstronomyKnowledgePayload
     {
         var json = JsonSerializer.Serialize<ITypedAstronomyKnowledgePayload>(original, options);
         var result = JsonSerializer.Deserialize<ITypedAstronomyKnowledgePayload>(json, options);
         result.Should().BeOfType<TPayload>();
         result.Should().Be(original);
+        return (TPayload)result!;
     }
 
     [Theory]
