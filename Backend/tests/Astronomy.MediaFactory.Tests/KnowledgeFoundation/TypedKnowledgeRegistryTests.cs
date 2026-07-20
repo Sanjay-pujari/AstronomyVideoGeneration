@@ -25,6 +25,56 @@ public sealed class TypedKnowledgeRegistryTests
         ]);
     }
 
+    [Theory]
+    [MemberData(nameof(BuiltInDiscriminators))]
+    public void Descriptor_accepts_built_in_canonical_discriminators(string discriminator)
+    {
+        var descriptor = new AstronomyTypedPayloadDescriptor(
+            discriminator,
+            typeof(AstronomyEntityClassificationPayload),
+            AstronomyKnowledgeDomain.Classification,
+            AstronomyKnowledgePayloadFamily.EntityClassification);
+
+        descriptor.Discriminator.Should().Be(discriminator);
+    }
+
+    [Theory]
+    [InlineData("Typed.Event.V1")]
+    [InlineData(" typed.event.v1")]
+    [InlineData("typed.event.v1 ")]
+    [InlineData("typed event.v1")]
+    [InlineData("typed.event.\u0001.v1")]
+    [InlineData("typed.event")]
+    [InlineData("typed.event.v")]
+    [InlineData("typed.event.vx")]
+    [InlineData("typed.event.v0")]
+    [InlineData("typed.event.v-1")]
+    [InlineData("typed.event.v1.extra")]
+    [InlineData("typed..event.v1")]
+    [InlineData(".typed.event.v1")]
+    [InlineData("typed.event.v1.")]
+    public void Descriptor_rejects_noncanonical_discriminators(string discriminator)
+    {
+        Assert.Throws<ArgumentException>(() => new AstronomyTypedPayloadDescriptor(
+            discriminator,
+            typeof(AstronomyEntityClassificationPayload),
+            AstronomyKnowledgeDomain.Classification,
+            AstronomyKnowledgePayloadFamily.EntityClassification));
+    }
+
+    [Fact]
+    public void Descriptor_rejects_excessive_length_discriminator()
+    {
+        Assert.Throws<ArgumentException>(() => new AstronomyTypedPayloadDescriptor(
+            $"typed.{new string('a', 128)}.v1",
+            typeof(AstronomyEntityClassificationPayload),
+            AstronomyKnowledgeDomain.Classification,
+            AstronomyKnowledgePayloadFamily.EntityClassification));
+    }
+
+    public static IEnumerable<object[]> BuiltInDiscriminators() =>
+        AstronomyBuiltInTypedPayloadDescriptors.BuiltIn.Select(descriptor => new object[] { descriptor.Discriminator });
+
     [Fact]
     public void Registry_IsImmutableDeterministicAndRejectsDuplicates()
     {
