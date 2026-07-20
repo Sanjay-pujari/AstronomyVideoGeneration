@@ -11,7 +11,7 @@ internal static class AstronomyObservationalMeasurementValidator
         if (!Enum.IsDefined(measurement.Unit.Dimension)) yield return Issue(AstronomyObservationalValidationCodes.MeasurementUnitInvalid, "Measurement unit dimension must be defined.", path + ".unit.dimension", ruleId, domain, family);
         if (measurement.Precision is not null)
         {
-            if (!Enum.IsDefined(measurement.Precision.Kind) || measurement.Precision.Digits < 0 || measurement.Precision.Digits > AstronomyMeasurementPrecision.MaxDigits)
+            if (IsPrecisionInvalid(measurement.Precision))
                 yield return Issue(AstronomyObservationalValidationCodes.MeasurementPrecisionInvalid, "Measurement precision must use a defined kind and supported digit count.", path + ".precision", ruleId, domain, family);
         }
         if (measurement.Uncertainty is not null)
@@ -21,5 +21,22 @@ internal static class AstronomyObservationalMeasurementValidator
                 yield return Issue(AstronomyObservationalValidationCodes.MeasurementUncertaintyInvalid, "Measurement uncertainty must be structurally consistent.", path + ".uncertainty", ruleId, domain, family);
         }
     }
+
+    private static bool IsPrecisionInvalid(AstronomyMeasurementPrecision precision)
+    {
+        if (!Enum.IsDefined(precision.Kind))
+            return true;
+
+        if (precision.Digits > AstronomyMeasurementPrecision.MaxDigits)
+            return true;
+
+        return precision.Kind switch
+        {
+            AstronomyPrecisionKind.DecimalPlaces => precision.Digits < 0,
+            AstronomyPrecisionKind.SignificantFigures => precision.Digits <= 0,
+            _ => false
+        };
+    }
+
     private static AstronomyKnowledgeValidationIssue Issue(string code, string message, string path, string ruleId, AstronomyKnowledgeDomain domain, AstronomyKnowledgePayloadFamily family) => new(code, AstronomyKnowledgeValidationSeverity.Error, message, path, ruleId, domain, family);
 }
