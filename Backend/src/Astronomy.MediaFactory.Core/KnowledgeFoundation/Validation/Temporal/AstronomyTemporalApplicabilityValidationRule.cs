@@ -1,0 +1,5 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Temporal;
+namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Temporal;
+public sealed class AstronomyTemporalApplicabilityValidationRule:TemporalRuleBase{public const string Id="temporal.applicability.extent"; public override string RuleId=>Id; public override int Order=>900; protected override IEnumerable<AstronomyKnowledgeValidationIssue> ValidateTyped(AstronomyTemporalPatternPayload p,AstronomyKnowledgeValidationContext c){var a=p.Pattern.Applicability; if(a is null) yield break; if(a.FromUtc?.Offset!=TimeSpan.Zero||a.ThroughUtc?.Offset!=TimeSpan.Zero) yield return Issue(AstronomyTemporalValidationCodes.ApplicabilityUtcInvalid,"Applicability instants must use UTC.","$.pattern.applicability",RuleId); if(a.ThroughUtc<a.FromUtc) yield return Issue(AstronomyTemporalValidationCodes.ApplicabilityOrderingInvalid,"Applicability end cannot precede start.","$.pattern.applicability",RuleId);}}
