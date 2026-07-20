@@ -1,9 +1,12 @@
+using System.Text.Json.Serialization;
+
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Orbital;
 
 public sealed record AstronomyKeplerianElementsPayload : ITypedAstronomyKnowledgePayload, IEquatable<AstronomyKeplerianElementsPayload>
 {
-    public AstronomyKeplerianElementsPayload(AstronomyKnowledgeTypeId typeId, AstronomyOrbitalReferenceContext referenceContext, IEnumerable<AstronomyKeplerianElement> elements)
+    [JsonConstructor]
+    public AstronomyKeplerianElementsPayload(AstronomyKnowledgeTypeId typeId, AstronomyOrbitalReferenceContext referenceContext, IReadOnlyList<AstronomyKeplerianElement> elements)
     {
         if (!typeId.IsValid) throw new ArgumentException("Keplerian elements payload type ID is required.", nameof(typeId));
         TypeId = typeId;
