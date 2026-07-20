@@ -16,6 +16,10 @@ public sealed record AstronomyVisibilityWindow
             if (peakTimeUtc.Value < Window.StartUtc || peakTimeUtc.Value > Window.EndUtc) throw new ArgumentException("Peak time must fall within the observation window.", nameof(peakTimeUtc));
         }
         if (peakAltitude is not null && peakAltitude.Unit.Dimension != AstronomyMeasurementDimension.Angle) throw new ArgumentException("Peak altitude must use the Angle dimension.", nameof(peakAltitude));
+        if (note is not null && string.IsNullOrWhiteSpace(note))
+        {
+            throw new ArgumentException("Visibility window note must not be blank when supplied.", nameof(note));
+        }
         PeakTimeUtc = peakTimeUtc; PeakAltitude = peakAltitude; Note = TypedKnowledgeTextGuards.NormalizeOptionalText(note, MaxNoteLength, nameof(note), "Visibility window note");
     }
     public AstronomyObservationTimeWindow Window { get; }

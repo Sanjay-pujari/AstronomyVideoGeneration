@@ -12,6 +12,10 @@ public sealed record AstronomyVisibilityAssessment : IEquatable<AstronomyVisibil
         Status = EnumGuard.RequireDefined(status, nameof(status));
         Method = EnumGuard.RequireDefined(method, nameof(method));
         Limitations = CopyLimitations(limitations ?? []);
+        if (summary is not null && string.IsNullOrWhiteSpace(summary))
+        {
+            throw new ArgumentException("Visibility assessment summary must not be blank when supplied.", nameof(summary));
+        }
         Summary = TypedKnowledgeTextGuards.NormalizeOptionalText(summary, MaxSummaryLength, nameof(summary), "Visibility assessment summary");
     }
     public AstronomyVisibilityStatus Status { get; }

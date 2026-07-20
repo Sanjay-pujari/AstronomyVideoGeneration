@@ -15,6 +15,10 @@ public sealed record AstronomyObservationalQuantity
         Measurement = measurement ?? throw new ArgumentNullException(nameof(measurement));
         Qualifier = qualifier.HasValue ? EnumGuard.RequireDefined(qualifier.Value, nameof(qualifier)) : null;
         Epoch = epoch;
+        if (note is not null && string.IsNullOrWhiteSpace(note))
+        {
+            throw new ArgumentException("Observational quantity note must not be blank when supplied.", nameof(note));
+        }
         Note = TypedKnowledgeTextGuards.NormalizeOptionalText(note, MaxNoteLength, nameof(note), "Observational quantity note");
     }
     public AstronomyObservationalQuantityId QuantityId { get; }
