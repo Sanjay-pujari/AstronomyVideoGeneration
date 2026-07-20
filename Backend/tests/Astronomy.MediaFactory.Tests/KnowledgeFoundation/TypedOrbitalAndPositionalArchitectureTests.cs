@@ -53,7 +53,12 @@ public sealed class TypedOrbitalAndPositionalArchitectureTests
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "Backend"))) directory = directory.Parent;
-        return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Backend", "Astronomy.MediaFactory.slnx"))) return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Repository root not found.");
     }
 }
