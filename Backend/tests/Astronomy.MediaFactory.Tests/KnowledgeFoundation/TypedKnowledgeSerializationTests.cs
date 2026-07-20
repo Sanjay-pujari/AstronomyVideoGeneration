@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core.AstronomyDomain.Families;
-using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
+using AstronomyEntityKind = Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy.AstronomyEntityKind;
+using AstronomyFamilyKind = Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy.AstronomyFamilyKind;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Classification;
@@ -250,10 +251,25 @@ public sealed class TypedKnowledgeSerializationTests
 
     private static void AssertStatementRoundTrip<TPayload>(TPayload payload, JsonSerializerOptions options) where TPayload : ITypedAstronomyKnowledgePayload
     {
-        var original = new AstronomyKnowledgeStatement<ITypedAstronomyKnowledgePayload>(new KnowledgeId($"knowledge.{payload.TypeId.Value}"), new KnowledgeVersion(2), KnowledgeStatementKind.Scientific, KnowledgeFoundationStatus.Reviewed, new AstronomyEntityReference("body.mars", AstronomyEntityKind.Planet, "Mars"), payload, new KnowledgeAuditMetadata(Utc("2026-01-01T00:00:00Z"), "author", Utc("2026-01-02T00:00:00Z"), "reviewer"), new AstronomyFamilyReference("solar-system", AstronomyFamilyKind.PlanetarySystem), [new(new KnowledgeLanguageTag("en-US"), "resource.key", false, true)], [new KnowledgeTag("mars"), new KnowledgeTag("typed")], new KnowledgeValidityRange(Utc("2026-01-01T00:00:00Z"), Utc("2026-12-31T00:00:00Z")));
+        var original = new AstronomyKnowledgeStatement<ITypedAstronomyKnowledgePayload>(new KnowledgeId($"knowledge.{GetPayloadTypeId(payload).Value}"), new KnowledgeVersion(2), KnowledgeStatementKind.Scientific, KnowledgeFoundationStatus.Reviewed, new AstronomyEntityReference("body.mars", AstronomyEntityKind.Planet, "Mars"), payload, new KnowledgeAuditMetadata(Utc("2026-01-01T00:00:00Z"), "author", Utc("2026-01-02T00:00:00Z"), "reviewer"), new AstronomyFamilyReference("solar-system", AstronomyFamilyKind.PlanetarySystem), [new(new KnowledgeLanguageTag("en-US"), "resource.key", false, true)], [new KnowledgeTag("mars"), new KnowledgeTag("typed")], new KnowledgeValidityRange(Utc("2026-01-01T00:00:00Z"), Utc("2026-12-31T00:00:00Z")));
         var result = JsonSerializer.Deserialize<AstronomyKnowledgeStatement<ITypedAstronomyKnowledgePayload>>(JsonSerializer.Serialize(original, options), options)!;
         result.Id.Should().Be(original.Id); result.Version.Should().Be(original.Version); result.Kind.Should().Be(original.Kind); result.Status.Should().Be(original.Status); result.Validity.Should().Be(original.Validity); result.Audit.Should().Be(original.Audit); result.Tags.Should().Equal(original.Tags); result.LocalizationReferences.Should().Equal(original.LocalizationReferences); result.Payload.Should().BeOfType(payload.GetType()); result.Payload.Should().Be(payload);
     }
+
+
+    private static AstronomyKnowledgeTypeId GetPayloadTypeId(ITypedAstronomyKnowledgePayload payload) => payload switch
+    {
+        AstronomyEntityClassificationPayload typed => typed.TypeId,
+        AstronomyPhysicalPropertiesPayload typed => typed.TypeId,
+        AstronomyKeplerianElementsPayload typed => typed.TypeId,
+        AstronomyOrbitalParametersPayload typed => typed.TypeId,
+        AstronomySpatialPositionPayload typed => typed.TypeId,
+        AstronomyObservationConditionsPayload typed => typed.TypeId,
+        AstronomyVisibilityWindowsPayload typed => typed.TypeId,
+        AstronomyEventPayload typed => typed.TypeId,
+        AstronomyTemporalPatternPayload typed => typed.TypeId,
+        _ => throw new ArgumentException($"Unsupported typed payload type '{payload.GetType().FullName}'.", nameof(payload))
+    };
 
     private static AstronomyEntityClassificationPayload ClassificationPayload() => new(new("typed.classification.entity.v1"), AstronomyEntityKind.Planet, [new(new("taxonomy.iau.body"), new("planet", "Planet", "IAU planet class"), AstronomyClassificationQualifier.Primary, "Primary scheme assignment")]);
 
@@ -269,7 +285,25 @@ public sealed class TypedKnowledgeSerializationTests
     private static AstronomyObservationConditionsPayload ObservationConditionsPayload() => new(new("typed.observational.conditions.v1"), ObservationContext(), new(AstronomySkyConditionKind.Clear, AstronomySeeingQuality.Good, AstronomyTransparencyQuality.VeryGood, Measure(-1.2m, "mag", "mag", AstronomyMeasurementDimension.Magnitude), null, "Clear winter night"), [new(new("obs.quantity.altitude"), AstronomyObservationalQuantityCategory.HorizontalPosition, Measure(42m, "deg", "°", AstronomyMeasurementDimension.Angle), AstronomyObservationalQuantityQualifier.Observed, AstronomyEpochReference.ObservationTime, "Altitude")], new(Az(120m), Alt(42m)), AstronomyHorizonSector.SouthEast);
     private static AstronomyVisibilityWindowsPayload VisibilityPayload() => new(new("typed.observational.visibility-windows.v1"), ObservationContext(), [new(new(Utc("2026-08-01T02:00:00Z"), Utc("2026-08-01T04:00:00Z")), new(AstronomyVisibilityStatus.Visible, AstronomyVisibilityMethod.NakedEye, [AstronomyVisibilityLimitation.Twilight, AstronomyVisibilityLimitation.Moonlight], "Visible"), Utc("2026-08-01T03:00:00Z"), Measure(35m, "deg", "°", AstronomyMeasurementDimension.Angle), "First"), new(new(Utc("2026-08-02T02:00:00Z"), Utc("2026-08-02T04:00:00Z")), new(AstronomyVisibilityStatus.Marginal, AstronomyVisibilityMethod.Binocular, [AstronomyVisibilityLimitation.LowTransparency, AstronomyVisibilityLimitation.TerrainObstruction], "Marginal"), Utc("2026-08-02T03:00:00Z"), Measure(25m, "deg", "°", AstronomyMeasurementDimension.Angle), "Second")]);
     private static AstronomyEventPayload EventPayload() => new(new("typed.event.astronomical.v1"), new(new("event.jupiter.venus.conjunction"), AstronomyEventKind.Conjunction, new AstronomyIntervalEventTemporalExtent(Utc("2026-08-01T00:00:00Z"), Utc("2026-08-01T02:00:00Z"), true), new(AstronomyEventScope.ReferenceFrameSpecific, AstronomyReferenceFrame.ICRS, AstronomyReferenceOrigin.Geocentric, AstronomyCoordinateSystem.Equatorial), [new(new("body.jupiter", AstronomyEntityKind.Planet, "Jupiter"), AstronomyEventParticipantRole.Primary, "Jupiter"), new(new("body.venus", AstronomyEntityKind.Planet, "Venus"), AstronomyEventParticipantRole.Secondary, "Venus")], [new(AstronomyEventPhaseMarkerKind.Start, Utc("2026-08-01T00:00:00Z"), "Start"), new(AstronomyEventPhaseMarkerKind.Peak, Utc("2026-08-01T01:00:00Z"), "Peak")], [new(new("geometry.angular-separation"), AstronomyEventGeometryCategory.AngularSeparation, Measure(0.5m, "deg", "°", AstronomyMeasurementDimension.Angle), AstronomyEpochReference.Custom(Utc("2026-08-01T01:00:00Z")), "Minimum separation")], [new(new("circumstance.visibility"), "Dawn sky", "Best before sunrise")], AstronomyEventSignificance.Notable, "Jupiter Venus conjunction", "Close apparent approach."));
-    private static AstronomyTemporalPatternPayload TemporalPayload() => new(new("typed.temporal.pattern.v1"), new(new("temporal.mars.synodic"), AstronomyTemporalPatternKind.Periodic, new(AstronomyTemporalReferenceBasis.Utc), new(AstronomyRecurrenceDescription(AstronomyRecurrenceKind.FixedPeriod, new AstronomyCyclePeriod(Measure(779.94m, "day", "d", AstronomyMeasurementDimension.Time), true), anchor: new AstronomyUtcTemporalAnchor(Utc("2026-01-01T00:00:00Z")), isApproximate: true, note: "Approximate recurrence"), new AstronomyCyclePeriod(Measure(779.94m, "day", "d", AstronomyMeasurementDimension.Time), true), [new(new("phase.opposition"), Measure(0m, "one", "1", AstronomyMeasurementDimension.Dimensionless), Measure(5m, "day", "d", AstronomyMeasurementDimension.Time), "Opposition", "Best visibility")], [new(Utc("2026-02-19T00:00:00Z"), Utc("2026-02-24T00:00:00Z"), new("phase.opposition"), true, "Supplied window")], new(new(1, 1), new(3, 31), false, "Winter season"), new(Utc("2026-01-01T00:00:00Z"), Utc("2027-01-01T00:00:00Z")), "Mars synodic cycle", "Mars opposition cadence."));
+    private static AstronomyTemporalPatternPayload TemporalPayload() => new(
+        new("typed.temporal.pattern.v1"),
+        new AstronomyTemporalPattern(
+            new("temporal.mars.synodic"),
+            AstronomyTemporalPatternKind.Periodic,
+            new(AstronomyTemporalReferenceBasis.Utc),
+            new AstronomyRecurrenceDescription(
+                AstronomyRecurrenceKind.FixedPeriod,
+                new AstronomyCyclePeriod(Measure(779.94m, "day", "d", AstronomyMeasurementDimension.Time), true),
+                anchor: new AstronomyUtcTemporalAnchor(Utc("2026-01-01T00:00:00Z")),
+                isApproximate: true,
+                note: "Approximate recurrence"),
+            new AstronomyCyclePeriod(Measure(779.94m, "day", "d", AstronomyMeasurementDimension.Time), true),
+            [new(new("phase.opposition"), Measure(0m, "one", "1", AstronomyMeasurementDimension.Dimensionless), Measure(5m, "day", "d", AstronomyMeasurementDimension.Time), "Opposition", "Best visibility")],
+            [new(Utc("2026-02-19T00:00:00Z"), Utc("2026-02-24T00:00:00Z"), new("phase.opposition"), true, "Supplied window")],
+            new(new(1, 1), new(3, 31), false, "Winter season"),
+            new(Utc("2026-01-01T00:00:00Z"), Utc("2027-01-01T00:00:00Z")),
+            "Mars synodic cycle",
+            "Mars opposition cadence."));
 
     private static AstronomyOrbitalReferenceContext OrbitalContext() => new(new("sun", AstronomyEntityKind.Star, "Sun"), AstronomyReferenceFrame.ICRS, AstronomyReferenceOrigin.Heliocentric, AstronomyEpochReference.J2000);
     private static AstronomyObservationContext ObservationContext() => new("observatory.test", Utc("2026-08-01T03:00:00Z"), AstronomyReferenceFrame.ICRS, AstronomyReferenceOrigin.Topocentric, AstronomyCoordinateSystem.Horizontal, 1234m);
