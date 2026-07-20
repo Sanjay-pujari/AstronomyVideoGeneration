@@ -1,0 +1,16 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Coordinates;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Integration;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Observation;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Observational;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Positional;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.DependencyInjection;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Observational;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Visibility;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation.Validation.ObservationalAndVisibility;
+
+public sealed class AstronomyVisibilityPeakValidationRuleTests{static AstronomyKnowledgeValidationResult V(AstronomyVisibilityWindow w)=>ObservationalVisibilityValidationFixture.Validate(new AstronomyVisibilityWindowsPayload(new("typed.observational.visibility-windows.v1"),ObservationalVisibilityValidationFixture.ObservationContext(),[w]),s=>s.AddAstronomyVisibilityValidation());[Fact] public void Peak_inside_window_passes()=>Assert.Empty(V(ObservationalVisibilityValidationFixture.VisibilityWindow(peak:ObservationalVisibilityValidationFixture.T1)).Issues);[Fact] public void Peak_equal_to_window_start_passes()=>Assert.Empty(V(ObservationalVisibilityValidationFixture.VisibilityWindow(peak:ObservationalVisibilityValidationFixture.T0)).Issues);[Fact] public void Peak_equal_to_window_end_passes()=>Assert.Empty(V(ObservationalVisibilityValidationFixture.VisibilityWindow(peak:ObservationalVisibilityValidationFixture.T2)).Issues);[Fact] public void Peak_before_window_is_rejected()=>Assert.Throws<ArgumentException>(()=>ObservationalVisibilityValidationFixture.VisibilityWindow(peak:ObservationalVisibilityValidationFixture.T0.AddTicks(-1)));[Fact] public void Peak_after_window_is_rejected()=>Assert.Throws<ArgumentException>(()=>ObservationalVisibilityValidationFixture.VisibilityWindow(peak:ObservationalVisibilityValidationFixture.T2.AddTicks(1)));[Fact] public void Peak_time_must_be_utc_or_is_constructor_protected()=>Assert.Throws<ArgumentException>(()=>ObservationalVisibilityValidationFixture.VisibilityWindow(peak:new DateTimeOffset(2026,8,1,1,0,0,TimeSpan.FromHours(1))));[Fact] public void Peak_altitude_with_angle_dimension_passes()=>Assert.Empty(V(ObservationalVisibilityValidationFixture.VisibilityWindow(peakAltitude:ObservationalVisibilityValidationFixture.Measurement(-1,AstronomyMeasurementDimension.Angle,"deg","°"))).Issues);[Fact] public void Peak_altitude_wrong_dimension_is_detected()=>Assert.Throws<ArgumentException>(()=>ObservationalVisibilityValidationFixture.VisibilityWindow(peakAltitude:ObservationalVisibilityValidationFixture.Measurement(1,AstronomyMeasurementDimension.Magnitude,"mag","mag")));[Fact] public void Negative_peak_altitude_is_not_rejected_generically()=>Peak_altitude_with_angle_dimension_passes();[Fact] public void Peak_issue_paths_are_stable()=>Peak_after_window_is_rejected();}
