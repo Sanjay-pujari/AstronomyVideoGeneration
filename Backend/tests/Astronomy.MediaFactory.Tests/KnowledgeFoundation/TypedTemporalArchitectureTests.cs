@@ -22,8 +22,19 @@ public sealed class TypedTemporalArchitectureTests
     public void Temporal_production_files_avoid_forbidden_architecture_references()
     {
         var temporalDirectory = Path.Combine(FindRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Core", "KnowledgeFoundation", "TypedDomains", "Temporal");
+        Assert.True(Directory.Exists(temporalDirectory), $"Temporal directory was not found at '{temporalDirectory}'.");
+
+        var files = Directory
+            .GetFiles(
+                temporalDirectory,
+                "*.cs",
+                SearchOption.TopDirectoryOnly)
+            .ToArray();
+
+        Assert.NotEmpty(files);
+
         var forbidden = new[] { "EvidenceId", "ConfidenceAssessmentId", "KnowledgeConfidenceLevel", "JsonConverter", "JsonSerializerOptions", "IServiceCollection", "DbContext", "IQueryable", "HttpClient", "GoogleCalendar", "MicrosoftCalendar", "Quartz", "Hangfire", "Cron", "Stellarium", "Skyfield", "SPICE", "NAIF", "Astropy", "SOFA", "ERFA", "JPL", "Horizons", "DateTimeOffset.UtcNow", "CertificationCoordinator", "Infrastructure", "Persistence", "EntityFrameworkCore", "Publishing", "Rendering", "AIOptimization", "ContentGen", "Calculate", "Compute", "Expand", "Generate", "Schedule", "Predict", "Forecast", "Recommend", "ResolveOccurrence", "EnumerateOccurrences", "FindNext", "FindPrevious", "Rank", "Score", "EphemerisService" };
-        foreach (var file in Directory.GetFiles(temporalDirectory, "*.cs"))
+        foreach (var file in files)
         {
             var text = File.ReadAllText(file);
             foreach (var term in forbidden) Assert.DoesNotContain(term, text, StringComparison.Ordinal);
@@ -39,11 +50,82 @@ public sealed class TypedTemporalArchitectureTests
         foreach (var type in types)
         {
             Assert.DoesNotContain(type.GetProperties(BindingFlags.Instance | BindingFlags.Public), p => p.SetMethod is not null && p.SetMethod.IsPublic);
-            Assert.DoesNotContain(type.GetProperties(BindingFlags.Instance | BindingFlags.Public), p => p.PropertyType == typeof(object) || (p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == typeof(Dictionary<,>)));
+            Assert.DoesNotContain(
+                type.GetProperties(BindingFlags.Instance | BindingFlags.Public),
+                p => p.PropertyType == typeof(object) || IsDictionaryType(p.PropertyType));
             Assert.DoesNotContain(type.GetCustomAttributesData(), a => a.AttributeType.Namespace?.Contains("Serialization", StringComparison.Ordinal) == true || a.AttributeType.Name.Contains("Json", StringComparison.Ordinal));
             Assert.DoesNotContain(type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly), m => new[] { "Calculate", "Compute", "Expand", "Generate", "Schedule", "Predict", "Forecast", "Recommend", "ResolveOccurrence", "EnumerateOccurrences", "FindNext", "FindPrevious" }.Any(term => m.Name.Contains(term, StringComparison.Ordinal)));
         }
-        Assert.True(typeof(AstronomyTemporalAnchor).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic).Any(c => c.GetParameters().Length == 0 && c.IsFamilyAndAssembly));
+        var constructors = typeof(AstronomyTemporalAnchor)
+            .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+        Assert.NotEmpty(constructors);
+
+        var parameterlessConstructors = constructors
+            .Where(constructor => constructor.GetParameters().Length == 0)
+            .ToArray();
+
+        Assert.Single(parameterlessConstructors);
+
+        var parameterlessConstructor = parameterlessConstructors[0];
+
+        Assert.False(parameterlessConstructor.IsPublic);
+        Assert.False(parameterlessConstructor.IsFamily);
+        Assert.False(parameterlessConstructor.IsFamilyOrAssembly);
+        Assert.True(parameterlessConstructor.IsFamilyAndAssembly);
+
+        var copyConstructors = constructors
+            .Where(
+                constructor =>
+                {
+                    var parameters = constructor.GetParameters();
+
+                    return parameters.Length == 1 &&
+                           parameters[0].ParameterType == typeof(AstronomyTemporalAnchor);
+                })
+            .ToArray();
+
+        Assert.Single(copyConstructors);
+
+        var copyConstructor = copyConstructors[0];
+
+        Assert.False(copyConstructor.IsPublic);
+        Assert.True(copyConstructor.IsFamily || copyConstructor.IsFamilyAndAssembly);
+
+        var expectedVariants = new[]
+            {
+                typeof(AstronomyCalendarDateTemporalAnchor),
+                typeof(AstronomyCustomTemporalAnchor),
+                typeof(AstronomyDayOfYearTemporalAnchor),
+                typeof(AstronomyEpochTemporalAnchor),
+                typeof(AstronomyMonthTemporalAnchor),
+                typeof(AstronomyUtcTemporalAnchor)
+            }
+            .OrderBy(type => type.Name)
+            .ToArray();
+
+        var actualVariants = typeof(AstronomyTemporalAnchor)
+            .Assembly
+            .GetTypes()
+            .Where(type => type.BaseType == typeof(AstronomyTemporalAnchor))
+            .OrderBy(type => type.Name)
+            .ToArray();
+
+        Assert.Equal(expectedVariants, actualVariants);
+    }
+
+    private static bool IsDictionaryType(Type type)
+    {
+        if (!type.IsGenericType)
+        {
+            return false;
+        }
+
+        var genericDefinition = type.GetGenericTypeDefinition();
+
+        return genericDefinition == typeof(Dictionary<,>) ||
+               genericDefinition == typeof(IDictionary<,>) ||
+               genericDefinition == typeof(IReadOnlyDictionary<,>);
     }
 
     private static string FindRepositoryRoot()

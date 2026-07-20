@@ -46,6 +46,69 @@ public sealed class TypedTemporalKnowledgeTests
     }
 
     [Fact]
+    public void Calendar_interval_accepts_only_calendar_semantic_units()
+    {
+        Assert.Equal(
+            AstronomyCadenceUnit.Day,
+            new AstronomyCalendarInterval(
+                1,
+                AstronomyCadenceUnit.Day).Unit);
+
+        Assert.Equal(
+            AstronomyCadenceUnit.Week,
+            new AstronomyCalendarInterval(
+                2,
+                AstronomyCadenceUnit.Week).Unit);
+
+        Assert.Equal(
+            AstronomyCadenceUnit.Month,
+            new AstronomyCalendarInterval(
+                3,
+                AstronomyCadenceUnit.Month).Unit);
+
+        Assert.Equal(
+            AstronomyCadenceUnit.Year,
+            new AstronomyCalendarInterval(
+                1,
+                AstronomyCadenceUnit.Year).Unit);
+
+        Assert.Throws<ArgumentException>(
+            () => new AstronomyCalendarInterval(
+                1,
+                AstronomyCadenceUnit.SiderealDay));
+
+        Assert.Throws<ArgumentException>(
+            () => new AstronomyCalendarInterval(
+                1,
+                AstronomyCadenceUnit.SynodicMonth));
+
+        Assert.Throws<ArgumentException>(
+            () => new AstronomyCalendarInterval(
+                1,
+                AstronomyCadenceUnit.JulianYear));
+
+        Assert.Throws<ArgumentException>(
+            () => new AstronomyCalendarInterval(
+                1,
+                AstronomyCadenceUnit.Custom));
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new AstronomyCalendarInterval(
+                0,
+                AstronomyCadenceUnit.Month));
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new AstronomyCalendarInterval(
+                -1,
+                AstronomyCadenceUnit.Month));
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new AstronomyCalendarInterval(
+                1,
+                (AstronomyCadenceUnit)999));
+    }
+
+    [Fact]
     public void Cycle_period_and_phase_enforce_local_measurement_invariants()
     {
         var period = new AstronomyCyclePeriod(Time(29.5m), true);
