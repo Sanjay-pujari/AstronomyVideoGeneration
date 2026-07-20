@@ -183,6 +183,20 @@ public sealed class TypedKnowledgeSerializationTests
     }
 
     [Fact]
+    public void Orbital_parameters_payload_round_trips_through_concrete_converter()
+    {
+        var options = CreateOptions();
+        var original = OrbitalParametersPayload();
+
+        var json = JsonSerializer.Serialize(original, options);
+        var result = JsonSerializer.Deserialize<AstronomyOrbitalParametersPayload>(json, options);
+
+        Assert.NotNull(result);
+        Assert.Equal(original, result);
+        Assert.Equal(original.GetHashCode(), result.GetHashCode());
+    }
+
+    [Fact]
     public void Enums_SerializeAsCamelCaseStringsAndRejectNumbersAndUnknownStrings()
     {
         var options = CreateOptions();
