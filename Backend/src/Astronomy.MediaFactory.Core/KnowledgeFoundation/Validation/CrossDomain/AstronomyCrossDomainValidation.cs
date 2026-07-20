@@ -7,6 +7,7 @@ using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Observational;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Orbital;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Positional;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
