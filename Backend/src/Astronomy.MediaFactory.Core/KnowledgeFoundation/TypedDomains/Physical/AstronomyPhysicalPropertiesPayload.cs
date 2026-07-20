@@ -1,10 +1,13 @@
+using System.Text.Json.Serialization;
+
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Physical;
 
 public sealed record AstronomyPhysicalPropertiesPayload : ITypedAstronomyKnowledgePayload, IEquatable<AstronomyPhysicalPropertiesPayload>
 {
+    [JsonConstructor]
     public AstronomyPhysicalPropertiesPayload(
         AstronomyKnowledgeTypeId typeId,
-        IEnumerable<AstronomyPhysicalProperty> properties)
+        IReadOnlyList<AstronomyPhysicalProperty> properties)
     {
         if (!typeId.IsValid)
         {

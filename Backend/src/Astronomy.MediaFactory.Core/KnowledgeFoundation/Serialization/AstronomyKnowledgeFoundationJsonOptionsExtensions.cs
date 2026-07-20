@@ -19,7 +19,7 @@ public static class AstronomyKnowledgeFoundationJsonOptionsExtensions
         AddIfMissing(options, new KnowledgeAuditMetadataJsonConverter());
         InsertBeforeEnumFallbackIfMissing(options, new StrictKnowledgeStatementKindJsonConverter());
         InsertBeforeEnumFallbackIfMissing(options, new StrictKnowledgeFoundationStatusJsonConverter());
-        if (!options.Converters.Any(c => c is JsonStringEnumConverter)) options.Converters.Add(new JsonStringEnumConverter());
+        if (!options.Converters.Any(c => c is JsonStringEnumConverter)) options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false));
         return options;
     }
 
