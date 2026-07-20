@@ -1,0 +1,26 @@
+using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Coordinates;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Orbital;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Positional;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
+
+namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation.Validation.OrbitalAndPositional;
+
+internal static class OrbitalPositionalValidationFixture
+{
+    public static AstronomyKnowledgeValidationContext Context(AstronomyKnowledgeValidationMode mode = AstronomyKnowledgeValidationMode.Standard) => new(new AstronomyKnowledgeValidationRunId("test-run"), new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), mode);
+    public static AstronomyMeasurement Measure(decimal value, AstronomyMeasurementDimension dimension, string code = "u") => new(value, new AstronomyMeasurementUnit($"{code}.{dimension.ToString().ToLowerInvariant()}", code, dimension));
+    public static AstronomyOrbitalReferenceContext OrbitalContext(AstronomyReferenceOrigin origin = AstronomyReferenceOrigin.Heliocentric) => new(new AstronomyEntityReference("sun", AstronomyEntityKind.Star, "Sun"), AstronomyReferenceFrame.ICRS, origin, AstronomyEpochReference.J2000);
+    public static AstronomyKeplerianElement Element(AstronomyKeplerianElementType type, AstronomyMeasurementDimension dimension, decimal value = 1) => new(type, Measure(value, dimension));
+    public static AstronomyKeplerianElementsPayload ValidKeplerian() => new(new("typed.orbital.keplerian-elements.v1"), OrbitalContext(), [Element(AstronomyKeplerianElementType.SemiMajorAxis, AstronomyMeasurementDimension.Distance), Element(AstronomyKeplerianElementType.Eccentricity, AstronomyMeasurementDimension.Dimensionless, .1m)]);
+    public static AstronomyKeplerianElementsPayload CompleteKeplerian() => new(new("typed.orbital.keplerian-elements.v1"), OrbitalContext(), [Element(AstronomyKeplerianElementType.SemiMajorAxis, AstronomyMeasurementDimension.Distance), Element(AstronomyKeplerianElementType.Eccentricity, AstronomyMeasurementDimension.Dimensionless, .1m), Element(AstronomyKeplerianElementType.Inclination, AstronomyMeasurementDimension.Angle), Element(AstronomyKeplerianElementType.LongitudeOfAscendingNode, AstronomyMeasurementDimension.Angle), Element(AstronomyKeplerianElementType.ArgumentOfPeriapsis, AstronomyMeasurementDimension.Angle), Element(AstronomyKeplerianElementType.MeanAnomaly, AstronomyMeasurementDimension.Angle)]);
+    public static AstronomyOrbitalParameter Parameter(string id = "orbital.distance.current", AstronomyOrbitalParameterCategory category = AstronomyOrbitalParameterCategory.Distance, AstronomyEpochReference? epoch = null) => new(new(id), category, Measure(1, category == AstronomyOrbitalParameterCategory.Period ? AstronomyMeasurementDimension.Time : AstronomyMeasurementDimension.Distance), epoch: epoch);
+    public static AstronomyOrbitalParametersPayload ValidParameters() => new(new("typed.orbital.parameters.v1"), OrbitalContext(), [Parameter()]);
+    public static AstronomyPositionReferenceContext SpatialContext(AstronomyCoordinateSystem system = AstronomyCoordinateSystem.Equatorial, AstronomyReferenceOrigin origin = AstronomyReferenceOrigin.Barycentric) => new(AstronomyReferenceFrame.ICRS, origin, system, AstronomyEpochReference.J2000);
+    public static AstronomyAngularCoordinateValue Angular(AstronomyAngularCoordinateComponent component) => new(component, Measure(1, AstronomyMeasurementDimension.Angle, "deg"));
+    public static AstronomySpatialPositionPayload AngularPayload(AstronomyCoordinateSystem system = AstronomyCoordinateSystem.Equatorial, AstronomyAngularCoordinateComponent first = AstronomyAngularCoordinateComponent.RightAscension, AstronomyAngularCoordinateComponent second = AstronomyAngularCoordinateComponent.Declination) => new(new("typed.positional.spatial-position.v1"), new AstronomySpatialPosition(SpatialContext(system, system == AstronomyCoordinateSystem.Horizontal ? AstronomyReferenceOrigin.Topocentric : AstronomyReferenceOrigin.Barycentric), new AstronomyAngularPositionValue(Angular(first), Angular(second))));
+    public static AstronomySpatialPositionPayload SphericalPayload() => new(new("typed.positional.spatial-position.v1"), new AstronomySpatialPosition(SpatialContext(AstronomyCoordinateSystem.Ecliptic, AstronomyReferenceOrigin.Heliocentric), new AstronomySphericalPositionValue(new AstronomySphericalCoordinate(Angular(AstronomyAngularCoordinateComponent.Longitude), Angular(AstronomyAngularCoordinateComponent.Latitude), Measure(1, AstronomyMeasurementDimension.Distance, "km")))));
+    public static AstronomySpatialPositionPayload CartesianPayload() => new(new("typed.positional.spatial-position.v1"), new AstronomySpatialPosition(SpatialContext(AstronomyCoordinateSystem.Cartesian), new AstronomyCartesianPositionValue(new AstronomyCartesianCoordinate(Measure(0, AstronomyMeasurementDimension.Distance, "km"), Measure(0, AstronomyMeasurementDimension.Distance, "km"), Measure(0, AstronomyMeasurementDimension.Distance, "km")))));
+}
