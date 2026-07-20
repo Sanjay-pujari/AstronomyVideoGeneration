@@ -17,7 +17,7 @@ public sealed class TypedOrbitalAndPositionalArchitectureTests
             {
                 Assert.Null(property.SetMethod);
                 Assert.NotEqual(typeof(object), property.PropertyType);
-                Assert.False(property.PropertyType.IsGenericType && property.PropertyType.GetGenericTypeDefinition() == typeof(IDictionary<,>));
+                Assert.False(IsDictionaryType(property.PropertyType));
                 Assert.DoesNotContain(property.Name, forbiddenNames, StringComparer.OrdinalIgnoreCase);
             });
 
@@ -29,9 +29,51 @@ public sealed class TypedOrbitalAndPositionalArchitectureTests
     public void Task23c_production_files_avoid_forbidden_architecture_terms()
     {
         var root = FindRepositoryRoot();
-        var files = Directory.GetFiles(Path.Combine(root, "Backend/src/Astronomy.MediaFactory.Core/KnowledgeFoundation/TypedDomains"), "*.cs", SearchOption.AllDirectories)
-            .Where(path => path.Contains("/Orbital/") || path.Contains("/Positional/"))
+        var typedDomainsDirectory = Path.Combine(
+            root,
+            "Backend",
+            "src",
+            "Astronomy.MediaFactory.Core",
+            "KnowledgeFoundation",
+            "TypedDomains");
+
+        var orbitalDirectory = Path.Combine(
+            typedDomainsDirectory,
+            "Orbital");
+
+        var positionalDirectory = Path.Combine(
+            typedDomainsDirectory,
+            "Positional");
+
+        Assert.True(
+            Directory.Exists(orbitalDirectory),
+            $"Orbital production directory was not found: {orbitalDirectory}");
+
+        Assert.True(
+            Directory.Exists(positionalDirectory),
+            $"Positional production directory was not found: {positionalDirectory}");
+
+        var orbitalFiles = Directory
+            .EnumerateFiles(
+                orbitalDirectory,
+                "*.cs",
+                SearchOption.TopDirectoryOnly)
             .ToArray();
+
+        var positionalFiles = Directory
+            .EnumerateFiles(
+                positionalDirectory,
+                "*.cs",
+                SearchOption.TopDirectoryOnly)
+            .ToArray();
+
+        Assert.NotEmpty(orbitalFiles);
+        Assert.NotEmpty(positionalFiles);
+
+        var files = orbitalFiles
+            .Concat(positionalFiles)
+            .ToArray();
+
         var forbidden = new[] { "EvidenceId", "ConfidenceAssessmentId", "KnowledgeConfidenceLevel", "AstronomyObservationContext", "JsonConverter", "JsonSerializerOptions", "IServiceCollection", "DbContext", "IQueryable", "HttpClient", "Stellarium", "Skyfield", "SPICE", "NAIF", "Astropy", "SOFA", "ERFA", "JPL", "Horizons", "DateTimeOffset.UtcNow", "CertificationCoordinator", "Infrastructure", "Persistence", "EntityFrameworkCore", "Publishing", "Rendering", "AIOptimization", "ContentGen", "Calculate", "Compute", "ConvertTo", "Transform", "Propagate", "Interpolate", "Predict", "Solve", "EphemerisService" };
 
         foreach (var file in files)
@@ -50,15 +92,42 @@ public sealed class TypedOrbitalAndPositionalArchitectureTests
         typeof(AstronomyAngularCoordinateValue), typeof(AstronomyCartesianCoordinate), typeof(AstronomySphericalCoordinate), typeof(AstronomyPositionValue), typeof(AstronomyAngularPositionValue), typeof(AstronomySphericalPositionValue), typeof(AstronomyCartesianPositionValue), typeof(AstronomyPositionReferenceContext), typeof(AstronomySpatialPosition), typeof(AstronomySpatialPositionPayload)
     ];
 
+    private static bool IsDictionaryType(Type type)
+    {
+        if (!type.IsGenericType)
+        {
+            return false;
+        }
+
+        var genericDefinition = type.GetGenericTypeDefinition();
+
+        return genericDefinition == typeof(Dictionary<,>) ||
+               genericDefinition == typeof(IDictionary<,>) ||
+               genericDefinition == typeof(IReadOnlyDictionary<,>);
+    }
+
     private static string FindRepositoryRoot()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        var startingDirectory = AppContext.BaseDirectory;
+        var directory = new DirectoryInfo(startingDirectory);
+
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "Backend", "Astronomy.MediaFactory.slnx"))) return directory.FullName;
+            var solutionPath = Path.Combine(
+                directory.FullName,
+                "Backend",
+                "Astronomy.MediaFactory.slnx");
+
+            if (File.Exists(solutionPath))
+            {
+                return directory.FullName;
+            }
+
             directory = directory.Parent;
         }
 
-        throw new InvalidOperationException("Repository root not found.");
+        throw new InvalidOperationException(
+            $"Repository root could not be found while walking upward from '{startingDirectory}'. " +
+            "Expected to find 'Backend/Astronomy.MediaFactory.slnx'.");
     }
 }
