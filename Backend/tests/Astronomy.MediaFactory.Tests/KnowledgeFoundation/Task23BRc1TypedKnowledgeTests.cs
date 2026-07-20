@@ -217,8 +217,31 @@ public sealed class Task23BRc1TypedKnowledgeTests
         Assert.Equal(AstronomyPhysicalPropertyValueKind.Text, new AstronomyTextPhysicalPropertyValue("x").Kind);
         Assert.Equal(AstronomyPhysicalPropertyValueKind.Boolean, new AstronomyBooleanPhysicalPropertyValue(true).Kind);
 
-        var constructor = typeof(AstronomyPhysicalPropertyValue).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic).Single();
-        Assert.True(constructor.IsFamilyAndAssembly);
+        var constructors = typeof(AstronomyPhysicalPropertyValue).GetConstructors(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+        Assert.NotEmpty(constructors);
+        Assert.All(
+            constructors,
+            constructor =>
+            {
+                Assert.False(
+                    constructor.IsPublic,
+                    "The physical property value hierarchy must not expose a public base constructor.");
+                Assert.False(
+                    constructor.IsFamily,
+                    "The physical property value hierarchy must not expose a protected base constructor.");
+                Assert.False(
+                    constructor.IsFamilyOrAssembly,
+                    "The physical property value hierarchy must not expose a protected-internal base constructor.");
+            });
+
+        var parameterlessConstructors = constructors
+            .Where(constructor => constructor.GetParameters().Length == 0)
+            .ToArray();
+
+        Assert.Single(parameterlessConstructors);
+        Assert.True(parameterlessConstructors[0].IsFamilyAndAssembly);
         var supportedVariants = typeof(AstronomyPhysicalPropertyValue).Assembly
             .GetTypes()
             .Where(type => type.BaseType == typeof(AstronomyPhysicalPropertyValue))
