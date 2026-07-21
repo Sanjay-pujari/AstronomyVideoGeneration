@@ -1,4 +1,5 @@
 using System.Text.Json;
+using JsonCodec = System.Text.Json.JsonSerializer;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Events;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Physical;
@@ -28,7 +29,7 @@ internal abstract class AstronomyDiscriminatedJsonConverter<TBase> : JsonConvert
         if (string.IsNullOrWhiteSpace(discriminator)) throw new JsonException($"{typeof(TBase).Name} type is required.");
         if (!value.HasValue || value.Value.ValueKind == JsonValueKind.Null) throw new JsonException($"{typeof(TBase).Name} value is required.");
         if (!TryGetConcreteType(discriminator, out var concreteType)) throw new JsonException($"Unknown {typeof(TBase).Name} discriminator '{discriminator}'.");
-        return (TBase?)JsonSerializer.Deserialize(value.Value.GetRawText(), concreteType, CreateOptions(options)) ?? throw new JsonException($"{typeof(TBase).Name} value cannot be null.");
+        return (TBase?)JsonCodec.Deserialize(value.Value.GetRawText(), concreteType, CreateOptions(options)) ?? throw new JsonException($"{typeof(TBase).Name} value cannot be null.");
     }
 
     public override void Write(Utf8JsonWriter writer, TBase value, JsonSerializerOptions options)

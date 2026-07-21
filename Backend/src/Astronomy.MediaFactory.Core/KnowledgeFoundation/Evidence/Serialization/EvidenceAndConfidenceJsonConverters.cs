@@ -1,4 +1,5 @@
 using System.Text.Json;
+using JsonCodec = System.Text.Json.JsonSerializer;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Evidence.Confidence;
@@ -104,8 +105,8 @@ public abstract class DomainConverter<T> : JsonConverter<T>
     protected static string ReqString(JsonElement e,string n)=> e.TryGetProperty(n,out var p)&&p.ValueKind==JsonValueKind.String ? p.GetString()! : throw new JsonException($"Required JSON string property '{n}' is missing or null.");
     protected static string? OptString(JsonElement e,string n)=> !e.TryGetProperty(n,out var p)||p.ValueKind==JsonValueKind.Null ? null : p.ValueKind==JsonValueKind.String ? p.GetString() : throw new JsonException($"JSON property '{n}' must be a string or null.");
     protected static Uri? OptUri(JsonElement e,string n)=> !e.TryGetProperty(n,out var p)||p.ValueKind==JsonValueKind.Null ? null : p.ValueKind==JsonValueKind.String&&Uri.TryCreate(p.GetString(),UriKind.Absolute,out var u) ? u : throw new JsonException($"JSON property '{n}' must be an absolute URI string or null.");
-    protected static TVal Req<TVal>(JsonElement e,string n,JsonSerializerOptions o)=> e.TryGetProperty(n,out var p)&&p.ValueKind!=JsonValueKind.Null ? JsonSerializer.Deserialize<TVal>(p.GetRawText(),o)! : throw new JsonException($"Required JSON property '{n}' is missing or null.");
-    protected static TVal? Opt<TVal>(JsonElement e,string n,JsonSerializerOptions o)=> !e.TryGetProperty(n,out var p)||p.ValueKind==JsonValueKind.Null ? default : JsonSerializer.Deserialize<TVal>(p.GetRawText(),o);
-    protected static IReadOnlyList<TVal> ReqList<TVal>(JsonElement e,string n,JsonSerializerOptions o)=> e.TryGetProperty(n,out var p)&&p.ValueKind==JsonValueKind.Array ? (JsonSerializer.Deserialize<List<TVal>>(p.GetRawText(),o) ?? throw new JsonException()) : throw new JsonException($"Required JSON array property '{n}' is missing or null.");
+    protected static TVal Req<TVal>(JsonElement e,string n,JsonSerializerOptions o)=> e.TryGetProperty(n,out var p)&&p.ValueKind!=JsonValueKind.Null ? JsonCodec.Deserialize<TVal>(p.GetRawText(),o)! : throw new JsonException($"Required JSON property '{n}' is missing or null.");
+    protected static TVal? Opt<TVal>(JsonElement e,string n,JsonSerializerOptions o)=> !e.TryGetProperty(n,out var p)||p.ValueKind==JsonValueKind.Null ? default : JsonCodec.Deserialize<TVal>(p.GetRawText(),o);
+    protected static IReadOnlyList<TVal> ReqList<TVal>(JsonElement e,string n,JsonSerializerOptions o)=> e.TryGetProperty(n,out var p)&&p.ValueKind==JsonValueKind.Array ? (JsonCodec.Deserialize<List<TVal>>(p.GetRawText(),o) ?? throw new JsonException()) : throw new JsonException($"Required JSON array property '{n}' is missing or null.");
     protected static void W<TVal>(Utf8JsonWriter w,string n,TVal v,JsonSerializerOptions o){ w.WritePropertyName(n); JsonSerializer.Serialize(w,v,o); }
 }

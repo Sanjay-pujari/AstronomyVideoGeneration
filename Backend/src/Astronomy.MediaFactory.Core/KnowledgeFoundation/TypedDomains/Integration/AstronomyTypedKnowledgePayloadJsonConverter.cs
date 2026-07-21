@@ -1,4 +1,5 @@
 using System.Text.Json;
+using JsonCodec = System.Text.Json.JsonSerializer;
 using System.Text.Json.Serialization;
 
 namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Integration;
@@ -30,7 +31,7 @@ public sealed class AstronomyTypedKnowledgePayloadJsonConverter : JsonConverter<
         ITypedAstronomyKnowledgePayload result;
         try
         {
-            result = (ITypedAstronomyKnowledgePayload?)JsonSerializer.Deserialize(value.Value.GetRawText(), descriptor.PayloadType, clone) ?? throw new JsonException("Typed payload value cannot be null.");
+            result = (ITypedAstronomyKnowledgePayload?)JsonCodec.Deserialize(value.Value.GetRawText(), descriptor.PayloadType, clone) ?? throw new JsonException("Typed payload value cannot be null.");
         }
         catch (JsonException)
         {
