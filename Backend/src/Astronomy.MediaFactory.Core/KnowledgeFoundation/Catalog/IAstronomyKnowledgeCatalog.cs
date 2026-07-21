@@ -1,0 +1,2 @@
+namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Catalog;
+public interface IAstronomyKnowledgeCatalog{ AstronomyKnowledgeCatalogSnapshot Snapshot{get;} bool TryGet(AstronomyKnowledgeCatalogEntryId id,out AstronomyKnowledgeCatalogEntry entry); IReadOnlyList<AstronomyKnowledgeCatalogEntry> GetByKind(AstronomyKnowledgeCatalogEntryKind kind); }
