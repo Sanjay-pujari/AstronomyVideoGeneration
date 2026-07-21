@@ -97,6 +97,84 @@ public sealed class ConstellationOrionSprint1Tests
         provider.GetRequiredService<IFamilyCertificationProfileRegistry>().Resolve("Constellation").FamilyId.Should().Be("CONSTELLATION");
     }
 
+
+
+    [Fact]
+    public void Di_created_certification_semantic_catalog_resolves_constellation()
+    {
+        using var provider = new ServiceCollection().AddCgA1CertificationFoundation().BuildServiceProvider();
+        var catalog = provider.GetRequiredService<CertificationSemanticFactCatalog>();
+
+        catalog.ResolveFamily("CONSTELLATION").CanonicalSemanticValueId.Should().Be("Constellation");
+        catalog.ResolveFamily("Constellation").FamilyId.Should().Be("CONSTELLATION");
+    }
+
+    [Fact]
+    public void Default_and_di_created_certification_semantic_catalogs_expose_equivalent_builtin_family_coverage()
+    {
+        using var provider = new ServiceCollection().AddCgA1CertificationFoundation().BuildServiceProvider();
+        var defaultCatalog = new CertificationSemanticFactCatalog();
+        var diCatalog = provider.GetRequiredService<CertificationSemanticFactCatalog>();
+
+        var expectedFamilies = new[] { "MeteorShower", "PlanetConjunction", "PLANET_CONJUNCTION", "CONSTELLATION" };
+        foreach (var family in expectedFamilies)
+        {
+            diCatalog.ResolveFamily(family).CanonicalSemanticValueId.Should().Be(defaultCatalog.ResolveFamily(family).CanonicalSemanticValueId);
+        }
+
+        diCatalog.Families.Select(NormalizedFamilyKey).Should().BeEquivalentTo(defaultCatalog.Families.Select(NormalizedFamilyKey));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Certification_foundation_registers_constellation_semantic_metadata_exactly_once(int registrationCalls)
+    {
+        var services = new ServiceCollection();
+        for (var i = 0; i < registrationCalls; i++) services.AddCgA1CertificationFoundation();
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        provider.GetServices<CertificationFamilySemanticProfileMetadata>()
+            .Where(profile => string.Equals(NormalizedFamilyKey(profile), "Constellation", StringComparison.OrdinalIgnoreCase))
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public void Di_constellation_certification_profile_metadata_and_aliases_resolve_successfully()
+    {
+        using var provider = new ServiceCollection().AddCgA1CertificationFoundation().BuildServiceProvider();
+        var profile = provider.GetServices<IFamilyCertificationProfile>().OfType<ConstellationCertificationProfile>().Single();
+
+        profile.CanonicalSemanticValueId.Should().Be("Constellation");
+        profile.SupportedEventTypeAliases.Should().Contain("Constellation");
+    }
+
+    [Fact]
+    public void Di_family_certification_registry_resolves_constellation_aliases_and_preserves_unknown_behavior()
+    {
+        using var provider = new ServiceCollection().AddCgA1CertificationFoundation().BuildServiceProvider();
+        var registry = provider.GetRequiredService<IFamilyCertificationProfileRegistry>();
+
+        registry.Resolve("CONSTELLATION").FamilyId.Should().Be("CONSTELLATION");
+        registry.Resolve("Constellation").FamilyId.Should().Be("CONSTELLATION");
+        registry.TryResolve("NotARealFamily", out _).Should().BeFalse();
+        Action act = () => registry.Resolve("NotARealFamily");
+        act.Should().Throw<KeyNotFoundException>().WithMessage("*Unsupported certification family event type 'NotARealFamily'*");
+    }
+
+    [Fact]
+    public void Di_family_certification_registry_still_resolves_existing_family_profiles()
+    {
+        using var provider = new ServiceCollection().AddCgA1CertificationFoundation().BuildServiceProvider();
+        var registry = provider.GetRequiredService<IFamilyCertificationProfileRegistry>();
+
+        registry.Resolve("MeteorShower").FamilyId.Should().Be("MeteorShower");
+        registry.Resolve("Meteor Shower").FamilyId.Should().Be("MeteorShower");
+        registry.Resolve("PlanetConjunction").FamilyId.Should().Be("PlanetConjunction");
+        registry.Resolve("PLANET_CONJUNCTION").FamilyId.Should().Be("PlanetConjunction");
+    }
+
     [Fact]
     public void Certification_semantic_catalog_allows_same_provider_canonical_and_alias_collision()
     {
@@ -159,6 +237,9 @@ public sealed class ConstellationOrionSprint1Tests
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*Duplicate certification semantic-fact key 'Orion'*");
     }
+
+    private static string NormalizedFamilyKey(CertificationFamilySemanticProfileMetadata profile) =>
+        string.IsNullOrWhiteSpace(profile.CanonicalSemanticValueId) ? profile.FamilyId.Trim() : profile.CanonicalSemanticValueId.Trim();
 
     private static CertificationFamilySemanticProfileMetadata TestFamily(string familyId, IEnumerable<string> aliases, string canonicalSemanticValueId) =>
         new(
