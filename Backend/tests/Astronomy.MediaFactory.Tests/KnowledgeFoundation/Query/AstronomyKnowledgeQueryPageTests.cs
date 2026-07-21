@@ -1,0 +1,4 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Query;
+using Xunit;
+namespace Astronomy.MediaFactory.Tests.KnowledgeFoundation.Query;
+public sealed class AstronomyKnowledgeQueryPageTests{[Fact]public void Defaults_are_stable(){var p=new AstronomyKnowledgeQueryPage();Assert.Equal(0,p.Offset);Assert.Equal(100,p.Limit);Assert.Equal(AstronomyKnowledgeQueryPage.Default,p);Assert.Equal(1000,AstronomyKnowledgeQueryPage.MaximumLimit);}[Fact]public void Valid_custom_values_are_kept(){var p=new AstronomyKnowledgeQueryPage(25,250);Assert.Equal(25,p.Offset);Assert.Equal(250,p.Limit);}[Theory][InlineData(-1,10)][InlineData(0,0)][InlineData(0,-1)][InlineData(0,1001)]public void Invalid_values_rejected(int o,int l)=>Assert.Throws<ArgumentOutOfRangeException>(()=>new AstronomyKnowledgeQueryPage(o,l));[Fact]public void Equality_is_value_based(){Assert.Equal(new AstronomyKnowledgeQueryPage(1,2),new AstronomyKnowledgeQueryPage(1,2));}}
