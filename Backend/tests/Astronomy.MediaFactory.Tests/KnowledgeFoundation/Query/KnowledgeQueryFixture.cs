@@ -11,7 +11,7 @@ public static class KnowledgeQueryFixture
     public static ServiceProvider Provider() => new ServiceCollection().AddAstronomyKnowledgeQueryModel().BuildServiceProvider();
     public static IAstronomyKnowledgeCatalog Catalog() => Provider().GetRequiredService<IAstronomyKnowledgeCatalog>();
     public static IAstronomyKnowledgeQueryValidator Validator() => Provider().GetRequiredService<IAstronomyKnowledgeQueryValidator>();
-    public static AstronomyKnowledgeTypeId RealTypeId() => Catalog().Snapshot.KnowledgeTypes[0].KnowledgeTypeId!.Value is var v ? AstronomyKnowledgeTypeId.Create(v) : default;
+    public static AstronomyKnowledgeTypeId RealTypeId() => Catalog().Snapshot.KnowledgeTypes[0].KnowledgeTypeId!.Value;
     public static AstronomyKnowledgeDomain RealDomain() => Catalog().Snapshot.KnowledgeTypes[0].Domain!.Value;
     public static AstronomyKnowledgePayloadFamily RealFamily() => Catalog().Snapshot.KnowledgeTypes[0].Family!.Value;
     public static AstronomyEntityReference Subject(string id = "mars") => new(id);
