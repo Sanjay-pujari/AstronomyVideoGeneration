@@ -9,7 +9,7 @@ public sealed class AstronomyKnowledgeValidationRuleRegistry : IAstronomyKnowled
     {
         ArgumentNullException.ThrowIfNull(descriptors);
         var ordered = descriptors.Select(d => d ?? throw new ArgumentException("Rule descriptors cannot contain null entries.", nameof(descriptors)))
-            .OrderBy(d => d.Domain).ThenBy(d => d.Family).ThenBy(d => d.Order).ThenBy(d => d.RuleId, StringComparer.Ordinal).ThenBy(d => d.PayloadType.FullName, StringComparer.Ordinal).ThenBy(d => d.RuleType.FullName, StringComparer.Ordinal).ToArray();
+            .OrderBy(d => d.Order).ThenBy(d => d.RuleId, StringComparer.Ordinal).ThenBy(d => d.Domain).ThenBy(d => d.Family).ThenBy(d => d.PayloadType.FullName, StringComparer.Ordinal).ThenBy(d => d.RuleType.FullName, StringComparer.Ordinal).ToArray();
         var dupId=ordered.GroupBy(d=>d.RuleId,StringComparer.Ordinal).FirstOrDefault(g=>g.Count()>1); if(dupId is not null) throw new ArgumentException($"Duplicate validation rule ID '{dupId.Key}'.", nameof(descriptors));
         var dup=ordered.GroupBy(d => (d.RuleId,d.RuleType,d.PayloadType,d.Domain,d.Family,d.Order)).FirstOrDefault(g=>g.Count()>1); if(dup is not null) throw new ArgumentException("Duplicate validation rule descriptor.", nameof(descriptors));
         Descriptors = Array.AsReadOnly(ordered); byRuleId=ordered.ToDictionary(d=>d.RuleId,d=>d,StringComparer.Ordinal);
