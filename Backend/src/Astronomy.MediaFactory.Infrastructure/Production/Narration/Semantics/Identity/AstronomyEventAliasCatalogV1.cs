@@ -27,6 +27,7 @@ public sealed class AstronomyEventAliasCatalogV1
         new("Meteor Shower", "MeteorShower"),
         new("Full Moon", "FullMoon"),
         new("Named Full Moon", "NamedFullMoon"),
+        new("CONSTELLATION", "Constellation"),
         new("Deep Sky Object", "DeepSkyObject"),
         new("BlackHoleOrScientificExplainer", "ScientificExplainer")
     ];

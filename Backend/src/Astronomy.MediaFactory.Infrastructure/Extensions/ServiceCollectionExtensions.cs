@@ -5,6 +5,9 @@ using Astronomy.MediaFactory.AstroData.Services;
 using Astronomy.MediaFactory.ContentGen;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.AstronomyDomain.Catalog;
+using Astronomy.MediaFactory.Core.AstronomyDomain.Families;
+using Astronomy.MediaFactory.Core.Constellations;
 using Astronomy.MediaFactory.Core.Certification;
 using Astronomy.MediaFactory.Infrastructure;
 using Astronomy.MediaFactory.Infrastructure.Alerting;
@@ -61,6 +64,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.ISemanticSourcePolicyCatalogV1>(
             sp => sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1>());
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.IMeteorShowerKnowledgeCatalogV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.MeteorShowerKnowledgeCatalogV1>();
+        services.AddSingleton<IAstronomyDomainFamily, ConstellationDomainFamily>();
+        services.AddSingleton<IConstellationKnowledgeProvider, OrionConstellationKnowledgeProvider>();
+        services.AddSingleton<IAstronomyDomainCatalog>(sp => { var catalog = new InMemoryAstronomyDomainCatalog(); catalog.Add(sp.GetRequiredService<IConstellationKnowledgeProvider>().GetOrion().Entity); return catalog; });
         services.AddSingleton<ISemanticSourceAdapterV1, EventIdentitySourceAdapterV1>();
         services.AddSingleton<ISemanticSourceAdapterV1, EventWindowSourceAdapterV1>();
         services.AddSingleton<ISemanticSourceAdapterV1, EventWindowProductionEventIntelligenceAdapterV1>();

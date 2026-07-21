@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "orion-constellation-plan-v1",
+  "planId": "20000000-0000-0000-0000-000000000001",
+  "title": "Orion: How to Find the Hunter Constellation",
+  "contentCategoryCode": "AstronomyEducation",
+  "primaryAstronomyEventTypeCode": "CONSTELLATION",
+  "primaryCelestialObjectCode": "Ori",
+  "sourceExternalEventId": "constellation-iau-ori",
+  "language": "en",
+  "regionId": "GLOBAL",
+  "plannedFormat": "LongAndShort",
+  "status": "Planned",
+  "planStatus": "ReadyForManualRun",
+  "requestedOutputTypes": ["Long", "Short"],
+  "plannedObjectNames": ["Orion", "Betelgeuse", "Rigel", "Orion Nebula"],
+  "compatibilityNotes": "Orion is evergreen. Existing ContentGenerationPlan accepts nullable ScheduledUtc, so no artificial transient peak date is introduced. Observation guidance is seasonal rather than event-window based."
+}
