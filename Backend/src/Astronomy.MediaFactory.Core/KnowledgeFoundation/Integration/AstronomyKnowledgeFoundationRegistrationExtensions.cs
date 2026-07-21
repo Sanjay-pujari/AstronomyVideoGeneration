@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.Core.KnowledgeFoundation.Query;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Query.Execution;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Integration;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.DependencyInjection;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.CrossDomain;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.Graph;
 using Microsoft.Extensions.DependencyInjection;
