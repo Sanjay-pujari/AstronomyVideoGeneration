@@ -48,8 +48,8 @@ public sealed class EvidenceFoundationPrimitivesTests
     [Fact]
     public void Evidence_taxonomies_match_task_2_2a_boundary_and_guards_reject_undefined_values()
     {
-        Assert.Equal(["Observation", "Measurement", "CatalogRecord", "Ephemeris", "ResearchPublication", "ReferencePublication", "InstitutionalDataset", "HistoricalRecord", "ExpertAssessment", "DerivedAnalysis"], Enum.GetNames<AstronomyEvidenceType>());
-        Assert.Equal(["Observatory", "SpaceAgency", "ResearchInstitution", "AcademicPublication", "ScientificCatalog", "EphemerisService", "Instrument", "Researcher", "HistoricalArchive", "EducationalInstitution", "Other"], Enum.GetNames<AstronomyEvidenceSourceType>());
+        Assert.Equal(["Observation", "Measurement", "CatalogRecord", "AlmanacRecord", "ResearchPublication", "ReferencePublication", "InstitutionalDataset", "HistoricalRecord", "ExpertAssessment", "DerivedAnalysis"], Enum.GetNames<AstronomyEvidenceType>());
+        Assert.Equal(["Observatory", "SpaceAgency", "ResearchInstitution", "AcademicPublication", "ScientificCatalog", "AlmanacService", "Instrument", "Researcher", "HistoricalArchive", "EducationalInstitution", "Other"], Enum.GetNames<AstronomyEvidenceSourceType>());
         Assert.Equal(["Draft", "Verified", "Disputed", "Superseded", "Withdrawn", "Archived"], Enum.GetNames<EvidenceFoundationStatus>());
         Assert.Equal(Enum.GetValues<AstronomyEvidenceType>().Length, Enum.GetValues<AstronomyEvidenceType>().Distinct().Count());
         Assert.Equal(Enum.GetValues<AstronomyEvidenceSourceType>().Length, Enum.GetValues<AstronomyEvidenceSourceType>().Distinct().Count());
