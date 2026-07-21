@@ -24,9 +24,13 @@ public sealed class AstronomyGraphPayloadCompletenessValidationRuleTests
     {
         var graph = InvalidGraph();
         var issues = Run(graph, InvalidContext()).ToArray();
-        Assert.NotEmpty(issues);
-        Assert.All(issues, i => Assert.False(string.IsNullOrWhiteSpace(i.RuleId)));
-        Assert.Equal(issues.Select(i => i.Path).OrderBy(p => p, StringComparer.Ordinal), issues.Select(i => i.Path).OrderBy(p => p, StringComparer.Ordinal));
+        var issue = Assert.Single(issues);
+        Assert.Equal(AstronomyKnowledgeGraphValidationCodes.PayloadDescriptorMissing, issue.Code);
+        Assert.Equal(AstronomyKnowledgeValidationSeverity.Error, issue.Severity);
+        Assert.Equal(AstronomyGraphPayloadCompletenessValidationRule.Id, issue.RuleId);
+        Assert.Equal("$.statements[3].payload", issue.Path);
+        Assert.Equal(AstronomyKnowledgeDomain.Catalog, issue.Domain);
+        Assert.Equal(AstronomyKnowledgePayloadFamily.CatalogReference, issue.Family);
     }
 
     [Fact]
@@ -61,10 +65,24 @@ public sealed class AstronomyGraphPayloadCompletenessValidationRuleTests
     }
 
     private static AstronomyKnowledgeGraphValidationSet InvalidGraph() => new(
-        statements: [Statement("s1", "missing"), Statement("s1", "missing", value: "other"), TypedStatement("s2", "earth", 3)],
+        statements:
+        [
+            Statement("s1", "missing"),
+            Statement("s1", "missing", value: "other"),
+            TypedStatement("s2", "earth", 3),
+            UndescribedTypedStatement("s3")
+        ],
         nodes: [Entity(), new("earth", AstronomyKnowledgeGraphNodeKind.Statement), Entity("unused")],
         relationships: [Rel("r1", "earth", "earth", AstronomyKnowledgeGraphRelationshipKind.DerivedFrom), Rel("r2", "missing", "s2", targetKind: AstronomyKnowledgeGraphReferenceTargetKind.Statement)],
         references: [Ref("provenance.0", "missing"), Ref("normal.0", "missing")], rootIds: ["s1", "s1"], repositoryId: "actual", repositoryVersion: "v2");
+
+    private static AstronomyKnowledgeStatement<UndescribedTypedPayload> UndescribedTypedStatement(string id) => new(new KnowledgeId(id), new KnowledgeVersion(1), KnowledgeStatementKind.Scientific, KnowledgeFoundationStatus.Reviewed, new AstronomyEntityReference("earth"), new UndescribedTypedPayload(new AstronomyKnowledgeTypeId("catalog.undocumented"), "v"), KnowledgeAuditMetadata.Create(FixedUtc));
+
+    private sealed record UndescribedTypedPayload(AstronomyKnowledgeTypeId TypeId, string Value) : ITypedAstronomyKnowledgePayload
+    {
+        public AstronomyKnowledgeDomain Domain => AstronomyKnowledgeDomain.Catalog;
+        public AstronomyKnowledgePayloadFamily Family => AstronomyKnowledgePayloadFamily.CatalogReference;
+    }
     private static AstronomyKnowledgeGraphValidationContext InvalidContext() => Context(policy: Policy(connectivity: AstronomyKnowledgeGraphConnectivityPolicy.ConnectedScopeRequired, external: AstronomyKnowledgeGraphExternalReferencePolicy.RejectExternal, requireRoot: true, uniqueRoots: true, requireReachability: true), repoId: "expected", repoVersion: "v1");
 
     private static void AssertProductionArchitecture()
