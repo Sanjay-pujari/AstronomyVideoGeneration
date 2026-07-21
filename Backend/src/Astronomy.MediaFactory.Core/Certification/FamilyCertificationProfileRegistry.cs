@@ -52,6 +52,7 @@ public static class CgA1CertificationFoundationServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IFamilyCertificationProfile, MeteorShowerCertificationProfile>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IFamilyCertificationProfile, PlanetConjunctionCertificationProfile>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IFamilyCertificationProfile, ConstellationCertificationProfile>());
+        services.AddBuiltInCertificationFamilySemanticProfiles();
         services.TryAddSingleton<IFamilyCertificationProfileRegistry, FamilyCertificationProfileRegistry>();
         services.AddCgA1PhaseCertification();
         services.TryAddSingleton<ICertificationPathService, CertificationPathService>();
@@ -62,4 +63,27 @@ public static class CgA1CertificationFoundationServiceCollectionExtensions
         services.TryAddSingleton<ICertificationCoordinator, CertificationCoordinator>();
         return services;
     }
+
+    private static IServiceCollection AddBuiltInCertificationFamilySemanticProfiles(this IServiceCollection services)
+    {
+        foreach (var profile in CertificationSemanticFactCatalog.BuiltInFamilyProfiles)
+        {
+            if (!services.Any(descriptor => IsSameFamilySemanticProfile(descriptor, profile)))
+            {
+                services.AddSingleton(profile);
+            }
+        }
+
+        return services;
+    }
+
+    private static bool IsSameFamilySemanticProfile(ServiceDescriptor descriptor, CertificationFamilySemanticProfileMetadata profile)
+        => descriptor.ServiceType == typeof(CertificationFamilySemanticProfileMetadata)
+            && descriptor.ImplementationInstance is CertificationFamilySemanticProfileMetadata registered
+            && string.Equals(NormalizedFamilyKey(registered), NormalizedFamilyKey(profile), StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizedFamilyKey(CertificationFamilySemanticProfileMetadata profile)
+        => string.IsNullOrWhiteSpace(profile.CanonicalSemanticValueId)
+            ? profile.FamilyId.Trim()
+            : profile.CanonicalSemanticValueId.Trim();
 }
