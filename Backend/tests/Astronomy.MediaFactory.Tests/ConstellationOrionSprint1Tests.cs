@@ -76,6 +76,93 @@ public sealed class ConstellationOrionSprint1Tests
         meteor!.FamilyId.Should().Be("MeteorShower");
     }
 
+
+    [Fact]
+    public void Certification_semantic_catalog_resolves_single_constellation_registration()
+    {
+        var catalog = new CertificationSemanticFactCatalog();
+
+        catalog.ResolveFamily("CONSTELLATION").CanonicalSemanticValueId.Should().Be("Constellation");
+        catalog.ResolveFamily("Constellation").FamilyId.Should().Be("CONSTELLATION");
+        catalog.ResolveCanonicalValue(" Constellation ").Should().Be("Constellation");
+    }
+
+    [Fact]
+    public void Certification_foundation_registration_is_idempotent_for_constellation_profile()
+    {
+        var services = new ServiceCollection().AddCgA1CertificationFoundation().AddCgA1CertificationFoundation();
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+
+        provider.GetServices<IFamilyCertificationProfile>().OfType<ConstellationCertificationProfile>().Should().ContainSingle();
+        provider.GetRequiredService<IFamilyCertificationProfileRegistry>().Resolve("Constellation").FamilyId.Should().Be("CONSTELLATION");
+    }
+
+    [Fact]
+    public void Certification_semantic_catalog_allows_same_provider_canonical_and_alias_collision()
+    {
+        var profile = TestFamily("CONSTELLATION", ["Constellation"], "Constellation");
+        var catalog = new CertificationSemanticFactCatalog([profile]);
+
+        catalog.ResolveFamily("Constellation").Should().BeSameAs(profile);
+    }
+
+    [Fact]
+    public void Certification_semantic_catalog_deduplicates_same_provider_alias_case_and_whitespace()
+    {
+        var profile = TestFamily("CONSTELLATION", [" Constellation ", "constellation"], "Constellation");
+        var catalog = new CertificationSemanticFactCatalog([profile]);
+
+        catalog.ResolveFamily("constellation").Should().BeSameAs(profile);
+    }
+
+    [Fact]
+    public void Certification_semantic_catalog_rejects_different_providers_claiming_constellation()
+    {
+        var first = TestFamily("CONSTELLATION", [], "Constellation");
+        var second = TestFamily("Constellation", [], "OtherConstellation");
+
+        Action act = () => _ = new CertificationSemanticFactCatalog([first, second]);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Duplicate certification semantic-fact key 'Constellation'*Constellation*");
+    }
+
+    [Fact]
+    public void Certification_semantic_catalog_rejects_different_providers_claiming_same_constellation_alias()
+    {
+        var first = TestFamily("OrionConstellation", ["Constellation"], "OrionConstellation");
+        var second = TestFamily("LegacyConstellation", [" constellation "], "LegacyConstellation");
+
+        Action act = () => _ = new CertificationSemanticFactCatalog([first, second]);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Duplicate certification semantic-fact key*Constellation*");
+    }
+
+    [Fact]
+    public void Certification_semantic_catalog_resolves_all_existing_astronomy_families_without_conflict()
+    {
+        var catalog = new CertificationSemanticFactCatalog();
+
+        catalog.ResolveFamily("MeteorShower").CanonicalSemanticValueId.Should().Be("MeteorActivity");
+        catalog.ResolveFamily("Meteor Shower").CanonicalSemanticValueId.Should().Be("MeteorActivity");
+        catalog.ResolveFamily("PlanetConjunction").CanonicalSemanticValueId.Should().Be("PlanetPairing");
+        catalog.ResolveFamily("PLANET_CONJUNCTION").CanonicalSemanticValueId.Should().Be("PlanetPairing");
+        catalog.ResolveFamily("CONSTELLATION").CanonicalSemanticValueId.Should().Be("Constellation");
+    }
+
+    [Fact]
+    public void Certification_semantic_catalog_does_not_silently_choose_conflicting_constellation_provider()
+    {
+        var first = TestFamily("CONSTELLATION", ["Orion"], "Constellation");
+        var second = TestFamily("Orion", [], "OrionLegacy");
+
+        Action act = () => _ = new CertificationSemanticFactCatalog([first, second]);
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Duplicate certification semantic-fact key 'Orion'*");
+    }
+
+    private static CertificationFamilySemanticProfileMetadata TestFamily(string familyId, IReadOnlySet<string> aliases, string canonicalSemanticValueId) =>
+        new(familyId, aliases, canonicalSemanticValueId, ["ObjectKnowledge"], [], [], [], new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase), []);
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

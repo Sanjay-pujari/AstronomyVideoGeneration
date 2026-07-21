@@ -38,7 +38,7 @@ public sealed class CertificationSemanticFactCatalog : ISemanticFactCatalog
         }.ToDictionary(f => f.FactId, StringComparer.OrdinalIgnoreCase);
 
         IReadOnlyList<string> sharedRoles = new[] { "Hook", "Orientation", "Timing", "Observation", "Science", "Closing" };
-        families = new[]
+        families = BuildFamilyLookup(new[]
         {
             Family("MeteorShower", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Meteor Shower" }, "MeteorActivity", new[] { "EventIdentity", "EventWindow", "ObservationDirection", "MeteorActivity", "DomainScientificKnowledge" }, Array.Empty<string>(),
                 new[] { new ForbiddenConceptDefinition { ConceptId = "planet-conjunction-leakage", Terms = new[] { "Venus", "Jupiter", "conjunction", "planet conjunction", "planet pairing", "western sky after sunset", "look west", "युति", "ग्रह-युति", "बृहस्पति", "शुक्र" }, Blocking = true } }, sharedRoles,
@@ -51,18 +51,67 @@ public sealed class CertificationSemanticFactCatalog : ISemanticFactCatalog
                 new[] { new ForbiddenConceptDefinition { ConceptId = "transient-event-leakage", Terms = new[] { "peak time", "maximum eclipse", "meteor radiant", "ZHR", "angular separation", "eclipse glasses" }, Blocking = true } }, new[] { "Hook", "Identification", "Orientation", "Science", "Significance", "Closing" },
                 new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["ObjectKnowledge"] = new[] { "Identification", "Orientation", "Science", "Significance" } },
                 new[] { new PhaseArtifactDefinition { ArtifactId = "constellation-knowledge", PhaseNumber = 2, RelativePath = "plan-input/constellation-knowledge.json", Required = true, ValidateJson = true, RequireNonEmpty = true } })
-        }.SelectMany(f => new[] { f }.Concat(f.Aliases.Select(a => f with { FamilyId = a }))).ToDictionary(f => f.FamilyId, StringComparer.OrdinalIgnoreCase);
+        });
     }
+
+
+    public CertificationSemanticFactCatalog(IEnumerable<CertificationFamilySemanticProfileMetadata> familyProfiles)
+        : this()
+    {
+        families = BuildFamilyLookup(familyProfiles);
+    }
+
+    private sealed record FamilyKeyRegistration(string OriginalKey, string NormalizedKey, Type ProviderType, string CanonicalFamilyId, bool IsAlias, CertificationFamilySemanticProfileMetadata Family);
+
+    private static IReadOnlyDictionary<string, CertificationFamilySemanticProfileMetadata> BuildFamilyLookup(IEnumerable<CertificationFamilySemanticProfileMetadata> familyProfiles)
+    {
+        ArgumentNullException.ThrowIfNull(familyProfiles);
+        var registrations = familyProfiles.SelectMany(CreateRegistrations).OrderBy(r => r.NormalizedKey, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.CanonicalFamilyId, StringComparer.OrdinalIgnoreCase).ToArray();
+        var builder = new Dictionary<string, CertificationFamilySemanticProfileMetadata>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in registrations.GroupBy(r => r.NormalizedKey, StringComparer.OrdinalIgnoreCase))
+        {
+            var first = group.First();
+            foreach (var candidate in group.Skip(1))
+            {
+                if (!IsSameLogicalFamily(first, candidate))
+                {
+                    throw new InvalidOperationException($"Duplicate certification semantic-fact key '{candidate.OriginalKey}' is claimed by '{first.ProviderType.Name}' for family '{first.CanonicalFamilyId}' and '{candidate.ProviderType.Name}' for family '{candidate.CanonicalFamilyId}'.");
+                }
+            }
+            builder[group.Key] = first.Family;
+        }
+        return builder;
+    }
+
+    private static IEnumerable<FamilyKeyRegistration> CreateRegistrations(CertificationFamilySemanticProfileMetadata family)
+    {
+        ArgumentNullException.ThrowIfNull(family);
+        yield return Registration(family.FamilyId, family, false);
+        foreach (var alias in family.Aliases.Order(StringComparer.OrdinalIgnoreCase)) yield return Registration(alias, family, true);
+    }
+
+    private static FamilyKeyRegistration Registration(string key, CertificationFamilySemanticProfileMetadata family, bool isAlias)
+    {
+        if (string.IsNullOrWhiteSpace(key)) throw new ArgumentException($"Certification semantic-fact family '{family.FamilyId}' contains an empty family id or alias.", nameof(family));
+        var normalized = key.Trim();
+        return new FamilyKeyRegistration(key, normalized, family.GetType(), CanonicalFamilyId(family), isAlias, family);
+    }
+
+    private static bool IsSameLogicalFamily(FamilyKeyRegistration first, FamilyKeyRegistration second)
+        => first.ProviderType == second.ProviderType && string.Equals(first.CanonicalFamilyId, second.CanonicalFamilyId, StringComparison.OrdinalIgnoreCase);
+
+    private static string CanonicalFamilyId(CertificationFamilySemanticProfileMetadata family)
+        => string.IsNullOrWhiteSpace(family.CanonicalSemanticValueId) ? family.FamilyId.Trim() : family.CanonicalSemanticValueId.Trim();
 
     public IReadOnlyList<CertificationSemanticFactDefinition> Facts => facts.Values.DistinctBy(f => f.FactId, StringComparer.OrdinalIgnoreCase).ToArray();
     public IReadOnlyList<CertificationFamilySemanticProfileMetadata> Families => families.Values.DistinctBy(f => f.CanonicalSemanticValueId ?? f.FamilyId, StringComparer.OrdinalIgnoreCase).ToArray();
-    public CertificationSemanticFactDefinition ResolveFactId(string factId) => facts.TryGetValue(factId, out var f) ? f : throw new KeyNotFoundException($"Unknown certification semantic fact '{factId}'.");
+    public CertificationSemanticFactDefinition ResolveFactId(string factId) => facts.TryGetValue(factId.Trim(), out var f) ? f : throw new KeyNotFoundException($"Unknown certification semantic fact '{factId}'.");
     public string? ResolveCanonicalValue(string familyOrAlias) => ResolveFamily(familyOrAlias).CanonicalSemanticValueId;
     public double? ResolveConfidence(string factId) => ResolveFactId(factId).MinimumConfidence;
     public IReadOnlyDictionary<string, string> ResolveMetadata(string factId) { var f = ResolveFactId(factId); return new Dictionary<string, string> { ["metadataType"] = f.MetadataType, ["displayName"] = f.DisplayName }; }
     public string ResolveDisplayName(string factId) => ResolveFactId(factId).DisplayName;
     public bool ResolveRequiredStatus(string familyOrAlias, string factId) => ResolveFamily(familyOrAlias).RequiredFactIds.Contains(factId, StringComparer.OrdinalIgnoreCase);
-    public CertificationFamilySemanticProfileMetadata ResolveFamily(string familyOrAlias) => families.TryGetValue(familyOrAlias, out var f) ? f : throw new KeyNotFoundException($"Unknown certification family '{familyOrAlias}'.");
+    public CertificationFamilySemanticProfileMetadata ResolveFamily(string familyOrAlias) => families.TryGetValue(familyOrAlias.Trim(), out var f) ? f : throw new KeyNotFoundException($"Unknown certification family '{familyOrAlias}'.");
     private static CertificationSemanticFactDefinition Fact(string id, string name, string type, double confidence, bool required = true) => new(id, name, type, confidence, required);
     private static CertificationFamilySemanticProfileMetadata Family(string id, IReadOnlySet<string> aliases, string canonical, IReadOnlyList<string> required, IReadOnlyList<string> optional, IReadOnlyList<ForbiddenConceptDefinition> forbidden, IReadOnlyList<string> roles, IReadOnlyDictionary<string, IReadOnlyList<string>> beat, IReadOnlyList<PhaseArtifactDefinition> artifacts) => new(id, aliases, canonical, required, optional, forbidden, roles, beat, artifacts);
 }

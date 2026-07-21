@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Astronomy.MediaFactory.Core.Certification;
 
@@ -225,8 +226,8 @@ public static class CgA1CertificationTask2ServiceCollectionExtensions
 {
     public static IServiceCollection AddCgA1PhaseCertification(this IServiceCollection services)
     {
-        services.AddSingleton<ISemanticFactCatalog, CertificationSemanticFactCatalog>(); services.AddSingleton<ICertificationJsonReader, CertificationJsonReader>(); services.AddSingleton<ICertificationArtifactVerifier, CertificationArtifactVerifier>(); services.AddSingleton<IPhaseArtifactRegistry, PhaseArtifactRegistry>(); services.AddSingleton<ISemanticCertificationEvidenceReader, SemanticCertificationEvidenceReader>(); services.AddSingleton<IForbiddenConceptValidator, ForbiddenConceptValidator>(); services.AddSingleton<IStoryBeatCoverageValidator, StoryBeatCoverageValidator>();
-        services.AddSingleton<IPhaseCertifier, Phase1Certifier>(); services.AddSingleton<IPhaseCertifier, Phase2Certifier>(); services.AddSingleton<IPhaseCertifier, Phase3Certifier>(); services.AddSingleton<IPhaseCertifier, Phase4Certifier>(); services.AddSingleton<IPhaseCertifier, Phase5Certifier>(); services.AddSingleton<IPhaseCertifier, Phase6Certifier>(); services.AddSingleton<IPhaseCertifier, Phase7Certifier>();
+        services.TryAddSingleton<ISemanticFactCatalog, CertificationSemanticFactCatalog>(); services.TryAddSingleton<ICertificationJsonReader, CertificationJsonReader>(); services.TryAddSingleton<ICertificationArtifactVerifier, CertificationArtifactVerifier>(); services.TryAddSingleton<IPhaseArtifactRegistry, PhaseArtifactRegistry>(); services.TryAddSingleton<ISemanticCertificationEvidenceReader, SemanticCertificationEvidenceReader>(); services.TryAddSingleton<IForbiddenConceptValidator, ForbiddenConceptValidator>(); services.TryAddSingleton<IStoryBeatCoverageValidator, StoryBeatCoverageValidator>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IPhaseCertifier, Phase1Certifier>()); services.TryAddEnumerable(ServiceDescriptor.Singleton<IPhaseCertifier, Phase2Certifier>()); services.TryAddEnumerable(ServiceDescriptor.Singleton<IPhaseCertifier, Phase3Certifier>()); services.TryAddEnumerable(ServiceDescriptor.Singleton<IPhaseCertifier, Phase4Certifier>()); services.TryAddEnumerable(ServiceDescriptor.Singleton<IPhaseCertifier, Phase5Certifier>()); services.TryAddEnumerable(ServiceDescriptor.Singleton<IPhaseCertifier, Phase6Certifier>()); services.TryAddEnumerable(ServiceDescriptor.Singleton<IPhaseCertifier, Phase7Certifier>());
         return services;
     }
 }
