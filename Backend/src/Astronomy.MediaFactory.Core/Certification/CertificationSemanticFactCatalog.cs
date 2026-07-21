@@ -32,7 +32,9 @@ public sealed class CertificationSemanticFactCatalog : ISemanticFactCatalog
             Fact("DomainScientificKnowledge", "Domain scientific knowledge", "DomainScientificKnowledge", 80),
             Fact("AstronomicalObjects", "Astronomical objects", "AstronomicalObjectList", 80),
             Fact("AngularSeparation", "Angular separation", "AngularSeparation", 80, false),
-            Fact("SecondaryAstronomicalObjects", "Secondary astronomical objects", "AstronomicalObjectList", 80, false)
+            Fact("SecondaryAstronomicalObjects", "Secondary astronomical objects", "AstronomicalObjectList", 80, false),
+            Fact("ObjectKnowledge", "Object knowledge", "ConstellationKnowledge", 80),
+            Fact("CulturalContext", "Cultural context", "CulturalAstronomy", 80, false)
         }.ToDictionary(f => f.FactId, StringComparer.OrdinalIgnoreCase);
 
         IReadOnlyList<string> sharedRoles = new[] { "Hook", "Orientation", "Timing", "Observation", "Science", "Closing" };
@@ -44,7 +46,11 @@ public sealed class CertificationSemanticFactCatalog : ISemanticFactCatalog
                 new[] { new PhaseArtifactDefinition { ArtifactId = "meteor-shower-shadow-validation", PhaseNumber = 7, RelativePath = "narration-v5/meteor-shower-shadow-validation.json", Required = false, ValidateJson = true, RequireNonEmpty = true } }),
             Family("PlanetConjunction", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "PlanetPairing", "PlanetaryConjunction", "PLANET_CONJUNCTION", "PLANET_PAIRING" }, "PlanetPairing", new[] { "EventIdentity", "AstronomicalObjects", "EventWindow", "DomainScientificKnowledge" }, Array.Empty<string>(),
                 new[] { new ForbiddenConceptDefinition { ConceptId = "meteor-shower-leakage", Terms = new[] { "meteor shower", "radiant", "meteors per hour", "ZHR", "shooting stars", "meteor parent body", "meteor peak activity", "उल्का वर्षा", "टूटते तारे" }, Blocking = true } }, sharedRoles,
-                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["EventIdentity"] = new[] { "Hook" }, ["AstronomicalObjects"] = new[] { "Hook", "Orientation", "Observation" }, ["EventWindow"] = new[] { "Timing", "Observation" }, ["DomainScientificKnowledge"] = new[] { "Science" } }, Array.Empty<PhaseArtifactDefinition>())
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["EventIdentity"] = new[] { "Hook" }, ["AstronomicalObjects"] = new[] { "Hook", "Orientation", "Observation" }, ["EventWindow"] = new[] { "Timing", "Observation" }, ["DomainScientificKnowledge"] = new[] { "Science" } }, Array.Empty<PhaseArtifactDefinition>()),
+            Family("CONSTELLATION", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Constellation" }, "Constellation", new[] { "ObjectKnowledge" }, new[] { "EventIdentity", "ObservationDirection", "CulturalContext" },
+                new[] { new ForbiddenConceptDefinition { ConceptId = "transient-event-leakage", Terms = new[] { "peak time", "maximum eclipse", "meteor radiant", "ZHR", "angular separation", "eclipse glasses" }, Blocking = true } }, new[] { "Hook", "Identification", "Orientation", "Science", "Significance", "Closing" },
+                new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["ObjectKnowledge"] = new[] { "Identification", "Orientation", "Science", "Significance" } },
+                new[] { new PhaseArtifactDefinition { ArtifactId = "constellation-knowledge", PhaseNumber = 2, RelativePath = "plan-input/constellation-knowledge.json", Required = true, ValidateJson = true, RequireNonEmpty = true } })
         }.SelectMany(f => new[] { f }.Concat(f.Aliases.Select(a => f with { FamilyId = a }))).ToDictionary(f => f.FamilyId, StringComparer.OrdinalIgnoreCase);
     }
 

@@ -6,6 +6,7 @@ public enum EventFamily
     PlanetGrouping,
     Moon,
     Eclipse,
+    Constellation,
     SpecialEvent,
     Unknown
 }
@@ -23,7 +24,8 @@ public static class EventFamilyResolver
         [EventFamily.PlanetGrouping] = ["PLANET_CONJUNCTION", "PlanetConjunction", "PLANET_GROUPING", "PlanetGrouping", "PLANET_PAIRING", "PlanetPairing", "PLANET_PARADE", "PlanetParade", "PLANET_ALIGNMENT", "MoonPlanetPairing"],
         [EventFamily.Moon] = ["NamedFullMoon", "FULL_MOON", "FullMoon", "SpecialMoonPhase", "NEW_MOON", "NewMoon", "BLUE_MOON", "BlueMoon", "SUPERMOON", "Supermoon", "MICROMOON", "Micromoon", "MOON_PHASE", "MoonPhase", "FirstQuarter", "LastQuarter"],
         [EventFamily.Eclipse] = ["Eclipse", "SolarEclipse", "LunarEclipse", "TotalSolarEclipse", "PartialSolarEclipse", "AnnularSolarEclipse", "TotalLunarEclipse", "PartialLunarEclipse", "PenumbralLunarEclipse", "SOLAR_ECLIPSE", "LUNAR_ECLIPSE", "TOTAL_SOLAR_ECLIPSE", "PARTIAL_SOLAR_ECLIPSE", "ANNULAR_SOLAR_ECLIPSE", "TOTAL_LUNAR_ECLIPSE", "PARTIAL_LUNAR_ECLIPSE", "PENUMBRAL_LUNAR_ECLIPSE"],
-        [EventFamily.SpecialEvent] = ["COMET", "DEEP_SKY_OBJECT", "CONSTELLATION", "OCCULTATION", "ASTERISM", "RARE_VISIBILITY_EVENT"]
+        [EventFamily.Constellation] = ["CONSTELLATION", "Constellation"],
+        [EventFamily.SpecialEvent] = ["COMET", "DEEP_SKY_OBJECT", "OCCULTATION", "ASTERISM", "RARE_VISIBILITY_EVENT"]
     };
 
     public static EventFamily Resolve(string? eventType, string? contentCategoryCode, IReadOnlyList<string>? primaryObjects, IReadOnlyList<string>? secondaryObjects, string? title = null)
@@ -139,6 +141,20 @@ public sealed class EclipseFamilyProfile : EventFamilyProfileBase
     public override bool AllowsDirectionCue => true;
 }
 
+public sealed class ConstellationFamilyProfile : EventFamilyProfileBase
+{
+    public override EventFamily Family => EventFamily.Constellation;
+    public override string ValidatorProfile => "Constellation";
+    public override string ThumbnailCompositionType => "ConstellationNavigationThumbnail";
+    public override IReadOnlyList<string> ForbiddenTerms => ["meteor radiant", "meteor streak", "meteor shower", "planet conjunction", "angular separation", "solar eclipse safety", "eclipse glasses"];
+    public override IReadOnlyList<string> RequiredVisualElements => ["star pattern lines", "recognizable constellation star field", "major-star labels", "sky navigation context"];
+    public override IReadOnlyList<string> RequiredOverlayElements => ["constellation name label", "direction guide", "Belt recognition steps"];
+    public override IReadOnlyList<string> RequiredDiagnosticFields => base.RequiredDiagnosticFields.Concat(["validatorProfile", "constellationName", "iauAbbreviation", "scientificCulturalSeparation", "constellationVisualGuidanceApplied"]).ToArray();
+    public override bool AllowsGuideCard => true;
+    public override bool AllowsObjectLabels => true;
+    public override bool AllowsDirectionCue => true;
+}
+
 public sealed class SpecialEventFamilyProfile : EventFamilyProfileBase
 {
     private readonly SpecialEventSubtype subtype;
@@ -228,6 +244,7 @@ public static class EventFamilyProfiles
             EventFamily.PlanetGrouping => new PlanetGroupingFamilyProfile(),
             EventFamily.Moon => new MoonFamilyProfile(),
             EventFamily.Eclipse => new EclipseFamilyProfile(),
+            EventFamily.Constellation => new ConstellationFamilyProfile(),
             EventFamily.SpecialEvent => new SpecialEventFamilyProfile(eventType),
             _ => new UnknownFamilyProfile(eventType)
         };

@@ -21,6 +21,7 @@ public sealed class AstronomyFamilyAliasCatalogV1
         new("Named Full Moon", AstronomyFamilyVocabularyV1.NamedFullMoon),
         new("Solar Eclipse", AstronomyFamilyVocabularyV1.SolarEclipse),
         new("Lunar Eclipse", AstronomyFamilyVocabularyV1.LunarEclipse),
+        new("CONSTELLATION", AstronomyFamilyVocabularyV1.Constellation),
         new("Deep Sky Object", AstronomyFamilyVocabularyV1.DeepSkyObject),
         new("DeepSky", AstronomyFamilyVocabularyV1.DeepSkyObject),
         new("BlackHoleOrScientificExplainer", AstronomyFamilyVocabularyV1.ScientificExplainer)
