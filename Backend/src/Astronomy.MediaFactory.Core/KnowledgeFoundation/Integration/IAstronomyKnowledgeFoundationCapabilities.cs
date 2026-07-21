@@ -1,0 +1,2 @@
+namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Integration;
+public interface IAstronomyKnowledgeFoundationCapabilities{ AstronomyKnowledgeFoundationCapabilitySnapshot Snapshot{get;} bool TryGet(AstronomyKnowledgeFoundationCapabilityId id,out AstronomyKnowledgeFoundationCapabilityDescriptor descriptor); IReadOnlyList<AstronomyKnowledgeFoundationCapabilityDescriptor> GetByKind(AstronomyKnowledgeFoundationCapabilityKind kind); }

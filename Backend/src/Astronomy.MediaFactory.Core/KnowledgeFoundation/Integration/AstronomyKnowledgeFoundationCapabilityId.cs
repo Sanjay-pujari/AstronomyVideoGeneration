@@ -1,0 +1,3 @@
+namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Integration;
+public readonly record struct AstronomyKnowledgeFoundationCapabilityId
+{ public AstronomyKnowledgeFoundationCapabilityId(AstronomyKnowledgeFoundationCapabilityKind kind,string value){ if(!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind)); if(string.IsNullOrWhiteSpace(value)) throw new ArgumentException("Capability ID value is required.",nameof(value)); Kind=kind; Value=value.Trim(); } public AstronomyKnowledgeFoundationCapabilityKind Kind{get;} public string Value{get;} public override string ToString()=>Value; }

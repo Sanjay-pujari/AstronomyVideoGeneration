@@ -1,0 +1,2 @@
+namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Integration;
+public interface IAstronomyKnowledgeFoundationCompatibilityVerifier{ AstronomyKnowledgeFoundationCompatibilityReport Verify(); }
