@@ -46,7 +46,7 @@ public sealed class AstronomyGraphPayloadCompletenessValidationRuleTests
         if (name.Contains("NodeIdentity")) return new AstronomyGraphNodeIdentityValidationRule().Validate(graph, context);
         if (name.Contains("StatementIdentity")) return new AstronomyGraphStatementIdentityValidationRule().Validate(graph, context);
         if (name.Contains("ReferenceIntegrity")) return new AstronomyGraphReferenceIntegrityValidationRule().Validate(graph, context);
-        if (name.Contains("PayloadCompleteness")) return new AstronomyGraphPayloadCompletenessValidationRule(new AstronomyTypedPayloadRegistry([new("catalog.test.v1", typeof(TypedTestPayload), AstronomyKnowledgeDomain.Catalog, AstronomyKnowledgePayloadFamily.CatalogReference)])).Validate(graph, context);
+        if (name.Contains("PayloadCompleteness")) return new AstronomyGraphPayloadCompletenessValidationRule(new AstronomyTypedPayloadRegistry([])).Validate(graph, context);
         if (name.Contains("DuplicateKnowledge")) return new AstronomyGraphDuplicateKnowledgeValidationRule().Validate(graph, context);
         if (name.Contains("Provenance")) return new AstronomyGraphProvenanceValidationRule().Validate(graph, context);
         if (name.Contains("VersionConsistency")) return new AstronomyGraphVersionConsistencyValidationRule().Validate(graph, context);
