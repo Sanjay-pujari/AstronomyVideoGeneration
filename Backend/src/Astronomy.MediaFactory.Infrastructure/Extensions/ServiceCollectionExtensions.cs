@@ -601,6 +601,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IContentCategorySettingsService, ContentCategorySettingsService>();
         services.AddScoped<IContentVarietyGuard, ContentVarietyGuard>();
         services.AddScoped<IContentPlanningService, ContentPlanningService>();
+        services.AddScoped<IOrionContentGenerationPlanSeeder, OrionContentGenerationPlanSeeder>();
         services.AddScoped<IContentPlanProductionRequestMapper, ContentPlanProductionRequestMapper>();
         services.AddScoped<ProductionPipelineExecutionService>();
         services.AddScoped<IProductionPipelineExecutionService>(sp => sp.GetRequiredService<ProductionPipelineExecutionService>());

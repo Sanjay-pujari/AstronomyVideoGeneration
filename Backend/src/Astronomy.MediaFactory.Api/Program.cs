@@ -1205,6 +1205,23 @@ app.MapPost("/api/astronomy-intelligence/import-verified-events", async (HttpReq
 })
 .Accepts<AstronomyEventVerifiedImportRequest>("application/json");
 
+app.MapPost("/api/content-planning/seed-orion-plan", async (IOrionContentGenerationPlanSeeder seeder, ILogger<Program> logger, CancellationToken ct) =>
+{
+    logger.LogInformation("Orion content generation plan seed requested.");
+    try
+    {
+        return Results.Ok(await seeder.SeedAsync(ct));
+    }
+    catch (FileNotFoundException ex)
+    {
+        return Results.NotFound(new { message = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { message = ex.Message });
+    }
+});
+
 app.MapPost("/api/astronomy-intelligence/preview-asset-production", async (HttpRequest httpRequest, IAstronomyAssetProducerPreviewService previews, ILogger<Program> logger, CancellationToken ct) =>
 {
     var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<AstronomyAssetProducerPreviewRequest>(httpRequest, "request", logger, ct);
