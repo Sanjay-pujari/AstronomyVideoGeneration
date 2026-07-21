@@ -118,3 +118,20 @@ The knowledge layer is responsible for:
 ## Non-goals
 
 The knowledge layer does not directly render videos, call AI providers, publish assets, or replace domain expertise. It provides the structured source of truth those systems consume.
+
+## Knowledge foundation registry map
+
+The CG-A2 knowledge foundation separates stable platform taxonomies from domain-specific payload implementations so future astronomy families can register new typed knowledge without changing statement envelopes or downstream engines.
+
+| Registry area | Architectural role | Astronomy examples |
+| --- | --- | --- |
+| Knowledge domains | Coarse subject buckets that describe the kind of knowledge represented by a typed payload. They route validation, indexing, and downstream consumers without replacing family-specific science models. | Classification, physical, orbital, positional, observational, event, temporal, catalog, and derived knowledge. |
+| Payload families | Stable groups for related payload shapes within a knowledge domain. They help validators and registries reason about compatible records without inspecting every field. | Entity classification, physical property, orbital parameter, spatial position, observation condition, visibility window, astronomical event, temporal cycle, catalog reference, and derived property. |
+| Knowledge type IDs | Versioned, lowercase, dot-separated identifiers for concrete typed payload contracts. They are external contract names, not CLR type names, database IDs, or localized labels. | `typed.classification.entity.v1`, `typed.physical.properties.v1`, `typed.orbital.parameters.v1`. |
+| Payload descriptors | Registration metadata binding a knowledge type ID to a concrete payload contract, its knowledge domain, and its payload family. Descriptors are explicit so serialization and validation do not depend on reflection scanning. | A classification descriptor maps `typed.classification.entity.v1` to the entity-classification payload with the classification domain and entity-classification family. |
+| Statement kinds | The semantic intent of a knowledge statement independent of its payload body. They let the platform distinguish scientific assertions, editorial guidance, validation rules, observations, and derived assertions while keeping the envelope stable. | A physical-property payload can be carried by a scientific statement, while a remediation payload could be carried by a validation-oriented statement. |
+| Validation capabilities | Structural and semantic checks available to the knowledge foundation before content generation consumes a statement. These checks confirm identity, payload completeness, domain/family consistency, issue severity, remediation hints, and deterministic issue codes. | Missing subjects, malformed paths, invalid enum values, family mismatches, duplicate records, and non-blocking warnings. |
+| Graph-validation capabilities | Cross-statement checks that treat entities, statements, relationships, references, provenance, versions, repository roots, and graph connectivity as one validation set. They catch issues that single-statement validation cannot see. | Duplicate node identities, missing relationship targets, conflicting duplicate knowledge, broken provenance references, forbidden cycles, orphan statements, disconnected components, and repository mismatches. |
+| Registration metadata | The explicit catalog of descriptors, rules, DI registrations, rule ordering, and schema-versioned names needed to assemble the knowledge foundation consistently in tests and production services. | Built-in typed payload descriptors, validation rule descriptors, graph-validation rule ordering, and service-collection extension registrations. |
+
+These registry areas are intentionally narrow. They define how typed knowledge is identified, registered, serialized, and validated, but they do not add astronomy facts, persistence migrations, prompt text, rendering logic, publishing behavior, or certification decisions.
