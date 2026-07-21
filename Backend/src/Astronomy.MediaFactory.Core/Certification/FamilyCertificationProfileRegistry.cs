@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Astronomy.MediaFactory.Core.Certification;
 
@@ -48,17 +49,17 @@ public static class CgA1CertificationFoundationServiceCollectionExtensions
     public static IServiceCollection AddCgA1CertificationFoundation(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        services.AddSingleton<IFamilyCertificationProfile, MeteorShowerCertificationProfile>();
-        services.AddSingleton<IFamilyCertificationProfile, PlanetConjunctionCertificationProfile>();
-        services.AddSingleton<IFamilyCertificationProfile, ConstellationCertificationProfile>();
-        services.AddSingleton<IFamilyCertificationProfileRegistry, FamilyCertificationProfileRegistry>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IFamilyCertificationProfile, MeteorShowerCertificationProfile>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IFamilyCertificationProfile, PlanetConjunctionCertificationProfile>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IFamilyCertificationProfile, ConstellationCertificationProfile>());
+        services.TryAddSingleton<IFamilyCertificationProfileRegistry, FamilyCertificationProfileRegistry>();
         services.AddCgA1PhaseCertification();
-        services.AddSingleton<ICertificationPathService, CertificationPathService>();
-        services.AddSingleton<ICertificationOutputLock, CertificationOutputLock>();
-        services.AddSingleton<ICertificationSummaryAggregator, CertificationSummaryAggregator>();
-        services.AddSingleton<ICertificationDashboardMapper, CertificationDashboardMapper>();
-        services.AddSingleton<ICertificationReportWriter, CertificationReportWriter>();
-        services.AddSingleton<ICertificationCoordinator, CertificationCoordinator>();
+        services.TryAddSingleton<ICertificationPathService, CertificationPathService>();
+        services.TryAddSingleton<ICertificationOutputLock, CertificationOutputLock>();
+        services.TryAddSingleton<ICertificationSummaryAggregator, CertificationSummaryAggregator>();
+        services.TryAddSingleton<ICertificationDashboardMapper, CertificationDashboardMapper>();
+        services.TryAddSingleton<ICertificationReportWriter, CertificationReportWriter>();
+        services.TryAddSingleton<ICertificationCoordinator, CertificationCoordinator>();
         return services;
     }
 }
