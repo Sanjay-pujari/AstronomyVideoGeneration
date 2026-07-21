@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.CrossDomain;
 
@@ -19,12 +20,7 @@ public sealed class AstronomyOrbitalPositionalConsistencyValidationRuleTests
         var rule = new AstronomyOrbitalPositionalConsistencyValidationRule();
         var issues = rule.Validate(CrossDomainValidationFixture.Set(CrossDomainValidationFixture.Orbital(CrossDomainValidationFixture.Mars), CrossDomainValidationFixture.Position(CrossDomainValidationFixture.Venus)), CrossDomainValidationFixture.Context(AstronomyKnowledgeValidationSeverity.Information, AstronomyKnowledgeValidationMode.Standard, CrossDomainValidationFixture.Relationship(0, 1, AstronomyCrossDomainRelationshipKind.OrbitalPositional))).ToArray();
         Assert.NotEmpty(issues);
-        Assert.Equal(rule.RuleId, issues[0].RuleId);
-        Assert.Equal(AstronomyCrossDomainValidationCodes.OrbitalPositionEntityMismatch, issues[0].Code);
-        Assert.Equal(AstronomyKnowledgeValidationSeverity.Error, issues[0].Severity);
-        Assert.NotEqual(default, issues[0].Domain);
-        Assert.NotEqual(default, issues[0].Family);
-        Assert.Contains("$.payloads[", issues[0].Path);
+        CrossDomainValidationFixture.AssertExactIssue(issues[0], AstronomyCrossDomainValidationCodes.OrbitalPositionEntityMismatch, "$.payloads[1]", AstronomyOrbitalPositionalConsistencyValidationRule.Id, AstronomyKnowledgeValidationSeverity.Error, AstronomyKnowledgeDomain.Positional, AstronomyKnowledgePayloadFamily.SpatialPosition);
     }
 
     [Fact]
@@ -38,12 +34,17 @@ public sealed class AstronomyOrbitalPositionalConsistencyValidationRuleTests
     public void Validate_MultiplePairs_IsDeterministicAndDoesNotMutateInput()
     {
         var rule = new AstronomyOrbitalPositionalConsistencyValidationRule();
-        var set = CrossDomainValidationFixture.Set(CrossDomainValidationFixture.Orbital(CrossDomainValidationFixture.Mars), CrossDomainValidationFixture.Position(CrossDomainValidationFixture.Venus));
-        var context = CrossDomainValidationFixture.Context(AstronomyKnowledgeValidationSeverity.Information, AstronomyKnowledgeValidationMode.Standard, CrossDomainValidationFixture.Relationship(0, 1, AstronomyCrossDomainRelationshipKind.OrbitalPositional), CrossDomainValidationFixture.Relationship(0, 1, AstronomyCrossDomainRelationshipKind.OrbitalPositional));
-        var before = set.Payloads.ToArray();
+        var set = CrossDomainValidationFixture.Set(CrossDomainValidationFixture.Orbital(CrossDomainValidationFixture.Mars), CrossDomainValidationFixture.Position(CrossDomainValidationFixture.Mars), CrossDomainValidationFixture.Orbital(CrossDomainValidationFixture.Mars), CrossDomainValidationFixture.Position(CrossDomainValidationFixture.Venus));
+        var context = CrossDomainValidationFixture.Context(AstronomyKnowledgeValidationSeverity.Information, AstronomyKnowledgeValidationMode.Standard, CrossDomainValidationFixture.Relationship(0, 1, AstronomyCrossDomainRelationshipKind.OrbitalPositional), CrossDomainValidationFixture.Relationship(2, 3, AstronomyCrossDomainRelationshipKind.OrbitalPositional));
+        var beforePayloads = set.Payloads.ToArray();
+        var beforeRelationships = context.Relationships.ToArray();
         var first = rule.Validate(set, context).Select(i => i.Code + i.Path).ToArray();
         var second = rule.Validate(set, context).Select(i => i.Code + i.Path).ToArray();
         Assert.Equal(first, second);
-        Assert.Equal(before, set.Payloads);
+        Assert.Single(first);
+        Assert.EndsWith("$.payloads[3]", first[0]);
+        Assert.DoesNotContain("payloads[1]", first[0]);
+        Assert.Equal(beforePayloads, set.Payloads);
+        Assert.Equal(beforeRelationships, context.Relationships);
     }
 }

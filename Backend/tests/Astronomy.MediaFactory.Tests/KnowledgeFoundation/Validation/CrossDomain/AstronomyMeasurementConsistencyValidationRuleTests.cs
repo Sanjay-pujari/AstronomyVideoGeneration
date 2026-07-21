@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation;
 using Astronomy.MediaFactory.Core.KnowledgeFoundation.Validation.CrossDomain;
 
@@ -19,12 +20,7 @@ public sealed class AstronomyMeasurementConsistencyValidationRuleTests
         var rule = new AstronomyMeasurementConsistencyValidationRule();
         var issues = rule.Validate(CrossDomainValidationFixture.Set(CrossDomainValidationFixture.Orbital(CrossDomainValidationFixture.Mars, dim: Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements.AstronomyMeasurementDimension.Distance), CrossDomainValidationFixture.Event(CrossDomainValidationFixture.Mars)), CrossDomainValidationFixture.Context(AstronomyKnowledgeValidationSeverity.Information, AstronomyKnowledgeValidationMode.Standard, CrossDomainValidationFixture.Relationship(0, 1, AstronomyCrossDomainRelationshipKind.Measurement))).ToArray();
         Assert.NotEmpty(issues);
-        Assert.Equal(rule.RuleId, issues[0].RuleId);
-        Assert.Equal(AstronomyCrossDomainValidationCodes.MeasurementDimensionConflict, issues[0].Code);
-        Assert.Equal(AstronomyKnowledgeValidationSeverity.Error, issues[0].Severity);
-        Assert.NotEqual(default, issues[0].Domain);
-        Assert.NotEqual(default, issues[0].Family);
-        Assert.Contains("$.payloads[", issues[0].Path);
+        CrossDomainValidationFixture.AssertExactIssue(issues[0], AstronomyCrossDomainValidationCodes.MeasurementDimensionConflict, "$.payloads[1]", AstronomyMeasurementConsistencyValidationRule.Id, AstronomyKnowledgeValidationSeverity.Error, AstronomyKnowledgeDomain.Event, AstronomyKnowledgePayloadFamily.AstronomicalEvent);
     }
 
     [Fact]
@@ -38,12 +34,17 @@ public sealed class AstronomyMeasurementConsistencyValidationRuleTests
     public void Validate_MultiplePairs_IsDeterministicAndDoesNotMutateInput()
     {
         var rule = new AstronomyMeasurementConsistencyValidationRule();
-        var set = CrossDomainValidationFixture.Set(CrossDomainValidationFixture.Orbital(CrossDomainValidationFixture.Mars, dim: Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements.AstronomyMeasurementDimension.Distance), CrossDomainValidationFixture.Event(CrossDomainValidationFixture.Mars));
-        var context = CrossDomainValidationFixture.Context(AstronomyKnowledgeValidationSeverity.Information, AstronomyKnowledgeValidationMode.Standard, CrossDomainValidationFixture.Relationship(0, 1, AstronomyCrossDomainRelationshipKind.Measurement), CrossDomainValidationFixture.Relationship(0, 1, AstronomyCrossDomainRelationshipKind.Measurement));
-        var before = set.Payloads.ToArray();
+        var set = CrossDomainValidationFixture.Set(CrossDomainValidationFixture.Orbital(CrossDomainValidationFixture.Mars), CrossDomainValidationFixture.Event(CrossDomainValidationFixture.Mars), CrossDomainValidationFixture.Orbital(CrossDomainValidationFixture.Mars, dim: Astronomy.MediaFactory.Core.KnowledgeFoundation.TypedDomains.Measurements.AstronomyMeasurementDimension.Distance), CrossDomainValidationFixture.Event(CrossDomainValidationFixture.Mars));
+        var context = CrossDomainValidationFixture.Context(AstronomyKnowledgeValidationSeverity.Information, AstronomyKnowledgeValidationMode.Standard, CrossDomainValidationFixture.Relationship(0, 1, AstronomyCrossDomainRelationshipKind.Measurement), CrossDomainValidationFixture.Relationship(2, 3, AstronomyCrossDomainRelationshipKind.Measurement));
+        var beforePayloads = set.Payloads.ToArray();
+        var beforeRelationships = context.Relationships.ToArray();
         var first = rule.Validate(set, context).Select(i => i.Code + i.Path).ToArray();
         var second = rule.Validate(set, context).Select(i => i.Code + i.Path).ToArray();
         Assert.Equal(first, second);
-        Assert.Equal(before, set.Payloads);
+        Assert.Single(first);
+        Assert.EndsWith("$.payloads[3]", first[0]);
+        Assert.DoesNotContain("payloads[1]", first[0]);
+        Assert.Equal(beforePayloads, set.Payloads);
+        Assert.Equal(beforeRelationships, context.Relationships);
     }
 }
