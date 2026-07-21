@@ -1,4 +1,5 @@
 using System.Text.Json;
+using JsonCodec = System.Text.Json.JsonSerializer;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Core.AstronomyDomain.Taxonomy;
 
@@ -98,7 +99,7 @@ public sealed class KnowledgeValidityRangeJsonConverter : JsonConverter<Knowledg
     {
         try
         {
-            var dto = JsonSerializer.Deserialize<KnowledgeValidityRangeDto>(ref reader, options) ?? throw new JsonException("Knowledge validity range cannot be null.");
+            var dto = JsonCodec.Deserialize<KnowledgeValidityRangeDto>(ref reader, options) ?? throw new JsonException("Knowledge validity range cannot be null.");
             return new KnowledgeValidityRange(dto.EffectiveFromUtc, dto.EffectiveToUtc);
         }
         catch (ArgumentException ex) { throw new JsonException("Invalid knowledge validity range JSON value.", ex); }
@@ -114,7 +115,7 @@ public sealed class KnowledgeAuditMetadataJsonConverter : JsonConverter<Knowledg
     {
         try
         {
-            var dto = JsonSerializer.Deserialize<KnowledgeAuditMetadataDto>(ref reader, options) ?? throw new JsonException("Knowledge audit metadata cannot be null.");
+            var dto = JsonCodec.Deserialize<KnowledgeAuditMetadataDto>(ref reader, options) ?? throw new JsonException("Knowledge audit metadata cannot be null.");
             return new KnowledgeAuditMetadata(dto.CreatedUtc, dto.CreatedBy, dto.UpdatedUtc, dto.UpdatedBy);
         }
         catch (ArgumentException ex) { throw new JsonException("Invalid knowledge audit metadata JSON value.", ex); }
@@ -138,7 +139,7 @@ public sealed class AstronomyKnowledgePayloadJsonConverter<TPayload>(string disc
         if (!string.Equals(kind.GetString(), discriminator, StringComparison.Ordinal)) throw new JsonException($"Unknown or mismatched knowledge payload discriminator '{kind.GetString()}'.");
         var clone = new JsonSerializerOptions(options);
         RemoveConverter<AstronomyKnowledgePayloadJsonConverter<TPayload>>(clone);
-        return JsonSerializer.Deserialize<TPayload>(document.RootElement.GetRawText(), clone) ?? throw new JsonException("Knowledge payload cannot be null.");
+        return JsonCodec.Deserialize<TPayload>(document.RootElement.GetRawText(), clone) ?? throw new JsonException("Knowledge payload cannot be null.");
     }
     public override void Write(Utf8JsonWriter writer, TPayload value, JsonSerializerOptions options)
     {
@@ -161,7 +162,7 @@ public sealed class AstronomyKnowledgeStatementJsonConverter<TPayload> : JsonCon
     {
         try
         {
-            var dto = JsonSerializer.Deserialize<StatementDto<TPayload>>(ref reader, options) ?? throw new JsonException("Knowledge statement cannot be null.");
+            var dto = JsonCodec.Deserialize<StatementDto<TPayload>>(ref reader, options) ?? throw new JsonException("Knowledge statement cannot be null.");
             return new AstronomyKnowledgeStatement<TPayload>(Require(dto.Id, "id"), Require(dto.Version, "version"), dto.Kind ?? throw new JsonException("Knowledge statement kind is required."), dto.Status ?? throw new JsonException("Knowledge statement status is required."), dto.PrimarySubject ?? throw new JsonException("Knowledge statement primary subject is required."), dto.Payload ?? throw new JsonException("Knowledge statement payload is required."), dto.Audit ?? throw new JsonException("Knowledge statement audit metadata is required."), dto.FamilyContext, dto.LocalizationReferences ?? [], dto.Tags ?? [], dto.Validity ?? new KnowledgeValidityRange());
         }
         catch (ArgumentException ex) { throw new JsonException("Invalid knowledge statement JSON value.", ex); }
