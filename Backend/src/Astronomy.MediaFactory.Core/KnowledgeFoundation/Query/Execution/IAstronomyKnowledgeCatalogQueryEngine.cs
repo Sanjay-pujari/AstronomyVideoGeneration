@@ -1,0 +1,3 @@
+using Astronomy.MediaFactory.Core.KnowledgeFoundation.Query;
+namespace Astronomy.MediaFactory.Core.KnowledgeFoundation.Query.Execution;
+public interface IAstronomyKnowledgeCatalogQueryEngine { AstronomyKnowledgeCatalogQueryResult Execute(AstronomyKnowledgeCatalogQuery query); }
