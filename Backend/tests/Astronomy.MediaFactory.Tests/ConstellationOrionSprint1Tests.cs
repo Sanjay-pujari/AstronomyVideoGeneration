@@ -16,7 +16,7 @@ public sealed class ConstellationOrionSprint1Tests
     public void Constellation_resolves_as_first_class_event_family_without_content_strategy()
     {
         var resolution = EventFamilyResolver.ResolveWithDiagnostics("CONSTELLATION", null, ["Orion"], [], "Orion: How to Find the Hunter Constellation");
-        resolution.Family.Should().Be(EventFamily.Constellation);
+        resolution.Family.Should().Be(Astronomy.MediaFactory.Core.EventFamily.Constellation);
         resolution.Reason.Should().Contain("eventType");
     }
 
