@@ -160,8 +160,17 @@ public sealed class ConstellationOrionSprint1Tests
         act.Should().Throw<InvalidOperationException>().WithMessage("*Duplicate certification semantic-fact key 'Orion'*");
     }
 
-    private static CertificationFamilySemanticProfileMetadata TestFamily(string familyId, IReadOnlySet<string> aliases, string canonicalSemanticValueId) =>
-        new(familyId, aliases, canonicalSemanticValueId, ["ObjectKnowledge"], [], [], [], new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase), []);
+    private static CertificationFamilySemanticProfileMetadata TestFamily(string familyId, IEnumerable<string> aliases, string canonicalSemanticValueId) =>
+        new(
+            familyId,
+            aliases.ToHashSet(StringComparer.OrdinalIgnoreCase),
+            canonicalSemanticValueId,
+            ["ObjectKnowledge"],
+            [],
+            [],
+            [],
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase),
+            []);
 
     private static string FindRepoRoot()
     {
