@@ -118,6 +118,10 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddOptions<OutputArtifactsOptions>()
             .Bind(configuration.GetSection(OutputArtifactsOptions.SectionName));
+        services.AddOptions<AstronomyKnowledgeOptions>()
+            .Bind(configuration.GetSection(AstronomyKnowledgeOptions.SectionName))
+            .Validate(options => !string.IsNullOrWhiteSpace(options.RootPath), "AstronomyKnowledge:RootPath is required.")
+            .ValidateOnStart();
         services.AddVisualIntelligenceOrchestration();
 
         services.AddOptions<ProductionPipelineOptions>()
@@ -732,6 +736,8 @@ public static class ServiceCollectionExtensions
         });
         services.AddScoped<IAstronomyEventVerificationService, AstronomyEventVerificationService>();
         services.AddScoped<IAstronomyEventVerifiedImportService, AstronomyEventVerifiedImportService>();
+        services.AddScoped<IEvergreenAstronomyKnowledgeLoader, EvergreenAstronomyKnowledgeLoader>();
+        services.AddScoped<IEvergreenAstronomySubjectImportService, EvergreenAstronomySubjectImportService>();
         services.AddScoped<IStellariumScriptGenerator, StellariumScriptGenerator>();
         services.AddScoped<IStellariumImageCaptureExecutor, StellariumImageCaptureExecutor>();
         services.AddScoped<IDailySkyGuideVisualAssetPackager, DailySkyGuideVisualAssetPackager>();

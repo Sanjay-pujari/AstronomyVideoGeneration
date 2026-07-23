@@ -1205,6 +1205,29 @@ app.MapPost("/api/astronomy-intelligence/import-verified-events", async (HttpReq
 })
 .Accepts<AstronomyEventVerifiedImportRequest>("application/json");
 
+app.MapPost("/api/astronomy-intelligence/import-evergreen-subject", async (HttpRequest httpRequest, IEvergreenAstronomySubjectImportService importer, ILogger<Program> logger, CancellationToken ct) =>
+{
+    var requestBody = await JsonEndpointBodyReader.ReadRequiredAsync<EvergreenAstronomySubjectImportRequest>(httpRequest, "request", logger, ct);
+    if (requestBody.HasError) return requestBody.ErrorResult!;
+    var request = requestBody.Value!;
+    logger.LogInformation("Evergreen astronomy subject import request received for {RelativePath}. DryRun={DryRun}", request.RelativePath, request.DryRun);
+    try
+    {
+        return Results.Ok(await importer.ImportAsync(request, ct));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { success = false, error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { success = false, error = ex.Message });
+    }
+})
+.WithName("ImportEvergreenAstronomySubject")
+.Accepts<EvergreenAstronomySubjectImportRequest>("application/json");
+
+
 app.MapPost("/api/content-planning/seed-orion-plan", async (IOrionContentGenerationPlanSeeder seeder, ILogger<Program> logger, CancellationToken ct) =>
 {
     logger.LogInformation("Orion content generation plan seed requested.");
