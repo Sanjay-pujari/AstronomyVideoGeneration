@@ -121,7 +121,7 @@ public sealed class AstronomyContentOpportunityServiceTests
     {
         await using var db = CreateDb();
         SeedEvent(db, "inside", "PLANET_CONJUNCTION", "Inside", 7m);
-        SeedEvent(db, "outside", "PLANET_CONJUNCTION", "Outside", 7m, startUtc: new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero));
+        SeedEvent(db, "outside", "PLANET_CONJUNCTION", "Outside", 7m, status: "Candidate", startUtc: new DateTimeOffset(2026, 7, 1, 0, 0, 0, TimeSpan.Zero));
         SeedEvent(db, "verified-transient", "PLANET_CONJUNCTION", "Verified transient", 9m, status: "Verified", startUtc: new DateTimeOffset(2026, 6, 5, 0, 0, 0, TimeSpan.Zero));
         await db.SaveChangesAsync();
         var service = CreateService(db);
