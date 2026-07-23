@@ -179,6 +179,62 @@ public sealed class ManualContentPlanCreationTests
             Reason: "Invalid status validation"), CancellationToken.None));
     }
 
+
+    [Fact]
+    public async Task CreatePlanFromEventAsync_VerifiedConstellation_CreatesConstellationPlanLinkedToIntelligence()
+    {
+        await using var db = CreateDb();
+        var evt = SeedOrionConstellationEvent(db);
+        var service = CreateService(db);
+
+        var response = await service.CreatePlanFromEventAsync(new CreatePlanFromEventRequest(
+            AstronomyEventIntelligenceId: evt.Id,
+            RegionId: "US",
+            Language: "en",
+            PlannedFormat: "ShortVideo",
+            RequestedOutputs: ["ShortVideo", "Thumbnail"],
+            ManualValidation: true,
+            Reason: "Orion evergreen constellation validation"), CancellationToken.None);
+
+        var plan = await db.ContentGenerationPlans.SingleAsync();
+
+        Assert.True(response.Success);
+        Assert.Equal(evt.Id, plan.AstronomyEventIntelligenceId);
+        Assert.Equal("CONSTELLATION", plan.PrimaryAstronomyEventTypeCode);
+        Assert.Equal("AstronomyEducation", plan.ContentCategoryCode);
+        Assert.Equal("US", plan.RegionId);
+        Assert.Equal("en", plan.Language);
+        Assert.Equal("Draft", plan.Status);
+        Assert.Equal("Draft", plan.PlanStatus);
+        Assert.Equal(["ShortVideo", "Thumbnail"], ReadStringArray(plan.RequestedOutputTypesJson));
+        Assert.Contains("Orion", ReadStringArray(plan.PlannedObjectNamesJson));
+        Assert.Equal(1, await db.AstronomyEventIntelligences.CountAsync(e => e.EventType == "CONSTELLATION"));
+    }
+
+    [Fact]
+    public async Task CreatePlanFromEventAsync_ExistingPlanetGroupingBehavior_RemainsUnchanged()
+    {
+        await using var db = CreateDb();
+        var evt = SeedPlanetGroupingEvent(db);
+        var service = CreateService(db);
+
+        var response = await service.CreatePlanFromEventAsync(new CreatePlanFromEventRequest(
+            AstronomyEventIntelligenceId: evt.Id,
+            RegionId: "IN-RJ-UDAIPUR",
+            Language: "en",
+            PlannedFormat: "ShortVideo",
+            RequestedOutputs: ["ShortVideo"],
+            ManualValidation: true,
+            Reason: "Regression check"), CancellationToken.None);
+
+        var plan = await db.ContentGenerationPlans.SingleAsync();
+        Assert.True(response.Success);
+        Assert.Equal("PLANET_GROUPING", plan.PrimaryAstronomyEventTypeCode);
+        Assert.Equal("CosmicStoryShort", plan.ContentCategoryCode);
+        Assert.Equal(evt.Id, plan.AstronomyEventIntelligenceId);
+    }
+
+
     public static TheoryData<string?, string[]> InvalidNeedsManualReviewOverrideFields => new()
     {
         { null, ["ShortVideo"] },
@@ -218,6 +274,35 @@ public sealed class ManualContentPlanCreationTests
                 new AstronomyEventObject { ObjectName = "Mars", ObjectType = "Planet", ObjectRole = "Companion" },
                 new AstronomyEventObject { ObjectName = "Jupiter", ObjectType = "Planet", ObjectRole = "Companion" },
                 new AstronomyEventObject { ObjectName = "Venus", ObjectType = "Planet", ObjectRole = "Companion" }
+            ]
+        };
+        db.AstronomyEventIntelligences.Add(evt);
+        db.SaveChanges();
+        return evt;
+    }
+
+
+    private static AstronomyEventIntelligence SeedOrionConstellationEvent(MediaFactoryDbContext db)
+    {
+        var evt = new AstronomyEventIntelligence
+        {
+            EventCode = "CONSTELLATION-ORION-EVERGREEN-2026",
+            ExternalEventId = "constellation-orion-evergreen-v1",
+            Year = 2026,
+            Language = "en",
+            VerificationStatus = "Verified",
+            AutoGenerateAllowed = true,
+            ContentStrategy = "EvergreenConstellationEducation",
+            EventType = "CONSTELLATION",
+            Title = "Orion constellation guide",
+            StartUtc = new DateTimeOffset(2026, 8, 1, 12, 0, 0, TimeSpan.Zero),
+            RegionId = "US",
+            RecommendedCategory = "AstronomyEducation",
+            Status = "Verified",
+            ContentOpportunityScore = 8m,
+            Objects =
+            [
+                new AstronomyEventObject { ObjectName = "Orion", ObjectType = "Constellation", ObjectRole = "Primary", CatalogId = "IAU:ORI" }
             ]
         };
         db.AstronomyEventIntelligences.Add(evt);

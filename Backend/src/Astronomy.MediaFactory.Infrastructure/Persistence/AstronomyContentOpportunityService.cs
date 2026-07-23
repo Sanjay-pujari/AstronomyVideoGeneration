@@ -16,7 +16,8 @@ public sealed class AstronomyContentOpportunityService(
         ["PLANET_CONJUNCTION"] = ["PlanetConjunction", "RareEventAlert", "WeeklySkyForecast"],
         ["PLANET_GROUPING"] = ["PlanetGrouping", "WeeklySkyForecast", "AstroExplainer"],
         ["BRIGHT_PLANET_VISIBILITY"] = ["PlanetVisibilityGuide", "WeeklySkyForecast"],
-        ["MOON_SPECIAL"] = ["MoonSpecials", "AstroPhotographyGuide"]
+        ["MOON_SPECIAL"] = ["MoonSpecials", "AstroPhotographyGuide"],
+        ["CONSTELLATION"] = ["AstronomyEducation"]
     };
 
     private static readonly IReadOnlyDictionary<string, decimal> CategoryWeights = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
@@ -28,7 +29,8 @@ public sealed class AstronomyContentOpportunityService(
         ["WeeklySkyForecast"] = 0.50m,
         ["MoonSpecials"] = 0.50m,
         ["AstroPhotographyGuide"] = 0.40m,
-        ["PlanetVisibilityGuide"] = 0.00m
+        ["PlanetVisibilityGuide"] = 0.00m,
+        ["AstronomyEducation"] = 1.00m
     };
 
     public async Task<AstronomyContentOpportunityResult> GenerateAsync(AstronomyContentOpportunityRequest request, CancellationToken cancellationToken)
@@ -41,27 +43,24 @@ public sealed class AstronomyContentOpportunityService(
             : null;
 
         var query = db.AstronomyEventIntelligences
-            .AsNoTracking()
-            .Where(e => e.Status == "Candidate");
+            .AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(request.RegionId))
             query = query.Where(e => e.RegionId == request.RegionId);
 
-        if (request.StartUtc.HasValue)
-            query = query.Where(e => e.StartUtc >= request.StartUtc.Value);
-
-        if (request.EndUtc.HasValue)
-            query = query.Where(e => e.StartUtc <= request.EndUtc.Value);
-
         if (requestedTypes is not null && requestedTypes.Count > 0)
             query = query.Where(e => requestedTypes.Contains(e.EventType));
 
-        var events = await query
+        var candidates = await query
             .Include(e => e.Objects)
             .OrderByDescending(e => e.ContentOpportunityScore)
             .ThenByDescending(e => e.VisibilityScore)
             .ThenBy(e => e.StartUtc)
             .ToListAsync(cancellationToken);
+
+        var events = candidates
+            .Where(e => IsEligibleForOpportunity(e, request))
+            .ToList();
 
         var generated = events
             .SelectMany(BuildOpportunities)
@@ -145,8 +144,10 @@ public sealed class AstronomyContentOpportunityService(
         var educationalValueScore = EducationalValueScore(evt, category, storyScore);
         var viralScore = ViralScore(evt, category, viralPotentialScore);
         var productionReadinessScore = ProductionReadinessScore(evt, category);
-        var requiresConstellationGuide = IsConjunctionOrGrouping(evt.EventType);
-        var requiresStellarium = IsConjunctionOrGrouping(evt.EventType) || NormalizeEventType(evt.EventType) == "BRIGHT_PLANET_VISIBILITY";
+        var eventType = NormalizeEventType(evt.EventType);
+        var isConstellation = eventType == "CONSTELLATION";
+        var requiresConstellationGuide = IsConjunctionOrGrouping(evt.EventType) || isConstellation;
+        var requiresStellarium = IsConjunctionOrGrouping(evt.EventType) || eventType == "BRIGHT_PLANET_VISIBILITY" || isConstellation;
         var requiresNasaAssets = category is "MoonSpecials" or "AstroExplainer";
         var requiresAiImages = RequiresAiImages(category);
 
@@ -177,7 +178,7 @@ public sealed class AstronomyContentOpportunityService(
             educationalValueScore,
             viralScore,
             productionReadinessScore,
-            RequiresSkyfield: true,
+            RequiresSkyfield: !isConstellation,
             RequiresConstellationGuide: requiresConstellationGuide,
             RequiresStellarium: requiresStellarium,
             RequiresNasaAssets: requiresNasaAssets,
@@ -259,6 +260,7 @@ public sealed class AstronomyContentOpportunityService(
         "PlanetVisibilityGuide" => $"Bright planet viewing guide: {evt.Title}",
         "MoonSpecials" => $"Moon special: {evt.Title}",
         "AstroPhotographyGuide" => $"Astrophotography plan: {evt.Title}",
+        "AstronomyEducation" => $"Constellation guide: {evt.Title}",
         _ => evt.Title
     };
 
@@ -272,12 +274,13 @@ public sealed class AstronomyContentOpportunityService(
         "PlanetVisibilityGuide" => "Create a practical naked-eye planet guide focused on direction, timing, brightness, and viewer expectations.",
         "MoonSpecials" => "Build a moon-focused short with phase, illumination, viewing timing, and cultural/seasonal context.",
         "AstroPhotographyGuide" => "Translate the event into a simple phone or camera shot list with timing and framing advice.",
+        "AstronomyEducation" => "Teach the constellation as an evergreen observing and cultural sky-story subject, keeping mythology, history, science, object facts, and viewing guidance separate.",
         _ => evt.Summary ?? evt.Description
     };
 
     private static decimal EducationalValueScore(AstronomyEventIntelligence evt, string category, decimal storyScore)
     {
-        var bonus = category is "AstroExplainer" or "AstroPhotographyGuide" ? 1.2m : category is "WeeklySkyForecast" ? 0.6m : 0.3m;
+        var bonus = category is "AstroExplainer" or "AstroPhotographyGuide" or "AstronomyEducation" ? 1.2m : category is "WeeklySkyForecast" ? 0.6m : 0.3m;
         if (NormalizeEventType(evt.EventType) == "MOON_SPECIAL") bonus += 0.4m;
         return Clamp((storyScore * 0.65m) + (evt.ConfidenceScore * 0.25m) + bonus);
     }
@@ -300,6 +303,7 @@ public sealed class AstronomyContentOpportunityService(
         "WeeklySkyForecast" => "Weekly astronomy forecast viewers",
         "AstroExplainer" => "Curious learners and science explainers audience",
         "AstroPhotographyGuide" => "Phone photographers and beginner astrophotographers",
+        "AstronomyEducation" => "Beginner astronomy learners and constellation observers",
         _ => "Beginner astronomy viewers"
     };
 
@@ -315,14 +319,15 @@ public sealed class AstronomyContentOpportunityService(
         "MoonSpecials" => "Moon-focused special adds seasonal and visual hook value over routine visibility.",
         "AstroPhotographyGuide" => "Photography guide adds practical capture value for viewers planning a sky shot.",
         "PlanetVisibilityGuide" => "Generic planet visibility keeps the base score without an event-specific urgency boost.",
+        "AstronomyEducation" => "Evergreen constellation education is valuable without time-sensitive transient urgency.",
         _ => "No category-specific priority adjustment was configured."
     };
 
-    private static bool RequiresAiImages(string category) => category is "RareEventAlert" or "PlanetGrouping" or "AstroExplainer" or "MoonSpecials" or "AstroPhotographyGuide";
+    private static bool RequiresAiImages(string category) => category is "RareEventAlert" or "PlanetGrouping" or "AstroExplainer" or "MoonSpecials" or "AstroPhotographyGuide" or "AstronomyEducation";
     private static bool IsConjunctionOrGrouping(string eventType) => NormalizeEventType(eventType) is "PLANET_CONJUNCTION" or "PLANET_GROUPING";
-    private static string VisualStyle(string category) => RequiresAiImages(category) ? "cinematic-educational-sky-visuals" : "observational-sky-map-and-timing-card";
-    private static string Hook(string category) => category == "RareEventAlert" ? "urgent-rare-sky-moment" : "clear-viewing-payoff";
-    private static string Tone(string category) => category == "AstroExplainer" ? "curious-educational" : "practical-inspiring";
+    private static string VisualStyle(string category) => category == "AstronomyEducation" ? "constellation-outline-object-callouts-and-cultural-context" : RequiresAiImages(category) ? "cinematic-educational-sky-visuals" : "observational-sky-map-and-timing-card";
+    private static string Hook(string category) => category == "RareEventAlert" ? "urgent-rare-sky-moment" : category == "AstronomyEducation" ? "recognizable-sky-pattern-and-story" : "clear-viewing-payoff";
+    private static string Tone(string category) => category is "AstroExplainer" or "AstronomyEducation" ? "curious-educational" : "practical-inspiring";
     private static string Key(Guid eventId, string category) => $"{eventId:N}:{category}";
 
     private static decimal Clamp(decimal score) => Math.Clamp(Math.Round(score, 2), 0m, 10m);
@@ -334,6 +339,39 @@ public sealed class AstronomyContentOpportunityService(
             normalized = string.Concat(normalized.Select((ch, index) => index > 0 && char.IsUpper(ch) ? $"_{ch}" : ch.ToString()));
 
         return normalized.ToUpperInvariant();
+    }
+
+    private static bool IsEligibleForOpportunity(AstronomyEventIntelligence evt, AstronomyContentOpportunityRequest request)
+    {
+        var eventType = NormalizeEventType(evt.EventType);
+        if (eventType == "CONSTELLATION")
+            return IsEvergreenConstellationEligible(evt, request);
+
+        if (!string.Equals(evt.Status, "Candidate", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (request.StartUtc.HasValue && evt.StartUtc < request.StartUtc.Value)
+            return false;
+        if (request.EndUtc.HasValue && evt.StartUtc > request.EndUtc.Value)
+            return false;
+
+        return true;
+    }
+
+    private static bool IsEvergreenConstellationEligible(AstronomyEventIntelligence evt, AstronomyContentOpportunityRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(evt.RegionId) || string.IsNullOrWhiteSpace(evt.Language))
+            return false;
+        if (evt.StartUtc == default)
+            return false;
+        if (!string.Equals(evt.VerificationStatus, "Verified", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(evt.VerificationStatus, "NeedsManualReview", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (!string.Equals(evt.Status, "Candidate", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(evt.Status, "Verified", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(evt.Status, "ManualReviewAccepted", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return true;
     }
 
     private static void Validate(AstronomyContentOpportunityRequest request)
