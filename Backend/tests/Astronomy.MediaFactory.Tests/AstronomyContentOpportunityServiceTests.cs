@@ -9,6 +9,63 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class AstronomyContentOpportunityServiceTests
 {
+
+    [Theory]
+    [InlineData("CONSTELLATION", "CONSTELLATION")]
+    [InlineData("Constellation", "CONSTELLATION")]
+    [InlineData("constellation", "CONSTELLATION")]
+    [InlineData(" CONSTELLATION ", "CONSTELLATION")]
+    [InlineData("PLANET_CONJUNCTION", "PLANET_CONJUNCTION")]
+    [InlineData("PlanetConjunction", "PLANET_CONJUNCTION")]
+    [InlineData("MeteorShower", "METEOR_SHOWER")]
+    [InlineData("BRIGHT_PLANET_VISIBILITY", "BRIGHT_PLANET_VISIBILITY")]
+    [InlineData("BrightPlanetVisibility", "BRIGHT_PLANET_VISIBILITY")]
+    [InlineData("bright-planet-visibility", "BRIGHT_PLANET_VISIBILITY")]
+    [InlineData("bright planet visibility", "BRIGHT_PLANET_VISIBILITY")]
+    [InlineData("bright--planet   visibility", "BRIGHT_PLANET_VISIBILITY")]
+    public void NormalizeEventType_CanonicalizesSupportedInputForms(string input, string expected)
+    {
+        Assert.Equal(expected, AstronomyEventTypeNormalizer.Normalize(input));
+    }
+
+    [Theory]
+    [InlineData("CONSTELLATION")]
+    [InlineData("Constellation")]
+    [InlineData("constellation")]
+    public async Task GenerateAsync_ConstellationRequestAliases_SelectPersistedCanonicalConstellation(string requestedType)
+    {
+        await using var db = CreateDb();
+        var evt = SeedOrionConstellation(db);
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        var result = await service.GenerateAsync(new AstronomyContentOpportunityRequest(EventTypes: [requestedType], DryRun: true), CancellationToken.None);
+
+        var opportunity = Assert.Single(result.GeneratedOpportunities);
+        Assert.Equal(evt.Id, opportunity.AstronomyEventIntelligenceId);
+        Assert.Equal("AstronomyEducation", opportunity.ContentCategory);
+        Assert.False(opportunity.RequiresSkyfield);
+        Assert.Contains("Orion", opportunity.SelectedObjectNames);
+    }
+
+    [Theory]
+    [InlineData("PlanetConjunction")]
+    [InlineData("bright-planet-visibility")]
+    public async Task GenerateAsync_LegacyEventTypeAliases_RemainSupported(string requestedType)
+    {
+        await using var db = CreateDb();
+        SeedEvent(db, "canonical-conjunction", "PLANET_CONJUNCTION", "Planet conjunction", 7.18m);
+        SeedEvent(db, "canonical-visibility", "BRIGHT_PLANET_VISIBILITY", "Bright planet visibility", 7.69m);
+        await db.SaveChangesAsync();
+        var service = CreateService(db);
+
+        var result = await service.GenerateAsync(new AstronomyContentOpportunityRequest(EventTypes: [requestedType], DryRun: true), CancellationToken.None);
+
+        Assert.NotEmpty(result.GeneratedOpportunities);
+        Assert.All(result.GeneratedOpportunities, o => Assert.True(o.EventType is "PLANET_CONJUNCTION" or "BRIGHT_PLANET_VISIBILITY"));
+        Assert.All(result.GeneratedOpportunities, o => Assert.True(o.RequiresSkyfield));
+    }
+
     [Fact]
     public async Task GenerateAsync_DryRun_AppliesCategoryWeightsAndSortsByFinalPriority()
     {

@@ -330,14 +330,7 @@ public sealed class AstronomyContentOpportunityService(
 
     private static decimal Clamp(decimal score) => Math.Clamp(Math.Round(score, 2), 0m, 10m);
 
-    private static string NormalizeEventType(string eventType)
-    {
-        var normalized = eventType.Trim().Replace('-', '_').Replace(' ', '_');
-        if (!normalized.Contains('_'))
-            normalized = string.Concat(normalized.Select((ch, index) => index > 0 && char.IsUpper(ch) ? $"_{ch}" : ch.ToString()));
-
-        return normalized.ToUpperInvariant();
-    }
+    private static string NormalizeEventType(string eventType) => AstronomyEventTypeNormalizer.Normalize(eventType);
 
     private static bool IsEligibleForOpportunity(AstronomyEventIntelligence evt, AstronomyContentOpportunityRequest request)
     {
