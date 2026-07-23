@@ -48,9 +48,6 @@ public sealed class AstronomyContentOpportunityService(
         if (!string.IsNullOrWhiteSpace(request.RegionId))
             query = query.Where(e => e.RegionId == request.RegionId);
 
-        if (requestedTypes is not null && requestedTypes.Count > 0)
-            query = query.Where(e => requestedTypes.Contains(e.EventType));
-
         var candidates = await query
             .Include(e => e.Objects)
             .OrderByDescending(e => e.ContentOpportunityScore)
@@ -59,6 +56,7 @@ public sealed class AstronomyContentOpportunityService(
             .ToListAsync(cancellationToken);
 
         var events = candidates
+            .Where(e => requestedTypes is null || requestedTypes.Count == 0 || requestedTypes.Contains(NormalizeEventType(e.EventType)))
             .Where(e => IsEligibleForOpportunity(e, request))
             .ToList();
 
