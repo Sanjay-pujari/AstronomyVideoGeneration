@@ -24,7 +24,7 @@ public static class SemanticCapabilityVocabularyV1
     public const string EditorialContext = nameof(EditorialContext);
     public const string SafetyGuidance = nameof(SafetyGuidance);
 
-    public static readonly string[] CanonicalIds =
+    public static readonly IReadOnlyList<string> CanonicalIds =
     [
         EventIdentity, EventWindow, AstronomicalObjects, SecondaryAstronomicalObjects, AngularSeparation,
         ObservationDirection, ObservationLocation, ObservationConditions, ObservationEquipment, MeteorActivity,

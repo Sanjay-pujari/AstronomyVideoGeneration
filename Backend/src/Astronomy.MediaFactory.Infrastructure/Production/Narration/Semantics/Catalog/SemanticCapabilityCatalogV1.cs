@@ -24,6 +24,12 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
 
     public IReadOnlyCollection<SemanticCapabilityDefinitionV1> Definitions => _definitions;
     public bool TryGet(SemanticCapabilityId id, out SemanticCapabilityDefinitionV1 definition) => _canonical.TryGetValue(Normalize(id.Value), out definition!);
+    public bool TryGet(SemanticCapabilityId? id, out SemanticCapabilityDefinitionV1 definition)
+    {
+        if (id is { } value) return TryGet(value, out definition);
+        definition = null!;
+        return false;
+    }
     public SemanticCapabilityDefinitionV1 GetRequired(SemanticCapabilityId id) => TryGet(id, out var d) ? d : throw new KeyNotFoundException($"Unknown V1 semantic capability: {id.Value}");
     public LegacySemanticCapabilityResolution ResolveLegacyTerm(string term)
     {
