@@ -68,6 +68,7 @@ public sealed class AstronomyFamilyProfileV1CompatibilityAdapter : IAstronomyFam
             (_, SemanticCapabilityVocabularyV1.ObjectKnowledge) => [family == "DeepSkyObject" ? "ObjectName" : "Name", "ScientificIdentity"],
             (_, SemanticCapabilityVocabularyV1.DomainScientificKnowledge) => [family is "PlanetPairing" or "PlanetGrouping" ? "ApparentPairingScience" : "ScientificImportance"],
             (_, SemanticCapabilityVocabularyV1.CulturalContext) => ["CulturalNameContext"],
+            (_, SemanticCapabilityVocabularyV1.CulturalNameContext) => ["CulturalNameContext"],
             (_, SemanticCapabilityVocabularyV1.SafetyGuidance) => ["SafetyGuidance"],
             _ => Array.Empty<string>()
         };
