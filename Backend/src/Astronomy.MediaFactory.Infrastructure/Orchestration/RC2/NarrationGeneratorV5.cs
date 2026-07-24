@@ -2990,16 +2990,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     }
 
     private static LegacySemanticCapabilityResolution ResolveLegacyCapability(string type)
-    {
-        var map = LegacySemanticCapabilityMapV1.Entries.FirstOrDefault(e => e.LegacyTerm.Equals(type, StringComparison.OrdinalIgnoreCase));
-        if (map is null)
-            return new(type, LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm, null, null, LegacySemanticCapabilityMigrationDisposition.UnsupportedLegacyTerm, false, "No V1 mapping exists for this term.");
-
-        var status = map.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.StructuredField
-            ? LegacySemanticCapabilityResolutionStatus.StructuredFieldMigration
-            : LegacySemanticCapabilityResolutionStatus.DeprecatedAliasMatch;
-        return new(type, status, map.CanonicalCapabilityId, map.StructuredFieldPath, map.MigrationDisposition, true, null);
-    }
+        => SemanticDefaults.LegacySemanticCapabilityResolverV1.Resolve(type);
 
     private static string BuildUnsupportedLegacyCapabilityWarning(LegacySemanticCapabilityResolution resolution)
     {

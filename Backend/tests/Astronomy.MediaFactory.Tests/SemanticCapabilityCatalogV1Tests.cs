@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Registry;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -148,6 +150,55 @@ public sealed class SemanticCapabilityCatalogV1Tests
         Assert.Equal(new SemanticCapabilityCatalogV1().Definitions.ToArray(), _catalog.Definitions.ToArray());
     }
 
+
+    [Theory]
+    [InlineData("CulturalNameContext", "CulturalNameContext", null, LegacySemanticCapabilityResolutionStatus.CanonicalMatch)]
+    [InlineData("Direction", "ObservationDirection", "ObservationDirection.direction", LegacySemanticCapabilityResolutionStatus.StructuredFieldMigration)]
+    [InlineData("ZHR", "MeteorActivity", "MeteorActivity.zhr", LegacySemanticCapabilityResolutionStatus.StructuredFieldMigration)]
+    [InlineData("LocationContext", "ObservationLocation", "ObservationLocation.locationName", LegacySemanticCapabilityResolutionStatus.StructuredFieldMigration)]
+    public void LegacyCapabilityResolver_Centralizes_Canonicalization(string term, string expectedCapability, string? expectedField, LegacySemanticCapabilityResolutionStatus expectedStatus)
+    {
+        var resolver = new LegacySemanticCapabilityResolverV1(_catalog);
+
+        var resolution = resolver.Resolve(term);
+
+        Assert.Equal(expectedStatus, resolution.Status);
+        Assert.Equal(expectedCapability, resolution.CanonicalCapabilityId!.Value.Value);
+        Assert.Equal(expectedField, resolution.StructuredFieldPath);
+        Assert.Equal(expectedCapability, resolver.Canonicalize(new SemanticCapabilityId(term)).Value);
+    }
+
+    [Fact]
+    public void LegacyCapabilityResolver_Reports_Unknown_Terms_As_Unsupported()
+    {
+        var resolver = new LegacySemanticCapabilityResolverV1(_catalog);
+
+        var resolution = resolver.Resolve("TotallyUnknownCapability");
+
+        Assert.Equal(LegacySemanticCapabilityResolutionStatus.UnsupportedLegacyTerm, resolution.Status);
+        Assert.Null(resolution.CanonicalCapabilityId);
+    }
+
+    [Fact]
+    public void Adapter_Registry_Legacy_Lookup_Returns_Canonical_Adapters()
+    {
+        var registry = new SemanticSourceAdapterRegistryV1();
+
+        var adapters = registry.GetAdapters(new SemanticCapabilityId("ZHR"));
+
+        Assert.NotEmpty(adapters);
+        Assert.All(adapters, adapter => Assert.Equal(SemanticCapabilityVocabularyV1.MeteorActivity, adapter.SupportedCapabilityId.Value));
+    }
+
+    [Fact]
+    public void Policy_Catalog_Legacy_Lookup_Returns_Canonical_Policy()
+    {
+        var catalog = new SemanticSourcePolicyCatalogV1();
+
+        Assert.True(catalog.TryGet(new SemanticCapabilityId("ZHR"), out var policy));
+        Assert.Equal(SemanticCapabilityVocabularyV1.MeteorActivity, policy.SemanticCapabilityId.Value);
+    }
+
     [Fact]
     public void Runtime_Catalog_References_Are_Restricted_To_Compatibility_Boundary()
     {
@@ -166,14 +217,23 @@ public sealed class SemanticCapabilityCatalogV1Tests
         var approved = new[]
         {
             Path.Combine(infra, "Production/Narration/Semantics/Catalog/SemanticCapabilityCatalogV1.cs"),
-            Path.Combine(infra, "Production/Narration/Semantics/Catalog/LegacySemanticCapabilityMapV1.cs"),
-            Path.Combine(infra, "Orchestration/RC2/NarrationGeneratorV5.cs")
+            Path.Combine(infra, "Production/Narration/Semantics/Catalog/LegacySemanticCapabilityMapV1.cs")
         }.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var references = Directory.EnumerateFiles(infra, "*.cs", SearchOption.AllDirectories)
             .Where(file => File.ReadAllText(file).Contains("LegacySemanticCapabilityMapV1", StringComparison.Ordinal))
             .Select(Path.GetFullPath)
             .ToArray();
 
-        Assert.All(references, file => Assert.Contains(file, approved));
+        var unexpected = references
+            .Where(file => !approved.Contains(file))
+            .Select(file => Path.GetRelativePath(root, file))
+            .OrderBy(file => file)
+            .ToArray();
+
+        Assert.True(
+            unexpected.Length == 0,
+            "Unexpected direct LegacySemanticCapabilityMapV1 references:" +
+            Environment.NewLine +
+            string.Join(Environment.NewLine, unexpected));
     }
 }
