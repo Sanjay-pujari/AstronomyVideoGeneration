@@ -1959,6 +1959,50 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     private sealed record MeteorShowerShadowEvaluationReport(string RequirementId, ExecutionRequirementOutcome Outcome, FamilyValidationSeverity Severity, string? SourceKey);
     private sealed record MeteorShowerShadowIssueReport(string RequirementId, ExecutionValidationIssueCode IssueCode, FamilyValidationSeverity Severity, ExecutionRequirementOutcome Outcome, string? SourceKey, string? Expected, string? Actual, string Message);
 
+    private static object BuildFamilyProfileV1CompatibilityRuntimeDiagnostics(object compatibilityDiagnostics, AstronomyFamilyProfile legacyProfile)
+    {
+        var catalog = new AstronomyFamilyProfileCatalogV1();
+        catalog.TryGet(legacyProfile.FamilyId, out var v1);
+        object[] Rows(string format, ImmutableArray<FamilyNarrativeBeatV1> beats) => beats.Select(b => new
+        {
+            format,
+            beatId = b.BeatId,
+            beatRole = b.BeatRole,
+            v1CapabilityIds = b.Requirements.Select(r => r.SemanticCapabilityId.Value).ToArray(),
+            requirements = b.Requirements.Select(r => new { capabilityId = r.SemanticCapabilityId.Value, requirementLevel = r.RequirementLevel.ToString(), missingBehavior = r.MissingValueBehavior.ToString(), r.BlocksPhase7 }).ToArray(),
+            projectedLegacyFactTypes = b.Requirements.Select(r => r.SemanticCapabilityId.Value).ToArray(),
+            runtimeRequiredFactTypes = RequiredProfileTypes(legacyProfile, b.BeatRole, format).ToArray(),
+            runtimeOptionalFactTypes = OptionalProfileTypes(legacyProfile, b.BeatRole, format).ToArray()
+        }).Cast<object>().ToArray();
+        return new { compatibilityDiagnostics, activeV1Profile = v1, activeCompatibilityProfile = legacyProfile, beatRequirements = v1 is null ? Array.Empty<object>() : Rows("long", v1.LongFormStructure.Beats).Concat(Rows("short", v1.ShortFormStructure.Beats)).ToArray() };
+    }
+
+    private static IEnumerable<string> RequiredProfileTypes(AstronomyFamilyProfile profile, string role, string format)
+    {
+        var beat = FindProfileBeat(profile, role, format);
+        if (beat is not null)
+            return beat.Requirements.Where(r => r.BlocksPhase7).Select(r => r.SemanticCapabilityId.Value).Distinct(StringComparer.OrdinalIgnoreCase);
+        if (!profile.ContentNature.Contains("Event", StringComparison.OrdinalIgnoreCase))
+            return profile.RequiredFactTypes.Where(t => !Regex.IsMatch(t, "Date|Time|Peak|Window", RegexOptions.IgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase);
+        return profile.RequiredFactTypes.Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> OptionalProfileTypes(AstronomyFamilyProfile profile, string role, string format)
+    {
+        var beat = FindProfileBeat(profile, role, format);
+        if (beat is not null)
+            return beat.Requirements.Where(r => !r.BlocksPhase7).Select(r => r.SemanticCapabilityId.Value).Distinct(StringComparer.OrdinalIgnoreCase);
+        return profile.OptionalFactTypes.Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static FamilyNarrativeBeatV1? FindProfileBeat(AstronomyFamilyProfile profile, string role, string format)
+    {
+        var catalog = new AstronomyFamilyProfileCatalogV1();
+        if (!catalog.TryGet(profile.FamilyId, out var v1)) return null;
+        var beats = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? v1.ShortFormStructure.Beats : v1.LongFormStructure.Beats;
+        return beats.FirstOrDefault(b => b.BeatRole.Equals(role, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string NormalizePath(string path) => path.Replace(Path.DirectorySeparatorChar, '/');
 }
 
@@ -3054,7 +3098,7 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             format = o.Format, beatId = o.BeatId, beatRole = o.Role, requestedLegacyFactType = o.LegacyFactType, canonicalCapabilityId = o.CapabilityId.Value,
             adapterContextCreated = context is not null, astronomyObjectKnowledgeSourcePresent = context?.AstronomyObjectKnowledge is not null,
             verifiedObjectCount = context?.AstronomyObjectKnowledge?.VerifiedObjects.Length ?? 0, verifiedObjects = context?.AstronomyObjectKnowledge?.VerifiedObjects.Select(v => v.Name).ToArray() ?? [],
-            objectKnowledgeValuePresent = ok is not null, objectKnowledgeSubject = ok?.Subject, objectKnowledgeFactCount = ok?.Facts.Length ?? 0, objectKnowledgeFactKeys = ok?.Facts.Select(f => f.Field).ToArray() ?? [],
+            objectKnowledgeValuePresent = ok is not null, objectKnowledgeSubject = ok?.ObjectIdentity, objectKnowledgeFactCount = ok?.Facts.Length ?? 0, objectKnowledgeFactKeys = ok?.Facts.Select(f => f.Field).ToArray() ?? [],
             adapterRegistryType = _sourceAdapterRegistry.GetType().FullName, candidateAdapterIds = _sourceAdapterRegistry.Adapters.Where(a => a.SupportedCapabilityId.Value.Equals(SemanticCapabilityVocabularyV1.ObjectKnowledge, StringComparison.OrdinalIgnoreCase)).Select(a => a.AdapterId).ToArray(),
             adapterInvoked = result.Diagnostics.InvokedAdapterIds.Any(id => id.Contains("object-knowledge", StringComparison.OrdinalIgnoreCase) || id.Contains("ObjectKnowledge", StringComparison.OrdinalIgnoreCase)), adapterResolutionStatus = result.Fact.Status.ToString(),
             resolvedSemanticFactV1Present = result.Fact.Status is SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination, typedValueRuntimeType = result.Fact.TypedValue?.Value?.GetType().FullName ?? result.Fact.CanonicalValue?.GetType().FullName, winningSourceId = result.Fact.WinningSourceId,

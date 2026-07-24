@@ -7,6 +7,7 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contr
 using ResolvedSemanticFact = Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts.ResolvedSemanticFact;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
 
 namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 
