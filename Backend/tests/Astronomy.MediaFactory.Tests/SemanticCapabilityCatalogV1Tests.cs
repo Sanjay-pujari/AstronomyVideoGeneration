@@ -16,6 +16,53 @@ public sealed class SemanticCapabilityCatalogV1Tests
         Assert.NotEmpty(catalog.Definitions);
     }
 
+
+    [Fact]
+    public void Canonical_Count_Remains_19() => Assert.Equal(19, SemanticCapabilityVocabularyV1.CanonicalIds.Count);
+
+    [Fact]
+    public void Structured_Field_Terms_Are_Not_Aliases()
+    {
+        var aliases = _catalog.Definitions.SelectMany(d => d.AcceptedAliases.Where(a => !a.Equals(d.CapabilityId, StringComparison.OrdinalIgnoreCase))).ToArray();
+        foreach (var term in new[] { "Direction", "Radiant", "LocationContext", "Region", "VisibilityRegion" })
+        {
+            Assert.DoesNotContain(term, aliases, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void Direction_Maps_To_ObservationDirection_Field() => AssertStructuredField("Direction", SemanticCapabilityVocabularyV1.ObservationDirection, "ObservationDirection.direction");
+
+    [Fact]
+    public void Radiant_Maps_To_MeteorActivity_Field() => AssertStructuredField("Radiant", SemanticCapabilityVocabularyV1.MeteorActivity, "MeteorActivity.radiant");
+
+    [Fact]
+    public void Location_Terms_Map_To_ObservationLocation_Field()
+    {
+        foreach (var term in new[] { "LocationContext", "Region", "VisibilityRegion" })
+        {
+            AssertStructuredField(term, SemanticCapabilityVocabularyV1.ObservationLocation, "ObservationLocation.locationName");
+        }
+    }
+
+    [Fact]
+    public void CulturalNameContext_Is_Canonical()
+    {
+        Assert.Contains(SemanticCapabilityVocabularyV1.CulturalNameContext, SemanticCapabilityVocabularyV1.CanonicalIds);
+        Assert.True(_catalog.TryGet(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.CulturalNameContext), out var definition));
+        Assert.Equal(SemanticCapabilityVocabularyV1.CulturalNameContext, definition.CapabilityId);
+    }
+
+    private void AssertStructuredField(string term, string expectedCapability, string expectedField)
+    {
+        var definition = _catalog.Definitions.Single(d => d.CapabilityId == expectedCapability);
+        Assert.DoesNotContain(term, definition.AcceptedAliases, StringComparer.OrdinalIgnoreCase);
+        var result = _catalog.ResolveLegacyTerm(term);
+        Assert.Equal(LegacySemanticCapabilityResolutionStatus.StructuredFieldMigration, result.Status);
+        Assert.Equal(expectedCapability, result.CanonicalCapabilityId!.Value.Value);
+        Assert.Equal(expectedField, result.StructuredFieldPath);
+    }
+
     [Fact]
     public void Zhr_Terms_Are_Not_Both_Capability_Aliases_And_Legacy_Field_Mappings()
     {
