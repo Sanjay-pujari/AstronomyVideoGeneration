@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -30,6 +31,59 @@ public sealed class EvergreenAstronomySubjectImportTests
     {
         var ex = await Assert.ThrowsAsync<ArgumentException>(() => CreateLoader().LoadByRelativePathAsync("../Orion.v1.json", CancellationToken.None));
         Assert.Contains("relativePath", ex.Message);
+    }
+
+
+    [Fact]
+    public void MissingRootPathDefaultsToWorkingDirectoryKnowledge()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var resolved = EvergreenAstronomyKnowledgeLoader.ResolveRootPath(" ", workingDirectory);
+        Assert.Equal(Path.GetFullPath(Path.Combine(workingDirectory, "Knowledge")), resolved);
+    }
+
+    [Fact]
+    public void RelativeRootPathResolvesUnderWorkingDirectory()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var resolved = EvergreenAstronomyKnowledgeLoader.ResolveRootPath("Knowledge", workingDirectory);
+        Assert.Equal(Path.GetFullPath(Path.Combine(workingDirectory, "Knowledge")), resolved);
+    }
+
+    [Fact]
+    public void AbsoluteRootPathRemainsUnchanged()
+    {
+        var rootPath = CreateTempDirectory();
+        var workingDirectory = CreateTempDirectory();
+        var resolved = EvergreenAstronomyKnowledgeLoader.ResolveRootPath(rootPath, workingDirectory);
+        Assert.Equal(Path.GetFullPath(rootPath), resolved);
+    }
+
+    [Fact]
+    public async Task OrionRelativePathResolvesUnderWorkingDirectoryKnowledge()
+    {
+        var workingDirectory = CreateTempDirectory();
+        CopyOrionKnowledgeFile(workingDirectory);
+        var loader = new EvergreenAstronomyKnowledgeLoader(
+            Options.Create(new AstronomyKnowledgeOptions { RootPath = "Knowledge" }),
+            Options.Create(new RenderingOptions { WorkingDirectory = workingDirectory }));
+
+        var result = await loader.LoadByRelativePathAsync("Constellations/Orion/Orion.v1.json", CancellationToken.None);
+
+        Assert.Equal(Path.GetFullPath(Path.Combine(workingDirectory, "Knowledge", "Constellations", "Orion", "Orion.v1.json")), result.FullPath);
+    }
+
+    [Fact]
+    public async Task AbsoluteRootPathSupportsAppContextBaseDirectoryPackaging()
+    {
+        var absoluteRootPath = Path.GetFullPath("Knowledge");
+        var loader = new EvergreenAstronomyKnowledgeLoader(
+            Options.Create(new AstronomyKnowledgeOptions { RootPath = absoluteRootPath }),
+            Options.Create(new RenderingOptions { WorkingDirectory = CreateTempDirectory() }));
+
+        var result = await loader.LoadByRelativePathAsync(OrionPath, CancellationToken.None);
+
+        Assert.Equal("constellation.orion", result.Package.KnowledgeId);
     }
 
     [Fact]
@@ -83,5 +137,18 @@ public sealed class EvergreenAstronomySubjectImportTests
 
     private static EvergreenAstronomySubjectImportRequest Request(bool dryRun = false) => new(OrionPath, "GLOBAL", "en", DateTimeOffset.Parse("2026-08-01T12:00:00Z"), false, dryRun);
     private static EvergreenAstronomyKnowledgeLoader CreateLoader() => new(Options.Create(new AstronomyKnowledgeOptions { RootPath = Path.GetFullPath("Knowledge") }));
+    private static string CreateTempDirectory()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "astronomy-knowledge-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static void CopyOrionKnowledgeFile(string workingDirectory)
+    {
+        var destination = Path.Combine(workingDirectory, "Knowledge", "Constellations", "Orion", "Orion.v1.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        File.Copy(Path.GetFullPath(OrionPath), destination);
+    }
     private static MediaFactoryDbContext CreateDb() => new(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
 }

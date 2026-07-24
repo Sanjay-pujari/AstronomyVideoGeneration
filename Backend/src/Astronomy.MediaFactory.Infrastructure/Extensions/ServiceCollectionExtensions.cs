@@ -120,7 +120,6 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(OutputArtifactsOptions.SectionName));
         services.AddOptions<AstronomyKnowledgeOptions>()
             .Bind(configuration.GetSection(AstronomyKnowledgeOptions.SectionName))
-            .Validate(options => !string.IsNullOrWhiteSpace(options.RootPath), "AstronomyKnowledge:RootPath is required.")
             .ValidateOnStart();
         services.AddVisualIntelligenceOrchestration();
 
