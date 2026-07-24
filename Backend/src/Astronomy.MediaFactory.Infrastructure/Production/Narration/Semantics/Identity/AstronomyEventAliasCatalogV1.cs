@@ -27,7 +27,6 @@ public sealed class AstronomyEventAliasCatalogV1
         new("Meteor Shower", "MeteorShower"),
         new("Full Moon", "FullMoon"),
         new("Named Full Moon", "NamedFullMoon"),
-        new("CONSTELLATION", "Constellation"),
         new("Deep Sky Object", "DeepSkyObject"),
         new("BlackHoleOrScientificExplainer", "ScientificExplainer")
     ];
@@ -72,6 +71,8 @@ public sealed class AstronomyEventAliasCatalogV1
             return new(input, canonical, [], false, [$"Event type '{canonical}' is reserved for a future V1 taxonomy stage."]);
         }
 
+        // Alias keys are matched by a trimmed, case-insensitive comparer. Canonical ids are terminal values,
+        // so supported lookups never recursively reprocess a canonical event type as another alias.
         if (_aliases.TryGetValue(input, out var mapped))
             return new(input, mapped, [input], true, [$"Alias '{input}' normalized to '{mapped}'."]);
 
@@ -96,14 +97,50 @@ public sealed class AstronomyEventAliasCatalogV1
 
         foreach (var alias in Aliases)
         {
+            if (AreSameAliasLookupKey(alias.Alias, alias.CanonicalEventType))
+                errors.Add($"Self alias rejected: '{alias.Alias}' targets equivalent canonical id '{alias.CanonicalEventType}'.");
+            if (IsCanonicalSelfAliasToAnotherSpelling(alias, allIds))
+                errors.Add($"Canonical value must not be registered as an alias to another spelling of itself: '{alias.Alias}' -> '{alias.CanonicalEventType}'.");
             if (!allIds.Contains(alias.CanonicalEventType, StringComparer.OrdinalIgnoreCase))
                 errors.Add($"Alias '{alias.Alias}' targets unsupported canonical id '{alias.CanonicalEventType}'.");
-            if (Aliases.Any(a => a.Alias.Equals(alias.CanonicalEventType, StringComparison.OrdinalIgnoreCase)))
-                errors.Add($"Alias cycle detected at '{alias.Alias}' -> '{alias.CanonicalEventType}'.");
         }
+
+        AddAliasCycleErrors(errors);
 
         return new(errors.Count == 0, errors, []);
     }
+
+    private void AddAliasCycleErrors(List<string> errors)
+    {
+        var aliasTargetsByNormalizedKey = Aliases
+            .GroupBy(a => NormalizeAliasLookupKey(a.Alias), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => NormalizeAliasLookupKey(g.First().CanonicalEventType), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var alias in Aliases)
+        {
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var current = NormalizeAliasLookupKey(alias.Alias);
+
+            while (aliasTargetsByNormalizedKey.TryGetValue(current, out var next))
+            {
+                if (!visited.Add(current))
+                {
+                    errors.Add($"Alias cycle detected at '{alias.Alias}'.");
+                    break;
+                }
+
+                current = next;
+            }
+        }
+    }
+
+    private static bool AreSameAliasLookupKey(string left, string right) =>
+        string.Equals(NormalizeAliasLookupKey(left), NormalizeAliasLookupKey(right), StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCanonicalSelfAliasToAnotherSpelling(AstronomyEventAliasV1 alias, IEnumerable<string> taxonomyIds) =>
+        taxonomyIds.Contains(alias.Alias, StringComparer.OrdinalIgnoreCase) && AreSameAliasLookupKey(alias.Alias, alias.CanonicalEventType);
+
+    private static string NormalizeAliasLookupKey(string value) => Clean(value).ToUpperInvariant();
 
     private static void AddDuplicateErrors(List<string> errors, IEnumerable<string> values, string label)
     {

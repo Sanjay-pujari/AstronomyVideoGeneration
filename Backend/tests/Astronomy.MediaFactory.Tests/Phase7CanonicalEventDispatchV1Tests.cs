@@ -131,6 +131,40 @@ public sealed class Phase7CanonicalEventDispatchV1Tests
         Assert.Equal("PlanetPairing", family.Resolved.CanonicalFamilyId);
     }
 
+    [Fact]
+    public void FamilyResolverUsesCanonicalEventTypeNotRawSourceType()
+    {
+        var identity = IdentityResolver.Resolve("PLANET_CONJUNCTION", "CanonicalResolverUnitTest");
+        var legacy = ToLegacyIdentity(identity);
+
+        var family = FamilyResolver.ResolveFamilyProfile(legacy);
+
+        Assert.Equal("PlanetPairing", legacy.EventType);
+        Assert.Equal("PLANET_CONJUNCTION", legacy.SourceEventType);
+        Assert.Equal("PlanetPairing", family.Profile.FamilyId);
+        Assert.Equal("PlanetPairing", family.Resolved.CanonicalFamilyId);
+    }
+
+    [Fact]
+    public void CompatibilityAdapterPreservesRawSourceSeparatelyFromCanonicalIdentity()
+    {
+        var planetIdentity = IdentityResolver.Resolve("PLANET_CONJUNCTION", "AdapterUnitTest");
+        var planetLegacy = ToLegacyIdentity(planetIdentity);
+        Assert.Equal("PlanetPairing", planetLegacy.EventType);
+        Assert.Equal("PLANET_CONJUNCTION", planetLegacy.SourceEventType);
+        Assert.Equal("PlanetPairing", planetLegacy.EventFamily);
+        Assert.Equal("PlanetPairing", planetLegacy.StrategyId);
+        Assert.True(planetLegacy.AliasApplied);
+
+        var constellationIdentity = IdentityResolver.Resolve("CONSTELLATION", "AdapterUnitTest");
+        var constellationLegacy = ToLegacyIdentity(constellationIdentity);
+        Assert.Equal("Constellation", constellationLegacy.EventType);
+        Assert.Equal("CONSTELLATION", constellationLegacy.SourceEventType);
+        Assert.Equal("Constellation", constellationLegacy.EventFamily);
+        Assert.Equal("Constellation", constellationLegacy.StrategyId);
+        Assert.False(constellationLegacy.AliasApplied);
+    }
+
     private static CanonicalEventIdentity ToLegacyIdentity(CanonicalAstronomyEventIdentity identity) => new(
         identity.CanonicalEventType ?? identity.InputEventType ?? string.Empty,
         identity.CanonicalFamily,
