@@ -17,6 +17,7 @@ using Astronomy.MediaFactory.Infrastructure.Operations;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Identity;
@@ -59,8 +60,11 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddProductionSemanticRuntimeV1(this IServiceCollection services)
     {
+        services.AddSingleton<SemanticCapabilityCatalogV1>();
+        services.AddSingleton<ILegacySemanticCapabilityResolverV1, LegacySemanticCapabilityResolverV1>();
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1>(
-            _ => new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1());
+            sp => new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1(
+                sp.GetRequiredService<ILegacySemanticCapabilityResolverV1>()));
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.ISemanticSourcePolicyCatalogV1>(
             sp => sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.SemanticSourcePolicyCatalogV1>());
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.IMeteorShowerKnowledgeCatalogV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog.MeteorShowerKnowledgeCatalogV1>();
@@ -91,7 +95,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISemanticSourceAdapterV1, EditorialContextSourceAdapterV1>();
         services.AddSingleton<ISemanticSourceAdapterV1, SafetyGuidanceKnowledgeAdapterV1>();
         services.AddSingleton<SemanticSourceAdapterRegistryV1>(sp =>
-            new SemanticSourceAdapterRegistryV1(sp.GetServices<ISemanticSourceAdapterV1>()));
+            new SemanticSourceAdapterRegistryV1(sp.GetServices<ISemanticSourceAdapterV1>(), sp.GetRequiredService<ILegacySemanticCapabilityResolverV1>()));
         services.AddSingleton<ISemanticSourceAdapterRegistryV1>(sp =>
             sp.GetRequiredService<SemanticSourceAdapterRegistryV1>());
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.ISemanticCandidateCollectorV1, Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection.SemanticCandidateCollectorV1>();

@@ -14,7 +14,7 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
     {
         if (fact.Status is not (SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination)) return null;
 
-        var mapping = LegacySemanticCapabilityMapV1.Entries.FirstOrDefault(e => e.LegacyTerm.Equals(legacyFactType, StringComparison.OrdinalIgnoreCase));
+        var mapping = SemanticDefaults.LegacySemanticCapabilityResolverV1.Resolve(legacyFactType);
         var projected = ProjectStructuredValue(fact, mapping.StructuredFieldPath, legacyFactType);
         var realized = SemanticFactValueRealizer.Instance.Realize(fact, legacyFactType, mapping.StructuredFieldPath, LanguageProfileResolver.Resolve(language));
         if (projected.DisplayValue is null && realized.Succeeded) projected = (projected.Value, projected.Unit, realized.SpeakableValue, projected.SourcePropertyPath);

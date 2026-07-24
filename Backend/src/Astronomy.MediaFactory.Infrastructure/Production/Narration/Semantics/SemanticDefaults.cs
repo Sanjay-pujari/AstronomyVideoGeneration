@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Collection;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Engine;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Evaluation;
@@ -14,6 +15,7 @@ public static class SemanticDefaults
     public static ISemanticCapabilitySourceRegistry SemanticCapabilitySourceRegistry { get; } = new SemanticCapabilitySourceRegistry(SemanticCapabilityCatalog);
     public static ISemanticCapabilityResolver SemanticCapabilityResolver { get; } = new SemanticCapabilityResolver(SemanticCapabilityCatalog, SemanticCapabilitySourceRegistry);
     public static IAstronomyDomainKnowledgeProvider DomainKnowledgeProvider { get; } = new AstronomyDomainKnowledgeProvider();
+    public static ILegacySemanticCapabilityResolverV1 LegacySemanticCapabilityResolverV1 { get; } = new LegacySemanticCapabilityResolverV1();
     public static ISemanticSourcePolicyCatalogV1 SemanticSourcePolicyCatalogV1 { get; } = new SemanticSourcePolicyCatalogV1();
     public static ISemanticSourceAdapterRegistryV1 SemanticSourceAdapterRegistryV1 { get; } = new SemanticSourceAdapterRegistryV1();
     public static ISemanticCandidateCollectorV1 SemanticCandidateCollectorV1 { get; } = new SemanticCandidateCollectorV1(SemanticSourcePolicyCatalogV1, SemanticSourceAdapterRegistryV1);

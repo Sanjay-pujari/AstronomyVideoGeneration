@@ -68,6 +68,24 @@ public sealed class FamilyProfileV1CompatibilityParityTests
         Assert.Contains("ObservationDirection", result.LegacyProfile.OptionalFactTypes);
     }
 
+
+    [Theory]
+    [InlineData("PlanetPairing")]
+    [InlineData("MeteorShower")]
+    [InlineData("SolarEclipse")]
+    [InlineData("Constellation")]
+    public void CompatibilityProjectionRemainsStableForCanonicalFamilies(string familyId)
+    {
+        var catalog = new AstronomyFamilyProfileCatalogV1();
+        var v1 = catalog.GetRequired(familyId);
+
+        var result = new AstronomyFamilyProfileV1CompatibilityAdapter().Convert(v1, new FamilyProfileCompatibilityContext(familyId, familyId, familyId, false));
+
+        Assert.True(result.Succeeded, string.Join("; ", result.BlockingErrors));
+        Assert.NotNull(result.LegacyProfile);
+        Assert.Equal(v1.LongFormStructure.Beats.Concat(v1.ShortFormStructure.Beats).SelectMany(b => b.Requirements).Select(r => r.SemanticCapabilityId.Value).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase), result.Diagnostics.Mappings.Select(m => m.V1CapabilityId).Order(StringComparer.OrdinalIgnoreCase));
+    }
+
     public static IEnumerable<object[]> ActiveFamilies()
         => RequiredActiveFamilies.Select(f => new object[] { f });
 }

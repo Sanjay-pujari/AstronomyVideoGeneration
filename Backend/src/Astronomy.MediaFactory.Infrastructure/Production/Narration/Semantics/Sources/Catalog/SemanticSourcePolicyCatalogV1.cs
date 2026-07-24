@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families;
@@ -10,8 +11,11 @@ namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.S
 public sealed class SemanticSourcePolicyCatalogV1 : ISemanticSourcePolicyCatalogV1
 {
     private readonly ImmutableArray<SemanticSourcePolicyV1> _policies;
-    public SemanticSourcePolicyCatalogV1() : this(CreatePolicies()) { }
-    public SemanticSourcePolicyCatalogV1(IEnumerable<SemanticSourcePolicyV1> policies) { _policies=policies.ToImmutableArray(); Policies=_policies; }
+    private readonly ILegacySemanticCapabilityResolverV1 _legacyCapabilityResolver;
+    public SemanticSourcePolicyCatalogV1() : this(CreatePolicies(), SemanticDefaults.LegacySemanticCapabilityResolverV1) { }
+    public SemanticSourcePolicyCatalogV1(ILegacySemanticCapabilityResolverV1 legacyCapabilityResolver) : this(CreatePolicies(), legacyCapabilityResolver) { }
+    public SemanticSourcePolicyCatalogV1(IEnumerable<SemanticSourcePolicyV1> policies) : this(policies, SemanticDefaults.LegacySemanticCapabilityResolverV1) { }
+    public SemanticSourcePolicyCatalogV1(IEnumerable<SemanticSourcePolicyV1> policies, ILegacySemanticCapabilityResolverV1 legacyCapabilityResolver) { _legacyCapabilityResolver=legacyCapabilityResolver??throw new ArgumentNullException(nameof(legacyCapabilityResolver)); _policies=policies.ToImmutableArray(); Policies=_policies; }
     public IReadOnlyCollection<SemanticSourcePolicyV1> Policies { get; }
     public bool TryGet(SemanticCapabilityId capabilityId, out SemanticSourcePolicyV1 policy)
     {
@@ -26,11 +30,10 @@ public sealed class SemanticSourcePolicyCatalogV1 : ISemanticSourcePolicyCatalog
     { if(!TryGet(capabilityId,out var p)) return new(capabilityId,d.SourceId,false,d.EvidenceCategory,d.EvidenceStrength,d.CompatibilityOnly,"MissingCapabilityPolicy","No policy exists."); var s=p.ApprovedSources.FirstOrDefault(x=>x.SourceId==d.SourceId); var ok=s is not null && p.AllowedEvidenceCategories.Contains(d.EvidenceCategory) && d.EvidenceStrength>=p.MinimumEvidenceStrength && !d.CompatibilityOnly; return new(capabilityId,d.SourceId,ok,d.EvidenceCategory,d.EvidenceStrength,d.CompatibilityOnly,ok?"Approved":"Rejected",ok?"Source is approved by policy.":"Source does not satisfy policy."); }
     public SemanticSourcePolicyCertificationReportV1 CertifyFamilyProfile(AstronomyFamilyProfileV1 profile)=>new SemanticSourcePolicyCertifierV1(this,new SemanticCapabilityCatalogV1()).Certify(profile);
 
-    private static SemanticCapabilityId CanonicalizeCapabilityId(SemanticCapabilityId capabilityId)
+    private SemanticCapabilityId CanonicalizeCapabilityId(SemanticCapabilityId capabilityId)
     {
         if (_canonicalPolicyIds.Contains(capabilityId.Value)) return capabilityId;
-        var mapped = LegacySemanticCapabilityMapV1.Entries.FirstOrDefault(e => e.LegacyTerm.Equals(capabilityId.Value, StringComparison.OrdinalIgnoreCase)).CanonicalCapabilityId;
-        return mapped ?? capabilityId;
+        return _legacyCapabilityResolver.Canonicalize(capabilityId);
     }
     private static readonly ImmutableHashSet<string> _canonicalPolicyIds = CreatePolicies().Select(p => p.SemanticCapabilityId.Value).ToImmutableHashSet(StringComparer.Ordinal);
 
