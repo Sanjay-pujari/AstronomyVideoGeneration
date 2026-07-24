@@ -44,6 +44,26 @@ public sealed class Phase7CanonicalEventDispatchV1Tests
     }
 
     [Theory]
+    [InlineData("CONSTELLATION")]
+    [InlineData("Constellation")]
+    [InlineData("constellation")]
+    public void Phase7AcceptsConstellationAliasesAndResolvesToConstellationProfile(string eventType)
+    {
+        var identity = IdentityResolver.Resolve(eventType, "Phase7ConstellationBoundary");
+        var family = FamilyResolver.ResolveFamilyProfile(ToLegacyIdentity(identity));
+
+        Assert.True(identity.Supported);
+        Assert.Equal("Constellation", identity.CanonicalEventType);
+        Assert.Equal("Constellation", identity.CanonicalFamily);
+        Assert.Equal("Constellation", family.Profile.FamilyId);
+        Assert.Equal("ConstellationShort", family.Profile.PreferredShortArchetype);
+        Assert.Equal("No event date required.", family.Profile.TimingRequirements);
+        Assert.Contains("ObjectKnowledge", family.Profile.RequiredFactTypes);
+        Assert.DoesNotContain("EventDateOrWindow", family.Profile.RequiredFactTypes);
+        Assert.DoesNotContain("LocalPeakTime", family.Profile.RequiredFactTypes);
+    }
+
+    [Theory]
     [InlineData("PLANET_CONJUNCTION", "PlanetPairing")]
     public void ConfirmedProductionAliasesResolve(string eventType, string expectedFamily)
     {
