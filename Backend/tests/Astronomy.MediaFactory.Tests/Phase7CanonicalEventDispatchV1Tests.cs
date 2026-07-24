@@ -58,7 +58,8 @@ public sealed class Phase7CanonicalEventDispatchV1Tests
         Assert.Equal("Constellation", family.Profile.FamilyId);
         Assert.Equal("ConstellationShort", family.Profile.PreferredShortArchetype);
         Assert.Equal("No event date required.", family.Profile.TimingRequirements);
-        Assert.Contains("ObjectKnowledge", family.Profile.RequiredFactTypes);
+        Assert.Contains("Name", family.Profile.RequiredFactTypes);
+        Assert.Contains("ScientificIdentity", family.Profile.RequiredFactTypes);
         Assert.DoesNotContain("EventDateOrWindow", family.Profile.RequiredFactTypes);
         Assert.DoesNotContain("LocalPeakTime", family.Profile.RequiredFactTypes);
     }
