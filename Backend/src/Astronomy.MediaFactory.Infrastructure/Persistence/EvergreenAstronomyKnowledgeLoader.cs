@@ -1,14 +1,28 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
-public sealed class EvergreenAstronomyKnowledgeLoader(IOptions<AstronomyKnowledgeOptions> options) : IEvergreenAstronomyKnowledgeLoader
+public sealed class EvergreenAstronomyKnowledgeLoader : IEvergreenAstronomyKnowledgeLoader
 {
+    private readonly IOptions<AstronomyKnowledgeOptions> options;
+    private readonly IOptions<RenderingOptions> renderingOptions;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly HashSet<string> SupportedReviewStatuses = new(StringComparer.OrdinalIgnoreCase) { "Reviewed" };
+
+    public EvergreenAstronomyKnowledgeLoader(IOptions<AstronomyKnowledgeOptions> options)
+        : this(options, Options.Create(new RenderingOptions()))
+    {
+    }
+
+    public EvergreenAstronomyKnowledgeLoader(IOptions<AstronomyKnowledgeOptions> options, IOptions<RenderingOptions> renderingOptions)
+    {
+        this.options = options;
+        this.renderingOptions = renderingOptions;
+    }
 
     public async Task<EvergreenAstronomyKnowledgeLoadResult> LoadByRelativePathAsync(string relativePath, CancellationToken cancellationToken)
     {
@@ -16,16 +30,45 @@ public sealed class EvergreenAstronomyKnowledgeLoader(IOptions<AstronomyKnowledg
         if (Path.IsPathRooted(relativePath)) throw new ArgumentException("relativePath must not be an absolute path.");
         var normalized = relativePath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
         if (normalized.Split(Path.DirectorySeparatorChar).Any(p => p == "..")) throw new ArgumentException("relativePath must not contain path traversal segments.");
-        var root = Path.GetFullPath(string.IsNullOrWhiteSpace(options.Value.RootPath) ? "Knowledge" : options.Value.RootPath);
-        var fullPath = Path.GetFullPath(Path.Combine(root, normalized.StartsWith("Knowledge" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? normalized[("Knowledge" + Path.DirectorySeparatorChar).Length..] : normalized));
-        if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && !string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("relativePath resolves outside AstronomyKnowledge:RootPath.");
-        var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
+        var configuredRootPath = options.Value.RootPath;
+        var configuredWorkingDirectory = renderingOptions.Value.WorkingDirectory;
+        var root = ResolveRootPath(configuredRootPath, configuredWorkingDirectory);
+        var requestedRelativePath = normalized.StartsWith("Knowledge" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? normalized[("Knowledge" + Path.DirectorySeparatorChar).Length..] : normalized;
+        var fullPath = Path.GetFullPath(Path.Combine(root, requestedRelativePath));
+        if (!IsUnderRoot(fullPath, root)) throw new ArgumentException("relativePath resolves outside AstronomyKnowledge:RootPath.");
+        byte[] bytes;
+        try
+        {
+            bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
+        }
+        catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException)
+        {
+            throw new FileNotFoundException(
+                $"Astronomy knowledge file was not found. Configured Rendering:WorkingDirectory='{configuredWorkingDirectory}'. Configured AstronomyKnowledge:RootPath='{configuredRootPath}'. Resolved knowledge root='{root}'. Requested relative path='{relativePath.Replace('\\', '/')}'. Resolved full file path='{fullPath}'.",
+                fullPath,
+                ex);
+        }
         EvergreenAstronomyKnowledgePackage? package;
         try { package = JsonSerializer.Deserialize<EvergreenAstronomyKnowledgePackage>(bytes, JsonOptions); }
         catch (JsonException ex) { throw new ArgumentException($"Invalid JSON in relativePath: {ex.Message}", ex); }
         if (package is null) throw new ArgumentException("knowledge package JSON is empty.");
         Validate(package);
         return new(package, relativePath.Replace('\\', '/'), fullPath, "sha256:" + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+    }
+
+    public static string ResolveRootPath(string? configuredRootPath, string? configuredWorkingDirectory)
+    {
+        var workingDirectory = string.IsNullOrWhiteSpace(configuredWorkingDirectory) ? new RenderingOptions().WorkingDirectory : configuredWorkingDirectory.Trim();
+        if (string.IsNullOrWhiteSpace(configuredRootPath)) return Path.GetFullPath(Path.Combine(workingDirectory, "Knowledge"));
+        var rootPath = configuredRootPath.Trim();
+        return Path.GetFullPath(Path.IsPathRooted(rootPath) ? rootPath : Path.Combine(workingDirectory, rootPath));
+    }
+
+    private static bool IsUnderRoot(string fullPath, string root)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return string.Equals(fullPath, normalizedRoot, comparison) || fullPath.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison);
     }
 
     public static void Validate(EvergreenAstronomyKnowledgePackage p)
