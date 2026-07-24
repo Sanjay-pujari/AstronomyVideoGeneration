@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
@@ -13,6 +15,10 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
     public static ResolvedSemanticFact? Map(ResolvedSemanticFactV1 fact, string legacyFactType, string? beatId, string requiredness, string language)
     {
         if (fact.Status is not (SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination)) return null;
+
+        if (fact.CapabilityId.Value.Equals(SemanticCapabilityVocabularyV1.ObjectKnowledge, StringComparison.OrdinalIgnoreCase) &&
+            legacyFactType.Equals(SemanticCapabilityVocabularyV1.ObjectKnowledge, StringComparison.OrdinalIgnoreCase))
+            return MapObjectKnowledgeAggregate(fact, beatId, requiredness, language);
 
         var mapping = SemanticDefaults.LegacySemanticCapabilityResolverV1.Resolve(legacyFactType);
         var projected = ProjectStructuredValue(fact, mapping.StructuredFieldPath, legacyFactType);
@@ -53,6 +59,43 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
             string.Equals(legacyFactType, fact.CapabilityId.Value, StringComparison.OrdinalIgnoreCase) ? null : $"V1Projection.{fact.CapabilityId.Value}.{legacyFactType}",
             provenance);
     }
+
+    private static ResolvedSemanticFact? MapObjectKnowledgeAggregate(ResolvedSemanticFactV1 fact, string? beatId, string requiredness, string language)
+    {
+        if ((fact.TypedValue?.Value ?? fact.CanonicalValue) is not ObjectKnowledgeValue value || value.Facts.IsDefaultOrEmpty) return null;
+        var projection = ObjectKnowledgeNarrationFormatter.Format(value, LanguageProfileResolver.Resolve(language));
+        if (projection.SafeFactKeys.IsDefaultOrEmpty || string.IsNullOrWhiteSpace(projection.SpeakableValue)) return null;
+        var sourceInputs = projection.SourceInputs.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return new ResolvedSemanticFact(
+            SemanticCapabilityVocabularyV1.ObjectKnowledge,
+            SemanticCapabilityVocabularyV1.ObjectKnowledge,
+            value,
+            null,
+            SemanticCapabilityVocabularyV1.ObjectKnowledge,
+            fact.WinningSourceId ?? fact.WinningAdapterId ?? SemanticSourcePolicyVocabularyV1.AstronomyObjectKnowledgeProvider,
+            "AstronomyObjectKnowledge.ObjectKnowledge",
+            beatId,
+            SemanticVerificationStatus.Verified,
+            fact.Confidence,
+            Enum.Parse<SemanticFactRequiredness>(requiredness, ignoreCase: true),
+            projection.LocalizedDisplayValue,
+            projection.SpeakableValue,
+            language,
+            projection.SafeFactKeys.Length > 0,
+            "Source",
+            null,
+            sourceInputs);
+    }
+
+    private static ObjectKnowledgeFactV1? FindObjectKnowledgeFact(ObjectKnowledgeValue value, string requestedField)
+        => value.Facts.IsDefaultOrEmpty || string.IsNullOrWhiteSpace(requestedField)
+            ? null
+            : value.Facts
+                .Where(f => f.Field.Equals(requestedField, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(f => f.Field, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(f => f.Provenance.SourcePropertyPath, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+
     private static (object? Value, string? Unit, string? DisplayValue, string? SourcePropertyPath) ProjectStructuredValue(ResolvedSemanticFactV1 fact, string? structuredFieldPath, string legacyFactType)
     {
         var value = fact.TypedValue?.Value ?? fact.CanonicalValue;
@@ -101,7 +144,7 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
         }
         if (value is ObjectKnowledgeValue ok)
         {
-            var f = ok.Facts.FirstOrDefault(x => x.Field.Equals(path, StringComparison.OrdinalIgnoreCase));
+            var f = FindObjectKnowledgeFact(ok, path);
             return f is null ? (null, null, null, null) : (f.Value, null, f.Value, f.Provenance.SourcePropertyPath);
         }
         if (value is DomainScientificKnowledgeValue dk)
@@ -131,4 +174,45 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
     }
 
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim();
+}
+
+public sealed record ObjectKnowledgeNarrationProjection(string SpeakableValue, string LocalizedDisplayValue, ImmutableArray<string> SafeFactKeys, ImmutableArray<string> OmittedFactKeys, ImmutableArray<string> SourceInputs);
+
+public static class ObjectKnowledgeNarrationFormatter
+{
+    private static readonly string[] PreferredOrder = ["Name", "ObjectType", "ScientificIdentity", "IdentificationPattern", "MajorStars", "ScientificImportance", "ObservationAdvice"];
+
+    public static ObjectKnowledgeNarrationProjection Format(ObjectKnowledgeValue value, LanguageProfile languageProfile)
+    {
+        if (value.Facts.IsDefaultOrEmpty) return new(string.Empty, string.Empty, [], [], []);
+        var facts = value.Facts
+            .Where(f => !string.IsNullOrWhiteSpace(f.Field) && !string.IsNullOrWhiteSpace(f.Value) && f.Provenance.Verified)
+            .GroupBy(f => f.Field, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderBy(f => f.Provenance.SourcePropertyPath, StringComparer.OrdinalIgnoreCase).First())
+            .ToDictionary(f => f.Field, f => f, StringComparer.OrdinalIgnoreCase);
+        var safeKeys = PreferredOrder.Where(facts.ContainsKey).ToImmutableArray();
+        var omitted = value.Facts.Select(f => f.Field).Where(k => !safeKeys.Contains(k, StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
+        var inputs = value.Facts.Select(f => f.Provenance.SourcePropertyPath).Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
+        var text = languageProfile.LanguageCode.Equals("hi", StringComparison.OrdinalIgnoreCase)
+            ? string.Join(" ", safeKeys.Select(k => $"{k}: {facts[k].Value}"))
+            : BuildEnglish(facts, safeKeys);
+        return new(text, text, safeKeys, omitted, inputs);
+    }
+
+    private static string BuildEnglish(IReadOnlyDictionary<string, ObjectKnowledgeFactV1> facts, ImmutableArray<string> safeKeys)
+    {
+        var sentences = new List<string>();
+        string? V(string key) => facts.TryGetValue(key, out var f) ? f.Value.Trim().TrimEnd('.') : null;
+        var name = V("Name"); var type = V("ObjectType");
+        if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(type)) sentences.Add($"{name} is {Article(type)} {type}.");
+        else if (!string.IsNullOrWhiteSpace(name)) sentences.Add(name + ".");
+        foreach (var key in PreferredOrder.Skip(2))
+        {
+            var value = V(key);
+            if (!string.IsNullOrWhiteSpace(value)) sentences.Add(value + ".");
+        }
+        return string.Join(" ", sentences);
+    }
+
+    private static string Article(string text) => Regex.IsMatch(text, "^[aeiou]", RegexOptions.IgnoreCase) ? "an" : "a";
 }

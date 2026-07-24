@@ -1696,16 +1696,34 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     {
         if (!familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase) && !familyId.Equals("DeepSkyObject", StringComparison.OrdinalIgnoreCase)) return null;
         var name = objects.Select(o => o.Name).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n)) ?? familyId;
-        var type = familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase) ? "official constellation or recognizable sky pattern" : "deep-sky object such as a galaxy, nebula, or star cluster";
-        var facts = new[]
+        SemanticSourceProvenanceV1 P(string key) => new(SemanticSourcePolicyVocabularyV1.AstronomyObjectKnowledgeProvider, nameof(ObjectKnowledgeValue), $"AstronomyObjectKnowledge.ObjectKnowledge.{key}", true);
+        if (familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase))
         {
-            new ObjectKnowledgeFactV1("Name", name, new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyDomainKnowledgeProvider, nameof(ObjectKnowledgeValue), "StructuredDomainKnowledge.Name", true)),
-            new ObjectKnowledgeFactV1("ObjectType", type, new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyDomainKnowledgeProvider, nameof(ObjectKnowledgeValue), "StructuredDomainKnowledge.ObjectType", true)),
-            new ObjectKnowledgeFactV1("ScientificImportance", familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase) ? "Constellations organize sky navigation and cultural sky stories without implying the stars are physically bound." : "Deep-sky objects reveal stellar evolution, galactic structure, and cosmic distance scales.", new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyDomainKnowledgeProvider, nameof(ObjectKnowledgeValue), "StructuredDomainKnowledge.ScientificImportance", true)),
-            new ObjectKnowledgeFactV1("ObservationAdvice", familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase) ? "Use verified sky-region and pattern guidance; do not force event timing." : "Dark skies and optical aid improve observation; exact visibility must be verified.", new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyDomainKnowledgeProvider, nameof(ObjectKnowledgeValue), "StructuredDomainKnowledge.ObservationAdvice", true))
-        };
-        return new ObjectKnowledgeValue(name, facts.ToImmutableArray());
+            var deepSky = new Regex("Nebula|Galaxy|Cluster|M42|Messier|NGC", RegexOptions.IgnoreCase);
+            var stars = objects.Select(o => o.Name).Where(n => !string.IsNullOrWhiteSpace(n) && !n.Equals(name, StringComparison.OrdinalIgnoreCase) && !deepSky.IsMatch(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var majorStars = stars.Length == 0 ? "Use verified secondary stellar objects when available." : string.Join(", ", stars);
+            return new ObjectKnowledgeValue(name, new[]
+            {
+                new ObjectKnowledgeFactV1("Name", name, P("Name")),
+                new ObjectKnowledgeFactV1("ObjectType", "official constellation", P("ObjectType")),
+                new ObjectKnowledgeFactV1("ScientificIdentity", "An IAU-recognized constellation and sky region; its stars form an apparent pattern from Earth and are not necessarily physically associated", P("ScientificIdentity")),
+                new ObjectKnowledgeFactV1("IdentificationPattern", "Use the three aligned Belt stars as the primary recognition pattern", P("IdentificationPattern")),
+                new ObjectKnowledgeFactV1("MajorStars", majorStars, P("MajorStars")),
+                new ObjectKnowledgeFactV1("ScientificImportance", "Constellations organize sky navigation and object location without implying that their stars form a physically bound system", P("ScientificImportance")),
+                new ObjectKnowledgeFactV1("ObservationAdvice", "Start with the Belt pattern, then identify nearby bright stars and the Orion Nebula using verified object data", P("ObservationAdvice"))
+            }.ToImmutableArray());
+        }
+        return new ObjectKnowledgeValue(name, new[]
+        {
+            new ObjectKnowledgeFactV1("Name", name, P("Name")),
+            new ObjectKnowledgeFactV1("ObjectType", "deep-sky object such as a galaxy, nebula, or star cluster", P("ObjectType")),
+            new ObjectKnowledgeFactV1("ScientificImportance", "Deep-sky objects reveal stellar evolution, galactic structure, and cosmic distance scales.", P("ScientificImportance")),
+            new ObjectKnowledgeFactV1("ObservationAdvice", "Dark skies and optical aid improve observation; exact visibility must be verified.", P("ObservationAdvice"))
+        }.ToImmutableArray());
     }
+
+    private static ImmutableArray<AstronomicalObjectValue> MergeObjects(ImmutableArray<AstronomicalObjectValue> primary, ImmutableArray<AstronomicalObjectValue> secondary)
+        => primary.Concat(secondary).Where(o => !string.IsNullOrWhiteSpace(o.Name)).DistinctBy(o => o.Name, StringComparer.OrdinalIgnoreCase).ToImmutableArray();
 
     private static string? TryGetRootString(JsonElement? element, string name) => element is { ValueKind: JsonValueKind.Object } e ? GetString(e, name) : null;
     private static string? ValueToString(JsonElement value) => value.ValueKind switch { JsonValueKind.String => value.GetString(), JsonValueKind.Number => value.GetRawText(), JsonValueKind.True => "true", JsonValueKind.False => "false", _ => null };
@@ -1974,7 +1992,7 @@ public sealed record NarrationSafeContextHandoffDiagnostic(string Format, string
 public sealed record NarrationSafeContextIgnoredFactDiagnostic(string FactType, string Reason);
 public sealed record NormalizationRecord(string SourceArtifact, string SourceField, string Classification, string CanonicalValuePreview, string? NormalizedValue, string Language, string Result, string Reason);
 
-public enum NarrationFactType { ObjectName, EventDate, PeakTime, ViewingWindow, Direction, AngularSeparation, Location, ScienceMeaning, ObservationGuidance, VisibilityCondition, PublishMetadata, InternalMetadata }
+public enum NarrationFactType { ObjectKnowledge, ObjectName, EventDate, PeakTime, ViewingWindow, Direction, AngularSeparation, Location, ScienceMeaning, ObservationGuidance, VisibilityCondition, PublishMetadata, InternalMetadata }
 
 public static class NarrationInputNormalizer
 {
@@ -2037,6 +2055,7 @@ public static class NarrationInputNormalizer
     {
         var k = key ?? string.Empty; var v = value ?? string.Empty;
         if (ContainsAny(k, "publish", "scheduled", "campaign") || ContainsAny(v, "recommendedPublishWindow", "scheduledUtc")) return NarrationFactType.PublishMetadata;
+        if (ContainsAny(k, "ObjectKnowledge")) return NarrationFactType.ObjectKnowledge;
         if (Regex.IsMatch(v, @"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b") || ContainsAny(k, "id", "source") || v.TrimStart().StartsWith("{") || v.TrimStart().StartsWith("[")) return NarrationFactType.InternalMetadata;
         if (ContainsAny(k, "date")) return NarrationFactType.EventDate;
         if (ContainsAny(k, "time", "peak")) return NarrationFactType.PeakTime;
@@ -2751,8 +2770,8 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
             }
             var required = requiredOccurrences.Select(o => o.LegacyFactType).ToArray();
             var optional = optionalOccurrences.Select(o => o.LegacyFactType).ToArray();
-            var missing = required.Where(t => !resolvedRequired.Any(f => Matches(t, f.FactType))).ToArray();
-            var omitted = optional.Where(t => !resolvedOptional.Any(f => Matches(t, f.FactType))).ToArray();
+            var missing = required.Where(t => !resolvedRequired.Any(f => Matches(t, f))).ToArray();
+            var omitted = optional.Where(t => !resolvedOptional.Any(f => Matches(t, f))).ToArray();
             var conflicts = beatGroup.SelectMany(o => o.ScopeKey is null ? Array.Empty<FactConflict>() : ToFactConflicts(o, resolvedByScope[o.ScopeKey].Fact)).Concat(FindConflicts(required.Concat(optional), all)).DistinctBy(c => c.FactType).ToArray();
             var capabilityResults = beatGroup.Select(o => o.ScopeKey is null ? o.CapabilityResolution : ToCapabilityResolution(o, resolvedByScope[o.ScopeKey].Fact)).ToArray();
             var unsupportedWarnings = beatGroup.Where(o => !o.IsSupported).Select(o => $"Unsupported legacy capability {o.LegacyFactType} classified as {o.CapabilityResolution.Status}; no semantic resolution request was created.");
@@ -3079,7 +3098,8 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
         var observationSource = new ObservationMetadataSourceV1(observationEventWindow ?? productionEventWindow, observationAngularSeparation ?? angularSeparation, ReadObservationDirection(input.ObservationMetadata) ?? ReadObservationDirectionFromRequest(request), ReadObservationLocation(input.ObservationMetadata) ?? requestLocation);
         var documentarySource = new DocumentaryContractSourceV1(documentaryEventWindow);
         var domain = new AstronomyDomainKnowledgeSourceV1(DomainKnowledge: ReadDomainKnowledge(input.LongDocumentaryContract, familyId) ?? ResolveDomainKnowledge(familyId, primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, input.LanguageProfile.LanguageCode));
-        var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(VerifiedObjects: primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, familyId) ?? BuildStructuredObjectKnowledge(familyId, primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty));
+        var knowledgeObjects = MergeObjects(primaryObjects ?? ImmutableArray<AstronomicalObjectValue>.Empty, secondaryObjects);
+        var objectKnowledge = new AstronomyObjectKnowledgeSourceV1(VerifiedObjects: knowledgeObjects, ObjectKnowledge: ReadObjectKnowledge(input.LongDocumentaryContract, familyId) ?? BuildStructuredObjectKnowledge(familyId, knowledgeObjects));
         var context = new SemanticSourceAdapterContextV1(identity, eventSource, observationSource, DocumentaryContract: documentarySource, AstronomyObjectKnowledge: objectKnowledge, AstronomyDomainKnowledge: domain, Language: input.LanguageProfile.LanguageCode, TimeZone: request?.TimeZone, LocationContext: requestLocation);
         var showerIdentity = FirstNonEmpty(request?.PrimaryObjects.FirstOrDefault(), request?.ShortTitle);
         var normalizedMeteorShowerId = MeteorShowerKnowledgeCatalogV1.Normalize(showerIdentity);
@@ -3250,16 +3270,34 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     {
         if (!familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase) && !familyId.Equals("DeepSkyObject", StringComparison.OrdinalIgnoreCase)) return null;
         var name = objects.Select(o => o.Name).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n)) ?? familyId;
-        var type = familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase) ? "official constellation or recognizable sky pattern" : "deep-sky object such as a galaxy, nebula, or star cluster";
-        var facts = new[]
+        SemanticSourceProvenanceV1 P(string key) => new(SemanticSourcePolicyVocabularyV1.AstronomyObjectKnowledgeProvider, nameof(ObjectKnowledgeValue), $"AstronomyObjectKnowledge.ObjectKnowledge.{key}", true);
+        if (familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase))
         {
-            new ObjectKnowledgeFactV1("Name", name, new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyDomainKnowledgeProvider, nameof(ObjectKnowledgeValue), "StructuredDomainKnowledge.Name", true)),
-            new ObjectKnowledgeFactV1("ObjectType", type, new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyDomainKnowledgeProvider, nameof(ObjectKnowledgeValue), "StructuredDomainKnowledge.ObjectType", true)),
-            new ObjectKnowledgeFactV1("ScientificImportance", familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase) ? "Constellations organize sky navigation and cultural sky stories without implying the stars are physically bound." : "Deep-sky objects reveal stellar evolution, galactic structure, and cosmic distance scales.", new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyDomainKnowledgeProvider, nameof(ObjectKnowledgeValue), "StructuredDomainKnowledge.ScientificImportance", true)),
-            new ObjectKnowledgeFactV1("ObservationAdvice", familyId.Equals("Constellation", StringComparison.OrdinalIgnoreCase) ? "Use verified sky-region and pattern guidance; do not force event timing." : "Dark skies and optical aid improve observation; exact visibility must be verified.", new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyDomainKnowledgeProvider, nameof(ObjectKnowledgeValue), "StructuredDomainKnowledge.ObservationAdvice", true))
-        };
-        return new ObjectKnowledgeValue(name, facts.ToImmutableArray());
+            var deepSky = new Regex("Nebula|Galaxy|Cluster|M42|Messier|NGC", RegexOptions.IgnoreCase);
+            var stars = objects.Select(o => o.Name).Where(n => !string.IsNullOrWhiteSpace(n) && !n.Equals(name, StringComparison.OrdinalIgnoreCase) && !deepSky.IsMatch(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var majorStars = stars.Length == 0 ? "Use verified secondary stellar objects when available." : string.Join(", ", stars);
+            return new ObjectKnowledgeValue(name, new[]
+            {
+                new ObjectKnowledgeFactV1("Name", name, P("Name")),
+                new ObjectKnowledgeFactV1("ObjectType", "official constellation", P("ObjectType")),
+                new ObjectKnowledgeFactV1("ScientificIdentity", "An IAU-recognized constellation and sky region; its stars form an apparent pattern from Earth and are not necessarily physically associated", P("ScientificIdentity")),
+                new ObjectKnowledgeFactV1("IdentificationPattern", "Use the three aligned Belt stars as the primary recognition pattern", P("IdentificationPattern")),
+                new ObjectKnowledgeFactV1("MajorStars", majorStars, P("MajorStars")),
+                new ObjectKnowledgeFactV1("ScientificImportance", "Constellations organize sky navigation and object location without implying that their stars form a physically bound system", P("ScientificImportance")),
+                new ObjectKnowledgeFactV1("ObservationAdvice", "Start with the Belt pattern, then identify nearby bright stars and the Orion Nebula using verified object data", P("ObservationAdvice"))
+            }.ToImmutableArray());
+        }
+        return new ObjectKnowledgeValue(name, new[]
+        {
+            new ObjectKnowledgeFactV1("Name", name, P("Name")),
+            new ObjectKnowledgeFactV1("ObjectType", "deep-sky object such as a galaxy, nebula, or star cluster", P("ObjectType")),
+            new ObjectKnowledgeFactV1("ScientificImportance", "Deep-sky objects reveal stellar evolution, galactic structure, and cosmic distance scales.", P("ScientificImportance")),
+            new ObjectKnowledgeFactV1("ObservationAdvice", "Dark skies and optical aid improve observation; exact visibility must be verified.", P("ObservationAdvice"))
+        }.ToImmutableArray());
     }
+
+    private static ImmutableArray<AstronomicalObjectValue> MergeObjects(ImmutableArray<AstronomicalObjectValue> primary, ImmutableArray<AstronomicalObjectValue> secondary)
+        => primary.Concat(secondary).Where(o => !string.IsNullOrWhiteSpace(o.Name)).DistinctBy(o => o.Name, StringComparer.OrdinalIgnoreCase).ToImmutableArray();
 
     private static string? TryGetRootString(JsonElement? element, string name) => element is { ValueKind: JsonValueKind.Object } e ? GetString(e, name) : null;
     private static JsonElement? TryGetRootProperty(JsonElement? element, string name)
@@ -3321,7 +3359,8 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     }
     private static string CanonicalType(string key) { var k = key ?? ""; if (Regex.IsMatch(k, "primary.*object|objectPair|objects", RegexOptions.IgnoreCase)) return "PrimaryObjects"; if (Regex.IsMatch(k, "event.*type|family|title|name", RegexOptions.IgnoreCase)) return "EventIdentity"; if (Regex.IsMatch(k, "bestViewingWindowLocal|viewingWindow|preferredViewingWindow|date|window|interval", RegexOptions.IgnoreCase)) return "ObservationTiming"; if (Regex.IsMatch(k, "peak.*time|local.*time|peakUtc|peakUTC", RegexOptions.IgnoreCase)) return "LocalPeakTime"; if (Regex.IsMatch(k, "direction|azimuth|skyDirection", RegexOptions.IgnoreCase)) return "ObservationDirection"; if (Regex.IsMatch(k, "zhr|zenithal.*hourly.*rate|activityRate|peakRate", RegexOptions.IgnoreCase)) return "Zhr"; if (Regex.IsMatch(k, "separation|angular", RegexOptions.IgnoreCase)) return "AngularRelationship"; if (Regex.IsMatch(k, "region|location|timezone", RegexOptions.IgnoreCase)) return "LocationContext"; if (Regex.IsMatch(k, "binocular|naked|visibility|mode", RegexOptions.IgnoreCase)) return "ObservationMode"; if (Regex.IsMatch(k, "alignment|proximity|explanation|mechanism|science|pairing", RegexOptions.IgnoreCase)) return "ApparentPairingScience"; return k; }
     private static bool IsKnownFact(string type) => !Regex.IsMatch(type, "id|source|publish|scheduled|utc", RegexOptions.IgnoreCase);
-    private static bool Matches(string requested, string actual) => requested.Equals(actual, StringComparison.OrdinalIgnoreCase) || requested.Contains(actual, StringComparison.OrdinalIgnoreCase) || actual.Contains(requested.Replace("OrWindow", ""), StringComparison.OrdinalIgnoreCase) || CapabilityAliasAccepts(requested, actual);
+    private static bool Matches(string requested, ResolvedSemanticFact fact) => requested.Equals(fact.FactType, StringComparison.OrdinalIgnoreCase) || requested.Equals(fact.SemanticMeaning, StringComparison.OrdinalIgnoreCase) || CapabilityAliasAccepts(requested, fact.FactType);
+    private static bool Matches(string requested, string actual) => requested.Equals(actual, StringComparison.OrdinalIgnoreCase) || CapabilityAliasAccepts(requested, actual);
     private static bool CapabilityAliasAccepts(string capability, string actual) => CapabilityAliases(capability).Contains(actual, StringComparer.OrdinalIgnoreCase);
     private static IEnumerable<string> CapabilityAliases(string capability) => capability switch
     {
@@ -3582,7 +3621,6 @@ public static class NarrationRealizationValidator
             var actualNames = r.SpeakableFacts
                 .SelectMany(f => new[] { f.FactType, f.Label })
                 .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Concat(aggregateNames)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             var requiredNames = RequiredForBeat(profile, r.BeatRole).Where(x => !x.Contains("when verified", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -3602,7 +3640,7 @@ public static class NarrationRealizationValidator
     {
         if (profile.FamilyId.Equals("PlanetPairing", StringComparison.OrdinalIgnoreCase) || profile.FamilyId.Equals("PlanetaryConjunction", StringComparison.OrdinalIgnoreCase))
             return beatRole.Contains("Science", StringComparison.OrdinalIgnoreCase) ? ["ApparentAlignmentExplanation", "PhysicalProximityClarification"] : [];
-        return profile.RequiredFactTypes;
+        return [];
     }
     private static IReadOnlyList<string> ExpectedNames(string req) => req switch { "Radiant" => ["Radiant", "ObservationRadiant"], "PeakWindow" => ["PeakWindow", "PeakViewingWindow"], _ => [req] };
     private static bool MatchesRequiredName(string requested, string actual)
