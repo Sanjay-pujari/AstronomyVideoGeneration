@@ -86,6 +86,19 @@ public sealed class EvergreenAstronomySubjectImportTests
         Assert.Equal("constellation.orion", result.Package.KnowledgeId);
     }
 
+
+    [Fact]
+    public async Task RelativeRootPathFallsBackToRepositoryKnowledgeWhenWorkingDirectoryDoesNotContainKnowledge()
+    {
+        var loader = new EvergreenAstronomyKnowledgeLoader(
+            Options.Create(new AstronomyKnowledgeOptions { RootPath = "Knowledge" }),
+            Options.Create(new RenderingOptions { WorkingDirectory = CreateTempDirectory() }));
+
+        var result = await loader.LoadByRelativePathAsync(OrionPath, CancellationToken.None);
+
+        Assert.Equal(Path.GetFullPath(OrionPath), result.FullPath);
+    }
+
     [Fact]
     public async Task Import_FirstImportCreatesIntelligenceObjectsAndNoOpportunityOrPlan()
     {
