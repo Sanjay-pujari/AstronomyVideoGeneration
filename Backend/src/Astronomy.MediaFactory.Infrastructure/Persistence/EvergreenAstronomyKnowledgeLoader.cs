@@ -32,7 +32,7 @@ public sealed class EvergreenAstronomyKnowledgeLoader : IEvergreenAstronomyKnowl
         if (normalized.Split(Path.DirectorySeparatorChar).Any(p => p == "..")) throw new ArgumentException("relativePath must not contain path traversal segments.");
         var configuredRootPath = options.Value.RootPath;
         var configuredWorkingDirectory = renderingOptions.Value.WorkingDirectory;
-        var root = ResolveRootPath(configuredRootPath, configuredWorkingDirectory);
+        var root = ResolveExistingRootPath(configuredRootPath, configuredWorkingDirectory);
         var requestedRelativePath = normalized.StartsWith("Knowledge" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? normalized[("Knowledge" + Path.DirectorySeparatorChar).Length..] : normalized;
         var fullPath = Path.GetFullPath(Path.Combine(root, requestedRelativePath));
         if (!IsUnderRoot(fullPath, root)) throw new ArgumentException("relativePath resolves outside AstronomyKnowledge:RootPath.");
@@ -62,6 +62,30 @@ public sealed class EvergreenAstronomyKnowledgeLoader : IEvergreenAstronomyKnowl
         if (string.IsNullOrWhiteSpace(configuredRootPath)) return Path.GetFullPath(Path.Combine(workingDirectory, "Knowledge"));
         var rootPath = configuredRootPath.Trim();
         return Path.GetFullPath(Path.IsPathRooted(rootPath) ? rootPath : Path.Combine(workingDirectory, rootPath));
+    }
+
+    private static string ResolveExistingRootPath(string? configuredRootPath, string? configuredWorkingDirectory)
+    {
+        var configuredRoot = ResolveRootPath(configuredRootPath, configuredWorkingDirectory);
+        if (Directory.Exists(configuredRoot) || Path.IsPathRooted(configuredRootPath ?? string.Empty)) return configuredRoot;
+
+        var rootPath = string.IsNullOrWhiteSpace(configuredRootPath) ? "Knowledge" : configuredRootPath.Trim();
+        foreach (var baseDirectory in GetDiscoveryBaseDirectories())
+        {
+            for (var directory = new DirectoryInfo(baseDirectory); directory is not null; directory = directory.Parent)
+            {
+                var candidate = Path.GetFullPath(Path.Combine(directory.FullName, rootPath));
+                if (Directory.Exists(candidate)) return candidate;
+            }
+        }
+
+        return configuredRoot;
+    }
+
+    private static IEnumerable<string> GetDiscoveryBaseDirectories()
+    {
+        yield return Directory.GetCurrentDirectory();
+        yield return AppContext.BaseDirectory;
     }
 
     private static bool IsUnderRoot(string fullPath, string root)
