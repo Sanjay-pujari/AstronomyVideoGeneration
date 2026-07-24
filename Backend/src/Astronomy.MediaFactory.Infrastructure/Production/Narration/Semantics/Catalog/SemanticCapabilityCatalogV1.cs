@@ -78,7 +78,8 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
         yield return Def("OccultationContacts","Occultation contact timings.","OccultationContacts",["Ephemeris"],75,true,true,true,[],"v1-policy-occultation");
         yield return Def("ObjectKnowledge","Knowledge about astronomical objects.","ObjectKnowledge",["DomainKnowledge"],60,true,true,false,[],"v1-policy-object-knowledge");
         yield return Def("DomainScientificKnowledge","Scientific explanation knowledge.","DomainScientificKnowledge",["DomainKnowledge"],80,true,true,false,[],"v1-policy-science");
-        yield return Def("CulturalContext","Cultural naming and mythology context.","CulturalContext",["DomainKnowledge","EditorialContract"],60,true,true,false,["CulturalNameContext","Mythology","WolfMoon","SnowMoon"],"v1-policy-cultural");
+        yield return Def("CulturalContext","General cultural naming and mythology context.","CulturalContext",["DomainKnowledge","EditorialContract"],60,true,true,false,["Mythology","WolfMoon","SnowMoon"],"v1-policy-cultural");
+        yield return Def("CulturalNameContext","Cultural name origin, mythology, historical naming, and regional sky-culture notes.","CulturalContext",["KnowledgePackage","DomainKnowledge","ReviewedSource","EditorialProjection"],60,true,true,false,[],"v1-policy-cultural-name-context");
         yield return Def("EditorialContext","Editorial framing context.","EditorialContext",["EditorialContract"],60,true,true,false,[],"v1-policy-editorial");
         yield return Def("SafetyGuidance","Safe observing guidance.","SafetyGuidance",["DomainKnowledge"],90,true,true,true,[],"v1-policy-safety");
     }

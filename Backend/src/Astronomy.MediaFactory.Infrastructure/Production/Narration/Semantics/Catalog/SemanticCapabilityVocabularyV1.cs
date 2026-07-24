@@ -20,6 +20,7 @@ public static class SemanticCapabilityVocabularyV1
     public const string ObjectKnowledge = nameof(ObjectKnowledge);
     public const string DomainScientificKnowledge = nameof(DomainScientificKnowledge);
     public const string CulturalContext = nameof(CulturalContext);
+    public const string CulturalNameContext = nameof(CulturalNameContext);
     public const string EditorialContext = nameof(EditorialContext);
     public const string SafetyGuidance = nameof(SafetyGuidance);
 
@@ -28,7 +29,7 @@ public static class SemanticCapabilityVocabularyV1
         EventIdentity, EventWindow, AstronomicalObjects, SecondaryAstronomicalObjects, AngularSeparation,
         ObservationDirection, ObservationLocation, ObservationConditions, ObservationEquipment, MeteorActivity,
         FullMoonObservation, EclipseCircumstances, OccultationContacts, ObjectKnowledge, DomainScientificKnowledge,
-        CulturalContext, EditorialContext, SafetyGuidance
+        CulturalContext, CulturalNameContext, EditorialContext, SafetyGuidance
     ];
 
     public static SemanticCapabilityId Id(string value) => new(value);

@@ -82,6 +82,7 @@ public sealed class SemanticCapabilitySourceRegistry(ISemanticCapabilityCatalog 
         new GenericAdapter("AngularSeparationAdapter","AngularSeparation","Production Event Intelligence","angularSeparation/angularRelationship",80,1, ["angularSeparation","angularRelationship","separation"]),
         new GenericAdapter("VisibilityMethodAdapter","VisibilityMethod","Observation Metadata","visibilityMethod/observationMode",75,1, ["visibilityMethod","observationMode","nakedEye","binocularGuidance","telescopeGuidance","visibilityConditions"]),
         new ZhrAdapter(),
+        new GenericAdapter("CulturalNameContextStructuredKnowledgeAdapter","CulturalNameContext","Astronomy Domain Knowledge Provider","culturalNameContext/mythology/traditionalSkyCulture/historicalNaming/regionalCulturalNotes",80,1,["culturalNameContext","mythology","greekMythology","hunterOrion","traditionalSkyCulture","historicalNaming","regionalCulturalNotes","originContext","tradition"]),
         new GenericAdapter("DomainKnowledgeApparentAlignmentAdapter","ApparentAlignmentExplanation","Astronomy Domain Knowledge Provider","PlanetPairingKnowledgeProfile",80,2, ["apparentAlignmentExplanation","physicalProximityClarification","perspectiveExplanation","whyPlanetsAppearClose","apparentPairingScience"])
     ];
 }

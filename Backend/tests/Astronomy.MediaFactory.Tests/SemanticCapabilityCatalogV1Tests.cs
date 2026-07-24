@@ -38,7 +38,7 @@ public sealed class SemanticCapabilityCatalogV1Tests
     }
 
     [Fact]
-    public void Exactly_18_Canonical_V1_Capabilities_Are_Registered() => Assert.Equal(18, _catalog.Definitions.Count);
+    public void Exactly_19_Canonical_V1_Capabilities_Are_Registered() => Assert.Equal(19, _catalog.Definitions.Count);
 
     [Fact]
     public void Every_Canonical_Id_Resolves_To_Itself()
