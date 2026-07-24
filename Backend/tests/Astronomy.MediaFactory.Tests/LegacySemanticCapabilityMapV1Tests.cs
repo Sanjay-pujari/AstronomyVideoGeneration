@@ -6,12 +6,18 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class LegacySemanticCapabilityMapV1Tests
 {
     private readonly SemanticCapabilityCatalogV1 _catalog = new();
+    private static string Normalize(string value) => value.Trim().Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
 
     [Fact]
     public void Every_Current_Legacy_Term_Maps_Exactly_Once()
     {
-        Assert.All(LegacySemanticCapabilityMapV1.Entries.GroupBy(e => e.LegacyTerm, StringComparer.OrdinalIgnoreCase), g => Assert.Single(g));
-        Assert.Equal(107, LegacySemanticCapabilityMapV1.Entries.Length);
+        Assert.NotEmpty(LegacySemanticCapabilityMapV1.Entries);
+        Assert.All(LegacySemanticCapabilityMapV1.Entries.GroupBy(e => Normalize(e.LegacyTerm)), g => Assert.Single(g));
+        Assert.All(LegacySemanticCapabilityMapV1.Entries.Where(e => e.CanonicalCapabilityId is not null), e => Assert.True(_catalog.TryGet(e.CanonicalCapabilityId!, out _), $"Unknown canonical target for {e.LegacyTerm}: {e.CanonicalCapabilityId!.Value}"));
+        Assert.All(LegacySemanticCapabilityMapV1.Entries.Where(e => e.MigrationDisposition == LegacySemanticCapabilityMigrationDisposition.StructuredField), e => Assert.True(!string.IsNullOrWhiteSpace(e.StructuredFieldPath) && e.StructuredFieldPath.Contains('.', StringComparison.Ordinal), $"Invalid structured field path for {e.LegacyTerm}: {e.StructuredFieldPath}"));
+        Assert.Contains(LegacySemanticCapabilityMapV1.Entries, e => e.LegacyTerm == "Direction" && e.StructuredFieldPath == "ObservationDirection.direction");
+        Assert.Contains(LegacySemanticCapabilityMapV1.Entries, e => e.LegacyTerm == "Radiant" && e.StructuredFieldPath == "MeteorActivity.radiant");
+        Assert.Contains(LegacySemanticCapabilityMapV1.Entries, e => e.LegacyTerm == "LocationContext" && e.StructuredFieldPath == "ObservationLocation.locationName");
     }
 
     [Theory]
@@ -45,7 +51,6 @@ public sealed class LegacySemanticCapabilityMapV1Tests
     [Fact]
     public void Every_Legacy_Normalized_Term_Is_Unique()
     {
-        static string Normalize(string value) => value.Trim().Replace(" ", string.Empty, StringComparison.Ordinal).ToUpperInvariant();
         Assert.All(LegacySemanticCapabilityMapV1.Entries.GroupBy(e => Normalize(e.LegacyTerm)), g => Assert.Single(g));
     }
 

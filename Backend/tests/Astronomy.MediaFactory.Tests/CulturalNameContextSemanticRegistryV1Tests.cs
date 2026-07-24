@@ -8,6 +8,7 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sourc
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -45,6 +46,80 @@ public sealed class CulturalNameContextSemanticRegistryV1Tests
         var omitted = engine.Resolve(Request(Context(null)));
         Assert.Equal(SemanticResolutionStatusV1.UnavailableOptional, omitted.Fact.Status);
         Assert.Empty(omitted.Diagnostics.BlockingIssueCodes);
+    }
+
+
+    [Fact]
+    public void CulturalNameContext_Policy_Exists()
+    {
+        var policies = new SemanticSourcePolicyCatalogV1();
+        Assert.True(policies.TryGet(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.CulturalNameContext), out var policy));
+        Assert.Equal(SemanticCapabilityVocabularyV1.CulturalNameContext, policy!.CapabilityId.Value);
+    }
+
+    [Fact]
+    public void CulturalNameContext_V1_Adapter_Exists()
+    {
+        var registry = new SemanticSourceAdapterRegistryV1();
+        var adapter = Assert.Single(registry.GetAdapters(new SemanticCapabilityId(SemanticCapabilityVocabularyV1.CulturalNameContext)).Where(a => a.AdapterId == "v1.cultural-name-context.structured-knowledge"));
+        Assert.Equal(SemanticCapabilityVocabularyV1.CulturalNameContext, adapter.SupportedCapabilityId.Value);
+    }
+
+    [Fact]
+    public void CulturalNameContext_Optional_Absence_Does_Not_Block()
+    {
+        using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
+        using var scope = provider.CreateScope();
+        var result = scope.ServiceProvider.GetRequiredService<ISemanticResolutionEngineV1>().Resolve(Request(Context(null)));
+        Assert.Equal(SemanticResolutionStatusV1.UnavailableOptional, result.Fact.Status);
+        Assert.Empty(result.Diagnostics.BlockingIssueCodes);
+    }
+
+    [Fact]
+    public void CulturalNameContext_Verified_Knowledge_Resolves()
+    {
+        using var provider = ProductionSourcePolicyCatalogNonEmptyTests.BuildProvider();
+        using var scope = provider.CreateScope();
+        var result = scope.ServiceProvider.GetRequiredService<ISemanticResolutionEngineV1>().Resolve(Request(Context(new CulturalContextValue("Orion", "Greek mythology", "Reviewed sky-culture naming context", .9m, "Mediterranean", "Reviewed", true))));
+        Assert.Equal(SemanticResolutionStatusV1.Resolved, result.Fact.Status);
+        Assert.Equal("v1.cultural-name-context.structured-knowledge", result.Fact.WinningAdapterId);
+    }
+
+    [Fact]
+    public void Legacy_Runtime_Cultural_Adapter_Can_Extract_Knowledge()
+    {
+        var registry = new SemanticCapabilitySourceRegistry(new SemanticCapabilityCatalog());
+        var adapter = Assert.Single(registry.Adapters.Where(a => a.AdapterId == "CulturalNameContextStructuredKnowledgeAdapter"));
+        var context = new SemanticCapabilitySourceContext("Constellation", "long", null, null, null, null, null, null, null, null, JsonDocument.Parse("{\"culturalNameContext\":\"Reviewed Orion naming context from structured astronomy knowledge.\"}").RootElement.Clone());
+
+        Assert.True(adapter.TryExtract(context, out var candidate, out var rejection));
+        Assert.Null(rejection);
+        Assert.Equal("Astronomy Domain Knowledge Provider", candidate.Source);
+        Assert.Equal("culturalNameContext", candidate.SourceField);
+    }
+
+    [Theory]
+    [InlineData("CONSTELLATION")]
+    [InlineData("Constellation")]
+    [InlineData("constellation")]
+    public void Constellation_Registry_Coverage_Passes(string eventType)
+    {
+        var profile = Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.AstronomyFamilyProfileCatalog.Resolve(TestJson.Json($"{{\"eventType\":\"{eventType}\"}}"), null);
+        Assert.Equal("Constellation", profile.FamilyId);
+        var rows = new SemanticCapabilitySourceRegistry(new SemanticCapabilityCatalog()).ValidateCoverageDetailed([profile]);
+        Assert.DoesNotContain(rows, r => !r.ResolutionPathValid);
+        Assert.Contains(rows, r => r.FamilyProfile == "Constellation" && r.Capability == "CulturalNameContext" && !r.Required);
+    }
+
+    [Theory]
+    [InlineData("PlanetPairing")]
+    [InlineData("MeteorShower")]
+    [InlineData("SolarEclipse")]
+    public void Existing_Family_Registry_Coverage_Remains_Passing(string eventType)
+    {
+        var profile = Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.AstronomyFamilyProfileCatalog.Resolve(TestJson.Json($"{{\"eventType\":\"{eventType}\"}}"), null);
+        var rows = new SemanticCapabilitySourceRegistry(new SemanticCapabilityCatalog()).ValidateCoverageDetailed([profile]);
+        Assert.DoesNotContain(rows, r => !r.ResolutionPathValid);
     }
 
     [Fact]

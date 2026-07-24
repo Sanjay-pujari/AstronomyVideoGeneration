@@ -68,8 +68,8 @@ public sealed class SemanticCapabilityCatalogV1 : ISemanticCapabilityCatalogV1
         yield return Def("AstronomicalObjects","Primary astronomical objects.","AstronomicalObjectList",["EventIntelligence"],80,true,true,true,[],"v1-policy-objects");
         yield return Def("SecondaryAstronomicalObjects","Secondary astronomical objects.","AstronomicalObjectList",["EventIntelligence"],70,true,true,true,[],"v1-policy-secondary-objects");
         yield return Def("AngularSeparation","Apparent angular separation.","AngularMeasure",["Ephemeris"],70,true,true,true,["AngularRelationship","Separation"],"v1-policy-angular-separation");
-        yield return Def("ObservationDirection","Where to look in the sky.","SkyDirection",["ObservationMetadata"],70,true,true,true,["Direction","SkyDirection","Radiant"],"v1-policy-direction");
-        yield return Def("ObservationLocation","Observer location context.","LocationContext",["Request","ObservationMetadata"],70,true,true,true,["LocationContext","Region","VisibilityRegion"],"v1-policy-location");
+        yield return Def("ObservationDirection","Where to look in the sky.","SkyDirection",["ObservationMetadata"],70,true,true,true,["SkyDirection"],"v1-policy-direction");
+        yield return Def("ObservationLocation","Observer location context.","LocationContext",["Request","ObservationMetadata"],70,true,true,true,[],"v1-policy-location");
         yield return Def("ObservationConditions","Sky visibility conditions.","ObservationConditions",["ObservationMetadata"],60,true,true,true,["VisibilityConditions","Visibility"],"v1-policy-conditions");
         yield return Def("ObservationEquipment","Viewing equipment guidance.","ObservationEquipment",["ObservationMetadata"],60,true,true,true,[],"v1-policy-equipment");
         yield return Def("MeteorActivity","Meteor shower activity metrics.","MeteorActivity",["EventIntelligence"],75,true,true,true,[],"v1-policy-meteor");

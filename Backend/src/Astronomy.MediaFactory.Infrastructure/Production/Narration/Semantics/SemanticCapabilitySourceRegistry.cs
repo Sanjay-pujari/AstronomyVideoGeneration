@@ -101,6 +101,7 @@ public class GenericAdapter(string id, string cap, string artifact, string path,
         else if (SourceArtifact == "Production Event Intelligence") yield return (SourceArtifact, c.ProductionEventIntelligence);
         else if (SourceArtifact == "Editorial Contract") yield return (SourceArtifact, c.EditorialContract);
         else if (SourceArtifact == "Observation Metadata") yield return (SourceArtifact, c.ObservationMetadata);
+        else if (SourceArtifact == "Astronomy Domain Knowledge Provider") yield return (SourceArtifact, c.AstronomyDomainKnowledge);
         else if (SourceArtifact == "Documentary Contract") { yield return (SourceArtifact, c.Format == "short" ? c.ShortDocumentaryContract : c.LongDocumentaryContract); yield return (SourceArtifact, c.LongDocumentaryContract); yield return (SourceArtifact, c.ShortDocumentaryContract); }
         else yield return (SourceArtifact, null);
     }
