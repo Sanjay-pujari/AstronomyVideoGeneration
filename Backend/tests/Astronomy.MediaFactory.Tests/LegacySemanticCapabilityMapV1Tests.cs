@@ -65,7 +65,10 @@ public sealed class LegacySemanticCapabilityMapV1Tests
         Assert.Contains(result.Errors, e => e.Contains("Duplicate legacy", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Theory][InlineData("CulturalNameContext")][InlineData("Mythology")][InlineData("WolfMoon")][InlineData("SnowMoon")]
+    [Fact]
+    public void CulturalNameContext_Resolves_As_First_Class_Canonical_Capability() => AssertMaps("CulturalNameContext", SemanticCapabilityVocabularyV1.CulturalNameContext);
+
+    [Theory][InlineData("Mythology")][InlineData("WolfMoon")][InlineData("SnowMoon")]
     public void Named_Full_Moon_Cultural_Terms_Map_To_CulturalContext(string term) => AssertMaps(term, SemanticCapabilityVocabularyV1.CulturalContext);
 
     [Theory][InlineData("EclipseType")][InlineData("Magnitude")]

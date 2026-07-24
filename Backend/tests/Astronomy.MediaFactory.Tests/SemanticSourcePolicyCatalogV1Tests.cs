@@ -12,7 +12,7 @@ public sealed class SemanticSourcePolicyCatalogV1Tests
     private readonly SemanticSourcePolicyCatalogV1 _catalog = new();
     private SemanticSourcePolicyV1 P(string id)=>_catalog.GetRequired(new SemanticCapabilityId(id));
 
-    [Fact] public void Exactly_18_Active_V1_Source_Policies_Exist()=>Assert.Equal(18,_catalog.Policies.Count(p=>p.ActiveInV1));
+    [Fact] public void Exactly_19_Active_V1_Source_Policies_Exist()=>Assert.Equal(19,_catalog.Policies.Count(p=>p.ActiveInV1));
     [Fact] public void Every_Canonical_Capability_Has_Exactly_One_Policy(){foreach(var id in SemanticCapabilityVocabularyV1.CanonicalIds) Assert.Single(_catalog.Policies,p=>p.SemanticCapabilityId.Value==id);}
     [Fact] public void Every_Policy_References_Known_Canonical_Capability(){foreach(var p in _catalog.Policies) Assert.Contains(p.SemanticCapabilityId.Value,SemanticCapabilityVocabularyV1.CanonicalIds);}
     [Fact] public void Catalog_Validation_Succeeds()=>Assert.True(_catalog.Validate().IsValid,string.Join("; ",_catalog.Validate().Errors));

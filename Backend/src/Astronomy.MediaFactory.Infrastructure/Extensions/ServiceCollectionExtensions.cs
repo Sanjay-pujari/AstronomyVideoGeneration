@@ -87,6 +87,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISemanticSourceAdapterV1, ObjectKnowledgeSourceAdapterV1>();
         services.AddSingleton<ISemanticSourceAdapterV1, DomainScientificKnowledgeSourceAdapterV1>();
         services.AddSingleton<ISemanticSourceAdapterV1, CulturalContextSourceAdapterV1>();
+        services.AddSingleton<ISemanticSourceAdapterV1, CulturalNameContextSourceAdapterV1>();
         services.AddSingleton<ISemanticSourceAdapterV1, EditorialContextSourceAdapterV1>();
         services.AddSingleton<ISemanticSourceAdapterV1, SafetyGuidanceKnowledgeAdapterV1>();
         services.AddSingleton<SemanticSourceAdapterRegistryV1>(sp =>

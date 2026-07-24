@@ -29,5 +29,5 @@ public static class SemanticSourcePolicyValidatorV1
         return new(errors.Count==0, errors.ToArray(), Array.Empty<string>());
     }
     private static bool IsEventMeasurement(string id)=>id is "EventWindow" or "AngularSeparation" or "ObservationDirection" or "ObservationLocation" or "EclipseCircumstances" or "OccultationContacts";
-    private static bool IsScientific(string id)=>id is not "CulturalContext" and not "EditorialContext";
+    private static bool IsScientific(string id)=>id is not "CulturalContext" and not "CulturalNameContext" and not "EditorialContext";
 }

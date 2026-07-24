@@ -291,7 +291,7 @@ public sealed class CurrentKnownSemanticFailureCharacterizationTests
         var profile = AstronomyFamilyProfileCatalog.Resolve(TestJson.Json("{\"eventType\":\"NamedFullMoon\"}"), null);
         var invalid = new SemanticCapabilitySourceRegistry(new SemanticCapabilityCatalog()).ValidateCoverageDetailed([profile]).Where(r => !r.ResolutionPathValid).ToArray();
         Assert.Contains(invalid, r => r.Capability == "MoonriseTime" && r.FailureReason == "CapabilityNotRegistered");
-        Assert.Contains(invalid, r => r.Capability == "CulturalNameContext" && r.FailureReason == "CapabilityNotRegistered");
+        Assert.DoesNotContain(invalid, r => r.Capability == "CulturalNameContext");
     }
 
     [Fact]
