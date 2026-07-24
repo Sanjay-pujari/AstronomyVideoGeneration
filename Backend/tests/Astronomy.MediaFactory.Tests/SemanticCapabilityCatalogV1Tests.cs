@@ -20,7 +20,7 @@ public sealed class SemanticCapabilityCatalogV1Tests
 
 
     [Fact]
-    public void Canonical_Count_Remains_19() => Assert.Equal(19, SemanticCapabilityVocabularyV1.CanonicalIds.Length);
+    public void Canonical_Count_Remains_19() => Assert.Equal(19, SemanticCapabilityVocabularyV1.CanonicalIds.Count);
 
     [Fact]
     public void Structured_Field_Terms_Are_Not_Aliases()
