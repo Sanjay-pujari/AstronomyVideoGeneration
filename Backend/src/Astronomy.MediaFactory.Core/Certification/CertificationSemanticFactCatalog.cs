@@ -48,7 +48,7 @@ public sealed class CertificationSemanticFactCatalog : ISemanticFactCatalog
         Fact("AngularSeparation", "Angular separation", "AngularSeparation", 80, false),
         Fact("SecondaryAstronomicalObjects", "Secondary astronomical objects", "AstronomicalObjectList", 80, false),
         Fact("ObjectKnowledge", "Object knowledge", "ConstellationKnowledge", 80),
-        Fact("CulturalContext", "Cultural context", "CulturalAstronomy", 80, false)
+        Fact("CulturalNameContext", "Cultural name context", "CulturalAstronomy", 80, false)
     ];
 
     private static IReadOnlyList<CertificationFamilySemanticProfileMetadata> CreateBuiltInFamilyProfiles()
@@ -63,7 +63,7 @@ public sealed class CertificationSemanticFactCatalog : ISemanticFactCatalog
             Family("PlanetConjunction", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "PlanetPairing", "PlanetaryConjunction", "PLANET_CONJUNCTION", "PLANET_PAIRING" }, "PlanetPairing", ["EventIdentity", "AstronomicalObjects", "EventWindow", "DomainScientificKnowledge"], [],
                 [new ForbiddenConceptDefinition { ConceptId = "meteor-shower-leakage", Terms = ["meteor shower", "radiant", "meteors per hour", "ZHR", "shooting stars", "meteor parent body", "meteor peak activity", "उल्का वर्षा", "टूटते तारे"], Blocking = true }], sharedRoles,
                 new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["EventIdentity"] = ["Hook"], ["AstronomicalObjects"] = ["Hook", "Orientation", "Observation"], ["EventWindow"] = ["Timing", "Observation"], ["DomainScientificKnowledge"] = ["Science"] }, []),
-            Family("CONSTELLATION", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Constellation" }, "Constellation", ["ObjectKnowledge"], ["EventIdentity", "ObservationDirection", "CulturalContext"],
+            Family("CONSTELLATION", new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Constellation" }, "Constellation", ["ObjectKnowledge"], ["EventIdentity", "ObservationDirection", "CulturalNameContext", "EditorialContext"],
                 [new ForbiddenConceptDefinition { ConceptId = "transient-event-leakage", Terms = ["peak time", "maximum eclipse", "meteor radiant", "ZHR", "angular separation", "eclipse glasses"], Blocking = true }], ["Hook", "Identification", "Orientation", "Science", "Significance", "Closing"],
                 new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase) { ["ObjectKnowledge"] = ["Identification", "Orientation", "Science", "Significance"] },
                 [new PhaseArtifactDefinition { ArtifactId = "constellation-knowledge", PhaseNumber = 2, RelativePath = "plan-input/constellation-knowledge.json", Required = true, ValidateJson = true, RequireNonEmpty = true }])

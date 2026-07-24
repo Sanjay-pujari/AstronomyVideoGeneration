@@ -43,7 +43,7 @@ public sealed class SemanticCapabilitySourceRegistry(ISemanticCapabilityCatalog 
                 var rules = found ? def!.ApprovedDerivationRuleIds : [];
                 var domain = found ? def!.ApprovedDomainKnowledgeFactTypes : [];
                 var hasPath = found && (adapters.Length > 0 || rules.Count > 0 || domain.Count > 0);
-                var valid = found && (!cap.Required || hasPath);
+                var valid = found && hasPath;
                 rows.Add(new(p.FamilyId, format, role, found ? def!.CapabilityId : cap.Capability, cap.Required, found, adapters, rules, domain, valid, valid ? null : !found ? "CapabilityNotRegistered" : "NoApprovedSourceAvailable"));
             }
         }
@@ -68,11 +68,11 @@ public sealed class SemanticCapabilitySourceRegistry(ISemanticCapabilityCatalog 
         new GenericAdapter("ProductionRequestEventIdentityAdapter","EventIdentity","Production Request","eventType/title/subjectIdentity",100,1, ["eventTitle","title","shortTitle","eventType","family","subjectIdentity"]),
         new GenericAdapter("ProductionEventIntelligenceEventIdentityAdapter","EventIdentity","Production Event Intelligence","eventType/title/subjectIdentity",95,2, ["eventTitle","title","shortTitle","eventType","family","subjectIdentity"]),
         new GenericAdapter("DocumentaryContractEventIdentityAdapter","EventIdentity","Documentary Contract","eventType/title/subjectIdentity",80,4, ["eventTitle","title","shortTitle","eventType","family","subjectIdentity"]),
-        new GenericAdapter("ProductionEventIntelligencePrimaryObjectsAdapter","PrimaryObjects","Production Event Intelligence","primaryObjects/objectPair/objects",95,1, ["primaryObjects","objectPair","objects","primaryObject","objectName","name"]),
-        new GenericAdapter("EditorialContractPrimaryObjectsAdapter","PrimaryObjects","Editorial Contract","primaryObjects/objectPair/objects",85,2, ["primaryObjects","objectPair","objects","primaryObject","objectName","name"]),
-        new GenericAdapter("DocumentaryContractPrimaryObjectsAdapter","PrimaryObjects","Documentary Contract","allocatedFacts/primaryObjects",80,3, ["primaryObjects","objectPair","objects","primaryObject","objectName","name"]),
-        new GenericAdapter("ProductionEventIntelligenceEventDateAdapter","EventDate","Production Event Intelligence","eventDate/date",90,1, ["eventDate","date","eventDateOrWindow"]),
-        new GenericAdapter("ObservationMetadataEventDateAdapter","EventDate","Observation Metadata","eventDate/date",85,2, ["eventDate","date","eventDateOrWindow"]),
+        new GenericAdapter("ProductionEventIntelligencePrimaryObjectsAdapter","AstronomicalObjects","Production Event Intelligence","primaryObjects/objectPair/objects",95,1, ["primaryObjects","objectPair","objects","primaryObject","objectName","name"]),
+        new GenericAdapter("EditorialContractPrimaryObjectsAdapter","AstronomicalObjects","Editorial Contract","primaryObjects/objectPair/objects",85,2, ["primaryObjects","objectPair","objects","primaryObject","objectName","name"]),
+        new GenericAdapter("DocumentaryContractPrimaryObjectsAdapter","AstronomicalObjects","Documentary Contract","allocatedFacts/primaryObjects",80,3, ["primaryObjects","objectPair","objects","primaryObject","objectName","name"]),
+        new GenericAdapter("ProductionEventIntelligenceEventDateAdapter","EventWindow","Production Event Intelligence","eventDate/date",90,1, ["eventDate","date","eventDateOrWindow"]),
+        new GenericAdapter("ObservationMetadataEventDateAdapter","EventWindow","Observation Metadata","eventDate/date",85,2, ["eventDate","date","eventDateOrWindow"]),
         new GenericAdapter("BestViewingWindowObservationTimingAdapter","ObservationTiming","Observation Metadata","bestViewingWindowLocal/viewingWindow",100,1, ["bestViewingWindowLocal","viewingWindow","preferredViewingWindow","localViewingInterval"]),
         new GenericAdapter("LocalPeakTimeObservationTimingAdapter","ObservationTiming","Observation Metadata","localPeakTime/peakTime",90,2, ["localPeakTime","peakTime","peakWindow"]),
         new UtcAdapter(),
@@ -82,6 +82,11 @@ public sealed class SemanticCapabilitySourceRegistry(ISemanticCapabilityCatalog 
         new GenericAdapter("AngularSeparationAdapter","AngularSeparation","Production Event Intelligence","angularSeparation/angularRelationship",80,1, ["angularSeparation","angularRelationship","separation"]),
         new GenericAdapter("VisibilityMethodAdapter","VisibilityMethod","Observation Metadata","visibilityMethod/observationMode",75,1, ["visibilityMethod","observationMode","nakedEye","binocularGuidance","telescopeGuidance","visibilityConditions"]),
         new ZhrAdapter(),
+        new GenericAdapter("ProductionEventIntelligenceMeteorActivityAdapter","MeteorActivity","Production Event Intelligence","meteorActivity/zhr/zenithalHourlyRate/expectedZhr/activityRate/peakRate/radiant/peakWindow",90,1,["meteorActivity","zhr","zenithalHourlyRate","expectedZhr","activityRate","peakRate","radiant","peakWindow"]),
+        new GenericAdapter("EclipseCircumstancesAdapter","EclipseCircumstances","Production Event Intelligence","eclipseCircumstances/eclipseType/magnitude/contacts/intervals",90,1,["eclipseCircumstances","eclipseType","magnitude","contacts","contactTimes","intervals","startTime","peakTime","endTime"]),
+        new GenericAdapter("ObjectKnowledgeStructuredAdapter","ObjectKnowledge","Astronomy Domain Knowledge Provider","objectKnowledge/structured facts",85,1,["objectKnowledge","objectFacts","scientificIdentity","scientificImportance","objectType","name","objectName","distance","observationAdvice"]),
+        new GenericAdapter("DomainScientificKnowledgeAdapter","DomainScientificKnowledge","Astronomy Domain Knowledge Provider","domainScientificKnowledge/scientific knowledge",85,1,["domainScientificKnowledge","scientificKnowledge","scientificImportance","mechanism","scientificMechanism","apparentAlignmentExplanation","significance","explanation"]),
+        new GenericAdapter("EditorialContextAdapter","EditorialContext","Editorial Contract","editorialContext/editorial intent",75,1,["editorialContext","editorialIntent","narrativeIntent","cautions","storyAngle"]),
         new GenericAdapter("CulturalNameContextStructuredKnowledgeAdapter","CulturalNameContext","Astronomy Domain Knowledge Provider","culturalNameContext/mythology/traditionalSkyCulture/historicalNaming/regionalCulturalNotes",80,1,["culturalNameContext","mythology","greekMythology","hunterOrion","traditionalSkyCulture","historicalNaming","regionalCulturalNotes","originContext","tradition"]),
         new GenericAdapter("DomainKnowledgeApparentAlignmentAdapter","ApparentAlignmentExplanation","Astronomy Domain Knowledge Provider","PlanetPairingKnowledgeProfile",80,2, ["apparentAlignmentExplanation","physicalProximityClarification","perspectiveExplanation","whyPlanetsAppearClose","apparentPairingScience"])
     ];
@@ -124,7 +129,7 @@ public sealed class UtcAdapter() : GenericAdapter("UtcEventIntervalObservationTi
     }
 }
 
-public sealed class ZhrAdapter() : GenericAdapter("ProductionEventIntelligenceZhrAdapter", "Zhr", "Production Event Intelligence", "zhr/zenithalHourlyRate/expectedZhr/activityRate/peakRate", 90, 1, ["zhr", "zenithalHourlyRate", "expectedZhr", "activityRate", "peakRate"])
+public sealed class ZhrAdapter() : GenericAdapter("ProductionEventIntelligenceZhrAdapter", "MeteorActivity", "Production Event Intelligence", "zhr/zenithalHourlyRate/expectedZhr/activityRate/peakRate", 90, 1, ["zhr", "zenithalHourlyRate", "expectedZhr", "activityRate", "peakRate"])
 {
     public override bool TryExtract(SemanticCapabilitySourceContext context, out SemanticCapabilityCandidate candidate, out SemanticCapabilityRejection? rejection)
     {
