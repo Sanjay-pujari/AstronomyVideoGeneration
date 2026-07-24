@@ -95,6 +95,7 @@ var app = builder.Build();
 
 app.Logger.LogInformation("Starting Astronomy.MediaFactory.Api in {Environment}", app.Environment.EnvironmentName);
 app.Logger.LogInformation("MediaFactory runtime marker {RuntimeMarker} Assembly={AssemblyName} Location={AssemblyLocation} InformationalVersion={InformationalVersion}", MediaFactoryRuntimeIdentity.SemanticArchitectureMarker, MediaFactoryRuntimeIdentity.AssemblyName, MediaFactoryRuntimeIdentity.AssemblyLocation, MediaFactoryRuntimeIdentity.InformationalVersion);
+app.Logger.LogInformation("Semantic projection stamp {ObjectKnowledgeAggregateProjectionVersion}", Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics.RuntimeCompositionDiagnostics.ObjectKnowledgeAggregateProjectionVersion);
 var renderingOptions = app.Services.GetRequiredService<IOptions<RenderingOptions>>().Value;
 var ffmpegConfigured = !string.IsNullOrWhiteSpace(renderingOptions.FfmpegPath);
 var ffprobeConfigured = !string.IsNullOrWhiteSpace(renderingOptions.FfprobePath);

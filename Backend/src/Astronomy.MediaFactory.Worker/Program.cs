@@ -68,6 +68,7 @@ builder.Services.AddQuartzHostedService(o => o.WaitForJobsToComplete = true);
 var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
 logger.LogInformation("Starting Astronomy.MediaFactory.Worker in {Environment}", builder.Environment.EnvironmentName);
+logger.LogInformation("Semantic projection stamp {ObjectKnowledgeAggregateProjectionVersion}", Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics.RuntimeCompositionDiagnostics.ObjectKnowledgeAggregateProjectionVersion);
 await host.RunAsync();
 
 public sealed class EnqueueScheduledContentJob : IJob

@@ -12,6 +12,10 @@ namespace Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics;
 
 public static class LegacyRequiredSemanticFactCompatibilityMapper
 {
+    public const string ObjectKnowledgeAggregateProjectionVersion = "ObjectKnowledgeAggregateProjectionV1";
+    public static bool LastObjectKnowledgeAggregateProjectionBranchEntered { get; private set; }
+    public static bool LastObjectKnowledgeAggregateProjectionSucceeded { get; private set; }
+
     public static ResolvedSemanticFact? Map(ResolvedSemanticFactV1 fact, string legacyFactType, string? beatId, string requiredness, string language)
     {
         if (fact.Status is not (SemanticResolutionStatusV1.Resolved or SemanticResolutionStatusV1.ResolvedByCombination)) return null;
@@ -62,9 +66,12 @@ public static class LegacyRequiredSemanticFactCompatibilityMapper
 
     private static ResolvedSemanticFact? MapObjectKnowledgeAggregate(ResolvedSemanticFactV1 fact, string? beatId, string requiredness, string language)
     {
+        LastObjectKnowledgeAggregateProjectionBranchEntered = true;
+        LastObjectKnowledgeAggregateProjectionSucceeded = false;
         if ((fact.TypedValue?.Value ?? fact.CanonicalValue) is not ObjectKnowledgeValue value || value.Facts.IsDefaultOrEmpty) return null;
         var projection = ObjectKnowledgeNarrationFormatter.Format(value, LanguageProfileResolver.Resolve(language));
         if (projection.SafeFactKeys.IsDefaultOrEmpty || string.IsNullOrWhiteSpace(projection.SpeakableValue)) return null;
+        LastObjectKnowledgeAggregateProjectionSucceeded = true;
         var sourceInputs = projection.SourceInputs.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         return new ResolvedSemanticFact(
             SemanticCapabilityVocabularyV1.ObjectKnowledge,
