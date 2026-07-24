@@ -18,7 +18,7 @@ public sealed class SemanticCapabilityInventoryCertificationV1Tests
         var adapters = new SemanticSourceAdapterRegistryV1();
         var families = new AstronomyFamilyProfileCatalogV1();
 
-        Assert.Equal(19, vocabulary.Length);
+        Assert.Equal(19, vocabulary.Count);
         Assert.Empty(vocabulary.GroupBy(id => id, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1));
         Assert.True(catalog.Validate().IsValid, string.Join("; ", catalog.Validate().Errors));
         Assert.True(policies.Validate().IsValid, string.Join("; ", policies.Validate().Errors));
