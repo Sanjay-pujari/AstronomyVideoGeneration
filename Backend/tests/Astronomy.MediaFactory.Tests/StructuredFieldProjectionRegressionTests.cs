@@ -85,3 +85,60 @@ public sealed class StructuredFieldProjectionRegressionTests
         "Resolved",
         "Resolved");
 }
+
+public sealed class ObjectKnowledgeAggregateProjectionTests
+{
+    [Fact]
+    public void ObjectKnowledge_Aggregate_Projects_To_NarrationFact()
+    {
+        var value = OrionKnowledge();
+        var fact = Resolved(SemanticCapabilityVocabularyV1.ObjectKnowledge, value, "ObjectKnowledgeValue", SemanticSourcePolicyVocabularyV1.AstronomyObjectKnowledgeProvider, "v1.object-knowledge.object-provider", "AstronomyObjectKnowledge.ObjectKnowledge");
+
+        var legacy = LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, "ObjectKnowledge", "beat-1", "Required", "en");
+
+        Assert.NotNull(legacy);
+        Assert.Equal("ObjectKnowledge", legacy!.FactType);
+        Assert.Equal("ObjectKnowledge", legacy.SemanticMeaning);
+        Assert.IsType<ObjectKnowledgeValue>(legacy.CanonicalValue);
+        Assert.False(string.IsNullOrWhiteSpace(legacy.SpeakableValue));
+        Assert.DoesNotContain("ObjectKnowledgeValue", legacy.SpeakableValue);
+        Assert.DoesNotContain("ImmutableArray", legacy.SpeakableValue);
+        Assert.DoesNotContain("{", legacy.SpeakableValue);
+        Assert.Contains("AstronomyObjectKnowledge.ObjectKnowledge.Name", legacy.SourceInputs!);
+    }
+
+    [Theory]
+    [InlineData("Name", "Orion")]
+    [InlineData("ScientificIdentity", "IAU-recognized")]
+    [InlineData("IdentificationPattern", "Belt")]
+    [InlineData("MajorStars", "Betelgeuse")]
+    [InlineData("ScientificImportance", "sky navigation")]
+    public void ObjectKnowledge_Field_Projections_Remain_Available(string field, string expected)
+    {
+        var fact = Resolved(SemanticCapabilityVocabularyV1.ObjectKnowledge, OrionKnowledge(), "ObjectKnowledgeValue", SemanticSourcePolicyVocabularyV1.AstronomyObjectKnowledgeProvider, "v1.object-knowledge.object-provider", "AstronomyObjectKnowledge.ObjectKnowledge");
+
+        var legacy = LegacyRequiredSemanticFactCompatibilityMapper.Map(fact, field, "beat-1", "Required", "en");
+
+        Assert.NotNull(legacy);
+        Assert.Equal(field, legacy!.FactType);
+        Assert.Contains(expected, legacy.SpeakableValue ?? legacy.CanonicalValue.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ObjectKnowledgeValue OrionKnowledge()
+    {
+        static ObjectKnowledgeFactV1 F(string key, string value) => new(key, value, new SemanticSourceProvenanceV1(SemanticSourcePolicyVocabularyV1.AstronomyObjectKnowledgeProvider, "ObjectKnowledgeValue", $"AstronomyObjectKnowledge.ObjectKnowledge.{key}", true));
+        return new ObjectKnowledgeValue("Orion", [
+            F("Name", "Orion"),
+            F("ObjectType", "official constellation"),
+            F("ScientificIdentity", "An IAU-recognized constellation and sky region"),
+            F("IdentificationPattern", "Use the three aligned Belt stars as the primary recognition pattern"),
+            F("MajorStars", "Betelgeuse, Rigel, Bellatrix, Saiph, Alnitak, Alnilam, Mintaka"),
+            F("ScientificImportance", "Constellations organize sky navigation and object location"),
+            F("ObservationAdvice", "Start with the Belt pattern")]);
+    }
+
+    private static ResolvedSemanticFactV1 Resolved(string capability, object value, string typeName, string sourceId, string adapterId, string sourcePath) => new(
+        new SemanticCapabilityId(capability), SemanticResolutionStatusV1.Resolved, true, new SemanticSourceValueV1(value, typeName), value.ToString(), null,
+        $"{adapterId}:{sourcePath}", adapterId, sourceId, SemanticEvidenceCategoryV1.VerifiedObjectData, SemanticEvidenceStrengthV1.Strong, .95m,
+        [new(sourceId, typeName, sourcePath, true)], [], [], [], "FirstApprovedByPriority", [], [], "Resolved", "Resolved");
+}
