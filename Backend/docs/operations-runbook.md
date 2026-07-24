@@ -274,3 +274,33 @@ Every recovery or cleanup action should be traceable through:
 - pipeline and worker logs,
 - stage execution records,
 - job status transitions.
+
+## Run a single content plan through production phases
+Use this when an operator needs to execute one known content plan through the Astronomy V1 production pipeline, including `GLOBAL` evergreen or globally visible plans. Supplying `planId` makes the selection exact; the service may still require the selected plan to be in a runnable status, or an explicit recovery/rerun mode when recovering failed, running, or completed plans.
+
+```http
+POST /api/content-planning/batch-generate-from-plans
+Content-Type: application/json
+
+{
+  "year": 2026,
+  "regionId": "GLOBAL",
+  "language": "en",
+  "maxPlans": 1,
+  "onlyHighPriority": false,
+  "dryRun": false,
+  "useProductionPipeline": true,
+  "overwriteExisting": false,
+  "startPhaseNo": 1,
+  "endPhaseNo": 7,
+  "planId": "baa5af31-4ba9-4d1d-8ef3-0796210a9ed2"
+}
+```
+
+### Operator checks
+1. Confirm `GET /health/ready` succeeds before submitting the request.
+2. Verify the exact `planId` exists and has the intended `regionId`, `language`, and scheduled year.
+3. Keep `maxPlans=1` for production-pipeline execution.
+4. Use `dryRun=true` first when validating plan selection without writing production artifacts.
+5. Set `overwriteExisting=true` only when intentionally replacing generated outputs.
+6. If the selected plan is already `ProductionCompleted`, use an explicit completed-rerun mode and `allowCompletedPlanRerun=true` before overwriting outputs.
