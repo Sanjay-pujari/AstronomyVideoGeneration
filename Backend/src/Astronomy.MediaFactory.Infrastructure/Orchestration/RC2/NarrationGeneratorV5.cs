@@ -208,6 +208,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             GetString(contract, "eventType")));
         var familyProfileResolution = familyProfileResolver.ResolveFamilyProfile(canonicalEventIdentity);
         var familyProfile = familyProfileResolution.Profile;
+        var phase7InputEventType = canonicalEventIdentity.SourceEventType ?? canonicalEventIdentity.EventType;
+        var phase7CanonicalEventType = ToPhase7CanonicalEventType(canonicalEventIdentity.EventType);
+        var transientTimingFactsSuppressedForEvergreenFamily = IsEvergreenReferenceFamily(familyProfile.FamilyId);
         await WriteAllTextUtf8Async(eventIdentityDiagnosticsPath, JsonSerializer.Serialize(CanonicalEventIdentityDiagnosticsBuilder.Build(canonicalEventIdentity, familyProfileResolution), JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(familyProfileV1CompatibilityDiagnosticsPath, JsonSerializer.Serialize(familyProfileResolution.Diagnostics, JsonOptions), cancellationToken);
         var semanticRegistryValidationReportPath = Path.Combine(narrationRoot, "semantic-registry-validation-report.json");
@@ -574,6 +577,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             shortNarrationArtifactGenerated = File.Exists(shortNarrationPath),
             longNarrationArtifactValid = File.Exists(longNarrationPath) && !string.IsNullOrWhiteSpace(GetNarrationText(longNarrationPath)),
             shortNarrationArtifactValid = File.Exists(shortNarrationPath) && !string.IsNullOrWhiteSpace(GetNarrationText(shortNarrationPath)),
+            inputEventType = phase7InputEventType,
+            canonicalEventType = phase7CanonicalEventType,
+            resolvedNarrationStrategyId = familyProfile.PreferredShortArchetype,
+            resolvedNarrationProfileId = familyProfileResolution.Resolved.ResolvedProfileId,
+            eventTypeResolverOrAdapterUsed = familyProfileResolution.Resolved.ResolutionSource,
+            narrationGenerated = File.Exists(narrationPath) && !string.IsNullOrWhiteSpace(GetNarrationText(narrationPath)),
+            narrationOutputPath = NormalizePath(narrationPath),
+            diagnosticsOutputPath = NormalizePath(diagnosticsPath),
+            wordCount = CountNarrationWords(fullText),
+            transientTimingFactsSuppressedForEvergreenFamily,
+            suppressedTransientTimingFacts = transientTimingFactsSuppressedForEvergreenFamily ? new[] { "PeakTime", "AngularSeparation", "Radiant", "OneNightOccurrence", "CountdownUrgency", "EditorialStartUtcAsOccurrenceDate" } : Array.Empty<string>(),
             languageRequested,
             languageResolved = language,
             requestedLanguage = languageRequested,
@@ -893,6 +907,19 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 
     private static Task WriteAllTextUtf8Async(string path, string contents, CancellationToken cancellationToken = default)
         => File.WriteAllTextAsync(path, contents, JsonUtf8NoBom, cancellationToken);
+
+    private static string ToPhase7CanonicalEventType(string? eventType)
+    {
+        if (string.Equals(eventType, "Constellation", StringComparison.OrdinalIgnoreCase)) return "CONSTELLATION";
+        return eventType ?? string.Empty;
+    }
+
+    private static bool IsEvergreenReferenceFamily(string? familyId)
+        => string.Equals(familyId, "Constellation", StringComparison.OrdinalIgnoreCase) || string.Equals(familyId, "DeepSkyObject", StringComparison.OrdinalIgnoreCase);
+
+    private static int CountNarrationWords(string? text)
+        => string.IsNullOrWhiteSpace(text) ? 0 : Regex.Matches(text, @"[\p{L}\p{N}]+(?:['’.-][\p{L}\p{N}]+)*").Count;
+
 
     private static RedundancyDiagnostics DetectRedundancy(string fullText, IReadOnlyList<NarrationV5Scene> scenes)
     {
