@@ -55,7 +55,7 @@ public sealed class SemanticCapabilityInventoryCertificationV1Tests
         {
             Assert.All(profile.LongFormStructure.Beats.Concat(profile.ShortFormStructure.Beats).SelectMany(b => b.Requirements), r => Assert.Contains(r.SemanticCapabilityId.Value, canonicalIds));
             var converted = adapter.Convert(profile, new FamilyProfileCompatibilityContext(profile.FamilyId, profile.FamilyId, profile.FamilyId, false));
-            Assert.True(converted.Succeeded, string.Join("; ", converted.BlockingDiagnostics));
+            Assert.True(converted.Succeeded, string.Join("; ", converted.BlockingErrors));
         }
     }
 }
