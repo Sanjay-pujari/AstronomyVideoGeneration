@@ -42,6 +42,26 @@ public sealed class DocumentaryNarrativeRevisionValidationComparisonTests
         var result = new DocumentaryNarrativeRevisionValidationComparer().Compare(source, new("target", []));
         Assert.Equal(2, result.ResolvedFindingCount); Assert.True(result.HasImproved); Assert.True(result.IsClean);
     }
+
+    [Theory]
+    [InlineData(1, 0, 0, 0, 0, false, false, true)]
+    [InlineData(0, 1, 0, 0, 0, false, true, false)]
+    public void Rejects_inconsistent_count_decompositions(int source, int revised, int resolved, int remaining,
+        int introduced, bool improved, bool regressed, bool clean) =>
+        Assert.Throws<ArgumentException>(() => Comparison(source, revised, resolved, remaining, introduced, improved, regressed, clean));
+
+    [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    [InlineData(true, true, false)]
+    public void Rejects_inconsistent_boolean_summaries(bool improved, bool regressed, bool clean) =>
+        Assert.Throws<ArgumentException>(() => Comparison(1, 0, 1, 0, 0, improved, regressed, clean));
+
+    private static DocumentaryNarrativeRevisionValidationComparison Comparison(int source, int revised, int resolved,
+        int remaining, int introduced, bool improved, bool regressed, bool clean) => new(source, revised, resolved,
+            remaining, introduced, Enumerable.Repeat("S", source).ToArray(), Enumerable.Repeat("V", revised).ToArray(),
+            Enumerable.Repeat("R", resolved).ToArray(), Enumerable.Repeat("M", remaining).ToArray(),
+            Enumerable.Repeat("I", introduced).ToArray(), improved, regressed, clean);
 }
 
 public sealed class DocumentaryNarrativeRevisionCyclePlannerTests
@@ -67,6 +87,83 @@ public sealed class DocumentaryNarrativeRevisionCyclePlannerTests
             new(DateTimeOffset.Parse("2026-01-15T14:01:00Z"), "coordinator", "1.0", "execution-correlation"),
             new(DateTimeOffset.Parse("2026-01-15T14:02:00Z"), "coordinator", "1.0", "cycle-correlation")));
     }
+}
+
+public sealed class DocumentaryNarrativeRevisionCycleInvariantTests
+{
+    private const string Correlation = "correlation";
+
+    [Fact] public void Plan_requires_an_exact_request_correlation()
+    {
+        var plan = CleanPlan();
+        var metadata = new DocumentaryNarrativeRevisionRequestMetadata(plan.RevisionRequest.Metadata.CreatedUtc,
+            plan.RevisionRequest.Metadata.CreatedBy, plan.SourceDraftVersion, plan.RevisionRequest.Metadata.ValidationSchemaVersion,
+            "1.0", "Correlation");
+        var request = new DocumentaryNarrativeRevisionRequest(plan.RevisionRequest.RevisionRequestId, plan.SourceDraftId,
+            plan.SourceDraftVersion, plan.SourceValidationResult, metadata, plan.RevisionRequest.Items);
+        Assert.Throws<ArgumentException>(() => new DocumentaryNarrativeRevisionCyclePlan(plan.CycleId, plan.SourceDraft,
+            plan.SourceValidationResult, request, plan.WorkPackage, plan.Metadata, plan.Status));
+    }
+
+    [Fact] public void Plan_requires_an_exact_work_package_correlation()
+    {
+        var plan = CleanPlan();
+        var package = plan.WorkPackage;
+        var metadata = new DocumentaryNarrativeRevisionExecutionMetadata(package.Metadata.CreatedUtc,
+            package.Metadata.CreatedBy, "1.0", "Correlation");
+        var changed = new DocumentaryNarrativeRevisionWorkPackage(package.WorkPackageId, package.RevisionRequestId,
+            package.DraftId, package.DraftVersion, package.SubjectId, package.SubjectName, package.PublicationFormat,
+            package.PrimaryLanguage, metadata, package.PassageWorkItems, package.ManualReviewWorkItems);
+        Assert.Throws<ArgumentException>(() => new DocumentaryNarrativeRevisionCyclePlan(plan.CycleId, plan.SourceDraft,
+            plan.SourceValidationResult, plan.RevisionRequest, changed, plan.Metadata, plan.Status));
+    }
+
+    [Fact] public void Result_rejects_wrong_correlation_and_completed_status()
+    {
+        var result = CleanResult();
+        Assert.Throws<ArgumentException>(() => Reconstruct(result, correlation: "Correlation"));
+        Assert.Throws<ArgumentException>(() => Reconstruct(result,
+            status: DocumentaryNarrativeRevisionCycleStatus.CompletedSuccessfully));
+        Assert.Throws<ArgumentException>(() => Reconstruct(result,
+            status: DocumentaryNarrativeRevisionCycleStatus.AwaitingExternalRevision));
+    }
+
+    [Fact] public void Valid_identical_correlation_chain_constructs_a_clean_result()
+    {
+        var result = CleanResult();
+        Assert.Equal(Correlation, result.CorrelationId);
+        Assert.Equal(DocumentaryNarrativeRevisionCycleStatus.NoRevisionRequired, result.Status);
+        Assert.True(result.ValidationComparison.IsClean);
+    }
+
+    private static DocumentaryNarrativeRevisionCyclePlan CleanPlan()
+    {
+        var draft = OrionDocumentaryNarrativeRevisionFixture.ValidDraft();
+        var validation = new DocumentaryNarrativeDraftValidator().Validate(draft);
+        return new DocumentaryNarrativeRevisionCyclePlanner().Plan(draft, validation, "request.clean",
+            new(DateTimeOffset.Parse("2026-01-15T14:00:00.1234567+05:30"), "reviewer", draft.Version, "1.0", "1.0", Correlation),
+            new(DateTimeOffset.Parse("2026-01-15T14:01:00.1234567+05:30"), "coordinator", "1.0", Correlation),
+            new(DateTimeOffset.Parse("2026-01-15T14:02:00.1234567+05:30"), "coordinator", "1.0", Correlation));
+    }
+
+    private static DocumentaryNarrativeRevisionCycleResult CleanResult()
+    {
+        var plan = CleanPlan();
+        var submission = new DocumentaryNarrativeRevisionSubmission("submission.clean", plan.WorkPackage.WorkPackageId,
+            plan.RevisionRequest.RevisionRequestId, plan.SourceDraftId, plan.SourceDraftVersion,
+            new(DateTimeOffset.Parse("2026-01-15T15:00:00Z"), "editor", "1.0",
+                DocumentaryNarrativeRevisionEditorType.Human, "editor", Correlation), []);
+        var revisionMetadata = new DocumentaryNarrativeRevisionMetadata(DateTimeOffset.Parse("2026-01-15T15:01:00Z"),
+            "reviewer", plan.SourceDraftId, plan.SourceDraftVersion, plan.SourceDraftVersion + ".revised", "1.0", Correlation);
+        return new DocumentaryNarrativeRevisionCycleCompleter().Complete(new(plan, submission, revisionMetadata,
+            DateTimeOffset.Parse("2026-01-15T15:02:00Z"), "reviewer", "1.0", Correlation));
+    }
+
+    private static DocumentaryNarrativeRevisionCycleResult Reconstruct(DocumentaryNarrativeRevisionCycleResult value,
+        string? correlation = null, DocumentaryNarrativeRevisionCycleStatus? status = null) => new(value.Plan,
+            value.Submission, value.BindingRequest, value.RevisionResult, value.RevisedValidationResult,
+            value.ValidationComparison, value.CompletedUtc, value.CompletedBy, value.CompletionSchemaVersion,
+            correlation ?? value.CorrelationId, status ?? value.Status);
 }
 
 public sealed class DocumentaryNarrativeRevisionCycleArchitectureTests

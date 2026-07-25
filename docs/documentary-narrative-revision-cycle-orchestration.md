@@ -26,11 +26,15 @@ Findings are matched as an ordered multiset, not as rule-code sets. Identity use
 
 Improvement requires a lower total and no introduced finding. Regression means a greater total or any introduced finding; consequently an equal-count replacement is a regression, not an improvement. A zero revised count is clean.
 
+Comparison construction enforces both multiset decompositions: resolved plus remaining equals the source count, and remaining plus introduced equals the revised count. The improvement, regression, and clean flags must exactly equal the values derived from those counts, so callers cannot construct a contradictory comparison.
+
 ## Determinism, immutability, and correlation
 
 All timestamps and provenance are caller supplied. Contracts expose no public setters, and direct summary collections are defensively copied in order. Operations are sealed, synchronous, parameterless, stateless, and instantiate only the certified deterministic upstream operations. Equivalent inputs consequently preserve cycle IDs, ordering, lineage, and Web JSON.
 
 O2.9 uses one correlation chain. Exact ordinal equality is required across cycle metadata, request metadata, execution/work-package metadata, submission metadata, revision metadata, and completion input. A mismatch is a structural error and throws; it is never ignored.
+
+Plans enforce their correlation chain at construction, including direct or deserialized construction. Completed results likewise enforce exact submission, binding, revision-result, validation, and comparison lineage; their supplied status must equal the status derived from the plan, unresolved-item count, and revised finding count.
 
 ## Responsibility and future-extension boundary
 
