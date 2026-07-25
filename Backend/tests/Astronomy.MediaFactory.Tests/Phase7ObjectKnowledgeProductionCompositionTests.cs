@@ -20,7 +20,7 @@ public sealed class Phase7ObjectKnowledgeProductionCompositionTests
         var generator = scope.ServiceProvider.GetRequiredService<NarrationGeneratorV5>();
         Assert.IsType<RequiredSemanticFactResolver>(generator.RuntimeRequiredSemanticFactResolver);
 
-        var request = new ContentPlanProductionPipelineRequest(Guid.NewGuid(), "Astronomy", "Orion constellation", "Orion", "Constellation", "US", "en", ["Orion"], [], null, null, null, null, "orion", "long", ["long", "short"], 90, 80, 90, 90, "Verified", "Test", "Constellation", null, null, null, "United States", null, null, null, null, [], [], "UTC", null);
+        var request = new ContentPlanProductionPipelineRequest(Guid.NewGuid(), "Astronomy", "Orion constellation", "Orion", "Constellation", "US", "en", ["Orion"], [], null, null, null, null, "orion", "long", ["long", "short"], 90, 80, 90, 90, "Verified", "Test", "Constellation", null, null, null, "United States", null, null, null, null, [], [], [], "UTC", null);
         var input = new RequiredSemanticFactResolutionInput(
             AstronomyFamilyProfileCatalog.ResolveFamilyProfile(new AstronomyFamilyProfileResolutionInput("Constellation", null, null, null, null, null)).Profile,
             Json("{\"beats\":[{\"sceneId\":\"scene-1\",\"documentaryBeatId\":\"long-orientation\",\"narrativeRole\":\"Orientation\",\"allocatedFacts\":{}}]}"),
