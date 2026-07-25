@@ -12,7 +12,11 @@ public sealed class DocumentaryNarrativeRevisionSubmissionAssembler
         {
             var work=workPackage.PassageWorkItems.SingleOrDefault(x=>Eq(x.WorkItemId,submitted.WorkItemId))??throw new ArgumentException("Unknown passage work-item identity.",nameof(submission));
             if(!Eq(work.PassageId,submitted.PassageId))throw new ArgumentException("Work item and passage identities do not match.",nameof(submission));
-            if(draft.Sections.SelectMany(x=>x.Passages).Count(x=>Eq(x.PassageId,submitted.PassageId))!=1)throw new ArgumentException("Unknown or duplicated passage identity.",nameof(submission));
+            var sourcePassages=draft.Sections.SelectMany(x=>x.Passages).Where(x=>Eq(x.PassageId,submitted.PassageId)).ToArray();
+            if(sourcePassages.Length!=1)throw new ArgumentException("Unknown or duplicated passage identity.",nameof(submission));
+            var sourcePassage=sourcePassages[0];
+            if(!Eq(sourcePassage.Text,work.OriginalText))throw new ArgumentException("Work-package original text does not match the source draft passage.",nameof(workPackage));
+            if(!Eq(sourcePassage.Text,submitted.OriginalText))throw new ArgumentException("Submitted original text does not match the source draft passage.",nameof(submission));
             if(!Eq(work.OriginalText,submitted.OriginalText))throw new ArgumentException("Original text is stale or mismatched.",nameof(submission));
             if(!work.RevisionItemIds.SequenceEqual(submitted.ResolvedRevisionItemIds,StringComparer.Ordinal))throw new ArgumentException("A passage submission must resolve every applicable item in request order.",nameof(submission));
             var applicable=revisionRequest.Items.Where(x=>x.RequiresPassageText&&x.PassageId is not null&&Eq(x.PassageId,submitted.PassageId)).Select(x=>x.RevisionItemId);

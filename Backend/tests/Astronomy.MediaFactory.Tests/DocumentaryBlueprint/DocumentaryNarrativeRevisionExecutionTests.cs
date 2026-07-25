@@ -32,6 +32,65 @@ public sealed class DocumentaryNarrativeRevisionSubmissionAssemblerTests
     [Fact] public void Maps_external_submission_without_binding(){var d=OrionDocumentaryNarrativeRevisionFixture.Draft();var request=OrionDocumentaryNarrativeRevisionFixture.Request();var binding=new DocumentaryNarrativeRevisionSubmissionAssembler().Assemble(d,request,OrionDocumentaryNarrativeRevisionExecutionFixture.Package(),OrionDocumentaryNarrativeRevisionExecutionFixture.Submission(),OrionDocumentaryNarrativeRevisionFixture.Metadata());Assert.Single(binding.PassageRevisionInputs);Assert.Equal(OrionDocumentaryNarrativeRevisionExecutionFixture.Submission().PassageSubmissions[0].ResolvedRevisionItemIds,binding.PassageRevisionInputs[0].RevisionItemIds);}
     [Fact] public void Rejects_partial_group_and_stale_text(){var d=OrionDocumentaryNarrativeRevisionFixture.Draft();var r=OrionDocumentaryNarrativeRevisionFixture.Request();var p=OrionDocumentaryNarrativeRevisionExecutionFixture.Package();var w=p.PassageWorkItems[0];DocumentaryNarrativeRevisionSubmission Make(string text,IReadOnlyList<string> ids)=>new("s",p.WorkPackageId,p.RevisionRequestId,p.DraftId,p.DraftVersion,OrionDocumentaryNarrativeRevisionExecutionFixture.SubmissionMetadata(),[new(w.WorkItemId,w.PassageId,text,"new",ids)]);var assembler=new DocumentaryNarrativeRevisionSubmissionAssembler();Assert.Throws<ArgumentException>(()=>assembler.Assemble(d,r,p,Make("stale",w.RevisionItemIds),OrionDocumentaryNarrativeRevisionFixture.Metadata()));Assert.Throws<ArgumentException>(()=>assembler.Assemble(d,r,p,Make(w.OriginalText,[w.RevisionItemIds[0]]),OrionDocumentaryNarrativeRevisionFixture.Metadata()));}
     [Fact] public void Empty_clean_submission_assembles_empty_request(){var d=OrionDocumentaryNarrativeRevisionFixture.ValidDraft();var r=OrionDocumentaryNarrativeRevisionFixture.NoChangeRequest();var p=new DocumentaryNarrativeRevisionWorkPackageBuilder().Build(d,r,OrionDocumentaryNarrativeRevisionExecutionFixture.ExecutionMetadata());var s=new DocumentaryNarrativeRevisionSubmission("s",p.WorkPackageId,p.RevisionRequestId,p.DraftId,p.DraftVersion,OrionDocumentaryNarrativeRevisionExecutionFixture.SubmissionMetadata(),[]);var binding=new DocumentaryNarrativeRevisionSubmissionAssembler().Assemble(d,r,p,s,OrionDocumentaryNarrativeRevisionFixture.MetadataFor(d));Assert.Empty(binding.PassageRevisionInputs);}
+
+    [Fact]
+    public void Rejects_work_item_text_that_differs_from_source_draft()
+    {
+        var package=OrionDocumentaryNarrativeRevisionExecutionFixture.Package();
+        var forged=WithOriginalText(package,"forged source text");
+        var error=Assert.Throws<ArgumentException>(()=>Assemble(forged,SubmissionFor(forged,"forged source text")));
+        Assert.Equal("workPackage",error.ParamName);
+    }
+
+    [Fact]
+    public void Rejects_submission_that_matches_forged_work_item_but_differs_from_source_draft()
+    {
+        var forged=WithOriginalText(OrionDocumentaryNarrativeRevisionExecutionFixture.Package(),"stale but internally consistent");
+        var error=Assert.Throws<ArgumentException>(()=>Assemble(forged,SubmissionFor(forged,"stale but internally consistent")));
+        Assert.Equal("workPackage",error.ParamName);
+    }
+
+    [Theory]
+    [MemberData(nameof(OrdinalTextMismatches))]
+    public void Rejects_work_package_text_without_normalization(string alteredText)
+    {
+        var forged=WithOriginalText(OrionDocumentaryNarrativeRevisionExecutionFixture.Package(),alteredText);
+        var error=Assert.Throws<ArgumentException>(()=>Assemble(forged,SubmissionFor(forged,alteredText)));
+        Assert.Equal("workPackage",error.ParamName);
+    }
+
+    [Fact]
+    public void Rejects_stale_submitted_source_text_independently()
+    {
+        var package=OrionDocumentaryNarrativeRevisionExecutionFixture.Package();
+        var error=Assert.Throws<ArgumentException>(()=>Assemble(package,SubmissionFor(package,"stale submission text")));
+        Assert.Equal("submission",error.ParamName);
+    }
+
+    public static IEnumerable<object[]> OrdinalTextMismatches()
+    {
+        var source=OrionDocumentaryNarrativeRevisionExecutionFixture.Package().PassageWorkItems[0].OriginalText;
+        yield return [source.ToUpperInvariant()];
+        yield return [" "+source];
+        yield return [source+" "];
+        yield return [source+"\r\ncontinued"];
+    }
+
+    private static void Assemble(DocumentaryNarrativeRevisionWorkPackage package,DocumentaryNarrativeRevisionSubmission submission)
+        =>new DocumentaryNarrativeRevisionSubmissionAssembler().Assemble(OrionDocumentaryNarrativeRevisionFixture.Draft(),OrionDocumentaryNarrativeRevisionFixture.Request(),package,submission,OrionDocumentaryNarrativeRevisionFixture.Metadata());
+
+    private static DocumentaryNarrativeRevisionSubmission SubmissionFor(DocumentaryNarrativeRevisionWorkPackage package,string originalText)
+    {
+        var work=package.PassageWorkItems[0];
+        return new("submission.source-text",package.WorkPackageId,package.RevisionRequestId,package.DraftId,package.DraftVersion,OrionDocumentaryNarrativeRevisionExecutionFixture.SubmissionMetadata(),[new(work.WorkItemId,work.PassageId,originalText,"revised text",work.RevisionItemIds)]);
+    }
+
+    private static DocumentaryNarrativeRevisionWorkPackage WithOriginalText(DocumentaryNarrativeRevisionWorkPackage package,string originalText)
+    {
+        var work=package.PassageWorkItems[0];
+        var replacement=new DocumentaryNarrativePassageRevisionWorkItem(work.WorkItemId,work.SequenceNumber,work.RevisionRequestId,work.DraftId,work.DraftVersion,work.SectionId,work.SectionNumber,work.SectionTitle,work.PassageId,work.PassageNumber,work.PassageTitle,work.PassageType,work.NarrativeStage,work.SceneRole,originalText,work.RevisionItemIds,work.RuleCodes,work.Severities,work.Actions,work.Messages,work.PreviousPassageContext,work.NextPassageContext);
+        return new(package.WorkPackageId,package.RevisionRequestId,package.DraftId,package.DraftVersion,package.SubjectId,package.SubjectName,package.PublicationFormat,package.PrimaryLanguage,package.Metadata,[replacement],package.ManualReviewWorkItems);
+    }
 }
 public sealed class DocumentaryNarrativeRevisionExecutionSerializationTests
 {

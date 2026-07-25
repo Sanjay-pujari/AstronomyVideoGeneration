@@ -26,7 +26,7 @@ Each passage work item snapshots its exact original text and the immediately pre
 
 Submission provenance—including timestamp, editor type/name, schema version, and correlation—is externally supplied. Editor type describes provenance only and triggers no behavior. Passage submissions preserve text exactly, identify the source work item and passage, and resolve the complete ordered finding group. Collections are defensively copied and expose no public setters.
 
-The assembler validates exact ordinal lineage among draft, request, package, submission, and O2.7 revision metadata. It rejects unknown or case-mismatched work and passage identities, stale original text (including case-only and whitespace-only changes), work/passage mismatches, manual findings, missing, reordered, duplicated, or extra finding IDs, and conflicting submission coverage.
+The assembler validates exact ordinal lineage among draft, request, package, submission, and O2.7 revision metadata. For every submitted passage it independently compares the source-draft passage text with both the work-package original text and the submitted original text using exact ordinal comparison. It rejects unknown or case-mismatched work and passage identities, stale original text (including case-only and whitespace-only changes), work/passage mismatches, manual findings, missing, reordered, duplicated, or extra finding IDs, and conflicting submission coverage.
 
 Partial submission **across passages** is supported; partial submission **within a passage group** is rejected. An empty submission is valid for clean and manual-review-only requests. Manual findings remain unresolved for the O2.7 binder, which consequently owns `NoChangesRequired`, `PartiallyRevised`, and all other final status decisions.
 
