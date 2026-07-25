@@ -2,6 +2,13 @@ using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 public sealed class DocumentaryBlueprintBuilderImmutabilityTests
 {
+    [Fact] public void Scene_input_exposes_read_only_visual_opportunities()
+    {
+        var scene=OrionDocumentaryBlueprintBuilderFixture.Scene();
+
+        Assert.Throws<NotSupportedException>(()=>((IList<VisualOpportunity>)scene.VisualOpportunities).Clear());
+    }
+
     [Fact] public void Inputs_copy_collections_and_build_does_not_mutate_them()
     {
         var refs=new List<KnowledgeReference>{new("one","section","purpose",true)}; var visuals=new List<VisualOpportunity>{new("description","type",null,null,false)}; var scene=OrionDocumentaryBlueprintBuilderFixture.Scene(references:refs,visuals:visuals); refs.Add(new("two","section","purpose",false)); visuals.Clear(); Assert.Single(scene.KnowledgeReferences); Assert.Single(scene.VisualOpportunities);
