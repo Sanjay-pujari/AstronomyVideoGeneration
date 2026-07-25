@@ -4,6 +4,7 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Catal
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Resolution.V1.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Adapters.Contracts;
+using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Catalog;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Sources.Contracts;
 
 namespace Astronomy.MediaFactory.Tests;
