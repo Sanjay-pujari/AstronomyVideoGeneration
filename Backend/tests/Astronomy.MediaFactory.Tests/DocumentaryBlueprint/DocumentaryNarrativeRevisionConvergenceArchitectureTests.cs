@@ -1,0 +1,10 @@
+using System.Reflection;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
+public sealed class DocumentaryNarrativeRevisionConvergenceArchitectureTests
+{
+    [Fact] public void Enums_are_exact_and_ordered() { Assert.Equal(["NotStarted","InProgress","ConvergedSuccessfully","StoppedByCycleLimit","StoppedByNoProgress","StoppedByRegression","RequiresManualEscalation"],Enum.GetNames<DocumentaryNarrativeRevisionConvergenceStatus>()); Assert.Equal(["None","PlanNextRevisionCycle","ObtainExternalRevisionSubmission","PerformManualReview","AcceptCurrentDraft","TerminateRevisionProcess"],Enum.GetNames<DocumentaryNarrativeRevisionConvergenceNextAction>()); }
+    [Fact] public void Operations_are_exact_sealed_parameterless_synchronous_and_stateless() { Operation(typeof(DocumentaryNarrativeRevisionConvergenceStarter),"Start",4); Operation(typeof(DocumentaryNarrativeRevisionConvergenceAdvancer),"Advance",1); Operation(typeof(DocumentaryNarrativeRevisionConvergenceSummarizer),"Summarize",1); }
+    [Fact] public void Contracts_have_no_public_setters() { foreach(var type in new[]{typeof(DocumentaryNarrativeRevisionConvergencePolicy),typeof(DocumentaryNarrativeRevisionConvergenceMetadata),typeof(DocumentaryNarrativeRevisionConvergenceState),typeof(DocumentaryNarrativeRevisionConvergenceAdvanceRequest),typeof(DocumentaryNarrativeRevisionConvergenceSummary)}) Assert.All(type.GetProperties(),p=>Assert.False(p.SetMethod?.IsPublic??false)); }
+    private static void Operation(Type type,string name,int parameters) { Assert.True(type.IsSealed); Assert.Empty(type.GetFields(BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic)); Assert.NotNull(type.GetConstructor(Type.EmptyTypes)); var methods=type.GetMethods(BindingFlags.Instance|BindingFlags.Public|BindingFlags.DeclaredOnly); Assert.Single(methods); Assert.Equal(name,methods[0].Name); Assert.Equal(parameters,methods[0].GetParameters().Length); Assert.False(typeof(Task).IsAssignableFrom(methods[0].ReturnType)); }
+}

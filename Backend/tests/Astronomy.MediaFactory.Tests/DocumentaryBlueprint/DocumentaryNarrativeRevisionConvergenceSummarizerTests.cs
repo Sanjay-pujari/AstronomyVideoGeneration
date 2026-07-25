@@ -1,0 +1,10 @@
+using System.Collections;
+using System.Text.Json;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
+public sealed class DocumentaryNarrativeRevisionConvergenceSummarizerTests
+{
+    [Fact] public void Zero_cycle_summary_has_zero_cumulative_remaining() { var summary=new DocumentaryNarrativeRevisionConvergenceSummarizer().Summarize(OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyInvalidState()); Assert.Equal(0,summary.TotalRemainingFindingCount); Assert.Empty(summary.CycleStatuses); Assert.Single(summary.FindingCountHistory); }
+    [Fact] public void Remaining_is_cumulative_comparison_evidence_not_current_count() { var state=OrionDocumentaryNarrativeRevisionConvergenceFixture.ResolvedAndIntroducedState(); var summary=new DocumentaryNarrativeRevisionConvergenceSummarizer().Summarize(state); Assert.True(summary.TotalResolvedFindingCount>0); Assert.True(summary.TotalIntroducedFindingCount>0); Assert.Equal(state.Cycles.Sum(x=>x.ValidationComparison.RemainingFindingCount),summary.TotalRemainingFindingCount); Assert.Equal(state.CurrentFindingCount,summary.CurrentFindingCount); Assert.NotEqual(summary.CurrentFindingCount,summary.TotalRemainingFindingCount); Assert.Equal(new[]{state.InitialFindingCount,state.CurrentFindingCount},summary.FindingCountHistory); }
+    [Fact] public void Summary_is_read_only_deterministic_and_round_trips() { var s=new DocumentaryNarrativeRevisionConvergenceSummarizer().Summarize(OrionDocumentaryNarrativeRevisionConvergenceFixture.OneCycleSuccessfulState()); Assert.Throws<NotSupportedException>(()=>((IList)s.FindingCountHistory).Clear()); DocumentaryNarrativeRevisionConvergencePolicyTests.RoundTrip(s); var o=OrionDocumentaryNarrativeRevisionConvergenceFixture.JsonOptions(); Assert.Equal(JsonSerializer.Serialize(s,o),JsonSerializer.Serialize(new DocumentaryNarrativeRevisionConvergenceSummarizer().Summarize(OrionDocumentaryNarrativeRevisionConvergenceFixture.OneCycleSuccessfulState()),o)); }
+}
