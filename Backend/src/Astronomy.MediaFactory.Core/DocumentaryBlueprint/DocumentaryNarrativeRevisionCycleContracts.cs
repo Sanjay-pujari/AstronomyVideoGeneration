@@ -46,6 +46,9 @@ public sealed class DocumentaryNarrativeRevisionCyclePlan
             !Eq(SourceDraft.Version, RevisionRequest.DraftVersion) || !Eq(RevisionRequest.RevisionRequestId, WorkPackage.RevisionRequestId) ||
             !Eq(SourceDraft.DraftId, WorkPackage.DraftId) || !Eq(SourceDraft.Version, WorkPackage.DraftVersion))
             throw new ArgumentException("Cycle plan lineage must match exactly.");
+        if (!Eq(Metadata.CorrelationId, RevisionRequest.Metadata.CorrelationId) ||
+            !Eq(Metadata.CorrelationId, WorkPackage.Metadata.CorrelationId))
+            throw new ArgumentException("Cycle plan correlations must match exactly.");
         var expected = SourceValidationResult.Findings.Count == 0 ? DocumentaryNarrativeRevisionCycleStatus.NoRevisionRequired : DocumentaryNarrativeRevisionCycleStatus.AwaitingExternalRevision;
         if (status != expected) throw new ArgumentException("Plan status is inconsistent with source validation.", nameof(status));
         Status = status;
@@ -108,6 +111,15 @@ public sealed record DocumentaryNarrativeRevisionValidationComparison
         if (SourceRuleCodes.Count != sourceFindingCount || RevisedRuleCodes.Count != revisedFindingCount ||
             ResolvedRuleCodes.Count != resolvedFindingCount || RemainingRuleCodes.Count != remainingFindingCount || IntroducedRuleCodes.Count != introducedFindingCount)
             throw new ArgumentException("Finding counts and rule-code summaries must align.");
+        if (resolvedFindingCount + remainingFindingCount != sourceFindingCount)
+            throw new ArgumentException("Resolved and remaining findings must decompose the source findings exactly.");
+        if (remainingFindingCount + introducedFindingCount != revisedFindingCount)
+            throw new ArgumentException("Remaining and introduced findings must decompose the revised findings exactly.");
+        var expectedHasImproved = revisedFindingCount < sourceFindingCount && introducedFindingCount == 0;
+        var expectedHasRegressed = revisedFindingCount > sourceFindingCount || introducedFindingCount > 0;
+        var expectedIsClean = revisedFindingCount == 0;
+        if (hasImproved != expectedHasImproved || hasRegressed != expectedHasRegressed || isClean != expectedIsClean)
+            throw new ArgumentException("Comparison Boolean values must agree with the finding counts.");
         HasImproved = hasImproved; HasRegressed = hasRegressed; IsClean = isClean;
     }
     private static IReadOnlyList<string> Copy(IReadOnlyList<string> values, string name)
@@ -144,8 +156,38 @@ public sealed class DocumentaryNarrativeRevisionCycleResult
         RevisedValidationResult = revisedValidationResult ?? throw new ArgumentNullException(nameof(revisedValidationResult)); ValidationComparison = validationComparison ?? throw new ArgumentNullException(nameof(validationComparison));
         CompletedUtc = completedUtc != default ? completedUtc : throw new ArgumentException("A non-default completion timestamp is required.", nameof(completedUtc));
         CompletedBy = Guard.Required(completedBy, nameof(completedBy)); CompletionSchemaVersion = completionSchemaVersion == "1.0" ? completionSchemaVersion : throw new ArgumentException("Completion schema version must be 1.0.", nameof(completionSchemaVersion)); CorrelationId = Guard.Required(correlationId, nameof(correlationId));
-        Guard.Enum(status, nameof(status)); if (status == DocumentaryNarrativeRevisionCycleStatus.AwaitingExternalRevision) throw new ArgumentException("A completed result cannot await revision.", nameof(status)); Status = status;
+        if (!Eq(Submission.WorkPackageId, Plan.WorkPackage.WorkPackageId) ||
+            !Eq(Submission.RevisionRequestId, Plan.RevisionRequest.RevisionRequestId) ||
+            !Eq(Submission.DraftId, Plan.SourceDraftId) || !Eq(Submission.DraftVersion, Plan.SourceDraftVersion) ||
+            !Eq(BindingRequest.OriginalDraft.DraftId, Plan.SourceDraftId) ||
+            !Eq(BindingRequest.OriginalDraft.Version, Plan.SourceDraftVersion) ||
+            !Eq(BindingRequest.RevisionRequest.RevisionRequestId, Plan.RevisionRequest.RevisionRequestId) ||
+            !Eq(RevisionResult.RevisionRequestId, Plan.RevisionRequest.RevisionRequestId) ||
+            !Eq(RevisionResult.SourceDraftId, Plan.SourceDraftId) ||
+            !Eq(RevisionResult.SourceDraftVersion, Plan.SourceDraftVersion) ||
+            !Eq(RevisedValidationResult.DraftId, RevisionResult.TargetDraftId))
+            throw new ArgumentException("Cycle result lineage must match exactly.");
+        if (ValidationComparison.SourceFindingCount != Plan.SourceFindingCount ||
+            ValidationComparison.RevisedFindingCount != RevisedValidationResult.Findings.Count)
+            throw new ArgumentException("Cycle result validation counts must match their artifacts.");
+        if (!new[] { Plan.Metadata.CorrelationId, Plan.RevisionRequest.Metadata.CorrelationId,
+                Plan.WorkPackage.Metadata.CorrelationId, Submission.Metadata.CorrelationId,
+                BindingRequest.Metadata.CorrelationId }.All(value => Eq(CorrelationId, value)))
+            throw new ArgumentException("Cycle result correlations must match exactly.", nameof(correlationId));
+        Guard.Enum(status, nameof(status));
+        var expectedStatus = Plan.Status == DocumentaryNarrativeRevisionCycleStatus.NoRevisionRequired &&
+            RevisionResult.Status == DocumentaryNarrativeRevisionStatus.NoChangesRequired
+                ? DocumentaryNarrativeRevisionCycleStatus.NoRevisionRequired
+                : RevisionResult.UnresolvedItemCount > 0
+                    ? DocumentaryNarrativeRevisionCycleStatus.PartiallyCompleted
+                    : RevisedValidationResult.Findings.Count > 0
+                        ? DocumentaryNarrativeRevisionCycleStatus.CompletedWithRemainingFindings
+                        : DocumentaryNarrativeRevisionCycleStatus.CompletedSuccessfully;
+        if (status != expectedStatus)
+            throw new ArgumentException("Cycle result status is inconsistent with its completed artifacts.", nameof(status));
+        Status = status;
     }
+    private static bool Eq(string left, string right) => string.Equals(left, right, StringComparison.Ordinal);
     public string CycleId => Plan.CycleId;
     public DocumentaryNarrativeRevisionCyclePlan Plan { get; }
     public DocumentaryNarrativeRevisionSubmission Submission { get; }
