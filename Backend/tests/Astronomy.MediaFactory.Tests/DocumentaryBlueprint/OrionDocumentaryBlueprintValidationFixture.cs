@@ -1,16 +1,17 @@
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using DocumentaryBlueprintModel = Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 
 internal static class OrionDocumentaryBlueprintValidationFixture
 {
-    public static DocumentaryBlueprint Create(params DocumentarySceneBlueprint[]? scenes) => new(
+    public static DocumentaryBlueprintModel Create(params DocumentarySceneBlueprint[]? scenes) => new(
         "documentary.orion.validation.v1", "knowledge.orion.v1", "orion", "Orion",
         BlueprintPublicationFormat.LongDocumentary, "en-US", "1",
         new(new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero), "editor", "model-v1", "knowledge-v1", "1.0", "orion-validation"),
         scenes is { Length: > 0 } ? scenes : [Scene(1, DocumentarySceneRole.OpeningHook), Scene(2, DocumentarySceneRole.ScientificExplanation), Scene(3, DocumentarySceneRole.ReflectiveClosing)]);
 
-    public static DocumentaryBlueprint Empty() => new("documentary.orion.validation.v1", "knowledge.orion.v1", "orion", "Orion", BlueprintPublicationFormat.LongDocumentary, "en-US", "1",
+    public static DocumentaryBlueprintModel Empty() => new("documentary.orion.validation.v1", "knowledge.orion.v1", "orion", "Orion", BlueprintPublicationFormat.LongDocumentary, "en-US", "1",
         new(new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero), "editor", "model-v1", "knowledge-v1", "1.0", "orion-validation"), []);
 
     public static DocumentarySceneBlueprint Scene(int number, DocumentarySceneRole role, string? id = null,

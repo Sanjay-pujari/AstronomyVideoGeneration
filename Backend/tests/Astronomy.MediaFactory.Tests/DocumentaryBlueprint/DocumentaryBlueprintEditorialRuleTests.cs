@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using FluentAssertions;
+using DocumentaryBlueprintModel = Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 public sealed class DocumentaryBlueprintEditorialRuleTests
@@ -24,7 +25,7 @@ public sealed class DocumentaryBlueprintEditorialRuleTests
         yield return [OrionDocumentaryBlueprintValidationFixture.Create(OrionDocumentaryBlueprintValidationFixture.Scene(1, DocumentarySceneRole.OpeningHook, duration: 0)), "DBP-EDITORIAL-015", E];
         yield return [OrionDocumentaryBlueprintValidationFixture.Create(OrionDocumentaryBlueprintValidationFixture.Scene(1, DocumentarySceneRole.OpeningHook, duration: 0), OrionDocumentaryBlueprintValidationFixture.Scene(2, DocumentarySceneRole.ReflectiveClosing)), "DBP-EDITORIAL-016", W];
     }
-    [Theory, MemberData(nameof(Cases))] public void Approved_rule_reports_stable_finding(DocumentaryBlueprint blueprint, string code, DocumentaryBlueprintValidationSeverity severity)
+    [Theory, MemberData(nameof(Cases))] public void Approved_rule_reports_stable_finding(DocumentaryBlueprintModel blueprint, string code, DocumentaryBlueprintValidationSeverity severity)
     { var findings = _validator.Validate(blueprint).Findings.Where(x => x.RuleCode == code).ToArray(); findings.Should().HaveCount(1); findings[0].Severity.Should().Be(severity); findings[0].BlueprintId.Should().Be(blueprint.BlueprintId); findings[0].Message.Should().NotBeNullOrWhiteSpace(); }
     private const DocumentaryBlueprintValidationSeverity E = DocumentaryBlueprintValidationSeverity.Error;
     private const DocumentaryBlueprintValidationSeverity W = DocumentaryBlueprintValidationSeverity.Warning;
