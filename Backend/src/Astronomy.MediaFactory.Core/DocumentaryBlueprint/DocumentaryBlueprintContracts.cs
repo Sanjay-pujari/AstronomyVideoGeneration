@@ -65,6 +65,7 @@ public sealed record VisualOpportunity(string Description, string Type, string? 
 /// <summary>Externally supplied provenance and version information for a blueprint.</summary>
 public sealed record DocumentaryBlueprintMetadata(DateTimeOffset CreatedUtc, string CreatedBy, string EditorialModelVersion, string KnowledgeVersion, string BlueprintSchemaVersion, string CorrelationId)
 {
+    public DateTimeOffset CreatedUtc { get; init; } = CreatedUtc != default ? CreatedUtc : throw new ArgumentException("A non-default creation timestamp is required.", nameof(CreatedUtc));
     public string CreatedBy { get; init; } = Guard.Required(CreatedBy, nameof(CreatedBy));
     public string EditorialModelVersion { get; init; } = Guard.Required(EditorialModelVersion, nameof(EditorialModelVersion));
     public string KnowledgeVersion { get; init; } = Guard.Required(KnowledgeVersion, nameof(KnowledgeVersion));

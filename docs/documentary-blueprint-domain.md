@@ -22,7 +22,7 @@ The blueprint is the deterministic contract between knowledge and later narratio
 - `KnowledgeReference` identifies an existing entry, section, purpose, and primary status; it never embeds knowledge content.
 - `SceneTransition` holds transition intent, next-question seed, and editorial direction—not finished prose.
 - `VisualOpportunity` holds visual guidance and optional knowledge/asset references—not image-generation instructions.
-- `DocumentaryBlueprintMetadata` holds externally supplied creation, author, model, knowledge, schema, and correlation values. The schema version is `1.0`.
+- `DocumentaryBlueprintMetadata` holds externally supplied creation, author, model, knowledge, schema, and correlation values. `CreatedUtc` must be non-default and is preserved exactly; the schema version is `1.0`.
 
 The enum inventories are intentionally closed: `DocumentaryNarrativeStage` describes the narrative progression; `DocumentarySceneRole` the scene function; `EditorialPriority` its importance; and `BlueprintPublicationFormat` its target format.
 
@@ -34,7 +34,7 @@ Contracts expose get-only state. Every supplied collection is copied into a read
 
 ## Determinism and serialization
 
-IDs, timestamps, versions, correlation IDs, numbers, and ordering are supplied by callers. Contracts use no clock, random source, current culture, environment state, or static mutable state. `System.Text.Json`, already used by the repository, reconstructs contracts through their public constructors. Round trips preserve every approved value and collection order; equivalent inputs serialize identically.
+IDs, timestamps, versions, correlation IDs, numbers, and ordering are supplied by callers. Default or ambient timestamps are never generated. Contracts use no clock, random source, current culture, environment state, or static mutable state. Tests reuse the repository's established `System.Text.Json` web defaults (`JsonSerializerDefaults.Web`), which reconstruct contracts through their public constructors. Round trips preserve every approved value and caller-provided scene, knowledge-reference, and visual-opportunity order; equivalent inputs serialize identically.
 
 ## Explicit exclusions
 
