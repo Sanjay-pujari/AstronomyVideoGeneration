@@ -1,0 +1,13 @@
+using System.Text.Json;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
+public sealed class DocumentaryNarrativeRevisionConvergenceStarterTests
+{
+    [Fact] public void Starts_clean_and_invalid_states_with_exact_identity()
+    {
+        var clean=OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyCleanState(); Assert.Equal($"{clean.OriginalDraftId}.revision-convergence.{clean.OriginalDraftVersion}",clean.ConvergenceId); Assert.Equal(DocumentaryNarrativeRevisionConvergenceStatus.ConvergedSuccessfully,clean.Status); Assert.Equal(DocumentaryNarrativeRevisionConvergenceNextAction.AcceptCurrentDraft,clean.NextAction); Assert.True(clean.IsClean);
+        var invalid=OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyInvalidState(); Assert.Equal(DocumentaryNarrativeRevisionConvergenceStatus.NotStarted,invalid.Status); Assert.Equal(DocumentaryNarrativeRevisionConvergenceNextAction.PlanNextRevisionCycle,invalid.NextAction); Assert.True(invalid.RequiresAnotherCycle); Assert.Same(invalid.OriginalDraft,invalid.CurrentDraft); Assert.Same(invalid.InitialValidationResult,invalid.CurrentValidationResult);
+    }
+    [Fact] public void Rejects_null_and_exact_lineage_mismatch() { var d=OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyCleanDraft(); var v=OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyCleanValidation(); var p=OrionDocumentaryNarrativeRevisionConvergenceFixture.DefaultPolicy(); var m=OrionDocumentaryNarrativeRevisionConvergenceFixture.Metadata(); var op=new DocumentaryNarrativeRevisionConvergenceStarter(); Assert.Throws<ArgumentNullException>(()=>op.Start(null!,v,p,m)); Assert.Throws<ArgumentNullException>(()=>op.Start(d,null!,p,m)); Assert.Throws<ArgumentException>(()=>op.Start(d,new(d.DraftId.ToUpperInvariant(),[]),p,m)); }
+    [Fact] public void Is_non_mutating_and_byte_deterministic() { var o=OrionDocumentaryNarrativeRevisionConvergenceFixture.JsonOptions(); var d=OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyInvalidDraft(); var v=OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyInvalidValidation(); var before=JsonSerializer.Serialize(new object[]{d,v},o); _=new DocumentaryNarrativeRevisionConvergenceStarter().Start(d,v,OrionDocumentaryNarrativeRevisionConvergenceFixture.DefaultPolicy(),OrionDocumentaryNarrativeRevisionConvergenceFixture.Metadata()); Assert.Equal(before,JsonSerializer.Serialize(new object[]{d,v},o)); Assert.Equal(JsonSerializer.Serialize(OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyInvalidState(),o),JsonSerializer.Serialize(OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyInvalidState(),o)); }
+}

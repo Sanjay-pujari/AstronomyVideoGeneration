@@ -82,6 +82,7 @@ public sealed class DocumentaryNarrativeRevisionConvergenceState
         Guard.Enum(status, nameof(status)); Guard.Enum(nextAction, nameof(nextAction));
         if (consecutiveNoProgressCycleCount < 0) throw new ArgumentOutOfRangeException(nameof(consecutiveNoProgressCycleCount));
         Status = status; NextAction = nextAction; ConsecutiveNoProgressCycleCount = consecutiveNoProgressCycleCount;
+        DocumentaryNarrativeRevisionConvergenceStateValidator.Validate(this);
     }
     private static IReadOnlyList<DocumentaryNarrativeRevisionCycleResult> Copy(IReadOnlyList<DocumentaryNarrativeRevisionCycleResult> values, string name)
     { ArgumentNullException.ThrowIfNull(values, name); if (values.Any(x => x is null)) throw new ArgumentException("Cycles cannot contain null elements.", name); return new ReadOnlyCollection<DocumentaryNarrativeRevisionCycleResult>(values.ToArray()); }

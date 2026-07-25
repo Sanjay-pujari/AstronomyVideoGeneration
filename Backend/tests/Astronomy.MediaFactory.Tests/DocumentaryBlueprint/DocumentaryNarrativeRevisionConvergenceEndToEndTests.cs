@@ -1,0 +1,7 @@
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
+public sealed class DocumentaryNarrativeRevisionConvergenceEndToEndTests
+{
+    [Fact] public void Successful_cycle_converges_and_terminal_state_rejects_advance() { var state=OrionDocumentaryNarrativeRevisionConvergenceFixture.OneCycleSuccessfulState(); Assert.Equal(1,state.CompletedCycleCount); Assert.Equal(DocumentaryNarrativeRevisionConvergenceStatus.ConvergedSuccessfully,state.Status); Assert.Equal(DocumentaryNarrativeRevisionConvergenceNextAction.AcceptCurrentDraft,state.NextAction); Assert.True(state.IsClean); Assert.Throws<InvalidOperationException>(()=>new DocumentaryNarrativeRevisionConvergenceAdvancer().Advance(OrionDocumentaryNarrativeRevisionConvergenceFixture.Request(state,OrionDocumentaryNarrativeRevisionConvergenceFixture.SuccessfulCycle()))); }
+    [Fact] public void Success_precedes_cycle_limit() { var initial=OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyInvalidState(OrionDocumentaryNarrativeRevisionConvergenceFixture.OneCyclePolicy()); var state=new DocumentaryNarrativeRevisionConvergenceAdvancer().Advance(OrionDocumentaryNarrativeRevisionConvergenceFixture.Request(initial,OrionDocumentaryNarrativeRevisionConvergenceFixture.SuccessfulCycle())); Assert.Equal(DocumentaryNarrativeRevisionConvergenceStatus.ConvergedSuccessfully,state.Status); }
+}

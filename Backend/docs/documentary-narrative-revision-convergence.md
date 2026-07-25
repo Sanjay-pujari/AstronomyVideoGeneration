@@ -37,6 +37,17 @@ no reopen operation. Contracts defensively copy ordered collections, use caller-
 timestamps and metadata, and require no clock or environment input. State is neither
 registered as a runtime service nor persisted or scheduled.
 
+State construction enforces the same deterministic identity, lineage, correlation,
+cycle uniqueness, no-progress, status, and next-action invariants used at the starter,
+advancer, and summarizer boundaries. Current-draft continuity with the final cycle is
+certified by deterministic Web JSON value equivalence, which also supports reconstructed
+instances during deserialization.
+
+`TotalRemainingFindingCount` is cumulative comparison evidence: it is the sum of every
+cycle's remaining-finding count (and is zero when there are no cycles). It is independent
+of `CurrentFindingCount`, which describes only the latest validation result; the two
+metrics are not synonymous.
+
 O2.10 does not generate or revise documentary text.
 
 O2.10 does not invoke an external editor.
