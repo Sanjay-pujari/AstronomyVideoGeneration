@@ -6,7 +6,7 @@ using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 
 /// <summary>Final, deterministic O2.9 closure fixture. Every value crossing an operation boundary is supplied here.</summary>
-internal static class OrionDocumentaryNarrativeRevisionCycleFixture
+internal static partial class OrionDocumentaryNarrativeRevisionCycleFixture
 {
     internal const string Correlation = "correlation-orion-cycle-001";
     internal static readonly DateTimeOffset Created = DateTimeOffset.Parse("2026-01-15T14:02:03.1234567+05:30");
