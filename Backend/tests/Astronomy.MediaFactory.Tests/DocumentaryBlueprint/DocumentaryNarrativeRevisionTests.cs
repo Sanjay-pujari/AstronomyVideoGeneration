@@ -11,6 +11,16 @@ internal static class OrionDocumentaryNarrativeRevisionFixture
     internal static DocumentaryNarrativeRevisionMetadata Metadata()=>new(DateTimeOffset.Parse("2026-01-15T15:00:00Z"),"narrative-editor","narrative-draft.orion.long.v1","1","2","1.0","correlation-orion-revision-001");
     internal static DocumentaryNarrativeRevisionRequest Request(){var d=Draft();return new DocumentaryNarrativeRevisionRequestBuilder().Build(d,new DocumentaryNarrativeDraftValidator().Validate(d),RequestId,RequestMetadata());}
     internal static DocumentaryNarrativePassageRevisionInput Input(){var r=Request();var p=Draft().Sections[0].Passages[0];return new(r.Items.Where(x=>x.RequiresPassageText&&x.PassageId==p.PassageId).Select(x=>x.RevisionItemId).ToArray(),p.PassageId,p.Text,"Orion commands attention above the eastern winter horizon tonight.");}
+    internal static DocumentaryNarrativeDraft ValidDraft()=>OrionDocumentaryNarrativeDraftValidationFixture.Valid();
+    internal static DocumentaryNarrativeDraft InvalidOpeningDraft()=>Draft();
+    internal static DocumentaryNarrativeDraftValidationResult CleanValidationResult()=>new DocumentaryNarrativeDraftValidator().Validate(ValidDraft());
+    internal static DocumentaryNarrativeDraftValidationResult InvalidValidationResult()=>new DocumentaryNarrativeDraftValidator().Validate(InvalidOpeningDraft());
+    internal static DocumentaryNarrativeRevisionRequest NoChangeRequest(){var d=ValidDraft();return new DocumentaryNarrativeRevisionRequestBuilder().Build(d,CleanValidationResult(),RequestId,RequestMetadata());}
+    internal static DocumentaryNarrativeRevisionRequest TextRevisionRequest()=>Request();
+    internal static DocumentaryNarrativeRevisionBindingRequest CompleteBindingRequest()=>new(Draft(),Request(),Metadata(),[Input()]);
+    internal static DocumentaryNarrativeRevisionBindingRequest NoChangeBindingRequest()=>new(ValidDraft(),NoChangeRequest(),MetadataFor(ValidDraft()),[]);
+    internal static DocumentaryNarrativeRevisionMetadata MetadataFor(DocumentaryNarrativeDraft d,string target="2")=>new(DateTimeOffset.Parse("2026-01-15T15:00:00Z"),"narrative-editor",d.DraftId,d.Version,target,"1.0","correlation-orion-revision-001");
+    internal static DocumentaryNarrativeRevisionItem Item(string id="i",int sequence=1,DocumentaryNarrativeRevisionAction action=DocumentaryNarrativeRevisionAction.RevisePassageText,string? passageId="p",string draftId="d")=>new(id,sequence,"DND-QUALITY-008",DocumentaryNarrativeDraftValidationSeverity.Error,action,"message",draftId,"s",1,passageId,1,"Text");
 }
 
 public sealed class DocumentaryNarrativeRevisionRequestMetadataTests { [Fact] public void Validates_schema_and_timestamp(){Assert.Throws<ArgumentException>(()=>new DocumentaryNarrativeRevisionRequestMetadata(default,"a","1","1.0","1.0","c"));Assert.Throws<ArgumentException>(()=>new DocumentaryNarrativeRevisionRequestMetadata(new DateTimeOffset(2026,1,1,0,0,0,TimeSpan.Zero),"a","1","1.0","2.0","c"));} }
