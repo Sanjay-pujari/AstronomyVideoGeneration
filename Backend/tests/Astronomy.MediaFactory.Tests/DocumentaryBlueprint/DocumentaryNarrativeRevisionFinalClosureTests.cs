@@ -29,7 +29,7 @@ public sealed class DocumentaryNarrativeRevisionRequestFinalContractTests
 {
     private static DocumentaryNarrativeRevisionRequest Valid(){var d=OrionDocumentaryNarrativeRevisionClosureFixture.Draft();return OrionDocumentaryNarrativeRevisionClosureFixture.Build(OrionDocumentaryNarrativeRevisionClosureFixture.Finding(d,0,"DND-QUALITY-011"));}
     [Theory][InlineData("id")][InlineData("draft")][InlineData("version")]
-    public void Rejects_each_blank_identity(string field){var r=Valid();Assert.Throws<ArgumentException>(()=>new(field=="id"?" ":r.RevisionRequestId,field=="draft"?" ":r.DraftId,field=="version"?" ":r.DraftVersion,r.ValidationResult,r.Metadata,r.Items));}
+    public void Rejects_each_blank_identity(string field){var r=Valid();Assert.Throws<ArgumentException>(()=>new DocumentaryNarrativeRevisionRequest(field=="id"?" ":r.RevisionRequestId,field=="draft"?" ":r.DraftId,field=="version"?" ":r.DraftVersion,r.ValidationResult,r.Metadata,r.Items));}
     [Fact] public void Rejects_null_validation_result(){var r=Valid();Assert.Throws<ArgumentNullException>(()=>new DocumentaryNarrativeRevisionRequest(r.RevisionRequestId,r.DraftId,r.DraftVersion,null!,r.Metadata,r.Items));}
     [Fact] public void Rejects_null_metadata(){var r=Valid();Assert.Throws<ArgumentNullException>(()=>new DocumentaryNarrativeRevisionRequest(r.RevisionRequestId,r.DraftId,r.DraftVersion,r.ValidationResult,null!,r.Items));}
     [Fact] public void Rejects_null_items(){var r=Valid();Assert.Throws<ArgumentNullException>(()=>new DocumentaryNarrativeRevisionRequest(r.RevisionRequestId,r.DraftId,r.DraftVersion,r.ValidationResult,r.Metadata,null!));}
