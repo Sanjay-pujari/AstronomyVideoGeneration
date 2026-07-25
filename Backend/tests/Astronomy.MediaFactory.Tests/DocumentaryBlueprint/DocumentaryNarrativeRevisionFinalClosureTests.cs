@@ -76,7 +76,91 @@ public sealed class DocumentaryNarrativeRevisionBinderFinalClosureTests
     {var d=OrionDocumentaryNarrativeRevisionClosureFixture.Draft();var mixed=OrionDocumentaryNarrativeRevisionClosureFixture.MixedRevisionRequest();var text=mixed.Items.First(i=>i.RequiresPassageText);var manual=mixed.Items.First(i=>!i.RequiresPassageText);var p0=d.Sections.SelectMany(s=>s.Passages).First();var p2=d.Sections.SelectMany(s=>s.Passages).ElementAt(2);var cases=new[]{new DocumentaryNarrativePassageRevisionInput([manual.RevisionItemId],p0.PassageId,p0.Text,p0.Text+"x"),new DocumentaryNarrativePassageRevisionInput([text.RevisionItemId,mixed.Items.Last().RevisionItemId],p0.PassageId,p0.Text,p0.Text+"x"),new DocumentaryNarrativePassageRevisionInput([text.RevisionItemId],p2.PassageId,p2.Text,p2.Text+"x"),new DocumentaryNarrativePassageRevisionInput(["unrelated"],p0.PassageId,p0.Text,p0.Text+"x")};foreach(var input in cases)Assert.Throws<ArgumentException>(()=>new DocumentaryNarrativeRevisionBinder().Bind(new(d,mixed,OrionDocumentaryNarrativeRevisionFixture.MetadataFor(d),[input])));}
     [Fact] public void Missing_and_duplicate_target_passages_are_rejected(){var d=OrionDocumentaryNarrativeRevisionClosureFixture.Draft();var r=OrionDocumentaryNarrativeRevisionClosureFixture.MultiPassageRevisionRequest();var good=OrionDocumentaryNarrativeRevisionClosureFixture.Input(r,0);var missing=new DocumentaryNarrativePassageRevisionInput(good.RevisionItemIds,"missing",good.OriginalText,good.RevisedText);Assert.Throws<ArgumentException>(()=>new DocumentaryNarrativeRevisionBinder().Bind(new(d,r,OrionDocumentaryNarrativeRevisionFixture.MetadataFor(d),[missing])));var section=d.Sections[1];var duplicateSection=new DocumentaryNarrativeDraftSection(section.SectionId,section.SectionNumber,section.SourceCompositionSectionId,section.Title,section.Purpose,section.NarrativeStage,section.SectionRole,[d.Sections[0].Passages[0],..section.Passages],section.EstimatedDurationSeconds);var duplicateDraft=new DocumentaryNarrativeDraft(d.DraftId,d.CompositionId,d.BlueprintId,d.KnowledgeId,d.SubjectId,d.SubjectName,d.PublicationFormat,d.PrimaryLanguage,d.Version,d.Metadata,[d.Sections[0],duplicateSection,..d.Sections.Skip(2)]);Assert.Throws<ArgumentException>(()=>new DocumentaryNarrativeRevisionBinder().Bind(new(duplicateDraft,r,OrionDocumentaryNarrativeRevisionFixture.MetadataFor(duplicateDraft),[good])));}
     [Fact] public void Binder_does_not_mutate_any_exact_input_object(){var b=OrionDocumentaryNarrativeRevisionClosureFixture.PartialBindingRequest();var before=new[]{JsonSerializer.Serialize(b.OriginalDraft,Web),JsonSerializer.Serialize(b.RevisionRequest,Web),JsonSerializer.Serialize(b.RevisionRequest.ValidationResult,Web),JsonSerializer.Serialize(b.Metadata,Web),JsonSerializer.Serialize(b.PassageRevisionInputs,Web)};var ids=b.PassageRevisionInputs.Select(i=>i.RevisionItemIds.ToArray()).ToArray();_ = new DocumentaryNarrativeRevisionBinder().Bind(b);Assert.Equal(before,new[]{JsonSerializer.Serialize(b.OriginalDraft,Web),JsonSerializer.Serialize(b.RevisionRequest,Web),JsonSerializer.Serialize(b.RevisionRequest.ValidationResult,Web),JsonSerializer.Serialize(b.Metadata,Web),JsonSerializer.Serialize(b.PassageRevisionInputs,Web)});Assert.Equal(ids,b.PassageRevisionInputs.Select(i=>i.RevisionItemIds.ToArray()));}
-    private static void AssertDraftPreserved(DocumentaryNarrativeRevisionBindingRequest b,DocumentaryNarrativeRevisionResult x){var o=b.OriginalDraft;var r=x.RevisedDraft;Assert.Equal((o.CompositionId,o.BlueprintId,o.KnowledgeId,o.SubjectId,o.SubjectName,o.PublicationFormat,o.PrimaryLanguage,o.Metadata,o.Sections.Count),(r.CompositionId,r.BlueprintId,r.KnowledgeId,r.SubjectId,r.SubjectName,r.PublicationFormat,r.PrimaryLanguage,r.Metadata,r.Sections.Count));Assert.Equal(o.DraftId+".revision."+b.Metadata.TargetDraftVersion,r.DraftId);Assert.Equal(b.Metadata.TargetDraftVersion,r.Version);var revised=x.Changes.Select(c=>c.PassageId).ToHashSet();for(var si=0;si<o.Sections.Count;si++){var a=o.Sections[si];var z=r.Sections[si];Assert.Equal((a.SectionId,a.SectionNumber,a.SourceCompositionSectionId,a.Title,a.Purpose,a.NarrativeStage,a.SectionRole,a.EstimatedDurationSeconds,a.Passages.Count),(z.SectionId,z.SectionNumber,z.SourceCompositionSectionId,z.Title,z.Purpose,z.NarrativeStage,z.SectionRole,z.EstimatedDurationSeconds,z.Passages.Count));for(var pi=0;pi<a.Passages.Count;pi++){var p=a.Passages[pi];var q=z.Passages[pi];Assert.Equal((p.PassageId,p.PassageNumber,p.SourceBeatId,p.SourceBeatNumber,p.SourceSceneId,p.SourceSceneNumber,p.Title,p.PassageType,p.NarrativeStage,p.SceneRole,p.ViewerQuestion,p.Purpose,p.KnowledgeReferences,p.VisualOpportunities,p.Transition,p.EditorialOutcome,p.EstimatedDurationSeconds),(q.PassageId,q.PassageNumber,q.SourceBeatId,q.SourceBeatNumber,q.SourceSceneId,q.SourceSceneNumber,q.Title,q.PassageType,q.NarrativeStage,q.SceneRole,q.ViewerQuestion,q.Purpose,q.KnowledgeReferences,q.VisualOpportunities,q.Transition,q.EditorialOutcome,q.EstimatedDurationSeconds));if(revised.Contains(p.PassageId))Assert.NotEqual(p.Text,q.Text);else Assert.Equal(JsonSerializer.Serialize(p,Web),JsonSerializer.Serialize(q,Web));}}}
+    [Fact]
+    public void Revised_passages_preserve_nested_collection_values_without_requiring_reference_identity()
+    {
+        var binding = OrionDocumentaryNarrativeRevisionClosureFixture.CompleteMultiPassageBindingRequest();
+        var result = new DocumentaryNarrativeRevisionBinder().Bind(binding);
+        var originalPassage = binding.OriginalDraft.Sections[0].Passages[0];
+        var revisedPassage = result.RevisedDraft.Sections[0].Passages[0];
+
+        Assert.Equal(originalPassage.KnowledgeReferences.ToArray(), revisedPassage.KnowledgeReferences.ToArray());
+        Assert.Equal(originalPassage.VisualOpportunities.ToArray(), revisedPassage.VisualOpportunities.ToArray());
+        AssertDraftPreserved(binding, result);
+    }
+
+    private static void AssertDraftPreserved(DocumentaryNarrativeRevisionBindingRequest b, DocumentaryNarrativeRevisionResult x)
+    {
+        var o = b.OriginalDraft;
+        var r = x.RevisedDraft;
+        Assert.Equal((o.CompositionId,o.BlueprintId,o.KnowledgeId,o.SubjectId,o.SubjectName,o.PublicationFormat,o.PrimaryLanguage,o.Metadata,o.Sections.Count),(r.CompositionId,r.BlueprintId,r.KnowledgeId,r.SubjectId,r.SubjectName,r.PublicationFormat,r.PrimaryLanguage,r.Metadata,r.Sections.Count));
+        Assert.Equal(o.DraftId + ".revision." + b.Metadata.TargetDraftVersion, r.DraftId);
+        Assert.Equal(b.Metadata.TargetDraftVersion, r.Version);
+        var revised = x.Changes.Select(c => c.PassageId).ToHashSet();
+        for (var si = 0; si < o.Sections.Count; si++)
+        {
+            var a = o.Sections[si];
+            var z = r.Sections[si];
+            Assert.Equal((a.SectionId,a.SectionNumber,a.SourceCompositionSectionId,a.Title,a.Purpose,a.NarrativeStage,a.SectionRole,a.EstimatedDurationSeconds,a.Passages.Count),(z.SectionId,z.SectionNumber,z.SourceCompositionSectionId,z.Title,z.Purpose,z.NarrativeStage,z.SectionRole,z.EstimatedDurationSeconds,z.Passages.Count));
+            for (var pi = 0; pi < a.Passages.Count; pi++)
+            {
+                var p = a.Passages[pi];
+                var q = z.Passages[pi];
+                Assert.Equal(p.PassageId, q.PassageId);
+                Assert.Equal(p.PassageNumber, q.PassageNumber);
+                Assert.Equal(p.SourceBeatId, q.SourceBeatId);
+                Assert.Equal(p.SourceBeatNumber, q.SourceBeatNumber);
+                Assert.Equal(p.SourceSceneId, q.SourceSceneId);
+                Assert.Equal(p.SourceSceneNumber, q.SourceSceneNumber);
+                Assert.Equal(p.Title, q.Title);
+                Assert.Equal(p.PassageType, q.PassageType);
+                Assert.Equal(p.NarrativeStage, q.NarrativeStage);
+                Assert.Equal(p.SceneRole, q.SceneRole);
+                Assert.Equal(p.ViewerQuestion, q.ViewerQuestion);
+                Assert.Equal(p.Purpose, q.Purpose);
+
+                Assert.Equal(p.KnowledgeReferences.Count, q.KnowledgeReferences.Count);
+                for (var index = 0; index < p.KnowledgeReferences.Count; index++)
+                {
+                    var expected = p.KnowledgeReferences[index];
+                    var actual = q.KnowledgeReferences[index];
+                    Assert.Equal(expected.KnowledgeEntryId, actual.KnowledgeEntryId);
+                    Assert.Equal(expected.Section, actual.Section);
+                    Assert.Equal(expected.Purpose, actual.Purpose);
+                    Assert.Equal(expected.IsPrimary, actual.IsPrimary);
+                }
+
+                Assert.Equal(p.VisualOpportunities.Count, q.VisualOpportunities.Count);
+                for (var index = 0; index < p.VisualOpportunities.Count; index++)
+                {
+                    var expected = p.VisualOpportunities[index];
+                    var actual = q.VisualOpportunities[index];
+                    Assert.Equal(expected.Description, actual.Description);
+                    Assert.Equal(expected.Type, actual.Type);
+                    Assert.Equal(expected.KnowledgeEntryId, actual.KnowledgeEntryId);
+                    Assert.Equal(expected.SourceAssetId, actual.SourceAssetId);
+                    Assert.Equal(expected.IsScientificallyRequired, actual.IsScientificallyRequired);
+                }
+
+                Assert.Equal(p.Transition, q.Transition);
+                Assert.Equal(p.EditorialOutcome, q.EditorialOutcome);
+                Assert.Equal(p.EstimatedDurationSeconds, q.EstimatedDurationSeconds);
+
+                if (revised.Contains(p.PassageId))
+                {
+                    Assert.NotEqual(p.Text, q.Text);
+                    var change = Assert.Single(x.Changes.Where(c => string.Equals(c.PassageId, p.PassageId, StringComparison.Ordinal)));
+                    Assert.Equal(p.Text, change.OriginalText);
+                    Assert.Equal(q.Text, change.RevisedText);
+                }
+                else
+                {
+                    Assert.Equal(p.Text, q.Text);
+                    Assert.Equal(JsonSerializer.Serialize(p, Web), JsonSerializer.Serialize(q, Web));
+                }
+            }
+        }
+    }
 }
 
 public sealed class DocumentaryNarrativeRevisionBuilderFinalClosureTests
