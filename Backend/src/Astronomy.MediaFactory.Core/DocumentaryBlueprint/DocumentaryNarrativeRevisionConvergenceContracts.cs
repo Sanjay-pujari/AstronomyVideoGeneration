@@ -145,8 +145,29 @@ public sealed class DocumentaryNarrativeRevisionConvergenceSummary
         IReadOnlyList<int> unresolvedRevisionItemCountHistory, bool hasImproved, bool hasRegressed, bool isClean)
     {
         ConvergenceId=Guard.Required(convergenceId,nameof(convergenceId)); OriginalDraftId=Guard.Required(originalDraftId,nameof(originalDraftId)); OriginalDraftVersion=Guard.Required(originalDraftVersion,nameof(originalDraftVersion)); CurrentDraftId=Guard.Required(currentDraftId,nameof(currentDraftId)); CurrentDraftVersion=Guard.Required(currentDraftVersion,nameof(currentDraftVersion));
+        if (initialFindingCount < 0) throw new ArgumentOutOfRangeException(nameof(initialFindingCount));
+        if (currentFindingCount < 0) throw new ArgumentOutOfRangeException(nameof(currentFindingCount));
+        if (completedCycleCount < 0) throw new ArgumentOutOfRangeException(nameof(completedCycleCount));
+        if (totalAppliedChangeCount < 0) throw new ArgumentOutOfRangeException(nameof(totalAppliedChangeCount));
+        if (totalResolvedFindingCount < 0) throw new ArgumentOutOfRangeException(nameof(totalResolvedFindingCount));
+        if (totalRemainingFindingCount < 0) throw new ArgumentOutOfRangeException(nameof(totalRemainingFindingCount));
+        if (totalIntroducedFindingCount < 0) throw new ArgumentOutOfRangeException(nameof(totalIntroducedFindingCount));
         InitialFindingCount=initialFindingCount; CurrentFindingCount=currentFindingCount; CompletedCycleCount=completedCycleCount; TotalAppliedChangeCount=totalAppliedChangeCount; TotalResolvedFindingCount=totalResolvedFindingCount; TotalRemainingFindingCount=totalRemainingFindingCount; TotalIntroducedFindingCount=totalIntroducedFindingCount;
-        CycleStatuses=Copy(cycleStatuses,nameof(cycleStatuses)); FindingCountHistory=Copy(findingCountHistory,nameof(findingCountHistory)); AppliedChangeCountHistory=Copy(appliedChangeCountHistory,nameof(appliedChangeCountHistory)); UnresolvedRevisionItemCountHistory=Copy(unresolvedRevisionItemCountHistory,nameof(unresolvedRevisionItemCountHistory)); HasImproved=hasImproved; HasRegressed=hasRegressed; IsClean=isClean;
+        CycleStatuses=Copy(cycleStatuses,nameof(cycleStatuses)); FindingCountHistory=Copy(findingCountHistory,nameof(findingCountHistory)); AppliedChangeCountHistory=Copy(appliedChangeCountHistory,nameof(appliedChangeCountHistory)); UnresolvedRevisionItemCountHistory=Copy(unresolvedRevisionItemCountHistory,nameof(unresolvedRevisionItemCountHistory));
+        if (CycleStatuses.Count != completedCycleCount || AppliedChangeCountHistory.Count != completedCycleCount ||
+            UnresolvedRevisionItemCountHistory.Count != completedCycleCount || FindingCountHistory.Count != completedCycleCount + 1)
+            throw new ArgumentException("Summary histories must match the completed cycle count.", nameof(completedCycleCount));
+        if (FindingCountHistory[0] != initialFindingCount || FindingCountHistory[^1] != currentFindingCount)
+            throw new ArgumentException("Finding history endpoints must match the summary counts.", nameof(findingCountHistory));
+        if (FindingCountHistory.Any(x => x < 0) || AppliedChangeCountHistory.Any(x => x < 0) ||
+            UnresolvedRevisionItemCountHistory.Any(x => x < 0))
+            throw new ArgumentOutOfRangeException(nameof(findingCountHistory), "Summary histories cannot contain negative counts.");
+        var expectedImproved = currentFindingCount < initialFindingCount;
+        var expectedRegressed = currentFindingCount > initialFindingCount;
+        var expectedClean = currentFindingCount == 0;
+        if (hasImproved != expectedImproved || hasRegressed != expectedRegressed || isClean != expectedClean)
+            throw new ArgumentException("Summary Boolean values must agree with finding counts.", nameof(hasImproved));
+        HasImproved=hasImproved; HasRegressed=hasRegressed; IsClean=isClean;
     }
     private static IReadOnlyList<T> Copy<T>(IReadOnlyList<T> values,string name) { ArgumentNullException.ThrowIfNull(values,name); return new ReadOnlyCollection<T>(values.ToArray()); }
     public string ConvergenceId{get;} public string OriginalDraftId{get;} public string OriginalDraftVersion{get;} public string CurrentDraftId{get;} public string CurrentDraftVersion{get;}
