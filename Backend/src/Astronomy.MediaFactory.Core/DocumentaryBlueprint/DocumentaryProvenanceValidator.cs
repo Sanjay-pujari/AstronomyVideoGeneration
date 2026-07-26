@@ -78,4 +78,18 @@ internal static class DocumentaryProvenanceValidator
         if(ValidateGraph(p,record.ArtifactNodes,record.RelationshipEdges,p.Metadata.CorrelationId).Count!=0)throw new ArgumentException("Record graph is not canonical.");
         var ids=record.ArtifactNodes.Select(x=>x.NodeId).ToHashSet(StringComparer.Ordinal);if(record.RelationshipEdges.Any(x=>!ids.Contains(x.SourceNodeId)||!ids.Contains(x.TargetNodeId)))throw new ArgumentException("Record graph has a dangling endpoint.");
     }
+
+    // Completeness is deliberately structural.  The independently reported lineage rules own
+    // semantic package defects and must not all collapse into the completeness rule.
+    internal static bool RecordStructureIsCanonical(DocumentaryProvenanceRecord record)
+    {
+        var p=record.ProductionPackage;
+        return record.CompletedCycleCount>=0&&record.ProvenanceId==$"{p.PackageId}.provenance"&&
+            record.PackageId==p.PackageId&&record.ManifestId==p.Manifest.ManifestId&&
+            record.ReleaseCandidateId==p.ReleaseCandidateId&&record.ConvergenceId==p.ConvergenceId&&
+            record.OriginalDraftId==p.OriginalDraftId&&record.OriginalDraftVersion==p.OriginalDraftVersion&&
+            record.CurrentDraftId==p.CurrentDraftId&&record.CurrentDraftVersion==p.CurrentDraftVersion&&
+            record.CompletedCycleCount==p.CompletedCycleCount&&
+            ValidateGraph(p,record.ArtifactNodes,record.RelationshipEdges,p.Metadata.CorrelationId).Count==0;
+    }
 }

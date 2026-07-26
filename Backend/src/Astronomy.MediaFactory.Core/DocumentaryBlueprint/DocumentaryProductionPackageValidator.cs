@@ -69,5 +69,8 @@ internal static class DocumentaryProductionPackageValidator
         left.Select((cycle,index)=>(cycle,index)).All(pair =>
             string.Equals(pair.cycle.CycleId,right[pair.index].CycleId,StringComparison.Ordinal) && JsonEqual(pair.cycle,right[pair.index]));
 
+    internal static bool PackagesAreEquivalent(DocumentaryProductionPackage left, DocumentaryProductionPackage right) =>
+        JsonEqual(left,right);
+
     private static bool JsonEqual<T>(T left,T right) => string.Equals(JsonSerializer.Serialize(left,WebJson),JsonSerializer.Serialize(right,WebJson),StringComparison.Ordinal);
 }
