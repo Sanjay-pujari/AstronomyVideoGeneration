@@ -1,0 +1,6 @@
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
+public sealed class DocumentaryMediaPipelinePlanOnlyTests
+{
+ [Fact] public void PlanOnly_is_a_non_materialized_planned_result(){var fake=new DocumentaryMediaPipelineFakeProviders();var result=new DocumentaryMediaPipelineOrchestrator(fake.Registry).Execute(DocumentaryMediaPipelineFixture.Request(DocumentaryMediaPipelineFixture.Orion(),DocumentaryMediaPipelineFixture.PlanOnly()));var r=Assert.IsType<DocumentaryMediaPipelineExecutionRecord>(result.ExecutionRecord);Assert.Equal(DocumentaryMediaPipelineStatus.Planned,result.Status);Assert.Equal(4,r.VariantCount);Assert.Equal(0,r.CompletedVariantCount);Assert.Equal(0,r.FailedVariantCount);Assert.Empty(r.OutputManifest.Assets);Assert.Empty(r.OutputManifest.Checksums);Assert.All(r.VariantRecords,x=>{Assert.Equal(DocumentaryMediaPipelineStatus.Planned,x.Status);Assert.Null(x.OutputAssetId);});Assert.Empty(fake.VisualRequests);Assert.Empty(fake.NarrationRequests);Assert.Empty(fake.SubtitleRequests);Assert.Empty(fake.SceneRequests);Assert.Empty(fake.VariantRequests);Assert.Empty(fake.VerificationRequests);var s=DocumentaryMediaPipelineFixture.Summary(r);Assert.False(s.IsComplete);Assert.Equal(0,s.CompletedVariantCount);}
+}
