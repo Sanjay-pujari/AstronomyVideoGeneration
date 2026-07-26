@@ -4,7 +4,9 @@ O2.12 sits directly above the accepted O2.11 narrative release candidate. O2.11 
 
 Schema `1.0` uses a strict policy: the release candidate must be accepted, clean, and fully resolved, and final validation, revision history, convergence, and acceptance evidence are mandatory. The canonical logical sections and manifest sequence are: `AcceptedNarrative` (0), `FinalValidationEvidence` (1), `RevisionHistory` (2), `ConvergenceEvidence` (3), `AcceptanceEvidence` (4), and `PackageManifest` (5).
 
-The package identity is `{ReleaseCandidateId}.production-package`; its manifest identity is `{PackageId}.manifest`. Manifest entries use stable architectural type names and deterministic evidence identities. Collections are copied into read-only views, while the narrative draft, final validation result, ordered convergence cycles, convergence state, and acceptance decision retain the exact O2.11/O2.10 references.
+The package identity is `{ReleaseCandidateId}.production-package`; its manifest identity is `{PackageId}.manifest`. Manifest entries use stable architectural type names and deterministic evidence identities. Every manifest entry is validated semantically against the retained O2.11 release candidate, including its exact ordinal type, identity, version, section, sequence, and required flag.
+
+Assembler-created packages preserve the exact narrative draft, final validation result, ordered convergence cycles, convergence state, and acceptance decision references. Deterministically reconstructed packages remain valid through value and lineage equivalence. Reference equality is not required for valid serialization reconstruction.
 
 Exact ordinal correlation is required across release-candidate metadata, acceptance metadata, convergence metadata, package metadata, and manifest. Completeness additionally requires an accepted `ConvergedAndClean` decision with no supporting reasons, successful convergence with `AcceptCurrentDraft`, zero findings, and zero unresolved revision items.
 
