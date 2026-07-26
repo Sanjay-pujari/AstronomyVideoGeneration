@@ -25,6 +25,17 @@ internal static class DocumentaryNarrativeRevisionConvergenceStateValidator
             StringComparison.Ordinal);
     }
 
+    internal static bool ValidationResultsAreEquivalent(
+        DocumentaryNarrativeDraftValidationResult left,
+        DocumentaryNarrativeDraftValidationResult right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        return string.Equals(left.DraftId, right.DraftId, StringComparison.Ordinal) &&
+            left.Findings.Count == right.Findings.Count &&
+            string.Equals(JsonSerializer.Serialize(left, WebJson), JsonSerializer.Serialize(right, WebJson), StringComparison.Ordinal);
+    }
+
     internal static void Validate(DocumentaryNarrativeRevisionConvergenceState state)
     {
         ArgumentNullException.ThrowIfNull(state);
