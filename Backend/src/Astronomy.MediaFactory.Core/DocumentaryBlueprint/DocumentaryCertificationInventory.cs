@@ -29,6 +29,23 @@ internal static class DocumentaryCertificationInventory
     internal const string Schema = "1.0";
     internal static readonly DocumentaryCertificationDomain[] Domains = Enum.GetValues<DocumentaryCertificationDomain>();
     internal static readonly DocumentaryCertificationRule[] Rules = Enum.GetValues<DocumentaryCertificationRule>();
+    private static readonly DocumentaryCertificationDomain[] RuleDomains = [
+        DocumentaryCertificationDomain.ProductionPackage, DocumentaryCertificationDomain.Provenance,
+        DocumentaryCertificationDomain.Identity, DocumentaryCertificationDomain.Manifest, DocumentaryCertificationDomain.Identity,
+        DocumentaryCertificationDomain.Manifest, DocumentaryCertificationDomain.ArtifactInventory, DocumentaryCertificationDomain.RelationshipInventory,
+        DocumentaryCertificationDomain.DraftLineage, DocumentaryCertificationDomain.ValidationLineage, DocumentaryCertificationDomain.RevisionLineage,
+        DocumentaryCertificationDomain.ConvergenceLineage, DocumentaryCertificationDomain.AcceptanceLineage, DocumentaryCertificationDomain.ReleaseCandidateLineage,
+        DocumentaryCertificationDomain.Correlation, DocumentaryCertificationDomain.Serialization, DocumentaryCertificationDomain.Serialization,
+        DocumentaryCertificationDomain.Immutability, DocumentaryCertificationDomain.OperationBoundary, DocumentaryCertificationDomain.ForbiddenCapability,
+        DocumentaryCertificationDomain.Documentation, DocumentaryCertificationDomain.UpstreamCertification];
+    private static readonly string[] MessageCodes = [
+        "CERT-PACKAGE-NOT-COMPLETE","CERT-PROVENANCE-NOT-COMPLETE","CERT-PACKAGE-IDENTITY","CERT-MANIFEST-IDENTITY","CERT-PROVENANCE-IDENTITY","CERT-MANIFEST-INVENTORY","CERT-ARTIFACT-INVENTORY","CERT-RELATIONSHIP-INVENTORY","CERT-DRAFT-LINEAGE","CERT-VALIDATION-LINEAGE","CERT-REVISION-LINEAGE","CERT-CONVERGENCE-LINEAGE","CERT-ACCEPTANCE-LINEAGE","CERT-RELEASE-LINEAGE","CERT-CORRELATION","CERT-PACKAGE-SERIALIZATION","CERT-PROVENANCE-SERIALIZATION","CERT-IMMUTABILITY","CERT-OPERATION-BOUNDARY","CERT-FORBIDDEN-CAPABILITY","CERT-DOCUMENTATION","CERT-UPSTREAM-CERTIFICATION"];
+    internal static readonly DocumentaryCertificationDomain[] EvaluatedDomains =
+        Rules.Select(DomainFor).Distinct().ToArray();
+    internal static DocumentaryCertificationDomain DomainFor(DocumentaryCertificationRule rule)
+    { Guard.Enum(rule,nameof(rule)); return RuleDomains[(int)rule]; }
+    internal static string MessageCodeFor(DocumentaryCertificationRule rule)
+    { Guard.Enum(rule,nameof(rule)); return MessageCodes[(int)rule]; }
     internal static readonly string[] Objectives = Enumerable.Range(1,13).Select(i=>$"O2.{i}").ToArray();
     internal static readonly string[] DocumentIds = [
         "documentary-narrative-acceptance-and-release-candidate", "documentary-production-package-foundation",
