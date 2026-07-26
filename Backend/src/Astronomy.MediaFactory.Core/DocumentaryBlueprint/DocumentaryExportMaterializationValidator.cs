@@ -52,4 +52,15 @@ internal static class DocumentaryExportMaterializationValidator
             &&r.PayloadCount==10&&r.DependencyCount==23&&r.TotalCharacterCount==r.Payloads.Sum(x=>x.CharacterCount)&&r.TotalByteCount==r.Payloads.Sum(x=>x.ByteCount)
             &&Eq(m.ManifestId,$"{r.MaterializationId}.manifest")&&Eq(m.MaterializationId,r.MaterializationId)&&Eq(m.ExportSpecificationId,s.ExportSpecificationId)&&m.SerializerProfile==r.SerializerProfile&&m.CharacterEncoding==r.CharacterEncoding&&PayloadsEqual(m.Payloads,r.Payloads)&&m.PayloadCount==r.PayloadCount&&m.DependencyCount==r.DependencyCount&&m.TotalCharacterCount==r.TotalCharacterCount&&m.TotalByteCount==r.TotalByteCount&&Eq(m.ManifestSchemaVersion,"1.0")&&Eq(m.CorrelationId,r.Metadata.CorrelationId);
     }
+
+    internal static bool RecordStructurallyValid(DocumentaryExportMaterializationRecord r)
+    {
+        try{DocumentaryExportSpecificationValidator.ValidateSpecification(r.ExportSpecification);}catch(ArgumentException){return false;}
+        var s=r.ExportSpecification;var m=r.Manifest;
+        return Eq(r.MaterializationId,$"{s.ExportSpecificationId}.materialization")&&Eq(r.ExportSpecificationId,s.ExportSpecificationId)&&Eq(r.CertificationId,s.CertificationId)&&Eq(r.ProvenanceId,s.ProvenanceId)&&Eq(r.PackageId,s.PackageId)&&Eq(r.ReleaseCandidateId,s.ReleaseCandidateId)&&Eq(r.ConvergenceId,s.ConvergenceId)
+            &&ValueEqual(r.CertificationRecord,s.CertificationRecord)&&ValueEqual(r.ProvenanceRecord,s.ProvenanceRecord)&&(ReferenceEquals(r.ProductionPackage,s.ProductionPackage)||DocumentaryProductionPackageValidator.PackagesAreEquivalent(r.ProductionPackage,s.ProductionPackage))
+            &&PolicyValid(r.Policy)&&r.SerializerProfile==DocumentaryExportSerializerProfile.CanonicalWebJson&&r.CharacterEncoding==DocumentaryExportCharacterEncoding.Utf8&&PayloadsStructurallyValid(r.Payloads,r.Metadata.CorrelationId)
+            &&r.PayloadCount==10&&r.DependencyCount==23&&r.TotalCharacterCount==r.Payloads.Sum(x=>x.CharacterCount)&&r.TotalByteCount==r.Payloads.Sum(x=>x.ByteCount)
+            &&Eq(m.ManifestId,$"{r.MaterializationId}.manifest")&&Eq(m.MaterializationId,r.MaterializationId)&&Eq(m.ExportSpecificationId,s.ExportSpecificationId)&&m.SerializerProfile==r.SerializerProfile&&m.CharacterEncoding==r.CharacterEncoding&&PayloadsEqual(m.Payloads,r.Payloads)&&m.PayloadCount==r.PayloadCount&&m.DependencyCount==r.DependencyCount&&m.TotalCharacterCount==r.TotalCharacterCount&&m.TotalByteCount==r.TotalByteCount&&Eq(m.ManifestSchemaVersion,"1.0")&&Eq(m.CorrelationId,r.Metadata.CorrelationId);
+    }
 }

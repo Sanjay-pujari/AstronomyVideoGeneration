@@ -8,7 +8,7 @@ public enum DocumentaryAstronomyTopicFamily { Constellation, PlanetConjunction, 
 public enum DocumentaryVideoFormat { Long, Short }
 public enum DocumentaryMediaLanguage { English, Hindi }
 public enum DocumentaryMediaVariantType { LongEnglish, LongHindi, ShortEnglish, ShortHindi }
-public enum DocumentaryMediaSceneRole { Hook, Introduction, Identity, Context, Location, Visibility, MajorFeature, SupportingFeature, Science, Mythology, Observation, Equipment, Astrophotography, Safety, Summary, CallToAction }
+public enum DocumentaryMediaSceneRole { Hook, Introduction, Identity, Context, Location, Visibility, MajorFeature, SupportingFeature, Science, Mythology, Observation, Equipment, Astrophotography, Safety, Summary, Conclusion, CallToAction }
 public enum DocumentaryMediaVisualType { GeneratedIllustration, SkySimulation, StarChart, TelescopeView, OrbitalDiagram, ScientificDiagram, HistoricalIllustration, ObjectPortrait, TextCard, Map, Timeline }
 public enum DocumentaryCameraMotion { None, SlowZoomIn, SlowZoomOut, PanLeft, PanRight, PanUp, PanDown, OrbitClockwise, OrbitCounterClockwise, TrackForward, TrackBackward }
 public enum DocumentarySceneTransition { Cut, CrossFade, FadeToBlack, FadeFromBlack, Dissolve }
