@@ -67,7 +67,6 @@ public sealed class DocumentaryMediaPipelineOrchestrator
                 for (var attempt = 1; attempt <= request.Policy.MaximumVisualAttempts; attempt++)
                 {
                     response = providers.Visual!.Generate(new(assetPlan, prompt, assetPlan.ExpectedWidth, assetPlan.ExpectedHeight, assetPlan.AssetFormat, attempt, request.Metadata.CorrelationId));
-                    response = response with { AssetResult = response.AssetResult with { AttemptCount = attempt } };
                     if (response.Status != DocumentaryMediaAssetStatus.Failed) break;
                 }
                 var result = response!.AssetResult;
@@ -85,7 +84,6 @@ public sealed class DocumentaryMediaPipelineOrchestrator
                 {
                     response = providers.Narration!.Synthesize(new(assetPlan, block, variant.Language.ToString(), variant.Language,
                         assetPlan.AssetFormat, request.Policy.AudioSampleRate, request.Policy.AudioChannelCount, attempt, request.Metadata.CorrelationId));
-                    response = response with { AssetResult = response.AssetResult with { AttemptCount = attempt } };
                     if (response.Status != DocumentaryMediaAssetStatus.Failed) break;
                 }
                 var result = response!.AssetResult;
@@ -121,7 +119,6 @@ public sealed class DocumentaryMediaPipelineOrchestrator
                     response = providers.Scene!.Compose(new(scenePlan, scene, visualResults, narrationResults[0], subtitleResult,
                         measuredDuration, scene.Timing.PlannedDurationMilliseconds, effectiveDuration, scene.Transition,
                         scenePlan.ExpectedWidth, scenePlan.ExpectedHeight, scenePlan.ExpectedFrameRate, request.Metadata.CorrelationId, attempt));
-                    response = response with { AssetResult = response.AssetResult with { AttemptCount = attempt } };
                     if (response.Status != DocumentaryMediaAssetStatus.Failed) break;
                 }
                 results.Add(response!.AssetResult);
@@ -141,7 +138,6 @@ public sealed class DocumentaryMediaPipelineOrchestrator
                 response = providers.Variant!.Compose(new(plan.VariantVideoAssetPlan, variant, sceneResults.Select(x=>x!).ToArray(), plan.VariantVideoAssetPlan.ExpectedWidth,
                     plan.VariantVideoAssetPlan.ExpectedHeight, plan.VariantVideoAssetPlan.ExpectedFrameRate, request.Policy.AudioSampleRate,
                     request.Policy.AudioChannelCount, request.Policy.VideoFormat, request.Metadata.CorrelationId, attempt));
-                response = response with { AssetResult = response.AssetResult with { AttemptCount = attempt } };
                 if (response.Status != DocumentaryMediaAssetStatus.Failed) break;
             }
             output = response!.AssetResult; results.Add(output);
@@ -173,6 +169,8 @@ public sealed class DocumentaryMediaPipelineOrchestrator
     private static bool ValidAsset(DocumentaryMediaAssetResult result, DocumentaryMediaAssetPlan plan, string correlation) =>
         result.AssetId == plan.AssetId && result.AssetType == plan.AssetType && result.AssetFormat == plan.AssetFormat &&
         result.CorrelationId == correlation && IsSuccessful(result) && result.AttemptCount > 0 &&
+        result.DurationMilliseconds > 0 && !string.IsNullOrWhiteSpace(result.ContentIdentity) &&
+        !string.IsNullOrWhiteSpace(result.Checksum) &&
         (plan.ExpectedWidth == 0 || result.Width == plan.ExpectedWidth) && (plan.ExpectedHeight == 0 || result.Height == plan.ExpectedHeight) &&
         (plan.ExpectedFrameRate == 0 || result.FrameRate == plan.ExpectedFrameRate) &&
         (plan.ExpectedSampleRate == 0 || result.SampleRate == plan.ExpectedSampleRate) &&
