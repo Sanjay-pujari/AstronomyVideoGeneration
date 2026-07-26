@@ -1,6 +1,6 @@
 namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
-public enum DocumentaryMediaPipelineStatus { Complete, PartiallyComplete, Rejected }
+public enum DocumentaryMediaPipelineStatus { Planned, Complete, PartiallyComplete, Rejected }
 public enum DocumentaryMediaPipelineRejectionReason { MediaProjectNotComplete, MediaProjectIdentityMismatch, MaterializationIdentityMismatch, TopicIdentityMismatch, CorrelationMismatch, PipelinePolicyRejected, RequiredVariantMissing, VariantInventoryMismatch, VariantOrderMismatch, VariantIdentityMismatch, SceneInventoryMismatch, SceneOrderMismatch, SceneIdentityMismatch, NarrationPlanRejected, SubtitlePlanRejected, VisualPlanRejected, TimingPlanRejected, TransitionPlanRejected, AssetDependencyMismatch, UnsupportedAssetType, ProviderUnavailable, VisualGenerationFailed, NarrationSynthesisFailed, SubtitleGenerationFailed, SceneCompositionFailed, VariantCompositionFailed, RenderVerificationFailed, OutputManifestMismatch }
 public enum DocumentaryMediaPipelineMode { PlanOnly, Execute }
 public enum DocumentaryMediaAssetType { VisualImage, SkySimulationImage, StarChartImage, TelescopeViewImage, ScientificDiagramImage, HistoricalIllustrationImage, NarrationAudio, SubtitleDocument, SceneVideo, VariantVideo }
