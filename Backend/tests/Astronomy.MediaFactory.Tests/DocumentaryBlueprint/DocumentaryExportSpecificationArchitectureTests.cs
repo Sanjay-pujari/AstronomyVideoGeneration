@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
@@ -14,9 +15,15 @@ public sealed class DocumentaryExportSpecificationArchitectureTests
 
     [Fact] public void Fixed_public_inventory_has_no_physical_export_capability()
     {
-        foreach(var type in Inventory){var surfaces=new List<string>{type.Name};foreach(var constructor in type.GetConstructors())foreach(var p in constructor.GetParameters()){surfaces.Add(p.Name??"");Collect(p.ParameterType,surfaces);}foreach(var method in type.GetMethods(BindingFlags.Public|BindingFlags.Instance|BindingFlags.DeclaredOnly)){surfaces.Add(method.Name);Collect(method.ReturnType,surfaces);foreach(var p in method.GetParameters())Collect(p.ParameterType,surfaces);}foreach(var property in type.GetProperties(BindingFlags.Public|BindingFlags.Instance|BindingFlags.DeclaredOnly)){surfaces.Add(property.Name);Collect(property.PropertyType,surfaces);}Assert.DoesNotContain(surfaces.SelectMany(x=>Forbidden.Where(f=>x.Contains(f,StringComparison.OrdinalIgnoreCase))),_=>true);}
+        foreach(var type in Inventory){var surfaces=new List<string>{type.Name};foreach(var constructor in type.GetConstructors())foreach(var p in constructor.GetParameters()){surfaces.Add(p.Name??"");Collect(p.ParameterType,surfaces);}foreach(var method in type.GetMethods(BindingFlags.Public|BindingFlags.Instance|BindingFlags.DeclaredOnly)){surfaces.Add(method.Name);Collect(method.ReturnType,surfaces);foreach(var p in method.GetParameters())Collect(p.ParameterType,surfaces);}foreach(var property in type.GetProperties(BindingFlags.Public|BindingFlags.Instance|BindingFlags.DeclaredOnly)){surfaces.Add(property.Name);Collect(property.PropertyType,surfaces);}Assert.DoesNotContain(surfaces.SelectMany(x=>Forbidden.Where(f=>ContainsIdentifierTerm(x,f))),_=>true);}
     }
     private static void Collect(Type type,List<string> values){values.Add(type.Name);if(type.IsGenericType)foreach(var argument in type.GetGenericArguments())Collect(argument,values);}
+    private static bool ContainsIdentifierTerm(string identifier,string forbidden)
+    {
+        var words=Regex.Matches(identifier,@"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+").Select(x=>x.Value).ToArray();
+        var terms=Regex.Matches(forbidden,@"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+").Select(x=>x.Value).ToArray();
+        return Enumerable.Range(0,Math.Max(0,words.Length-terms.Length+1)).Any(index=>words.Skip(index).Take(terms.Length).SequenceEqual(terms,StringComparer.OrdinalIgnoreCase));
+    }
 
     [Fact] public void Foundation_documentation_contains_all_certified_boundaries()
     {
