@@ -143,13 +143,19 @@ public sealed class DocumentaryMediaPipelineOrchestrator
             output = response!.AssetResult; results.Add(output);
             if (!ValidAsset(output, plan.VariantVideoAssetPlan, request.Metadata.CorrelationId) || response.SceneCount != variant.SceneCount ||
                 response.EffectiveDurationMilliseconds != effectiveVariantDuration || string.IsNullOrWhiteSpace(output.Checksum))
+            {
                 reasons.Add(DocumentaryMediaPipelineRejectionReason.VariantCompositionFailed);
+                results.RemoveAt(results.Count - 1);
+            }
             else
             {
                 var verification = providers.Verifier!.Verify(new(variant, output, variant.SceneCount, output.Width, output.Height, output.FrameRate,
                     output.SampleRate, output.ChannelCount, effectiveVariantDuration, effectiveVariantDuration, request.Metadata.CorrelationId));
                 if (!ValidVerification(verification, variant.SceneCount, output, effectiveVariantDuration))
+                {
                     reasons.Add(DocumentaryMediaPipelineRejectionReason.RenderVerificationFailed);
+                    results.RemoveAt(results.Count - 1);
+                }
                 else
                 {
                     output = output with { Status = DocumentaryMediaAssetStatus.Verified };
@@ -171,10 +177,9 @@ public sealed class DocumentaryMediaPipelineOrchestrator
         result.CorrelationId == correlation && IsSuccessful(result) && result.AttemptCount > 0 &&
         result.DurationMilliseconds > 0 && !string.IsNullOrWhiteSpace(result.ContentIdentity) &&
         !string.IsNullOrWhiteSpace(result.Checksum) &&
-        (plan.ExpectedWidth == 0 || result.Width == plan.ExpectedWidth) && (plan.ExpectedHeight == 0 || result.Height == plan.ExpectedHeight) &&
-        (plan.ExpectedFrameRate == 0 || result.FrameRate == plan.ExpectedFrameRate) &&
-        (plan.ExpectedSampleRate == 0 || result.SampleRate == plan.ExpectedSampleRate) &&
-        (plan.ExpectedChannelCount == 0 || result.ChannelCount == plan.ExpectedChannelCount);
+        result.Width == plan.ExpectedWidth && result.Height == plan.ExpectedHeight &&
+        result.FrameRate == plan.ExpectedFrameRate && result.SampleRate == plan.ExpectedSampleRate &&
+        result.ChannelCount == plan.ExpectedChannelCount;
 
     private static bool ValidVerification(DocumentaryRenderVerificationResult value, int scenes, DocumentaryMediaAssetResult output, long duration) =>
         value.IsValid && value.ActualSceneCount == scenes && value.ActualWidth == output.Width && value.ActualHeight == output.Height &&
