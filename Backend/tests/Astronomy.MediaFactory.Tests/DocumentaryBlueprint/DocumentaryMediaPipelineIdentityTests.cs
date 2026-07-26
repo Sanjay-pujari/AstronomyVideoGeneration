@@ -1,0 +1,7 @@
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
+public sealed class DocumentaryMediaPipelineIdentityTests
+{
+ [Fact] public void Metadata_and_all_identities_are_caller_owned_and_deterministic(){var project=DocumentaryMediaPipelineFixture.Orion();var request=DocumentaryMediaPipelineFixture.Request(project);var plan=DocumentaryMediaPipelineFixture.Plan(project);Assert.Equal(DocumentaryMediaPipelineFixture.Timestamp,request.Metadata.CreatedUtc);Assert.Equal(TimeSpan.FromHours(5.5),request.Metadata.CreatedUtc.Offset);Assert.Equal(4567,request.Metadata.CreatedUtc.Ticks%TimeSpan.TicksPerMillisecond);Assert.Equal(DocumentaryMediaPipelineFixture.Creator,request.Metadata.CreatedBy);Assert.False(string.IsNullOrWhiteSpace(request.Metadata.CorrelationId));Assert.Equal($"{project.MediaProjectId}.execution.1",request.Metadata.ExecutionId);Assert.Equal($"{request.Metadata.ExecutionId}.plan",plan.ExecutionPlanId);Assert.All(plan.VariantPlans,x=>Assert.Equal($"{x.VariantId}.execution-plan",x.VariantExecutionPlanId));}
+ [Fact] public void Asset_formulas_are_stable_and_unique(){var p=DocumentaryMediaPipelineFixture.Plan(DocumentaryMediaPipelineFixture.Orion());Assert.Equal(p.AssetCount,p.AssetPlans.Select(x=>x.AssetId).Distinct().Count());Assert.All(p.AssetPlans,x=>Assert.Matches(@"\.asset\.(visual|audio|subtitle|video)$",x.AssetId));Assert.DoesNotContain(p.AssetPlans,x=>Guid.TryParse(x.AssetId,out _));}
+}
