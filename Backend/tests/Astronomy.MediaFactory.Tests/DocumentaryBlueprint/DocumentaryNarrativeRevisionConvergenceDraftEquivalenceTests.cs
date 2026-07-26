@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
@@ -12,9 +13,11 @@ public sealed class DocumentaryNarrativeRevisionConvergenceDraftEquivalenceTests
     public void Advance_accepts_same_source_draft_instance()
     {
         var cycle = OrionDocumentaryNarrativeRevisionConvergenceFixture.SuccessfulCycle();
-        var state = Start(cycle.Plan.SourceDraft);
+        var state = StartFromCycleSource(cycle);
 
         Assert.Same(state.CurrentDraft, cycle.Plan.SourceDraft);
+        Assert.Equal(DocumentaryNarrativeRevisionConvergenceStatus.NotStarted, state.Status);
+        Assert.True(state.RequiresAnotherCycle);
 
         var advanced = Advance(state, cycle);
 
@@ -45,6 +48,10 @@ public sealed class DocumentaryNarrativeRevisionConvergenceDraftEquivalenceTests
         var cycle = CloneCycle(OrionDocumentaryNarrativeRevisionConvergenceFixture.SuccessfulCycle());
 
         Assert.NotSame(state.CurrentDraft, cycle.Plan.SourceDraft);
+        Assert.Equal(state.CurrentDraftId, cycle.SourceDraftId, StringComparer.Ordinal);
+        Assert.Equal(state.CurrentDraftVersion, cycle.SourceDraftVersion, StringComparer.Ordinal);
+        Assert.Equal(JsonSerializer.Serialize(state.CurrentDraft, WebJson),
+            JsonSerializer.Serialize(cycle.Plan.SourceDraft, WebJson));
 
         var advanced = Advance(state, cycle);
 
@@ -78,12 +85,10 @@ public sealed class DocumentaryNarrativeRevisionConvergenceDraftEquivalenceTests
     [Fact]
     public void Advance_rejects_case_only_source_id_difference()
     {
-        var state = OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyInvalidState();
-        var cycle = MutateCycle(root =>
-        {
-            root["sourceDraftId"] = state.CurrentDraftId.ToUpperInvariant();
-            root["plan"]!["sourceDraft"]!["draftId"] = state.CurrentDraftId.ToUpperInvariant();
-        });
+        var cycle = OrionDocumentaryNarrativeRevisionConvergenceFixture.SuccessfulCycle();
+        var state = CloneState(StartFromCycleSource(cycle));
+
+        SetBackingField(state.CurrentDraft, "DraftId", state.CurrentDraftId.ToUpperInvariant());
 
         Assert.Throws<ArgumentException>(() => Advance(state, cycle));
     }
@@ -91,24 +96,24 @@ public sealed class DocumentaryNarrativeRevisionConvergenceDraftEquivalenceTests
     [Fact]
     public void Advance_rejects_case_only_source_version_difference()
     {
-        var cycleRoot = JsonNode.Parse(JsonSerializer.Serialize(
-            OrionDocumentaryNarrativeRevisionConvergenceFixture.SuccessfulCycle(), WebJson))!;
-        ReplaceStringValues(cycleRoot, "1", "vA");
-        var baselineCycle = cycleRoot.Deserialize<DocumentaryNarrativeRevisionCycleResult>(WebJson)!;
-        var state = Start(baselineCycle.Plan.SourceDraft);
-        var cycle = MutateCycle(baselineCycle, root =>
-        {
-            root["sourceDraftVersion"] = state.CurrentDraftVersion.ToUpperInvariant();
-            root["plan"]!["sourceDraft"]!["version"] = state.CurrentDraftVersion.ToUpperInvariant();
-        });
+        var cycle = OrionDocumentaryNarrativeRevisionConvergenceFixture.SuccessfulCycle();
+        var sourceDraft = WithVersion(cycle.Plan.SourceDraft, $"v{cycle.Plan.SourceDraft.Version}");
+        var state = new DocumentaryNarrativeRevisionConvergenceStarter().Start(
+            sourceDraft,
+            cycle.Plan.SourceValidationResult,
+            OrionDocumentaryNarrativeRevisionConvergenceFixture.DefaultPolicy(),
+            OrionDocumentaryNarrativeRevisionConvergenceFixture.Metadata());
+
+        SetBackingField(state.CurrentDraft, "Version", state.CurrentDraftVersion.ToUpperInvariant());
 
         Assert.Throws<ArgumentException>(() => Advance(state, cycle));
     }
 
-    private static DocumentaryNarrativeRevisionConvergenceState Start(DocumentaryNarrativeDraft draft) =>
+    private static DocumentaryNarrativeRevisionConvergenceState StartFromCycleSource(
+        DocumentaryNarrativeRevisionCycleResult cycle) =>
         new DocumentaryNarrativeRevisionConvergenceStarter().Start(
-            draft,
-            new DocumentaryNarrativeDraftValidator().Validate(draft),
+            cycle.Plan.SourceDraft,
+            cycle.Plan.SourceValidationResult,
             OrionDocumentaryNarrativeRevisionConvergenceFixture.DefaultPolicy(),
             OrionDocumentaryNarrativeRevisionConvergenceFixture.Metadata());
 
@@ -131,24 +136,34 @@ public sealed class DocumentaryNarrativeRevisionConvergenceDraftEquivalenceTests
         return root.Deserialize<DocumentaryNarrativeRevisionCycleResult>(WebJson)!;
     }
 
-    private static void ReplaceStringValues(JsonNode node, string oldValue, string newValue)
+    private static void SetBackingField<T>(object target, string propertyName, T value)
     {
-        if (node is JsonObject obj)
-        {
-            foreach (var property in obj.ToArray())
-            {
-                if (property.Value is JsonValue value && value.TryGetValue<string>(out var text) && text == oldValue)
-                    obj[property.Key] = newValue;
-                else if (property.Value is not null)
-                    ReplaceStringValues(property.Value, oldValue, newValue);
-            }
-        }
-        else if (node is JsonArray array)
-        {
-            foreach (var child in array.Where(x => x is not null))
-                ReplaceStringValues(child!, oldValue, newValue);
-        }
+        var field = target.GetType().GetField(
+            $"<{propertyName}>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+        Assert.NotNull(field);
+        field!.SetValue(target, value);
     }
+
+    private static DocumentaryNarrativeRevisionConvergenceState CloneState(
+        DocumentaryNarrativeRevisionConvergenceState state) =>
+        JsonSerializer.Deserialize<DocumentaryNarrativeRevisionConvergenceState>(
+            JsonSerializer.Serialize(state, WebJson), WebJson)!;
+
+    private static DocumentaryNarrativeDraft WithVersion(DocumentaryNarrativeDraft draft, string version) =>
+        new(
+            draft.DraftId,
+            draft.CompositionId,
+            draft.BlueprintId,
+            draft.KnowledgeId,
+            draft.SubjectId,
+            draft.SubjectName,
+            draft.PublicationFormat,
+            draft.PrimaryLanguage,
+            version,
+            draft.Metadata,
+            draft.Sections);
 
     private static DocumentaryNarrativeRevisionCycleResult CloneCycle(
         DocumentaryNarrativeRevisionCycleResult cycle) =>
