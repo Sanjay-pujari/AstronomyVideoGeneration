@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 internal sealed record DocumentarySemanticFact(string FactId,IReadOnlyList<string> TopicIds,IReadOnlyList<DocumentaryAstronomyTopicFamily> TopicFamilies,string Category,string Key,string ValueEnglish,string ValueHindi,int Importance,IReadOnlyList<DocumentaryMediaKnowledgeReference> KnowledgeReferences,bool SupportsLong,bool SupportsShort,DocumentaryMediaSceneRole PreferredSceneRole,DocumentaryMediaVisualType PreferredVisualType,IReadOnlyList<string> SubjectIds,IReadOnlyList<string> KnowledgeTags,string CorrelationId);
-internal sealed record DocumentarySemanticScene(string SemanticSceneId,DocumentaryMediaSceneRole SceneRole,string TitleEnglish,string TitleHindi,IReadOnlyList<DocumentarySemanticFact> Facts,string VisualIntent,int Importance,bool IncludeInLong,bool IncludeInShort,IReadOnlyList<DocumentaryMediaKnowledgeReference> KnowledgeReferences,string CorrelationId);
+internal sealed record DocumentarySemanticScene(string SemanticSceneId,int Sequence,DocumentaryMediaSceneRole SceneRole,string TitleEnglish,string TitleHindi,IReadOnlyList<DocumentarySemanticFact> Facts,string VisualIntent,int Importance,bool IncludeInLong,bool IncludeInShort,IReadOnlyList<DocumentaryMediaKnowledgeReference> KnowledgeReferences,string CorrelationId);
 internal sealed record DocumentarySemanticScenePlan(string TopicId,DocumentaryAstronomyTopicFamily TopicFamily,IReadOnlyList<DocumentarySemanticScene> Scenes,string CorrelationId);
 
 internal static class DocumentaryMediaKnowledgeExtractor
@@ -65,7 +65,7 @@ internal static class DocumentarySemanticScenePlanner
         if(!Required(profile.TopicFamily,relevant)||relevant.Count(f=>f.SupportsLong)<request.Policy.LongMinimumSceneCount)return null;
         var shortIds=relevant.Where(f=>f.SupportsShort).OrderBy(f=>ShortOrder(profile.TopicFamily,f)).ThenByDescending(f=>f.Importance).ThenBy(f=>f.FactId,StringComparer.Ordinal).Take(request.Policy.ShortMaximumSceneCount).Select(f=>f.FactId).ToHashSet(StringComparer.Ordinal);
         if(shortIds.Count<request.Policy.ShortMinimumSceneCount)return null;
-        var scenes=distinct.Select((f,i)=>new DocumentarySemanticScene($"{request.TopicProfile.TopicId}.semantic-scene.{i}",f.PreferredSceneRole,f.Key,f.Key,[f],f.Category,f.Importance,f.SupportsLong,shortIds.Contains(f.FactId),f.KnowledgeReferences,request.Metadata.CorrelationId)).ToArray();
+        var scenes=distinct.Select((f,i)=>new DocumentarySemanticScene($"{request.TopicProfile.TopicId}.semantic-scene.{i}",i,f.PreferredSceneRole,f.Key,f.Key,[f],f.Category,f.Importance,f.SupportsLong,shortIds.Contains(f.FactId),f.KnowledgeReferences,request.Metadata.CorrelationId)).ToArray();
         return new(request.TopicProfile.TopicId,request.TopicProfile.TopicFamily,scenes,request.Metadata.CorrelationId);
     }
     private static bool Required(DocumentaryAstronomyTopicFamily family,IReadOnlyList<DocumentarySemanticFact> facts)

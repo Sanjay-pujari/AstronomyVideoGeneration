@@ -19,3 +19,7 @@ Every narrative block, subtitle cue, visual prompt, and scene retains an in-memo
 O2.17 does not generate images. O2.17 does not synthesize speech. O2.17 does not create subtitle files. O2.17 does not render videos. O2.17 does not invoke FFmpeg. O2.17 does not upload or publish content. O2.17 does not modify the materialization record or upstream artifacts. O2.17 performs no external work.
 
 Its outputs are instructions and immutable planning contracts only. Runtime production orchestration belongs to O2.18 or a later certified objective.
+
+## Certification status
+
+The four canonical variants use a shared semantic plan with topic applicability filtering, constellation and planet-conjunction profiles, no invented facts, complete subtitle coverage, validated payload traceability, and deterministic timing. No images are generated, no speech is synthesized, no subtitle files are created, no video is rendered, and no FFmpeg, upload, publishing, or external work occurs. O2.18 has not started.
