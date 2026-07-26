@@ -10,6 +10,8 @@ Edges are ordered: initial `Validates`; for each cycle, `Revises`, `ProducesDraf
 
 Every node and edge carries the exact ordinal package correlation shared by the manifest, release candidate, acceptance decision, convergence state, and provenance metadata. Completeness requires canonical inventories, contiguous unique sequences, unique deterministic identities, existing endpoints, exact package identities and lineage, and no unsupported or disconnected artifacts.
 
+The provenance builder reports all independently detectable package-lineage reasons in canonical order. Revision lineage validates ordered source-to-target continuity, unique cycle identity, validation ownership, and exact correlation. Canonical graph validation distinguishes inventory mismatches from specifically missing required nodes and required edges. Every published O2.13 rejection reason has an executable validation path.
+
 Value-based canonical reconstruction permits independently reconstructed and Web JSON-deserialized artifacts. Collections are defensive, read-only copies; timestamps, offsets, precision, and supplied whitespace are preserved. The builder and summarizer are synchronous, stateless, non-mutating operations with no external work. O2.13 uses neither an external audit system nor a graph database and performs no persistence.
 
 O2.13 does not generate or revise documentary text.
