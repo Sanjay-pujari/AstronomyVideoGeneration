@@ -6,6 +6,10 @@ O2.17 projects certified knowledge into media-production plans. It sits directly
 
 O2.17 produces Long English, Long Hindi, Short English, and Short Hindi variants. One shared semantic scene plan supplies the facts, source references, scene intent, and visual intent for all variants. Long and short forms are selected and timed independently; language-specific narration and subtitles remain aligned through common scene roles and knowledge references.
 
+Facts are extracted only from explicit bilingual semantic-fact objects in certified canonical payload JSON. Unknown JSON shapes and missing astronomy knowledge are ignored rather than inferred or invented. Constellation and planet-conjunction profiles share this extraction and planning path: category ordering drives long form, while importance and short eligibility drive an independent short selection. English and Hindi variants retain identical fact references and visual intent, but narration timing and subtitle line segmentation are calculated independently for each language.
+
+Schema 1.0 timing uses deterministic internal rates of 145 English words per minute and 125 Hindi words per minute. A scene receives its narration estimate plus a deterministic hold allocation when the policy minimum requires a longer variant; durations are never produced by equal division alone.
+
 The classification inventory supports constellations; planetary and lunar objects and events; eclipses; meteor showers; deep-sky objects; galaxies; nebulae; clusters; stellar objects; comets; asteroids; seasonal sky topics; and observing guides. These are topic classifications rather than separate pipelines. Orion, Leo, and planet-conjunction inputs therefore use the same projection architecture, and only certified payload knowledge is projected.
 
 Every narrative block, subtitle cue, visual prompt, and scene retains an in-memory reference to its certified O2.16 payload. Identities, ordering, aspect ratios, and estimated timing are deterministic. The caller supplies projection time and correlation metadata; projection does not use a clock or mutate upstream artifacts.
