@@ -12,8 +12,12 @@ public sealed class DocumentaryNarrativeRevisionConvergenceAdvancer
         static bool Eq(string left, string right) => string.Equals(left, right, StringComparison.Ordinal);
         if (!Eq(cycle.SourceDraftId, state.CurrentDraftId) || !Eq(cycle.SourceDraftVersion, state.CurrentDraftVersion))
             throw new ArgumentException("The cycle source must match the current draft exactly.", nameof(request));
-        if (!ReferenceEquals(cycle.Plan.SourceDraft, state.CurrentDraft))
-            throw new ArgumentException("The cycle must retain the current source draft.", nameof(request));
+        if (!DocumentaryNarrativeRevisionConvergenceStateValidator.DraftsAreEquivalent(
+                cycle.Plan.SourceDraft,
+                state.CurrentDraft))
+            throw new ArgumentException(
+                "The cycle source draft must be value-equivalent to the current convergence draft.",
+                nameof(request));
         if (state.Cycles.Any(x => Eq(x.CycleId, cycle.CycleId))) throw new ArgumentException("The cycle has already been appended.", nameof(request));
         var correlation = state.Metadata.CorrelationId;
         if (!new[] { request.CorrelationId, cycle.CorrelationId, cycle.Plan.Metadata.CorrelationId,

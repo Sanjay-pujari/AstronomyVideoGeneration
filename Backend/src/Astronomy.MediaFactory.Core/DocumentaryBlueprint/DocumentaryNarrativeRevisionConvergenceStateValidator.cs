@@ -6,6 +6,25 @@ internal static class DocumentaryNarrativeRevisionConvergenceStateValidator
 {
     private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
 
+    internal static bool DraftsAreEquivalent(
+        DocumentaryNarrativeDraft left,
+        DocumentaryNarrativeDraft right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+
+        if (!string.Equals(left.DraftId, right.DraftId, StringComparison.Ordinal) ||
+            !string.Equals(left.Version, right.Version, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            JsonSerializer.Serialize(left, WebJson),
+            JsonSerializer.Serialize(right, WebJson),
+            StringComparison.Ordinal);
+    }
+
     internal static void Validate(DocumentaryNarrativeRevisionConvergenceState state)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -34,8 +53,9 @@ internal static class DocumentaryNarrativeRevisionConvergenceStateValidator
         var lastVersion = state.Cycles.Count == 0 ? state.OriginalDraftVersion : state.Cycles[^1].TargetDraftVersion;
         if (!Eq(state.CurrentDraftId, lastId) || !Eq(state.CurrentDraftVersion, lastVersion))
             throw new ArgumentException("Current draft lineage is inconsistent.", nameof(state));
-        if (state.Cycles.Count != 0 && JsonSerializer.Serialize(state.CurrentDraft, WebJson) !=
-            JsonSerializer.Serialize(state.Cycles[^1].RevisionResult.RevisedDraft, WebJson))
+        if (state.Cycles.Count != 0 && !DraftsAreEquivalent(
+                state.CurrentDraft,
+                state.Cycles[^1].RevisionResult.RevisedDraft))
             throw new ArgumentException("Current draft value must match the latest revised draft.", nameof(state));
 
         var expectedNoProgress = 0;
