@@ -22,13 +22,71 @@ internal static class OrionDocumentaryNarrativeAcceptanceFixture
     internal static DocumentaryNarrativeReleaseCandidateMetadata ReleaseMetadata() => new(DateTimeOffset.Parse("2026-02-04T05:06:07.7654321-04:00"), " release editor ", "1.0", OrionDocumentaryNarrativeRevisionCycleFixture.Correlation);
     internal static DocumentaryNarrativeRevisionConvergenceState InitiallyCleanConvergenceState() => OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyCleanState();
     internal static DocumentaryNarrativeRevisionConvergenceState SuccessfulOneCycleConvergenceState() => OrionDocumentaryNarrativeRevisionConvergenceFixture.OneCycleSuccessfulState();
+    internal static DocumentaryNarrativeRevisionConvergenceState SuccessfulMultiCycleConvergenceState()
+    {
+        var firstCycle = OrionDocumentaryNarrativeRevisionCycleFixture.CompletedWithRemainingFindingsResult();
+        var state = new DocumentaryNarrativeRevisionConvergenceStarter().Start(
+            firstCycle.Plan.SourceDraft,
+            firstCycle.Plan.SourceValidationResult,
+            new DocumentaryNarrativeRevisionConvergencePolicy(2, false, 2, true, true, "1.0"),
+            OrionDocumentaryNarrativeRevisionConvergenceFixture.Metadata());
+        var advancer = new DocumentaryNarrativeRevisionConvergenceAdvancer();
+        state = advancer.Advance(OrionDocumentaryNarrativeRevisionConvergenceFixture.Request(state, firstCycle));
+
+        var secondCycle = NextCycle(state, "multi-cycle.final", true);
+        return advancer.Advance(OrionDocumentaryNarrativeRevisionConvergenceFixture.Request(state, secondCycle));
+    }
+    private static DocumentaryNarrativeRevisionCycleResult NextCycle(
+        DocumentaryNarrativeRevisionConvergenceState state,
+        string scenario,
+        bool submitRevisions)
+    {
+        var source = state.CurrentDraft;
+        var plan = new DocumentaryNarrativeRevisionCyclePlanner().Plan(
+            source,
+            state.CurrentValidationResult,
+            $"request.orion.{scenario}",
+            OrionDocumentaryNarrativeRevisionCycleFixture.RequestMetadata(source),
+            OrionDocumentaryNarrativeRevisionCycleFixture.ExecutionMetadata(),
+            OrionDocumentaryNarrativeRevisionCycleFixture.CycleMetadata());
+        var submissions = submitRevisions
+            ? plan.WorkPackage.PassageWorkItems
+                .Select(work => new DocumentaryNarrativePassageRevisionSubmission(
+                    work.WorkItemId,
+                    work.PassageId,
+                    work.OriginalText,
+                    $"{work.OriginalText} Orion's measured light reveals a detailed stellar history.",
+                    work.RevisionItemIds))
+                .ToArray()
+            : [];
+        var submission = new DocumentaryNarrativeRevisionSubmission(
+            $"submission.orion.{scenario}", plan.WorkPackage.WorkPackageId, plan.RevisionRequest.RevisionRequestId,
+            plan.SourceDraftId, plan.SourceDraftVersion, OrionDocumentaryNarrativeRevisionCycleFixture.SubmissionMetadata(), submissions);
+        var revisionMetadata = new DocumentaryNarrativeRevisionMetadata(
+            OrionDocumentaryNarrativeRevisionCycleFixture.Created.AddMinutes(4), " revision reviewer ",
+            plan.SourceDraftId, plan.SourceDraftVersion, "3", "1.0", OrionDocumentaryNarrativeRevisionCycleFixture.Correlation);
+        return new DocumentaryNarrativeRevisionCycleCompleter().Complete(new(
+            plan, submission, revisionMetadata, OrionDocumentaryNarrativeRevisionCycleFixture.Completed,
+            " completion reviewer ", "1.0", OrionDocumentaryNarrativeRevisionCycleFixture.Correlation));
+    }
     private static DocumentaryNarrativeRevisionConvergenceState Advance(DocumentaryNarrativeRevisionCycleResult cycle, DocumentaryNarrativeRevisionConvergencePolicy policy) =>
         new DocumentaryNarrativeRevisionConvergenceAdvancer().Advance(OrionDocumentaryNarrativeRevisionConvergenceFixture.Request(
             new DocumentaryNarrativeRevisionConvergenceStarter().Start(cycle.Plan.SourceDraft, cycle.Plan.SourceValidationResult, policy, OrionDocumentaryNarrativeRevisionConvergenceFixture.Metadata()), cycle));
     internal static DocumentaryNarrativeRevisionConvergenceState NotStartedState() => OrionDocumentaryNarrativeRevisionConvergenceFixture.InitiallyInvalidState();
     internal static DocumentaryNarrativeRevisionConvergenceState InProgressState() => Advance(OrionDocumentaryNarrativeRevisionCycleFixture.CompletedWithRemainingFindingsResult(), OrionDocumentaryNarrativeRevisionConvergenceFixture.NoProgressThresholdTwoPolicy());
     internal static DocumentaryNarrativeRevisionConvergenceState CycleLimitState() => Advance(OrionDocumentaryNarrativeRevisionCycleFixture.CompletedWithRemainingFindingsResult(), new(1, false, 2, true, true, "1.0"));
-    internal static DocumentaryNarrativeRevisionConvergenceState NoProgressState() => Advance(OrionDocumentaryNarrativeRevisionCycleFixture.CompletedWithRemainingFindingsResult(), OrionDocumentaryNarrativeRevisionConvergenceFixture.NoProgressThresholdOnePolicy());
+    internal static DocumentaryNarrativeRevisionConvergenceState NoProgressState()
+    {
+        var firstCycle = OrionDocumentaryNarrativeRevisionCycleFixture.CompletedWithRemainingFindingsResult();
+        var starter = new DocumentaryNarrativeRevisionConvergenceStarter().Start(
+            firstCycle.Plan.SourceDraft, firstCycle.Plan.SourceValidationResult,
+            OrionDocumentaryNarrativeRevisionConvergenceFixture.NoProgressThresholdOnePolicy(),
+            OrionDocumentaryNarrativeRevisionConvergenceFixture.Metadata());
+        var advancer = new DocumentaryNarrativeRevisionConvergenceAdvancer();
+        var inProgress = advancer.Advance(OrionDocumentaryNarrativeRevisionConvergenceFixture.Request(starter, firstCycle));
+        return advancer.Advance(OrionDocumentaryNarrativeRevisionConvergenceFixture.Request(
+            inProgress, NextCycle(inProgress, "no-progress", false)));
+    }
     internal static DocumentaryNarrativeRevisionConvergenceState RegressionState() => Advance(OrionDocumentaryNarrativeRevisionCycleFixture.CompletedWithRemainingFindingsResult(), OrionDocumentaryNarrativeRevisionConvergenceFixture.RegressionStoppingPolicy());
     internal static DocumentaryNarrativeRevisionConvergenceState ManualEscalationState() => Advance(OrionDocumentaryNarrativeRevisionCycleFixture.ManualOnlyResult(), OrionDocumentaryNarrativeRevisionConvergenceFixture.DefaultPolicy());
     internal static DocumentaryNarrativeAcceptanceRequest Request(DocumentaryNarrativeRevisionConvergenceState state, DocumentaryNarrativeAcceptancePolicy policy) => new(state, policy, AcceptanceMetadata());
@@ -44,6 +102,7 @@ internal static class OrionDocumentaryNarrativeAcceptanceFixture
     internal static DocumentaryNarrativeAcceptanceRequest ManualEscalationRejectRequest() => Request(ManualEscalationState(), ManualEscalationRejectPolicy());
     internal static DocumentaryNarrativeAcceptanceRequest AcceptedInitiallyCleanRequest() => new(InitiallyCleanConvergenceState(), StrictPolicy(), AcceptanceMetadata());
     internal static DocumentaryNarrativeAcceptanceRequest AcceptedOneCycleRequest() => new(SuccessfulOneCycleConvergenceState(), StrictPolicy(), AcceptanceMetadata());
+    internal static DocumentaryNarrativeAcceptanceRequest AcceptedMultiCycleRequest() => new(SuccessfulMultiCycleConvergenceState(), StrictPolicy(), AcceptanceMetadata());
     internal static DocumentaryNarrativeAcceptanceDecision AcceptedDecision(DocumentaryNarrativeRevisionConvergenceState? state = null)
     {
         state ??= InitiallyCleanConvergenceState();
@@ -57,6 +116,16 @@ internal static class OrionDocumentaryNarrativeAcceptanceFixture
     internal static DocumentaryNarrativeReleaseCandidate OneCycleReleaseCandidate()
     {
         var state = SuccessfulOneCycleConvergenceState();
+        return new DocumentaryNarrativeReleaseCandidateBuilder().Build(state, AcceptedDecision(state), ReleaseMetadata());
+    }
+    internal static DocumentaryNarrativeAcceptanceDecision AcceptedMultiCycleDecision()
+    {
+        var request = AcceptedMultiCycleRequest();
+        return new DocumentaryNarrativeAcceptanceEvaluator().Evaluate(request);
+    }
+    internal static DocumentaryNarrativeReleaseCandidate MultiCycleReleaseCandidate()
+    {
+        var state = SuccessfulMultiCycleConvergenceState();
         return new DocumentaryNarrativeReleaseCandidateBuilder().Build(state, AcceptedDecision(state), ReleaseMetadata());
     }
     internal static string Json<T>(T value) => JsonSerializer.Serialize(value, JsonOptions());
