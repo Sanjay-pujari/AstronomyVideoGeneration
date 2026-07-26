@@ -4,9 +4,11 @@
 
 O2.16 is the deterministic, in-memory projection immediately above the O2.15 logical export specification. It transforms the ten specification items into an immutable payload set for a future delivery layer without performing that delivery.
 
+This in-memory materialization contains exactly 10 canonical payloads and 23 canonical dependencies. It has a deterministic materialization identity, deterministic payload manifest identity, deterministic payload identity, and deterministic dependency identity.
+
 ## Materialization contract
 
-The `CanonicalWebJson` profile serializes each source artifact with `new JsonSerializerOptions(JsonSerializerDefaults.Web)`. Each canonical JSON string is encoded with UTF-8, and the payload records both its .NET character count and encoded byte count. Reconstruction uses only the retained source item identity, artifact identity and version, sequence, dependency graph, correlation, profile, content, and bytes.
+The `CanonicalWebJson` profile serializes each source artifact as canonical Web JSON with `new JsonSerializerOptions(JsonSerializerDefaults.Web)`. The character encoding inventory names this representation `Utf8`; each canonical JSON string is encoded with UTF-8, and the payload records both its .NET character count and encoded byte count. Reconstruction uses only the retained source item identity, artifact identity and version, sequence, dependency graph, correlation, profile, content, and bytes.
 
 The canonical mapping, in order, is accepted narrative, final validation evidence, revision history, convergence evidence, acceptance evidence, production package manifest, provenance record, certification decision, certification record, and export manifest. The corresponding logical content classifications follow that same order. A zero-cycle revision history is `[]`; other histories retain their canonical array content.
 

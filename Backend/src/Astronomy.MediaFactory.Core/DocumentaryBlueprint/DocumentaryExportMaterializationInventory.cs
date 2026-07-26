@@ -16,5 +16,17 @@ internal static class DocumentaryExportMaterializationInventory
     internal static readonly DocumentaryExportPayloadContentType[] ContentTypes=Enum.GetValues<DocumentaryExportPayloadContentType>();
     internal static IReadOnlyList<T> Copy<T>(IReadOnlyList<T> source,string name){ArgumentNullException.ThrowIfNull(source,name);return new ReadOnlyCollection<T>(source.ToArray());}
     internal static bool Eq(string? left,string? right)=>string.Equals(left,right,StringComparison.Ordinal);
-    internal static DocumentaryExportPayloadContentType ContentTypeFor(DocumentaryExportPayloadType type){Guard.Enum(type,nameof(type));return (DocumentaryExportPayloadContentType)(int)type;}
+    internal static DocumentaryExportPayloadContentType PayloadContentTypeFor(DocumentaryExportPayloadType type){Guard.Enum(type,nameof(type));return (DocumentaryExportPayloadContentType)(int)type;}
+    internal static DocumentaryExportPayloadContentType ContentTypeFor(DocumentaryExportPayloadType type)=>PayloadContentTypeFor(type);
+    internal static IReadOnlyList<DocumentaryExportPayloadType> DependencyTargetsFor(DocumentaryExportPayloadType type)
+    {
+        Guard.Enum(type,nameof(type));
+        DocumentaryExportPayloadType[][] targets=[[],[DocumentaryExportPayloadType.AcceptedNarrative],[DocumentaryExportPayloadType.AcceptedNarrative],
+            [DocumentaryExportPayloadType.FinalValidationEvidence,DocumentaryExportPayloadType.RevisionHistory],[DocumentaryExportPayloadType.ConvergenceEvidence],
+            [DocumentaryExportPayloadType.AcceptedNarrative,DocumentaryExportPayloadType.FinalValidationEvidence,DocumentaryExportPayloadType.RevisionHistory,DocumentaryExportPayloadType.ConvergenceEvidence,DocumentaryExportPayloadType.AcceptanceEvidence],
+            [DocumentaryExportPayloadType.ProductionPackageManifest],[DocumentaryExportPayloadType.ProvenanceRecord],
+            [DocumentaryExportPayloadType.ProvenanceRecord,DocumentaryExportPayloadType.CertificationDecision],
+            [DocumentaryExportPayloadType.AcceptedNarrative,DocumentaryExportPayloadType.FinalValidationEvidence,DocumentaryExportPayloadType.RevisionHistory,DocumentaryExportPayloadType.ConvergenceEvidence,DocumentaryExportPayloadType.AcceptanceEvidence,DocumentaryExportPayloadType.ProductionPackageManifest,DocumentaryExportPayloadType.ProvenanceRecord,DocumentaryExportPayloadType.CertificationDecision,DocumentaryExportPayloadType.CertificationRecord]];
+        return Array.AsReadOnly(targets[(int)type]);
+    }
 }
