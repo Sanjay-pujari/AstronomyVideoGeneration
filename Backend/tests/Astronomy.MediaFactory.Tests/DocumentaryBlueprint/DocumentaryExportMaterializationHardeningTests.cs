@@ -46,5 +46,22 @@ public sealed class DocumentaryExportMaterializationHardeningTests
         Assert.Contains(DocumentaryExportMaterializationRejectionReason.PayloadOrderMismatch,reasons);
     }
 
+    [Fact]
+    public void Shared_finalizer_returns_categorized_rejection_result_for_a_corrupt_candidate_graph()
+    {
+        var record=Record();
+        var request=new DocumentaryExportMaterializationRequest(record.ExportSpecification,record.Policy,record.Metadata,record.SerializerProfile);
+
+        var result=DocumentaryExportMaterializer.FinalizeMaterialization(request,record.Payloads.Skip(1).ToArray());
+
+        Assert.Equal(DocumentaryExportMaterializationStatus.Rejected,result.Status);
+        Assert.Equal([
+            DocumentaryExportMaterializationRejectionReason.RequiredPayloadMissing,
+            DocumentaryExportMaterializationRejectionReason.PayloadInventoryMismatch,
+            DocumentaryExportMaterializationRejectionReason.PayloadOrderMismatch
+        ],result.RejectionReasons);
+        Assert.Null(result.MaterializationRecord);
+    }
+
     private static DocumentaryExportPayload Copy(DocumentaryExportPayload p,IReadOnlyList<DocumentaryExportPayloadDependency> dependencies)=>new(p.PayloadId,p.PayloadType,p.ContentType,p.SerializerProfile,p.CharacterEncoding,p.SourceItemId,p.ArtifactIdentity,p.ArtifactVersion,p.Sequence,dependencies,p.Content,Encoding.UTF8.GetBytes(p.Content),p.CharacterCount,p.ByteCount,p.CorrelationId);
 }
