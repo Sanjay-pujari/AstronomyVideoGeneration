@@ -5,7 +5,7 @@ namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 
 internal static class OrionDocumentaryNarrativeAcceptanceFixture
 {
-    internal const string Correlation = "orion-documentary-correlation-001";
+    internal const string Correlation = OrionDocumentaryNarrativeRevisionCycleFixture.Correlation;
     internal static JsonSerializerOptions JsonOptions() => new(JsonSerializerDefaults.Web);
     internal static DocumentaryNarrativeAcceptancePolicy StrictPolicy() => new(true, true, true, true, false, false, false, false, "1.0");
     internal static DocumentaryNarrativeAcceptancePolicy ManualHoldPolicy() => new(true, true, true, false, true, true, true, true, "1.0");
