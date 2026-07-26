@@ -192,7 +192,7 @@ public sealed class DocumentaryMediaPipelineOrchestrator
         var completed = variants.Count(x => x.Status == DocumentaryMediaPipelineStatus.Complete);
         var manifest = new DocumentaryMediaOutputManifest($"{request.Metadata.ExecutionId}.manifest", request.Metadata.ExecutionId,
             request.MediaProject.MediaProjectId, request.MediaProject.TopicId, variants, assets,
-            assets.Where(x => x.Checksum is not null).Select(x => x.Checksum!).ToArray(), 4, assets.Length, completed,
+            assets.Where(x => x.Status == DocumentaryMediaAssetStatus.Verified && x.Checksum is not null).Select(x => x.Checksum!).ToArray(), 4, assets.Length, completed,
             status == DocumentaryMediaPipelineStatus.Planned ? 0 : 4 - completed, "1.0", request.Metadata.CorrelationId);
         var record = new DocumentaryMediaPipelineExecutionRecord(request.Metadata.ExecutionId, request.MediaProject, request.Policy,
             request.Metadata, plan, variants, manifest, status, request.MediaProject.MediaProjectId, request.MediaProject.MaterializationId,

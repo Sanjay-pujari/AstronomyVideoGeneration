@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text.Json.Serialization;
 
 namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
@@ -14,6 +15,7 @@ public sealed class DocumentaryMediaPipelinePolicy
     public DocumentaryMediaAssetFormat VisualImageFormat=>DocumentaryMediaAssetFormat.Png; public DocumentaryMediaAssetFormat NarrationMasterFormat=>DocumentaryMediaAssetFormat.Wav; public DocumentaryMediaAssetFormat NarrationDeliveryFormat=>DocumentaryMediaAssetFormat.Aac; public DocumentaryMediaAssetFormat SubtitleFormat=>DocumentaryMediaAssetFormat.Srt; public DocumentaryMediaAssetFormat VideoFormat=>DocumentaryMediaAssetFormat.Mp4;
     public int LongWidth=>1920; public int LongHeight=>1080; public int ShortWidth=>1080; public int ShortHeight=>1920; public int LongFrameRate=>30; public int ShortFrameRate=>30; public int AudioSampleRate=>48000; public int AudioChannelCount=>2; public int MaximumVisualAttempts{get;} public int MaximumNarrationAttempts{get;} public int MaximumCompositionAttempts{get;} public string PipelineSchemaVersion=>"1.0";
 }
+[method: JsonConstructor]
 public sealed record DocumentaryMediaPipelineMetadata(DateTimeOffset CreatedUtc,string CreatedBy,string PipelineSchemaVersion,string CorrelationId,string ExecutionId)
 { public DocumentaryMediaPipelineMetadata(DateTimeOffset createdUtc,string createdBy,string correlationId,string executionId):this(createdUtc,Required(createdBy),"1.0",Required(correlationId),Required(executionId)){} private static string Required(string x)=>string.IsNullOrWhiteSpace(x)?throw new ArgumentException("Value required."):x; }
 public sealed record DocumentaryMediaPipelineRequest(DocumentaryMediaProject MediaProject,DocumentaryMediaPipelinePolicy Policy,DocumentaryMediaPipelineMetadata Metadata);
