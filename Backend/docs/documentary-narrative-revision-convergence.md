@@ -48,6 +48,11 @@ cycle's remaining-finding count (and is zero when there are no cycles). It is in
 of `CurrentFindingCount`, which describes only the latest validation result; the two
 metrics are not synonymous.
 
+Summary construction rejects negative aggregate or history counts, requires each
+per-cycle history to agree with the completed-cycle count, and requires finding history
+to contain the initial count followed by one entry per cycle and to end at the current
+count. The improved, regressed, and clean flags must agree with those endpoint counts.
+
 O2.10 does not generate or revise documentary text.
 
 O2.10 does not invoke an external editor.
