@@ -31,7 +31,11 @@ public sealed class DocumentaryMediaProjector
     private static DocumentaryMediaVariant? CreateVariant(string projectId,DocumentaryMediaVariantType type,DocumentarySemanticScenePlan plan,DocumentaryMediaProjectionRequest request)
     {
         var (format,language)=DocumentaryMediaProjectionInventory.Mapping(type);var p=request.Policy;
-        var selected=plan.Scenes.Where(s=>format==DocumentaryVideoFormat.Long?s.IncludeInLong:s.IncludeInShort).OrderBy(s=>format==DocumentaryVideoFormat.Long?s.SemanticSceneId:$"{999-s.Importance:D3}.{s.SemanticSceneId}",StringComparer.Ordinal).Take(format==DocumentaryVideoFormat.Long?p.LongMaximumSceneCount:p.ShortMaximumSceneCount).ToArray();
+        var eligible=plan.Scenes.Where(s=>format==DocumentaryVideoFormat.Long?s.IncludeInLong:s.IncludeInShort);
+        var selected=(format==DocumentaryVideoFormat.Long
+                ?eligible.OrderBy(s=>s.Sequence)
+                :eligible.OrderByDescending(s=>s.Importance).ThenBy(s=>s.Sequence))
+            .Take(format==DocumentaryVideoFormat.Long?p.LongMaximumSceneCount:p.ShortMaximumSceneCount).ToArray();
         var minimum=format==DocumentaryVideoFormat.Long?p.LongMinimumSceneCount:p.ShortMinimumSceneCount;var maximum=format==DocumentaryVideoFormat.Long?p.LongMaximumSceneCount:p.ShortMaximumSceneCount;if(selected.Length<minimum||selected.Length>maximum)return null;
         var variantId=$"{projectId}.{type}";var raw=selected.Select(s=>Estimate(language,Text(s,language))).ToArray();var target=(format==DocumentaryVideoFormat.Long?p.LongMinimumDurationSeconds:p.ShortMinimumDurationSeconds)*1000L;var extra=Math.Max(0,target-raw.Sum());long start=0;var scenes=new List<DocumentaryMediaScene>();
         for(var i=0;i<selected.Length;i++){var duration=raw[i]+extra/selected.Length+(i<extra%selected.Length?1:0);scenes.Add(CreateScene(variantId,type,format,language,selected[i],i,start,duration,request));start+=duration;}

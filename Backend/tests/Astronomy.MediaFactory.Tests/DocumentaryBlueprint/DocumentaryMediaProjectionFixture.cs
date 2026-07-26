@@ -6,6 +6,15 @@ namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 
 internal static class DocumentaryMediaProjectionFixture
 {
+    internal static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
+    internal static DocumentaryMediaProject Complete(DocumentaryMediaProjectionRequest request)
+    {
+        var result = new DocumentaryMediaProjector().Project(request);
+        Assert.True(result.IsComplete, string.Join(", ", result.RejectionReasons));
+        return Assert.IsType<DocumentaryMediaProject>(result.MediaProject);
+    }
+    internal static DocumentaryMediaProjectionSummary Summary(DocumentaryMediaProjectionRequest request) => new DocumentaryMediaProjectionSummarizer().Summarize(Complete(request));
+    internal static string Json<T>(T value) => JsonSerializer.Serialize(value, WebJson);
     internal static DocumentaryMediaProjectionRequest Orion()=>Request("orion",DocumentaryAstronomyTopicFamily.Constellation,"Orion","ओरायन",["orion"],["betelgeuse","rigel"],["winter-sky"]);
     internal static DocumentaryMediaProjectionRequest Leo()=>Request("leo",DocumentaryAstronomyTopicFamily.Constellation,"Leo","सिंह",["leo"],["regulus","leo-triplet"],["spring-sky"]);
     internal static DocumentaryMediaProjectionRequest Conjunction()=>Request("mars-jupiter-conjunction",DocumentaryAstronomyTopicFamily.PlanetConjunction,"Mars Jupiter conjunction","मंगल बृहस्पति युति",["mars","jupiter"],[],["conjunction","planet-event"]);
