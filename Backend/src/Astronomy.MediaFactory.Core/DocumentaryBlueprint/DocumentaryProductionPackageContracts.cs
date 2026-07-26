@@ -98,7 +98,12 @@ public sealed class DocumentaryProductionPackage
         NarrativeDraft=narrativeDraft??throw new ArgumentNullException(nameof(narrativeDraft)); FinalValidationResult=finalValidationResult??throw new ArgumentNullException(nameof(finalValidationResult));
         ArgumentNullException.ThrowIfNull(revisionCycles); ConvergenceState=convergenceState??throw new ArgumentNullException(nameof(convergenceState)); AcceptanceDecision=acceptanceDecision??throw new ArgumentNullException(nameof(acceptanceDecision)); Manifest=manifest??throw new ArgumentNullException(nameof(manifest)); Policy=policy??throw new ArgumentNullException(nameof(policy)); Metadata=metadata??throw new ArgumentNullException(nameof(metadata));
         DocumentaryProductionPackageInventory.ValidateSections(includedSections,nameof(includedSections));
-        if(!ReferenceEquals(narrativeDraft,releaseCandidate.NarrativeDraft)||!ReferenceEquals(finalValidationResult,releaseCandidate.FinalValidationResult)||!ReferenceEquals(convergenceState,releaseCandidate.ConvergenceState)||!ReferenceEquals(acceptanceDecision,releaseCandidate.AcceptanceDecision)||!ReferenceEquals(revisionCycles,convergenceState.Cycles))throw new ArgumentException("Certified artifact references must be retained.");
+        if(!DocumentaryNarrativeRevisionConvergenceStateValidator.DraftsAreEquivalent(narrativeDraft,releaseCandidate.NarrativeDraft)||
+           !DocumentaryNarrativeRevisionConvergenceStateValidator.ValidationResultsAreEquivalent(finalValidationResult,releaseCandidate.FinalValidationResult)||
+           !DocumentaryProductionPackageValidator.ConvergenceStatesAreEquivalent(convergenceState,releaseCandidate.ConvergenceState)||
+           !DocumentaryProductionPackageValidator.AcceptanceDecisionsAreEquivalent(acceptanceDecision,releaseCandidate.AcceptanceDecision)||
+           !DocumentaryProductionPackageValidator.RevisionCyclesAreEquivalent(revisionCycles,convergenceState.Cycles))
+            throw new ArgumentException("Certified artifacts must be deterministically equivalent.");
         DocumentaryProductionPackageValidator.ValidateComplete(packageId,releaseCandidate,manifest,metadata);
         RevisionCycles=revisionCycles; IncludedSections=DocumentaryProductionPackageInventory.Copy(includedSections,nameof(includedSections));
     }
