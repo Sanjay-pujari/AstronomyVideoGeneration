@@ -8,6 +8,14 @@ The specification identity is `{CertificationId}.export-specification`, its logi
 
 The builder returns either Complete with an immutable specification or Rejected with canonically ordered reasons. Exact ordinal correlation spans the retained package, revision history, provenance graph, certification evidence, export metadata, items, dependencies, and manifest. Caller-supplied timestamps and text are preserved. Value-derived identities, inventories, and ordering permit deterministic reconstruction without mutation or external work.
 
+Canonical graph validation compares every export-item and dependency field, not identity strings alone.
+
+Item rejection categories distinguish missing items, inventory defects, ordering defects, identity defects, dependency defects, and unsupported additions.
+
+Certification, provenance, and production-package linkage require deterministic value equivalence where references differ.
+
+The summarizer validates the complete logical export specification before deriving a summary.
+
 O2.15 does not create physical export files.
 
 O2.15 does not create directories or archives.
