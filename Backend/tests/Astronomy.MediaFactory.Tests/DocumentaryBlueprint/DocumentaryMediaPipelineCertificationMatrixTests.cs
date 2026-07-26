@@ -26,7 +26,7 @@ public sealed class DocumentaryMediaPipelineCertificationMatrixTests
     public static IEnumerable<object[]> ProviderResultCases()
     {
         var types = new[] { DocumentaryMediaAssetType.VisualImage, DocumentaryMediaAssetType.NarrationAudio,
-            DocumentaryMediaAssetType.SubtitleFile, DocumentaryMediaAssetType.SceneVideo, DocumentaryMediaAssetType.VariantVideo };
+            DocumentaryMediaAssetType.SubtitleDocument, DocumentaryMediaAssetType.SceneVideo, DocumentaryMediaAssetType.VariantVideo };
         foreach (var type in types)
         foreach (var mutation in Enumerable.Range(0,13)) yield return [type,mutation];
     }
@@ -41,7 +41,7 @@ public sealed class DocumentaryMediaPipelineCertificationMatrixTests
         var expected=targetType switch {
             DocumentaryMediaAssetType.VisualImage => DocumentaryMediaPipelineRejectionReason.VisualGenerationFailed,
             DocumentaryMediaAssetType.NarrationAudio => DocumentaryMediaPipelineRejectionReason.NarrationSynthesisFailed,
-            DocumentaryMediaAssetType.SubtitleFile => DocumentaryMediaPipelineRejectionReason.SubtitleGenerationFailed,
+            DocumentaryMediaAssetType.SubtitleDocument => DocumentaryMediaPipelineRejectionReason.SubtitleGenerationFailed,
             DocumentaryMediaAssetType.SceneVideo => DocumentaryMediaPipelineRejectionReason.SceneCompositionFailed,
             _ => DocumentaryMediaPipelineRejectionReason.VariantCompositionFailed };
         Assert.Contains(expected,pipeline.RejectionReasons);
