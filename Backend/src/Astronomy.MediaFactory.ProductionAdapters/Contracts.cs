@@ -19,6 +19,9 @@ public sealed record DocumentaryArtifactMappingContext(DocumentaryMediaAssetPlan
 public sealed record DocumentaryRegisteredPhysicalArtifact(DocumentaryPhysicalArtifactDescriptor Descriptor, DocumentaryPhysicalArtifactKind Kind);
 
 public interface IDocumentaryProductionExecutionHost { Task<DocumentaryMediaPipelineExecutionRecord?> ExecuteAsync(DocumentaryMediaPipelineRequest request, CancellationToken cancellationToken); }
+public interface IDocumentaryProductionExecutionCoordinator { Task<DocumentaryProductionExecutionResult> ExecuteAsync(DocumentaryMediaPipelineRequest request, CancellationToken cancellationToken); }
+public interface IDocumentaryProductionAttemptContextFactory { DocumentaryProductionAttemptContext Create(DocumentaryProductionExecutionContext executionContext,DocumentaryProductionOperationKind operationKind,string assetId,string providerId,int attemptNumber,TimeSpan timeout,string? variantId=null,string? sceneId=null); }
+public interface IDocumentaryProductionExecutionDependencyResolver { Task<DocumentaryPhysicalArtifactDescriptor> ResolveAsync(string assetId,DocumentaryPhysicalArtifactKind kind,string correlationId,CancellationToken cancellationToken); Task<IReadOnlyList<DocumentaryPhysicalArtifactDescriptor>> ResolveOrderedAsync(IEnumerable<DocumentaryMediaAssetPlan> plans,DocumentaryPhysicalArtifactKind kind,string correlationId,CancellationToken cancellationToken); }
 public interface IDocumentaryProductionClock { DateTimeOffset UtcNow { get; } }
 public interface IDocumentaryExecutionIdGenerator { string Create(); }
 public interface IDocumentaryProductionExecutionContextFactory { DocumentaryProductionExecutionContext Create(DocumentaryMediaPipelineRequest request, IReadOnlyDictionary<string,string>? metadata = null); }
