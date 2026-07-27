@@ -20,7 +20,10 @@ public sealed class DocumentaryProductionCertificationHardeningTests
         var record=Assert.IsType<DocumentaryProductionCertificationRecord>(result.CertificationRecord);
         Assert.Equal(DocumentaryProductionCertificationInventory.VariantTypes,record.VariantCertificationRecords.Select(x=>x.VariantType));
         Assert.Equal(4,record.VerifiedOutputCount);Assert.All(record.VariantCertificationRecords,x=>{Assert.True(x.IsOutputVerified);Assert.True(x.IsTraceabilityComplete);Assert.NotEmpty(x.TraceabilityLinks);});
-        Assert.Equal(record.MediaProject.Variants.Sum(x=>x.Scenes.Sum(s=>s.KnowledgeReferences.Count)),record.TraceabilityLinkCount);
+        Assert.Equal(record.MediaProject.Variants.Sum(x=>x.Scenes.Sum(s=>s.KnowledgeReferences.Count+s.Narration.Sum(n=>n.KnowledgeReferences.Count)+s.SubtitleCues.Sum(c=>c.KnowledgeReferences.Count)+s.VisualPrompts.Sum(v=>v.KnowledgeReferences.Count))),record.TraceabilityLinkCount);
+        Assert.Equal(Enum.GetValues<DocumentaryProductionTraceabilityType>(),record.VariantCertificationRecords.SelectMany(x=>x.TraceabilityLinks).Select(x=>x.TraceabilityType).Distinct());
+        Assert.Equal(Enum.GetValues<CertificationEvidenceType>(),record.Evidence.EvidenceReferences.Select(x=>x.EvidenceType));
+        Assert.All(record.Evidence.EvidenceReferences,x=>Assert.True(x.Verified));
         Assert.True(new DocumentaryProductionCertificationSummarizer().Summarize(record).IsCertified);
     }
 
