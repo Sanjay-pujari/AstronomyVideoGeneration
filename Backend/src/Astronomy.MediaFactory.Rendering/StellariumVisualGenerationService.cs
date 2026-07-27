@@ -140,6 +140,21 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
         return scenes.Select(s => s.OutputImagePath).ToList();
     }
 
+    /// <summary>Runs the established script/capture pipeline for an isolated one-subject documentary request.</summary>
+    public async Task<string> GenerateSingleVisualAsync(StellariumDocumentaryVisualRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.Subject) || string.IsNullOrWhiteSpace(request.SceneId))
+            throw new ArgumentException("A subject and scene identifier are required.", nameof(request));
+        var context = new AstronomyContext { Date = request.ObservationDate, LocationName = request.ObserverLocation };
+        context.Events.Add(new AstronomyEventModel { ObjectName = request.Subject, Details = request.VisualInstruction });
+        var outputs = (await PrepareVisualsAsync(context, request.OutputDirectory, cancellationToken)).ToArray();
+        var matches = outputs.Where(path => Path.GetFileNameWithoutExtension(path).Contains(request.SceneId, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (matches.Length == 1) return matches[0];
+        if (outputs.Length == 1) return outputs[0]; // The existing contract proves the collection is unambiguous.
+        throw new InvalidDataException(matches.Length == 0 ? "The requested Stellarium capture was not produced." : "The Stellarium capture result was ambiguous.");
+    }
+
     private static async Task WriteSscContextAsync(StellariumScene scene, CancellationToken cancellationToken)
     {
         var contextPath = Path.ChangeExtension(scene.ScriptPath, ".generated-ssc-context.json");
@@ -542,3 +557,5 @@ public sealed class StellariumVisualGenerationService : IVisualAssetProvider
 
     private sealed record SceneDefinition(string Slug, string Title, string Caption, string TargetObject, string Type);
 }
+
+public sealed record StellariumDocumentaryVisualRequest(string SceneId, string Subject, string VisualInstruction, DateOnly ObservationDate, string ObserverLocation, int Width, int Height, string OutputDirectory);

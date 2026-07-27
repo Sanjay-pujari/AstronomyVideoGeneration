@@ -20,4 +20,12 @@ public sealed class FileVisualAssetProvider : IVisualAssetProvider
         }
         return files;
     }
+
+    public Task<string?> SelectExistingAssetAsync(string assetKey, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(assetKey)) return Task.FromResult<string?>(null);
+        var path = Path.GetFullPath(assetKey);
+        return Task.FromResult(File.Exists(path) ? path : null);
+    }
 }
