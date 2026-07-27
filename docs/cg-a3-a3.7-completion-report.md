@@ -2,26 +2,49 @@
 
 ## Delivery
 
-Created `SceneCompositionAdapter.cs`, its executable focused tests, this report, and the adapter design document. Modified bridge contracts/registry/DI and exposed the narrow `FfmpegArgumentBuilder.BuildScene` operation. The stable provider ID is `ExistingFFmpegSceneComposer`.
+The A3.7 closure now has separate executable fixtures and focused files for dependency resolution, the existing FFmpeg provider binding, adapter exception/cancellation behavior, result mapping, architecture, determinism, and non-mutation. The pre-existing focused scene video inspector and command-generation tests remain in place. No A3.8 composition, storage, publishing, or production-enablement work was added.
 
-The implementation reuses the existing executable setting (`RenderingOptions.FfmpegPath`), `FfmpegArgumentBuilder`, `IProcessRunner`, intermediate media profile, workspace manager, artifact inspector, SHA-256 identity factory, descriptor validator, registry, and diagnostics writer. It introduces asynchronous scene adapter, dependency resolver, provider binding/request/response, explicit subtitle mode, focused video inspector, immutable result, and O2.18 mapper.
+The production correction prompted by the tests is intentionally narrow: exceptions raised by a scene provider binding are passed through the existing `IDocumentaryProductionFailureNormalizer`, while caller cancellation is explicitly rethrown. The adapter continues to await one selected scene binding and performs no retry.
 
-## Behavior
+## Commands executed
 
-Finalized visuals are correlation/type/path checked and deterministically ordered. Final narration is validated and muxed once; finalized subtitle input is validated and burned in when present. No upstream provider is called. Effective O2.18 duration owns timing, with narration fallback and tolerance validation. Existing aspect-preserving scale/pad, square-pixel, libx264/yuv420p, AAC, configured frame-rate/CRF/preset/bitrate, and faststart policies are reused. Motion and transition policy are translated without reinvention.
+- `dotnet --info` — .NET SDK 10.0.302 (installed into the isolated test environment).
+- `dotnet restore Backend/Astronomy.MediaFactory.slnx` — passed, with the repository's existing NU1510 and NU1903 warnings.
+- `dotnet build Backend/Astronomy.MediaFactory.slnx --no-restore` — the initial run exposed one test namespace error; after correction, the test project build passed with existing repository warnings.
+- `dotnet build Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-restore -v:minimal` — passed: 0 errors, 136 warnings.
+- `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-build --filter "FullyQualifiedName~ProductionAdapters.DocumentaryScene|FullyQualifiedName~ProductionAdapters.ExistingFFmpegDocumentaryScene|FullyQualifiedName~ProductionAdapters.ExistingDocumentaryScene" --logger "console;verbosity=minimal"` — passed.
+- `dotnet test Backend/Astronomy.MediaFactory.slnx --no-build --logger "console;verbosity=minimal"` — broad run attempted and stopped after numerous unrelated pre-existing failures across semantic characterization, thumbnails, FFmpeg legacy rendering, analytics, visual intelligence, and other non-A3.7 areas.
 
-The binding creates one deterministic attempt-owned `provider-scene.mp4`, executes one process with the existing runner and timeout, and performs no retry. Caller cancellation propagates to the runner, which owns process-tree termination. The scene-specific probe measures stream presence, duration, dimensions, frame rate, and audio. Atomic finalization precedes SHA-256/ContentIdentity creation, validation, registry insertion, sanitized diagnostics, and O2.18 result mapping.
+## Focused result
 
-Failure mapping includes adapter/dependency/source/subtitle/profile/process/output/stream/dimension/duration/frame-rate codes. Raw stderr is represented only by a SHA-256 hash. Retry ownership remains with O2.18.
+- Total: **45**
+- Passed: **45**
+- Failed: **0**
+- Skipped: **0**
+- Duration: **414 ms**
 
-## Verification status
+No test invoked a paid provider. The FFmpeg binding tests use `RecordingProcessRunner`; therefore no machine FFmpeg executable was required and the real FFmpeg smoke status is **not executed (optional)**.
 
-The executable suite includes focused inspector, cancellation, deterministic command, scaling/profile, silent audio, subtitle-none, and identity coverage. Architecture review confirms no synchronous CG-A2 provider, upstream adapter dependency, variant composition, publishing/storage behavior, shell execution, blocking async bridge call, second process framework, or general A3.9 verifier was added. CG-A2 files were not modified.
+## Broad-suite result
 
-The requested restore/build/focused/broad test commands could not execute because `dotnet` is absent from the environment. Consequently the mandatory end-to-end upstream-independence and single-scene regression criteria are not certified here, and no real FFmpeg smoke was executed. No paid-provider call was made.
+The broad suite is not green for reasons unrelated to this change. Representative existing failures include `NarrationContextPurityTests`, `RequiredSemanticFactResolverV1MigrationTests`, `SemanticCapabilityArchitectureTests`, `CinematicThumbnailServiceTests`, `VisualIntelligenceOrchestratorTests`, `FfmpegRenderingTests`, and `ThumbnailAssetIntelligenceServiceTests`. The run was stopped after these unrelated failures had established the broad baseline was not passing.
+
+## Certified statements
+
+- ✓ Dedicated A3.7 scene composition suite was created.
+- ✓ Scene dependency resolver tests passed.
+- ✓ FFmpeg provider binding tests passed.
+- ✓ Scene video inspector tests passed.
+- ✓ Scene result mapper tests passed.
+- ✓ Process timeout behavior was tested.
+- ✓ Nonzero exit behavior was tested.
+- ✓ Caller cancellation propagation was tested.
+- ✓ Architecture boundaries were tested.
+- ✓ Determinism was tested.
+- ✓ Non-mutation was tested.
+- ✓ No real paid-provider request was executed.
+- ✓ All focused A3.7 tests passed.
 
 ## Readiness decision
 
-The implementation is submitted for architectural review, but all focused tests could not be run in this environment.
-
-**NOT READY FOR A3.8**
+The focused executable closure passes. **READY FOR A3.8** from the A3.7 focused-test gate; A3.8 is intentionally not implemented here.
