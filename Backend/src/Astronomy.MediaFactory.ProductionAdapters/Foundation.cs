@@ -7,20 +7,64 @@ namespace Astronomy.MediaFactory.ProductionAdapters;
 
 public sealed class SystemDocumentaryProductionClock : IDocumentaryProductionClock { public DateTimeOffset UtcNow => DateTimeOffset.UtcNow; }
 public sealed class DocumentaryExecutionIdGenerator : IDocumentaryExecutionIdGenerator { public string Create() => Guid.NewGuid().ToString("N"); }
-public sealed class DocumentaryProductionExecutionContextFactory(IDocumentaryProductionClock clock, IDocumentaryExecutionIdGenerator ids, Microsoft.Extensions.Options.IOptions<DocumentaryProductionAdaptersOptions> options) : IDocumentaryProductionExecutionContextFactory {
- public DocumentaryProductionExecutionContext Create(DocumentaryMediaPipelineRequest request, IReadOnlyDictionary<string,string>? metadata=null) {
-  ArgumentNullException.ThrowIfNull(request); var executionId=string.IsNullOrWhiteSpace(request.Metadata.ExecutionId)?ids.Create():request.Metadata.ExecutionId;
-  if(string.IsNullOrWhiteSpace(executionId)||string.IsNullOrWhiteSpace(request.Metadata.CorrelationId)) throw new ArgumentException("Execution and correlation IDs are required.");
-  return new(executionId,request.Metadata.CorrelationId,options.Value.ExecutionMode,Path.GetFullPath(options.Value.WorkspaceRoot),clock.UtcNow,ImmutableMetadata.Copy(metadata));
- }
+public sealed class DocumentaryProductionExecutionContextFactory(IDocumentaryProductionClock clock, IDocumentaryExecutionIdGenerator ids, Microsoft.Extensions.Options.IOptions<DocumentaryProductionAdaptersOptions> options) : IDocumentaryProductionExecutionContextFactory
+{
+    public DocumentaryProductionExecutionContext Create(DocumentaryMediaPipelineRequest request, IReadOnlyDictionary<string, string>? metadata = null)
+    {
+        ArgumentNullException.ThrowIfNull(request); var executionId = string.IsNullOrWhiteSpace(request.Metadata.ExecutionId) ? ids.Create() : request.Metadata.ExecutionId;
+        if (string.IsNullOrWhiteSpace(executionId) || string.IsNullOrWhiteSpace(request.Metadata.CorrelationId)) throw new ArgumentException("Execution and correlation IDs are required.");
+        return new(executionId, request.Metadata.CorrelationId, options.Value.ExecutionMode, Path.GetFullPath(options.Value.WorkspaceRoot), clock.UtcNow, ImmutableMetadata.Copy(metadata));
+    }
 }
-public sealed partial class DocumentarySafeFileNameGenerator : IDocumentarySafeFileNameGenerator {
- static readonly HashSet<string> Reserved=new(["CON","PRN","AUX","NUL","COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9","LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9"],StringComparer.OrdinalIgnoreCase);
- public string Create(string logicalId,int maximumLength=100){ArgumentNullException.ThrowIfNull(logicalId);if(maximumLength<22)throw new ArgumentOutOfRangeException(nameof(maximumLength));var normalized=logicalId.Normalize(NormalizationForm.FormKC);var safe=UnsafeRun().Replace(normalized,"_").Trim('.','_');var needsHash=safe.Length==0||safe.Length>maximumLength||Reserved.Contains(safe)||!string.Equals(safe,logicalId,StringComparison.Ordinal);if(!needsHash)return safe;var hash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(logicalId))).ToLowerInvariant()[..20];var prefix=safe.Length==0?"asset":safe;prefix=prefix[..Math.Min(prefix.Length,maximumLength-21)].TrimEnd('.','_');if(prefix.Length==0)prefix="asset";return $"{prefix}-{hash}";}
- [GeneratedRegex("[^A-Za-z0-9._-]+",RegexOptions.CultureInvariant)] private static partial Regex UnsafeRun();
+public sealed partial class DocumentarySafeFileNameGenerator : IDocumentarySafeFileNameGenerator
+{
+    static readonly HashSet<string> Reserved = new(["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"], StringComparer.OrdinalIgnoreCase);
+    public string Create(string logicalId, int maximumLength = 100) { ArgumentNullException.ThrowIfNull(logicalId); if (maximumLength < 22) throw new ArgumentOutOfRangeException(nameof(maximumLength)); var normalized = logicalId.Normalize(NormalizationForm.FormKC); var safe = UnsafeRun().Replace(normalized, "_").Trim('.', '_'); var needsHash = safe.Length == 0 || safe.Length > maximumLength || Reserved.Contains(safe) || !string.Equals(safe, logicalId, StringComparison.Ordinal); if (!needsHash) return safe; var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(logicalId))).ToLowerInvariant()[..20]; var prefix = safe.Length == 0 ? "asset" : safe; prefix = prefix[..Math.Min(prefix.Length, maximumLength - 21)].TrimEnd('.', '_'); if (prefix.Length == 0) prefix = "asset"; return $"{prefix}-{hash}"; }
+    [GeneratedRegex("[^A-Za-z0-9._-]+", RegexOptions.CultureInvariant)] private static partial Regex UnsafeRun();
 }
-public sealed class DocumentaryChecksumService : IDocumentaryChecksumService { public async Task<string> ComputeSha256Async(string path,CancellationToken cancellationToken){if(Directory.Exists(path))throw new ArgumentException("Path is a directory.",nameof(path));await using var stream=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read,81920,FileOptions.Asynchronous|FileOptions.SequentialScan);var digest=await SHA256.HashDataAsync(stream,cancellationToken);return Convert.ToHexString(digest).ToLowerInvariant();} }
-public sealed class DocumentaryContentIdentityFactory : IDocumentaryContentIdentityFactory { private static readonly Regex Digest=new("^[0-9a-f]{64}$",RegexOptions.CultureInvariant); public string Create(string checksum)=>Digest.IsMatch(checksum??"")?$"sha256:{checksum}":throw new ArgumentException("A lowercase SHA-256 digest is required.",nameof(checksum)); public bool IsValid(string value)=>value?.StartsWith("sha256:",StringComparison.Ordinal)==true&&Digest.IsMatch(value[7..]); }
-public sealed class DocumentaryPhysicalArtifactDescriptorValidator(IDocumentaryContentIdentityFactory identities) : IDocumentaryPhysicalArtifactDescriptorValidator { public IReadOnlyList<string> Validate(DocumentaryPhysicalArtifactDescriptor d){var e=new List<string>();if(string.IsNullOrWhiteSpace(d.AssetId))e.Add("AssetIdRequired");if(!Path.IsPathFullyQualified(d.PhysicalPath))e.Add("PhysicalPathMustBeAbsolute");if(d.PhysicalPath.Split(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar).Any(x=>x.Equals("tmp",StringComparison.OrdinalIgnoreCase)))e.Add("TemporaryPathRejected");if(d.Length<=0)e.Add("LengthMustBePositive");if(d.AttemptCount<=0)e.Add("AttemptCountMustBePositive");if(string.IsNullOrWhiteSpace(d.CorrelationId))e.Add("CorrelationIdRequired");if(!identities.IsValid(d.ContentIdentity))e.Add("ContentIdentityInvalid");if(d.Checksum.Length!=64||d.Checksum.Any(x=>!Uri.IsHexDigit(x)||char.IsUpper(x)))e.Add("ChecksumInvalid");if(d.ContentIdentity!=$"sha256:{d.Checksum}")e.Add("IdentityChecksumMismatch");return e.AsReadOnly();} }
-public sealed class NullDocumentaryMediaProbe : IDocumentaryMediaProbe { public Task<DocumentaryMediaProbeResult> ProbeAsync(string path,CancellationToken token){token.ThrowIfCancellationRequested();return Task.FromResult(new DocumentaryMediaProbeResult(false,Failure:new(DocumentaryProductionFailureCode.AdapterUnavailable,"Media probe is not configured.")));} }
-public sealed class DocumentaryPhysicalArtifactInspector(IDocumentaryChecksumService checksums,IDocumentaryContentIdentityFactory identities,IDocumentaryMediaProbe probe) : IDocumentaryPhysicalArtifactInspector { public async Task<DocumentaryPhysicalArtifactDescriptor> InspectAsync(DocumentaryPhysicalArtifactInspectionRequest r,CancellationToken token){token.ThrowIfCancellationRequested();var path=Path.GetFullPath(r.PhysicalPath);var info=new FileInfo(path);if(!info.Exists)throw new FileNotFoundException("Artifact not found.",path);if(info.Length==0)throw new InvalidDataException("Artifact is empty.");if(string.IsNullOrWhiteSpace(r.ContentType))throw new ArgumentException("Content type required.");var hash=await checksums.ComputeSha256Async(path,token);var p=r.ProbeMedia?await probe.ProbeAsync(path,token):new DocumentaryMediaProbeResult(false);return new(r.AssetId,identities.Create(hash),path,r.ContentType,info.Length,hash,p.DurationMilliseconds,p.Width,p.Height,p.FrameRate,p.AudioSampleRate,p.AudioChannelCount,r.ProviderId,r.AttemptCount,r.CorrelationId);} }
+public sealed class DocumentaryChecksumService : IDocumentaryChecksumService
+{
+    public async Task<string> ComputeSha256Async(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var fullPath = Path.GetFullPath(path);
+
+        if (Directory.Exists(fullPath))
+        {
+            throw new ArgumentException(
+                "Path must reference a file, not a directory.",
+                nameof(path));
+        }
+
+        // Normalize both a missing file and a missing parent directory
+        // into the checksum service's stable missing-file contract.
+        if (!File.Exists(fullPath))
+        {
+            throw new FileNotFoundException(
+                "The file to checksum was not found.",
+                fullPath);
+        }
+
+        await using var stream = new FileStream(
+            fullPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        var digest = await SHA256.HashDataAsync(
+            stream,
+            cancellationToken);
+
+        return Convert.ToHexString(digest).ToLowerInvariant();
+    }
+}
+public sealed class DocumentaryContentIdentityFactory : IDocumentaryContentIdentityFactory { private static readonly Regex Digest = new("^[0-9a-f]{64}$", RegexOptions.CultureInvariant); public string Create(string checksum) => Digest.IsMatch(checksum ?? "") ? $"sha256:{checksum}" : throw new ArgumentException("A lowercase SHA-256 digest is required.", nameof(checksum)); public bool IsValid(string value) => value?.StartsWith("sha256:", StringComparison.Ordinal) == true && Digest.IsMatch(value[7..]); }
+public sealed class DocumentaryPhysicalArtifactDescriptorValidator(IDocumentaryContentIdentityFactory identities) : IDocumentaryPhysicalArtifactDescriptorValidator { public IReadOnlyList<string> Validate(DocumentaryPhysicalArtifactDescriptor d) { var e = new List<string>(); if (string.IsNullOrWhiteSpace(d.AssetId)) e.Add("AssetIdRequired"); if (!Path.IsPathFullyQualified(d.PhysicalPath)) e.Add("PhysicalPathMustBeAbsolute"); if (d.PhysicalPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(x => x.Equals("tmp", StringComparison.OrdinalIgnoreCase))) e.Add("TemporaryPathRejected"); if (d.Length <= 0) e.Add("LengthMustBePositive"); if (d.AttemptCount <= 0) e.Add("AttemptCountMustBePositive"); if (string.IsNullOrWhiteSpace(d.CorrelationId)) e.Add("CorrelationIdRequired"); if (!identities.IsValid(d.ContentIdentity)) e.Add("ContentIdentityInvalid"); if (d.Checksum.Length != 64 || d.Checksum.Any(x => !Uri.IsHexDigit(x) || char.IsUpper(x))) e.Add("ChecksumInvalid"); if (d.ContentIdentity != $"sha256:{d.Checksum}") e.Add("IdentityChecksumMismatch"); return e.AsReadOnly(); } }
+public sealed class NullDocumentaryMediaProbe : IDocumentaryMediaProbe { public Task<DocumentaryMediaProbeResult> ProbeAsync(string path, CancellationToken token) { token.ThrowIfCancellationRequested(); return Task.FromResult(new DocumentaryMediaProbeResult(false, Failure: new(DocumentaryProductionFailureCode.AdapterUnavailable, "Media probe is not configured."))); } }
+public sealed class DocumentaryPhysicalArtifactInspector(IDocumentaryChecksumService checksums, IDocumentaryContentIdentityFactory identities, IDocumentaryMediaProbe probe) : IDocumentaryPhysicalArtifactInspector { public async Task<DocumentaryPhysicalArtifactDescriptor> InspectAsync(DocumentaryPhysicalArtifactInspectionRequest r, CancellationToken token) { token.ThrowIfCancellationRequested(); var path = Path.GetFullPath(r.PhysicalPath); var info = new FileInfo(path); if (!info.Exists) throw new FileNotFoundException("Artifact not found.", path); if (info.Length == 0) throw new InvalidDataException("Artifact is empty."); if (string.IsNullOrWhiteSpace(r.ContentType)) throw new ArgumentException("Content type required."); var hash = await checksums.ComputeSha256Async(path, token); var p = r.ProbeMedia ? await probe.ProbeAsync(path, token) : new DocumentaryMediaProbeResult(false); return new(r.AssetId, identities.Create(hash), path, r.ContentType, info.Length, hash, p.DurationMilliseconds, p.Width, p.Height, p.FrameRate, p.AudioSampleRate, p.AudioChannelCount, r.ProviderId, r.AttemptCount, r.CorrelationId); } }
