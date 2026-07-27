@@ -13,6 +13,8 @@ public static class DocumentaryProductionCertificationValidator
         if(p is null||!p.IsComplete||!DocumentaryMediaProjectionValidator.ProjectValid(p))reasons.Add(DocumentaryProductionCertificationRejectionReason.MediaProjectionNotComplete);
         if(e is null||!e.IsComplete||!ExecutionValid(e))reasons.Add(DocumentaryProductionCertificationRejectionReason.PipelineExecutionNotComplete);
         if(request.Policy is null||request.Metadata is null||!PolicyValid(request.Policy))reasons.Add(DocumentaryProductionCertificationRejectionReason.ArchitectureBoundaryViolation);
+        if(request.Metadata is not null)
+            foreach(var reason in ValidateEvidencePackage(request.EvidencePackage,request.Metadata))reasons.Add(reason);
         if(m is null||p is null||e is null||request.Metadata is null)return Ordered(reasons);
         if(!KnowledgeFoundationValid(m))reasons.Add(DocumentaryProductionCertificationRejectionReason.KnowledgeFoundationNotCertified);
         if(p.MaterializationId!=m.MaterializationId||p.MediaProjectId!=e.MediaProjectId||!Equivalent(e.MediaProject,p)||p.ExportSpecificationId!=m.ExportSpecificationId||p.CertificationId!=m.CertificationId||p.ProvenanceId!=m.ProvenanceId||p.PackageId!=m.PackageId||p.ReleaseCandidateId!=m.ReleaseCandidateId||p.ConvergenceId!=m.ConvergenceId||request.Metadata.CertificationRunId!=$"{e.ExecutionId}.production-certification.1")reasons.Add(DocumentaryProductionCertificationRejectionReason.IdentityChainMismatch);
@@ -75,13 +77,67 @@ public static class DocumentaryProductionCertificationValidator
     }
     private static bool IsSuccessful(DocumentaryMediaAssetStatus status)=>status is DocumentaryMediaAssetStatus.Generated or DocumentaryMediaAssetStatus.Verified;
     private static bool IsVisual(DocumentaryMediaAssetType x)=>x is DocumentaryMediaAssetType.VisualImage or DocumentaryMediaAssetType.SkySimulationImage or DocumentaryMediaAssetType.StarChartImage or DocumentaryMediaAssetType.TelescopeViewImage or DocumentaryMediaAssetType.ScientificDiagramImage or DocumentaryMediaAssetType.HistoricalIllustrationImage;
+    public static IReadOnlyList<DocumentaryProductionCertificationRejectionReason> ValidateEvidencePackage(DocumentaryProductionCertificationEvidencePackage? package,DocumentaryProductionCertificationMetadata metadata)
+    {
+        var reasons=new HashSet<DocumentaryProductionCertificationRejectionReason>();
+        if(package is null)return One(DocumentaryProductionCertificationRejectionReason.ArchitectureBoundaryViolation);
+        var expected=Enum.GetValues<CertificationEvidenceType>();
+        if(package.EvidencePackageId!=$"{metadata.CertificationRunId}.evidence-package"||package.CertificationSchemaVersion!=DocumentaryProductionCertificationInventory.SchemaVersion||package.CorrelationId!=metadata.CorrelationId||package.EvidenceReferenceCount!=package.EvidenceReferences.Count||package.EvidenceReferences.Count!=expected.Length)
+            reasons.Add(DocumentaryProductionCertificationRejectionReason.ArchitectureBoundaryViolation);
+        var duplicateTypes=package.EvidenceReferences.GroupBy(x=>x.EvidenceType).Where(x=>x.Count()!=1).SelectMany(x=>x).ToHashSet();
+        var duplicateIds=package.EvidenceReferences.GroupBy(x=>x.EvidenceIdentity,StringComparer.Ordinal).Where(x=>x.Count()>1).SelectMany(x=>x).ToHashSet();
+        for(var i=0;i<package.EvidenceReferences.Count;i++)
+        {
+            var evidence=package.EvidenceReferences[i];
+            var malformed=i>=expected.Length||evidence.EvidenceType!=expected[i]||evidence.Sequence!=i||evidence.EvidenceIdentity!=$"{package.EvidencePackageId}.{evidence.EvidenceType}"||
+                evidence.CorrelationId!=metadata.CorrelationId||!evidence.Verified||evidence.PassedCount<0||evidence.FailedCount!=0||evidence.SkippedCount<0||evidence.DurationMilliseconds<0||string.IsNullOrWhiteSpace(evidence.RepositoryRevision)||string.IsNullOrWhiteSpace(evidence.EvidenceSource)||duplicateTypes.Contains(evidence)||duplicateIds.Contains(evidence);
+            if(malformed)reasons.Add(EvidenceReason(evidence.EvidenceType));
+        }
+        if(!package.EvidenceReferences.Select(x=>x.EvidenceType).OrderBy(x=>(int)x).SequenceEqual(expected))reasons.Add(DocumentaryProductionCertificationRejectionReason.ArchitectureBoundaryViolation);
+        return Ordered(reasons);
+    }
+    private static DocumentaryProductionCertificationRejectionReason EvidenceReason(CertificationEvidenceType type)=>type switch
+    {
+        CertificationEvidenceType.Determinism=>DocumentaryProductionCertificationRejectionReason.DeterminismCertificationFailed,
+        CertificationEvidenceType.Serialization=>DocumentaryProductionCertificationRejectionReason.SerializationCertificationFailed,
+        CertificationEvidenceType.NonMutation=>DocumentaryProductionCertificationRejectionReason.NonMutationCertificationFailed,
+        CertificationEvidenceType.Architecture or CertificationEvidenceType.FocusedTests or CertificationEvidenceType.RepositoryTests=>DocumentaryProductionCertificationRejectionReason.ArchitectureBoundaryViolation,
+        CertificationEvidenceType.Documentation=>DocumentaryProductionCertificationRejectionReason.DocumentationCertificationFailed,
+        _=>DocumentaryProductionCertificationRejectionReason.ArchitectureBoundaryViolation
+    };
     private static bool PointerResolves(string content,string pointer){try{using var document=JsonDocument.Parse(content);var current=document.RootElement;if(pointer=="/")return true;if(string.IsNullOrEmpty(pointer)||pointer[0]!='/')return false;foreach(var token in pointer.Split('/').Skip(1).Select(x=>x.Replace("~1","/",StringComparison.Ordinal).Replace("~0","~",StringComparison.Ordinal))){if(current.ValueKind==JsonValueKind.Object){if(!current.TryGetProperty(token,out current))return false;}else if(current.ValueKind==JsonValueKind.Array&&int.TryParse(token,out var index)&&index>=0&&index<current.GetArrayLength())current=current[index];else return false;}return true;}catch(JsonException){return false;}}
     private static IEnumerable<DocumentaryMediaKnowledgeReference> AllReferences(DocumentaryMediaProject p)=>p.Variants.SelectMany(x=>x.Scenes).SelectMany(s=>s.KnowledgeReferences.Concat(s.Narration.SelectMany(n=>n.KnowledgeReferences)).Concat(s.SubtitleCues.SelectMany(c=>c.KnowledgeReferences)).Concat(s.VisualPrompts.SelectMany(v=>v.KnowledgeReferences)));
     private static bool Equivalent<T>(T left,T right)=>ReferenceEquals(left,right)||JsonSerializer.Serialize(left,JsonSerializerOptions.Web)==JsonSerializer.Serialize(right,JsonSerializerOptions.Web);
     public static void ValidateRecord(DocumentaryProductionCertificationRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);var refs=record.Evidence.EvidenceReferences;
-        if(!record.IsCertified||record.ProductionCertificationId!=$"{record.PipelineExecutionId}.production-certification"||record.VariantCount!=4||record.VerifiedOutputCount!=4||record.VariantCertificationRecords.Count!=4||record.TraceabilityLinkCount!=record.VariantCertificationRecords.Sum(x=>x.TraceabilityLinkCount)||!record.VariantCertificationRecords.Select(x=>x.VariantType).SequenceEqual(DocumentaryProductionCertificationInventory.VariantTypes)||refs.Count!=Enum.GetValues<CertificationEvidenceType>().Length||!refs.Select(x=>x.EvidenceType).SequenceEqual(Enum.GetValues<CertificationEvidenceType>())||refs.Select(x=>x.Sequence).Where((x,i)=>x!=i).Any()||refs.Any(x=>!x.Verified||string.IsNullOrWhiteSpace(x.EvidenceIdentity)||string.IsNullOrWhiteSpace(x.EvidenceSource))||!record.Evidence.KnowledgeFoundationCertified||!record.Evidence.ExportMaterializationComplete||!record.Evidence.MediaProjectionComplete||!record.Evidence.PipelineExecutionComplete||!record.Evidence.IdentityChainValid||!record.Evidence.CorrelationChainValid||!record.Evidence.ProvenanceChainValid||!record.Evidence.TopicChainValid||!record.Evidence.VariantInventoryValid||!record.Evidence.AllOutputsVerified||!record.Evidence.KnowledgeTraceabilityValid||!record.Evidence.NarrationTraceabilityValid||!record.Evidence.SubtitleTraceabilityValid||!record.Evidence.VisualTraceabilityValid||!record.Evidence.SceneAssetTraceabilityValid)throw new ArgumentException("Certification record is invalid.");
+        var request=new DocumentaryProductionCertificationRequest(record.ExportMaterializationRecord,record.MediaProject,record.PipelineExecutionRecord,record.Policy,record.Metadata,record.EvidencePackage);
+        var links=record.VariantCertificationRecords.SelectMany(x=>x.TraceabilityLinks).ToArray();
+        var invalid=!record.IsCertified||ValidateRequest(request).Count!=0||record.ProductionCertificationId!=$"{record.PipelineExecutionId}.production-certification"||record.Metadata.CertificationRunId!=$"{record.PipelineExecutionId}.production-certification.1"||record.Evidence.EvidenceId!=$"{record.Metadata.CertificationRunId}.evidence"||record.Evidence.EvidenceSchemaVersion!="1.0"||record.Evidence.CorrelationId!=record.Metadata.CorrelationId||!refs.SequenceEqual(record.EvidencePackage.EvidenceReferences)||
+            record.MaterializationId!=record.ExportMaterializationRecord.MaterializationId||record.MediaProjectId!=record.MediaProject.MediaProjectId||record.PipelineExecutionId!=record.PipelineExecutionRecord.ExecutionId||record.TopicId!=record.MediaProject.TopicId||record.CertificationId!=record.MediaProject.CertificationId||record.ProvenanceId!=record.MediaProject.ProvenanceId||record.PackageId!=record.MediaProject.PackageId||record.ReleaseCandidateId!=record.MediaProject.ReleaseCandidateId||record.ConvergenceId!=record.MediaProject.ConvergenceId||
+            record.VariantCount!=4||record.VerifiedOutputCount!=4||record.VariantCertificationRecords.Count!=4||record.TraceabilityLinkCount!=links.Length||!record.VariantCertificationRecords.Select(x=>x.VariantType).SequenceEqual(DocumentaryProductionCertificationInventory.VariantTypes)||
+            !record.Evidence.KnowledgeFoundationCertified||!record.Evidence.ExportMaterializationComplete||!record.Evidence.MediaProjectionComplete||!record.Evidence.PipelineExecutionComplete||!record.Evidence.IdentityChainValid||!record.Evidence.CorrelationChainValid||!record.Evidence.ProvenanceChainValid||!record.Evidence.TopicChainValid||!record.Evidence.VariantInventoryValid||!record.Evidence.AllOutputsVerified||!record.Evidence.KnowledgeTraceabilityValid||!record.Evidence.NarrationTraceabilityValid||!record.Evidence.SubtitleTraceabilityValid||!record.Evidence.VisualTraceabilityValid||!record.Evidence.SceneAssetTraceabilityValid;
+        foreach(var variant in record.VariantCertificationRecords)invalid|=!VariantRecordValid(variant,record);
+        if(invalid)throw new ArgumentException("Certification record is invalid.");
+    }
+    private static bool VariantRecordValid(DocumentaryProductionVariantCertificationRecord certification,DocumentaryProductionCertificationRecord record)
+    {
+        var variant=record.MediaProject.Variants.SingleOrDefault(x=>x.VariantType==certification.VariantType);var execution=record.PipelineExecutionRecord;
+        var executionVariant=execution.VariantRecords.SingleOrDefault(x=>x.VariantType==certification.VariantType);var output=execution.OutputManifest.Assets.SingleOrDefault(x=>x.AssetId==certification.OutputAssetId);
+        if(variant is null||executionVariant is null||output is null||certification.VariantCertificationId!=$"{record.PipelineExecutionId}.{certification.VariantType}.certification"||certification.VariantId!=variant.VariantId||executionVariant.OutputAssetId!=certification.OutputAssetId||output.AssetType!=DocumentaryMediaAssetType.VariantVideo||output.AssetFormat!=DocumentaryMediaAssetFormat.Mp4||output.Status!=DocumentaryMediaAssetStatus.Verified||certification.OutputChecksum!=output.Checksum||certification.SceneCount!=variant.SceneCount||certification.TraceabilityLinkCount!=certification.TraceabilityLinks.Count||!certification.IsOutputVerified||!certification.IsTraceabilityComplete||certification.CorrelationId!=record.Metadata.CorrelationId)return false;
+        if(!certification.TraceabilityLinks.Select(x=>x.TraceabilityType).Distinct().OrderBy(x=>(int)x).SequenceEqual(Enum.GetValues<DocumentaryProductionTraceabilityType>()))return false;
+        return certification.TraceabilityLinks.Select(x=>x.Sequence).SequenceEqual(Enumerable.Range(0,certification.TraceabilityLinks.Count))&&certification.TraceabilityLinks.All(x=>TraceabilityLinkValid(x,certification,record));
+    }
+    private static bool TraceabilityLinkValid(DocumentaryProductionTraceabilityLink link,DocumentaryProductionVariantCertificationRecord variant,DocumentaryProductionCertificationRecord record)
+    {
+        var execution=record.PipelineExecutionRecord;var plans=execution.ExecutionPlan.AssetPlans;var manifest=execution.OutputManifest.Assets;
+        var source=plans.SingleOrDefault(x=>x.AssetId==link.SourceAssetId);var scene=plans.SingleOrDefault(x=>x.AssetId==link.SceneVideoAssetId);var output=manifest.SingleOrDefault(x=>x.AssetId==link.OutputAssetId);var payload=record.ExportMaterializationRecord.Payloads.SingleOrDefault(x=>x.PayloadId==link.PayloadId);
+        if(link.TraceabilityLinkId!=$"{link.OutputAssetId}.trace.{link.Sequence}"||link.VariantType!=variant.VariantType||link.OutputAssetId!=variant.OutputAssetId||link.CorrelationId!=record.Metadata.CorrelationId||source is null||scene is null||output?.Status!=DocumentaryMediaAssetStatus.Verified||source.VariantType!=link.VariantType||scene.VariantType!=link.VariantType||source.SceneId!=link.SceneId||scene.SceneId!=link.SceneId||manifest.All(x=>x.AssetId!=source.AssetId||!IsSuccessful(x.Status))||manifest.All(x=>x.AssetId!=scene.AssetId||!IsSuccessful(x.Status))||payload is null||payload.SourceItemId!=link.SourceItemId||payload.ArtifactIdentity!=link.ArtifactIdentity||payload.ArtifactVersion!=link.ArtifactVersion||!PointerResolves(payload.Content,link.JsonPointer))return false;
+        if(link.TraceabilityType==DocumentaryProductionTraceabilityType.Scene&&link.SourceAssetId!=link.SceneVideoAssetId)return false;
+        var deps=execution.ExecutionPlan.AssetDependencies;
+        var sourceToScene=link.SourceAssetId==link.SceneVideoAssetId||deps.Any(x=>x.SourceAssetId==link.SceneVideoAssetId&&x.TargetAssetId==link.SourceAssetId);
+        var sceneToOutput=deps.Any(x=>x.SourceAssetId==link.OutputAssetId&&x.TargetAssetId==link.SceneVideoAssetId);
+        return sourceToScene&&sceneToOutput;
     }
     public static void ValidateResult(DocumentaryProductionCertificationResult result){ArgumentNullException.ThrowIfNull(result);if(!result.RejectionReasons.SequenceEqual(result.RejectionReasons.Distinct().OrderBy(x=>(int)x))||(result.IsCertified?(result.CertificationRecord is null||result.RejectionReasons.Count!=0):(result.CertificationRecord is not null||result.RejectionReasons.Count==0)))throw new ArgumentException("Certification result is invalid.");if(result.CertificationRecord is not null)ValidateRecord(result.CertificationRecord);}
     public static void ValidateSummary(DocumentaryProductionCertificationSummary summary){ArgumentNullException.ThrowIfNull(summary);if(!summary.IsCertified||summary.VariantCount!=4||summary.LongVariantCount!=2||summary.ShortVariantCount!=2||summary.EnglishVariantCount!=2||summary.HindiVariantCount!=2||summary.VerifiedOutputCount!=4||summary.TraceabilityLinkCount<1)throw new ArgumentException("Certification summary is invalid.");}
