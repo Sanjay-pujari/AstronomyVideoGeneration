@@ -149,7 +149,7 @@ public static class DocumentaryMediaPipelineValidator
         var ids = plan.AssetPlans.Select(x => x.AssetId).ToHashSet(StringComparer.Ordinal);
         if (plan.AssetDependencies.Any(x => !ids.Contains(x.SourceAssetId) || !ids.Contains(x.TargetAssetId) ||
                 x.SourceAssetId == x.TargetAssetId ||
-                x.DependencyId != $"{x.SourceAssetId}.depends-on.{x.TargetAssetId}") ||
+                x.DependencyId != $"{x.SourceAssetId}.depends-on.{x.TargetAssetId}" ||
                 x.CorrelationId != plan.CorrelationId) || HasCycle(plan))
             Reject(DocumentaryMediaPipelineRejectionReason.AssetDependencyMismatch);
 
