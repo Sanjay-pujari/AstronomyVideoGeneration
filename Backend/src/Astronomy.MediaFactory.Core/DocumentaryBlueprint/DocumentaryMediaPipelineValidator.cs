@@ -197,7 +197,7 @@ public static class DocumentaryMediaPipelineValidator
             manifest.CompletedVariantCount != record.CompletedVariantCount ||
             manifest.FailedVariantCount != record.FailedVariantCount ||
             manifest.CorrelationId != record.Metadata.CorrelationId ||
-            !manifest.VariantRecords.SequenceEqual(record.VariantRecords))
+            !manifest.VariantRecords.SequenceEqual(record.VariantRecords, VariantExecutionRecordComparer.Instance))
             Reject(DocumentaryMediaPipelineRejectionReason.OutputManifestMismatch);
 
         if (record.Status == DocumentaryMediaPipelineStatus.Planned &&
@@ -214,6 +214,48 @@ public static class DocumentaryMediaPipelineValidator
             (record.CompletedVariantCount is < 1 or > 3 || record.FailedVariantCount != 4 - record.CompletedVariantCount ||
              record.VariantRecords.Count(x => x.Status == DocumentaryMediaPipelineStatus.Complete) != record.CompletedVariantCount))
             Reject(DocumentaryMediaPipelineRejectionReason.OutputManifestMismatch);
+    }
+
+    private sealed class VariantExecutionRecordComparer : IEqualityComparer<DocumentaryMediaVariantExecutionRecord>
+    {
+        public static VariantExecutionRecordComparer Instance { get; } = new();
+
+        public bool Equals(DocumentaryMediaVariantExecutionRecord? left, DocumentaryMediaVariantExecutionRecord? right)
+        {
+            if (ReferenceEquals(left, right)) return true;
+            if (left is null || right is null) return false;
+
+            return left.VariantExecutionId == right.VariantExecutionId &&
+                left.VariantId == right.VariantId &&
+                left.VariantType == right.VariantType &&
+                left.Status == right.Status &&
+                left.AssetResults.SequenceEqual(right.AssetResults) &&
+                left.CompletedSceneCount == right.CompletedSceneCount &&
+                left.FailedSceneCount == right.FailedSceneCount &&
+                left.PlannedDurationMilliseconds == right.PlannedDurationMilliseconds &&
+                left.EffectiveDurationMilliseconds == right.EffectiveDurationMilliseconds &&
+                left.OutputAssetId == right.OutputAssetId &&
+                left.RejectionReasons.SequenceEqual(right.RejectionReasons) &&
+                left.CorrelationId == right.CorrelationId;
+        }
+
+        public int GetHashCode(DocumentaryMediaVariantExecutionRecord value)
+        {
+            var hash = new HashCode();
+            hash.Add(value.VariantExecutionId);
+            hash.Add(value.VariantId);
+            hash.Add(value.VariantType);
+            hash.Add(value.Status);
+            foreach (var asset in value.AssetResults) hash.Add(asset);
+            hash.Add(value.CompletedSceneCount);
+            hash.Add(value.FailedSceneCount);
+            hash.Add(value.PlannedDurationMilliseconds);
+            hash.Add(value.EffectiveDurationMilliseconds);
+            hash.Add(value.OutputAssetId);
+            foreach (var reason in value.RejectionReasons) hash.Add(reason);
+            hash.Add(value.CorrelationId);
+            return hash.ToHashCode();
+        }
     }
 
     private static bool HasCycle(DocumentaryMediaPipelineExecutionPlan plan)
