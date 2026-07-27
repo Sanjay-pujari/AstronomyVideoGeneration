@@ -508,6 +508,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IObservationTimeService, ObservationTimeService>();
         services.AddScoped<StellariumVisualGenerationService>();
         services.AddScoped<IVisualAssetProvider>(sp => sp.GetRequiredService<StellariumVisualGenerationService>());
+        services.AddSingleton<StellariumScriptService>();
         services.AddScoped<FileVisualAssetProvider>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
         services.AddScoped<IMetadataOptimizationService, MetadataOptimizationService>();
