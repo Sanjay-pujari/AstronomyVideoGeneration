@@ -50,6 +50,10 @@ public sealed class DocumentaryProductionOperationRunner(
     failure = failures.Normalize(new OperationCanceledException(), request.OperationKind, false);
    }
    catch (OperationCanceledException) { throw; }
+   catch (Exception exception)
+   {
+    failure = failures.Normalize(exception, request.OperationKind, callerCancelled: false);
+   }
 
    if (!failure.Retryable || NeverRetry.Contains(failure.Code) || attempt == request.MaximumAttempts)
     return new(last, failure, attempt);

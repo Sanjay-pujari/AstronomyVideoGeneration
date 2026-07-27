@@ -39,3 +39,11 @@ The isolated .NET SDK 10.0.302 restored and built the solution. Operation-runner
 **NOT READY FOR A3.11**
 
 The implementation gaps identified in the coordinator were closed, but A3.11 remains gated on adding and executing the complete fake-adapter host matrix. No real provider smoke should execute until that evidence exists.
+
+## A3.10 final-closure policy evidence (2026-07-27)
+
+Pipeline success is not publishing authorization. `EligibleForPublishing` is true only when a non-null production certification result reports `Certified == true`; because A3.10 does not execute O2.19, current successful executions remain ineligible.
+
+The common operation runner now normalizes unexpected adapter exceptions after preserving the distinct caller-cancellation path. Normalization uses the certified failure normalizer, so provider/process timeout and filesystem/rejected-request codes remain stable and private exception messages are not returned.
+
+The executed focused filter contains 9 passing operation-runner tests, and the A3.9 verification regression contains 64 passing tests. The complete fake-host matrix and the remaining required named suites are still absent; therefore this evidence does not certify A3.10 and the readiness decision remains **NOT READY FOR A3.11**. Real providers were **Not executed.**
