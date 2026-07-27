@@ -40,7 +40,7 @@ public interface IDocumentaryProductionWorkspaceManager {
 public interface IDocumentaryPhysicalArtifactRegistry { Task RegisterAsync(DocumentaryPhysicalArtifactDescriptor descriptor, DocumentaryPhysicalArtifactKind kind, CancellationToken cancellationToken); Task<DocumentaryPhysicalArtifactDescriptor?> GetAsync(string assetId, CancellationToken cancellationToken); Task<IReadOnlyCollection<DocumentaryPhysicalArtifactDescriptor>> GetAllAsync(string correlationId, CancellationToken cancellationToken); Task PersistAsync(string diagnosticsDirectory, CancellationToken cancellationToken); }
 public interface IDocumentaryProductionFailureNormalizer { DocumentaryProductionFailure Normalize(Exception exception, DocumentaryProductionOperationKind operation, bool callerCancelled); }
 public interface IDocumentaryProductionDiagnosticsWriter { Task WriteAsync(string diagnosticsDirectory, string fileName, object value, CancellationToken cancellationToken); }
-public interface IDocumentaryProductionAdapterRegistry { IDocumentaryProductionVisualAdapter? VisualGeneration { get; } bool IsAvailable(DocumentaryProductionOperationKind operation); }
+public interface IDocumentaryProductionAdapterRegistry { IDocumentaryProductionVisualAdapter? VisualGeneration { get; } IDocumentaryProductionNarrationAdapter? NarrationSynthesis { get; } bool IsAvailable(DocumentaryProductionOperationKind operation); }
 public interface IDocumentaryProductionExecutionRecordMapper { DocumentaryMediaAssetResult MapAsset(DocumentaryArtifactMappingContext context); }
 
 public sealed class DocumentaryProductionAdaptersOptions {
