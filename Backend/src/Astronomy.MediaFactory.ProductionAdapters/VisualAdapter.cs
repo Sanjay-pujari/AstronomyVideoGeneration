@@ -36,7 +36,30 @@ public sealed record DocumentaryVisualProviderRoute(
     IReadOnlyList<string> OrderedFallbackProviders,
     bool FallbackAllowed,
     string RequiredSemanticClass,
-    string Reason);
+    string Reason)
+{
+    public bool Equals(DocumentaryVisualProviderRoute? other) =>
+        other is not null &&
+        RequestedVisualType == other.RequestedVisualType &&
+        StringComparer.Ordinal.Equals(PrimaryProvider, other.PrimaryProvider) &&
+        OrderedFallbackProviders.SequenceEqual(other.OrderedFallbackProviders, StringComparer.Ordinal) &&
+        FallbackAllowed == other.FallbackAllowed &&
+        StringComparer.Ordinal.Equals(RequiredSemanticClass, other.RequiredSemanticClass) &&
+        StringComparer.Ordinal.Equals(Reason, other.Reason);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(RequestedVisualType);
+        hash.Add(PrimaryProvider, StringComparer.Ordinal);
+        foreach (var fallbackProvider in OrderedFallbackProviders)
+            hash.Add(fallbackProvider, StringComparer.Ordinal);
+        hash.Add(FallbackAllowed);
+        hash.Add(RequiredSemanticClass, StringComparer.Ordinal);
+        hash.Add(Reason, StringComparer.Ordinal);
+        return hash.ToHashCode();
+    }
+}
 
 public interface IDocumentaryVisualProviderRouter
 {
