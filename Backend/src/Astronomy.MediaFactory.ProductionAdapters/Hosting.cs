@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Rendering;
 using Microsoft.Extensions.Configuration;
