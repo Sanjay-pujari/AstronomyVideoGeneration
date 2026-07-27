@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.ProductionAdapters;
+using FluentAssertions;
 
 namespace Astronomy.MediaFactory.Tests.ProductionAdapters;
 
