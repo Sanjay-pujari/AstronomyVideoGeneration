@@ -20,3 +20,11 @@ The adapter atomically finalizes through the workspace manager, reuses artifact 
 
 ## Testing and limitations
 Tests are process-fake/reflection based; paid providers are not called. Real FFmpeg smoke testing is not part of automated A3.8. Codec, pixel-format, time-base, and audio-layout metadata are unavailable in the certified descriptor, so the existing final re-encode path is deliberately used rather than stream copy. Generalized verification remains A3.9 scope.
+
+## A3.8 adapter-level certification closure (2026-07-27)
+
+The certification suite now directly constructs `ExistingDocumentaryVariantCompositionAdapter` with the real workspace manager, checksum and content-identity services, physical artifact inspector and validator, registry, dependency resolver, compatibility validator, diagnostics writer, and failure normalizer. Only the FFmpeg provider binding and focused video inspector are replaced with controllable fakes. The sources are registered, finalized `SceneVideo` files outside the attempts tree; no visual, narration, subtitle, scene-composition, storage, publishing, or generalized verification service participates.
+
+The executed full-flow coverage proves deterministic sequence ordering; landscape 1920x1080 `YouTubeLongFinal` and portrait 1080x1920 `ShortsFinal` profiles; `RequireAudio` and `VideoOnly`; provider output ownership; provider and inspector cancellation; inspector exception normalization; atomic finalization; SHA-256 and `sha256:` identity construction; descriptor validation and idempotent registry replay; sanitized JSON diagnostics; and O2.18 result mapping. A3.8 sums finalized scene durations only when the plan has no explicit duration and applies no transition-overlap subtraction because no certified variant-level overlap operation exists.
+
+Provider-native output is owned by the attempt directory and removed after success when retention is disabled. Finalization precedes final descriptor validation, so a finalized but unregistered file can remain available for quarantine when validation fails. Encoded-byte determinism across FFmpeg versions is deliberately not asserted. No real FFmpeg smoke test was executed; provider behavior is certified with deterministic process and adapter fakes. A3.9 generalized media verification remains out of scope.
