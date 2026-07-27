@@ -46,6 +46,26 @@ public interface IDocumentaryProductionFailureNormalizer { DocumentaryProduction
 public interface IDocumentaryProductionDiagnosticsWriter { Task WriteAsync(string diagnosticsDirectory, string fileName, object value, CancellationToken cancellationToken); }
 public interface IDocumentaryProductionAdapterRegistry { IDocumentaryProductionVisualAdapter? VisualGeneration { get; } IDocumentaryProductionNarrationAdapter? NarrationSynthesis { get; } IDocumentaryProductionSubtitleAdapter? SubtitleGeneration { get; } IDocumentaryProductionSceneCompositionAdapter? SceneComposition { get; } IDocumentaryProductionVariantCompositionAdapter? VariantComposition { get; } IDocumentaryProductionMediaVerificationAdapter? MediaVerification { get; } bool IsAvailable(DocumentaryProductionOperationKind operation); }
 public interface IDocumentaryProductionExecutionRecordMapper { DocumentaryMediaAssetResult MapAsset(DocumentaryArtifactMappingContext context); }
+public sealed record DocumentaryProductionOperationExecutionRequest(
+ DocumentaryProductionExecutionContext ExecutionContext,
+ DocumentaryProductionOperationKind OperationKind,
+ string AssetId,
+ string ProviderId,
+ TimeSpan Timeout,
+ int MaximumAttempts,
+ string? VariantId = null,
+ string? SceneId = null);
+public sealed record DocumentaryProductionOperationExecutionResult<T>(T? Value, DocumentaryProductionFailure? Failure, int AttemptCount)
+{ public bool Succeeded => Failure is null && Value is not null; }
+public interface IDocumentaryProductionOperationRunner
+{
+ Task<DocumentaryProductionOperationExecutionResult<T>> ExecuteAsync<T>(
+  DocumentaryProductionOperationExecutionRequest request,
+  Func<DocumentaryProductionAttemptContext,CancellationToken,Task<T>> operation,
+  Func<T,bool> succeeded,
+  Func<T,DocumentaryProductionFailure?> failureSelector,
+  CancellationToken callerToken);
+}
 
 public sealed class DocumentaryProductionAdaptersOptions {
  public const string SectionName="DocumentaryProductionAdapters";

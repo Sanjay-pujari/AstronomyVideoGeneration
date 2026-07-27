@@ -1,53 +1,41 @@
 # CG-A3 A3.10 — Production Execution Host
 
-## Scope and boundary
+## Boundary and orchestration
 
-A3.10 coordinates existing certified production adapters. A3.10 does not implement provider logic. It is located in `Astronomy.MediaFactory.ProductionAdapters`; the certified Core has no dependency on it. A3.10 does not publish or upload media. A3.10 does not itself execute real paid-provider smoke certification.
+A3.10 is application-layer orchestration in `Astronomy.MediaFactory.ProductionAdapters`. It invokes only the certified adapter ports: visual generation, narration synthesis, subtitle generation, scene composition, media verification, and variant composition. It contains no provider SDK, process, storage, upload, or publishing call. A3.11 real-provider smoke execution and A3.12 storage/publishing remain out of scope.
 
-## Contracts
+The coordinator is disabled by default. Disabled execution returns `NotStarted` before workspace creation, diagnostics, registry access, or adapter invocation. The compatibility `IDocumentaryProductionExecutionHost` returns the coordinator's mapped pipeline execution record; unsuccessful or disabled execution may still return null.
 
-The certified nullable `IDocumentaryProductionExecutionHost` contract remains as a compatibility facade. New application callers use `IDocumentaryProductionExecutionCoordinator`, which returns the immutable `DocumentaryProductionExecutionResult`. Results preserve execution/correlation identity, ordered variant and scene evidence, partial artifacts, normalized failures, diagnostics and manifest references, and publishing eligibility.
+## Execution records and evidence
 
-## State machine and sequence
+Successful and partial executions are mapped through `IDocumentaryProductionExecutionRecordMapper`. Variant records deterministically contain each scene's visual assets in prompt order, narration, subtitles, verified scene video, and verified final variant. `DocumentaryProductionSceneExecutionResult.VisualArtifacts` is an immutable ordered collection; `VisualArtifact` remains a read-only last-item convenience property.
 
-The externally visible states are NotStarted, Preparing, Executing, PartiallySucceeded, Succeeded, VerificationFailed, CertificationRejected, Cancelled, and Failed. Execution is deliberately sequential: each variant, then each scene by its certified `Sequence`; visual generation, narration, subtitles, scene composition, optional scene verification, variant composition, and optional final verification. Composition cannot run after a required predecessor fails. Verification cannot run before the adapter registers its artifact.
+The registry, not adapter return values, is the dependency source. Every successful stage resolves its finalized artifact by asset kind and correlation before downstream use. Missing registration becomes `SourceArtifactMissing`; the host never registers or finalizes adapter output.
 
-## Preparation and availability
+## Voice, narration, and audio policy
 
-The coordinator validates through `DocumentaryMediaPipelineValidator`, creates the certified execution context and workspace, writes `execution-started.json`, and checks all six adapter operations before provider work. Missing adapters produce `AdapterUnavailable` evidence and a failed completion record.
+The request builder asks the existing `IDocumentaryNarrationVoiceResolver` to resolve `default`, thereby reusing `AzureSpeechOptions.Voices` for English and Hindi rather than embedding placeholder voice IDs. Multiple certified narration blocks are ordered and combined into one scene-level narration request, preserving all text and avoiding per-subtitle-cue TTS.
 
-## Request building and identity
+Verification accepts explicit `requireAudio` and `allowAudio` policy. Narrated scenes and final variants require audio; the builder can represent a silent scene as `RequireAudio=false, AllowAudio=true`. Subtitle strategy remains explicit and only `Embedded` requires an embedded subtitle stream.
 
-`IDocumentaryProductionExecutionRequestBuilder` is deterministic, provider-agnostic and side-effect free. It creates requests from the Core planner's asset plans and immutable project objects, preserving correlation, asset, variant, scene, sequence, language, dimensions, media profile, duration, and subtitle policy. The attempt factory derives every attempt from one execution context and the production clock.
+## Timeouts, retry, and cancellation
 
-## Timeouts, retries, cancellation, and cleanup
+`DocumentaryProductionOperationRunner` owns every adapter attempt. It creates a fresh attempt context, links the caller token, calls `CancelAfter` with the configured operation timeout, and applies the same retry policy to visual, narration, subtitle, scene composition, variant composition, and verification. Attempts preserve execution, correlation, asset, variant, and scene identity while incrementing only attempt number. Deterministic failures are never retried. Host timeout maps to `ProviderTimeout`, or `ProcessTimedOut` for composition. Caller cancellation propagates as `OperationCanceledException` and is never normalized.
 
-The host supplies operation-specific timeouts, falling back to `DocumentaryProductionAdapters.DefaultOperationTimeoutSeconds`. Adapters continue to own their internal process/provider timeout. Orchestration defaults to one attempt; only retryable failures are retried and deterministic/cancellation failures are excluded. Caller cancellation is never normalized: it propagates through every awaited call and prevents downstream work. Existing adapters/workspace management retain ownership of successful cleanup, quarantine, and finalized artifacts.
+Options validation requires 1–10 attempts and, when specified, timeouts of 1–86400 seconds.
 
-## Adapter stages
+## Persistence
 
-Visual routing, Azure Speech/SSML, subtitle construction, FFmpeg argument/process behavior, probing, inspection, checksums and `ContentIdentity` remain adapter-owned. Scene composition consumes mapped registered dependency identities. Scene verification gates variant composition; final verification gates success.
+Manifest, execution-record, and completion-diagnostic persistence are independent guarded steps. A filesystem exception appends `FileSystemFailure` without replacing an earlier pipeline failure; caller cancellation propagates. A reference is returned only after its corresponding write succeeds. The persisted execution evidence contains the host result, mapped pipeline record, ordered variants/assets, and safe failure evidence; it excludes commands, raw provider payloads, stderr, credentials, and tokens.
 
-## Subtitle strategy
+## Certification boundary and limitations
 
-Verification requests explicitly represent BurnedIn, Embedded, Sidecar, or None. Only Embedded requires an MP4 subtitle stream. Sidecar therefore does not incorrectly require an embedded stream; its registered subtitle artifact remains scene evidence.
+No O2.19 implementation was introduced. `RunProductionCertification` remains an intent flag; because no certification port is wired in A3.10, publishing eligibility is not granted when certification is requested. No storage or publishing service is referenced or invoked.
 
-## Dependency resolution, partial results, and failures
+The isolated .NET SDK 10.0.302 restored and built the solution. Operation-runner tests and the existing A3.9 verification regression suite pass. The repository does not yet contain the complete named fake-host matrix requested for final certification, so the evidence does not justify claiming all full-flow, four-variant, persistence, determinism, and non-mutation criteria.
 
-`IDocumentaryProductionExecutionDependencyResolver` reads the existing registry, validates kind and correlation, orders by certified plan sequence, and never mutates registry state. Scene and variant result records retain every completed descriptor if a later operation fails. Stable safe adapter failures are retained without provider exceptions, stderr, credentials, prompts, or command lines.
+## A3.11 readiness
 
-## Persistence and diagnostics
+**NOT READY FOR A3.11**
 
-Configured completion persists the existing `documentary-artifacts.json` registry manifest, safe `documentary-production-execution.json` evidence, and `execution-completed.json`. No finalized registered output is deleted.
-
-## Optional O2.19 and publishing prohibition
-
-The result reserves optional certification evidence and the state model reserves rejection. Concrete O2.19 invocation remains a narrow future integration because no application port is currently available. No storage, upload, publishing, or scheduler service is referenced. `EligibleForPublishing` is evidence only and never performs a handoff.
-
-## Configuration and DI
-
-`DocumentaryProductionAdapters:ExecutionHost` is disabled by default. It configures maximum attempts, verification gates, continuation, retention, persistence, certification intent, and per-operation host timeouts. DI registers the attempt factory, request builder, dependency resolver, coordinator, and compatibility facade once per appropriate lifetime.
-
-## Tests, limitations, and A3.11 readiness
-
-The implementation is designed for fake-adapter orchestration tests without paid calls. This execution environment did not contain the .NET SDK, so compilation and the mandated focused/targeted/broad suites could not be executed. Concrete O2.19 invocation and execution-record mapping back into the certified Core record remain compatibility-boundary limitations. A3.11 real-provider smoke certification must not start until the suites pass in an SDK-equipped environment.
+The implementation gaps identified in the coordinator were closed, but A3.11 remains gated on adding and executing the complete fake-adapter host matrix. No real provider smoke should execute until that evidence exists.
