@@ -45,6 +45,40 @@ public sealed class DocumentaryProductionOperationRunnerTests
   await action.Should().ThrowAsync<OperationCanceledException>();
  }
 
+ [Fact]
+ public async Task Unexpected_provider_exception_is_normalized()
+ {
+  var runner=new DocumentaryProductionOperationRunner(new CapturingAttempts(),new DocumentaryProductionFailureNormalizer());
+  var result=await runner.ExecuteAsync<Value>(Request(),(_,_)=>throw new TimeoutException("private provider detail"),x=>x.Success,x=>x.Failure,default);
+  result.Failure!.Code.Should().Be(DocumentaryProductionFailureCode.ProviderTimeout);
+ }
+
+ [Fact]
+ public async Task Unexpected_composition_exception_is_normalized()
+ {
+  var runner=new DocumentaryProductionOperationRunner(new CapturingAttempts(),new DocumentaryProductionFailureNormalizer());
+  var result=await runner.ExecuteAsync<Value>(Request(kind:DocumentaryProductionOperationKind.SceneComposition),(_,_)=>throw new IOException("private path"),x=>x.Success,x=>x.Failure,default);
+  result.Failure!.Code.Should().Be(DocumentaryProductionFailureCode.FileSystemFailure);
+ }
+
+ [Fact]
+ public async Task Private_adapter_exception_message_is_not_exposed()
+ {
+  const string secret="customer-secret-provider-message";
+  var runner=new DocumentaryProductionOperationRunner(new CapturingAttempts(),new DocumentaryProductionFailureNormalizer());
+  var result=await runner.ExecuteAsync<Value>(Request(),(_,_)=>throw new InvalidOperationException(secret),x=>x.Success,x=>x.Failure,default);
+  result.Failure!.Code.Should().Be(DocumentaryProductionFailureCode.ProviderRejectedRequest);
+  result.Failure.Message.Should().NotContain(secret);
+ }
+
+ [Fact]
+ public async Task Caller_cancellation_is_not_normalized()
+ {
+  var runner=new DocumentaryProductionOperationRunner(new CapturingAttempts(),new DocumentaryProductionFailureNormalizer());using var cancellation=new CancellationTokenSource();cancellation.Cancel();
+  var action=()=>runner.ExecuteAsync<Value>(Request(),(_,_)=>throw new OperationCanceledException(cancellation.Token),x=>x.Success,x=>x.Failure,cancellation.Token);
+  await action.Should().ThrowAsync<OperationCanceledException>();
+ }
+
  private static DocumentaryProductionOperationExecutionRequest Request(TimeSpan? timeout=null,DocumentaryProductionOperationKind kind=DocumentaryProductionOperationKind.VisualGeneration,int maximumAttempts=1)=>new(new("execution","correlation",DocumentaryProductionExecutionMode.Certified,"/tmp",DateTimeOffset.UnixEpoch,new Dictionary<string,string>()),kind,"asset","provider",timeout??TimeSpan.FromSeconds(1),maximumAttempts,"variant","scene");
  private sealed record Value(bool Success,DocumentaryProductionFailure? Failure);
  private sealed class CapturingAttempts:IDocumentaryProductionAttemptContextFactory { public List<DocumentaryProductionAttemptContext> Values{get;}=[];public DocumentaryProductionAttemptContext Create(DocumentaryProductionExecutionContext e,DocumentaryProductionOperationKind k,string asset,string provider,int attempt,TimeSpan timeout,string? variantId=null,string? sceneId=null){var value=new DocumentaryProductionAttemptContext(e.ExecutionId,e.CorrelationId,k,asset,variantId,sceneId,attempt,provider,DateTimeOffset.UnixEpoch,timeout);Values.Add(value);return value;} }
