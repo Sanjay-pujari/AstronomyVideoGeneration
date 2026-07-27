@@ -47,3 +47,11 @@ Pipeline success is not publishing authorization. `EligibleForPublishing` is tru
 The common operation runner now normalizes unexpected adapter exceptions after preserving the distinct caller-cancellation path. Normalization uses the certified failure normalizer, so provider/process timeout and filesystem/rejected-request codes remain stable and private exception messages are not returned.
 
 The executed focused filter contains 9 passing operation-runner tests, and the A3.9 verification regression contains 64 passing tests. The complete fake-host matrix and the remaining required named suites are still absent; therefore this evidence does not certify A3.10 and the readiness decision remains **NOT READY FOR A3.11**. Real providers were **Not executed.**
+
+## A3.10 certification execution (2026-07-27)
+
+The previously missing deterministic host matrix now exists under `Backend/tests/Astronomy.MediaFactory.Tests/ProductionAdapters`. Discovery found all sixteen required suite groups. The focused run completed with 75/75 passing; the A3.9 verification regression completed with 64/64 passing.
+
+Executed coverage includes one-scene, multi-scene, and four-variant flow contracts; configured English/Hindi voice and narrated/silent audio policy; registry dependency enforcement; scene and final verification gates; retry and timeout coverage for every operation class; caller cancellation; persistence and execution-record mapping; DI and disabled-by-default validation; architecture boundary scans; determinism; non-mutation; safe exception normalization; and publishing ineligibility without O2.19. All infrastructure is deterministic and provider-free; no media process, paid provider, storage, or publishing operation was invoked.
+
+**CG-A3 A3.10 — CERTIFIED. READY FOR A3.11.**
