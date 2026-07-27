@@ -5,6 +5,16 @@ namespace Astronomy.MediaFactory.Rendering;
 
 public sealed class FfmpegArgumentBuilder
 {
+    public string BuildVariant(RenderingOptions options, string concatInputPath, string outputPath, int width, int height, int frameRate, bool includeAudio)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (width <= 0 || height <= 0 || frameRate <= 0) throw new ArgumentOutOfRangeException(nameof(width));
+        var preset = height > width ? VideoEncodingPreset.ShortsFinal(options) : VideoEncodingPreset.YouTubeLongFinal(options);
+        var filter = $"scale={width}:{height}:flags={preset.ScaleFlags}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1";
+        var audio = includeAudio ? $"-map 0:v:0 -map 0:a:0 -c:a aac -b:a {preset.AudioBitrate}" : "-map 0:v:0 -an";
+        return $"-y -f concat -safe 0 -i {Quote(concatInputPath)} -vf \"{filter}\" -r {frameRate} {BuildVideoEncodeArguments(preset)} {audio} -movflags +faststart {Quote(outputPath)}";
+    }
+
     /// <summary>Builds the existing intermediate-profile operation for exactly one documentary scene.</summary>
     public string BuildScene(
         RenderingOptions options,
