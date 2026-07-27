@@ -30,6 +30,7 @@ using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Infrastructure.Scheduling;
 using Astronomy.MediaFactory.Publishing;
 using Astronomy.MediaFactory.Rendering;
+using Astronomy.MediaFactory.ProductionAdapters;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.NasaAssets;
 using Astronomy.MediaFactory.Core.EditorialIntelligence.Configuration;
 using Astronomy.MediaFactory.Core.EditorialIntelligence.Services;
@@ -114,6 +115,7 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddMediaFactory(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddDocumentaryProductionBridge(configuration);
         services.AddSemanticRuntime();
 
         services.AddOptions<VisualIntelligenceOptions>()
@@ -504,7 +506,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITopicRankingService, TopicRankingService>();
         services.AddScoped<ITopicSelectionService, TopicSelectionService>();
         services.AddScoped<IObservationTimeService, ObservationTimeService>();
-        services.AddScoped<IVisualAssetProvider, StellariumVisualGenerationService>();
+        services.AddScoped<StellariumVisualGenerationService>();
+        services.AddScoped<IVisualAssetProvider>(sp => sp.GetRequiredService<StellariumVisualGenerationService>());
+        services.AddScoped<FileVisualAssetProvider>();
         services.AddScoped<IPromptBuilder, PromptBuilder>();
         services.AddScoped<IMetadataOptimizationService, MetadataOptimizationService>();
         services.AddScoped<IContentMonetizationService, ContentMonetizationService>();
@@ -899,6 +903,12 @@ public static class ServiceCollectionExtensions
             .AddCheck<DatabaseConnectivityHealthCheck>("database", tags: ["ready"])
             .AddCheck<QueueProcessorReadinessHealthCheck>("queue", tags: ["ready"])
             .AddCheck<OperationsConfigHealthCheck>("config", tags: ["ready"]);
+
+        services.AddScoped<IDocumentaryVisualProviderBinding, StellariumDocumentaryVisualProviderBinding>();
+        services.AddScoped<IDocumentaryVisualProviderBinding, AzureOpenAICinematicDocumentaryVisualProviderBinding>();
+        services.AddScoped<IDocumentaryVisualProviderBinding, AstronomyInfographicDocumentaryVisualProviderBinding>();
+        services.AddScoped<IDocumentaryVisualProviderBinding, FileVisualAssetDocumentaryVisualProviderBinding>();
+        services.AddScoped<IDocumentaryVisualProviderBinding, CelestialAssetDocumentaryVisualProviderBinding>();
 
         return services;
     }

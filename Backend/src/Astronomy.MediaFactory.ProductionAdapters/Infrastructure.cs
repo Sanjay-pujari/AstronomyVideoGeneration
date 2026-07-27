@@ -14,7 +14,7 @@ public sealed class DocumentaryProductionWorkspaceManager(IDocumentarySafeFileNa
  public async Task CleanupSuccessfulAttemptAsync(DocumentaryProductionWorkspace w,string attemptDirectory,CancellationToken token){token.ThrowIfCancellationRequested();var p=Below(w.Root,attemptDirectory);if(Directory.Exists(p))Directory.Delete(p,true);await Task.CompletedTask;}
  static async Task CreateDirectoryAsync(string path,CancellationToken token){token.ThrowIfCancellationRequested();Directory.CreateDirectory(path);await Task.CompletedTask;}
  static async Task CopyFlushedAsync(string from,string to,CancellationToken token){await using var input=new FileStream(from,FileMode.Open,FileAccess.Read,FileShare.Read,81920,true);await using var output=new FileStream(to,FileMode.CreateNew,FileAccess.Write,FileShare.None,81920,true);await input.CopyToAsync(output,token);await output.FlushAsync(token);output.Flush(true);}
- static string Below(string root,params string[] parts){var rootFull=Path.GetFullPath(root);var full=Path.GetFullPath(Path.Combine(parts));var prefix=rootFull.TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;if(full!=rootFull&&!full.StartsWith(prefix,StringComparison.Ordinal))throw new UnauthorizedAccessException("Path escapes the production workspace.");return full;}
+ static string Below(string root,params string[] parts){var full=Path.GetFullPath(Path.Combine(parts));if(!DocumentaryPathComparison.IsBelow(root,full))throw new UnauthorizedAccessException("Path escapes the production workspace.");return full;}
 }
 
 public sealed record DocumentaryArtifactManifestEntry(DocumentaryPhysicalArtifactKind Kind,DocumentaryPhysicalArtifactDescriptor Descriptor);
