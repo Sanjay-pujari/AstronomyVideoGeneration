@@ -42,7 +42,7 @@ public static class DocumentaryProductionCertificationValidator
                 foreach(var kr in scene.KnowledgeReferences)
                     if(!payloads.TryGetValue(kr.PayloadId,out var payload)||payload.PayloadType!=kr.PayloadType||payload.SourceItemId!=kr.SourceItemId||payload.ArtifactIdentity!=kr.ArtifactIdentity||payload.ArtifactVersion!=kr.ArtifactVersion||!kr.JsonPointer.StartsWith('/')||kr.CorrelationId!=correlation)reasons.Add(DocumentaryProductionCertificationRejectionReason.KnowledgeTraceabilityMismatch);
                 CheckAssets(scene.Narration.Select(x=>x.NarrationId),DocumentaryMediaAssetType.NarrationAudio,DocumentaryProductionCertificationRejectionReason.NarrationTraceabilityMismatch);
-                CheckAssets(scene.SubtitleCues.Select(x=>x.SubtitleCueId),DocumentaryMediaAssetType.SubtitleDocument,DocumentaryProductionCertificationRejectionReason.SubtitleTraceabilityMismatch);
+                CheckAssets(new[]{scene.SceneId+".subtitle-cues"},DocumentaryMediaAssetType.SubtitleDocument,DocumentaryProductionCertificationRejectionReason.SubtitleTraceabilityMismatch);
                 CheckAssets(scene.VisualPrompts.Select(x=>x.VisualPromptId),null,DocumentaryProductionCertificationRejectionReason.VisualTraceabilityMismatch);
                 var scenePlan=plans.SingleOrDefault(x=>x.AssetType==DocumentaryMediaAssetType.SceneVideo&&x.SceneId==scene.SceneId);
                 if(scenePlan is null||results.All(x=>x.AssetId!=scenePlan.AssetId||x.Status==DocumentaryMediaAssetStatus.Failed)||scenePlan.Dependencies.Any(d=>results.All(x=>x.AssetId!=d.TargetAssetId&&x.AssetId!=d.SourceAssetId)))reasons.Add(DocumentaryProductionCertificationRejectionReason.SceneAssetTraceabilityMismatch);
