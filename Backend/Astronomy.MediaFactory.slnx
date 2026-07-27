@@ -7,6 +7,7 @@
   <Project Path="src/Astronomy.MediaFactory.Core/Astronomy.MediaFactory.Core.csproj" />
   <Project Path="src/Astronomy.MediaFactory.Infrastructure/Astronomy.MediaFactory.Infrastructure.csproj" />
   <Project Path="src/Astronomy.MediaFactory.Publishing/Astronomy.MediaFactory.Publishing.csproj" />
+  <Project Path="src/Astronomy.MediaFactory.ProductionAdapters/Astronomy.MediaFactory.ProductionAdapters.csproj" />
   <Project Path="src/Astronomy.MediaFactory.Rendering/Astronomy.MediaFactory.Rendering.csproj" />
   <Project Path="src/Astronomy.MediaFactory.Worker/Astronomy.MediaFactory.Worker.csproj" />
   <Project Path="Astronomy.SscIntelligence/Astronomy.SscIntelligence.csproj" />
