@@ -26,7 +26,11 @@ Diagnostics contain logical identities, requested/measured profile data, policy 
 
 Stable failures distinguish unavailable adapters, missing/invalid sources, missing subtitles, rejected profiles, missing FFmpeg, start/timeout/nonzero-exit failures, malformed/missing/empty outputs, stream/profile mismatches, and finalization/registry infrastructure failures. Public failures never contain raw stderr.
 
-Executable tests cover focused metadata, missing/empty/video-less output, cancellation, deterministic multi-image command translation, approved scaling, AAC narration, silent scenes, subtitle-none behavior, and stable provider identity. Tests use fakes and do not call paid providers. A real FFmpeg smoke test was not executed in this environment because the .NET SDK is unavailable.
+The full-adapter fixture directly constructs `ExistingDocumentarySceneCompositionAdapter` with the real workspace manager, checksum and ContentIdentity services, physical artifact inspector and registry, descriptor validator, dependency resolver, failure normalizer, and diagnostics writer. Deterministic provider and inspector fakes isolate FFmpeg encoding while exercising the complete adapter pipeline. Coverage proves upstream independence, the one-request/one-scene invariant, narrated and silent flows, subtitle burn-in, provider ownership, safe exception normalization, caller and inspector cancellation, registry replay idempotency, diagnostic sanitization, result mapping, determinism, and non-mutation.
+
+The adapter now rejects a missing certified visual-motion policy before indexing the prompt collection, rejects null/malformed binding responses, normalizes inspector and finalization/registry/diagnostic exceptions, and always preserves caller cancellation. Descriptor validation still follows atomic finalization; consequently, a rejected descriptor can leave a finalized artifact available for quarantine, but it is never registered or returned as successful.
+
+The focused certification run used .NET SDK 10.0.302 and passed 65/65 tests. Tests use fakes and do not call paid providers. A real FFmpeg smoke test was **not executed**; the provider-binding tests use a recording process runner and the full-adapter tests write deterministic placeholder bytes.
 
 ## Known limitations
 
