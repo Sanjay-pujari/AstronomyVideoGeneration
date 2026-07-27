@@ -29,3 +29,17 @@ One `narration-<safe-asset-id>-<attempt>.json` diagnostic records identities, vo
 ## Validation and limitations
 
 Automated tests must fake `IAzureSpeechClient`; paid Azure calls are prohibited. The current environment does not contain the .NET SDK, so compilation and tests could not be executed here. MP3 inspection uses the first valid MPEG-1 Layer III frame and constant-bitrate byte duration; variable-bit-rate certification requires an already-approved metadata capability. No real-provider smoke test was run.
+
+## Dedicated automated coverage
+
+The adapter is covered by `DocumentaryNarrationVoiceResolverTests`, `AzureSpeechDocumentaryNarrationProviderBindingTests`, `DocumentaryNarrationAudioInspectorTests`, `ExistingDocumentaryNarrationAudioNormalizerTests`, `ExistingAzureSpeechDocumentaryNarrationAdapterTests`, `DocumentaryNarrationSynthesisResultMapperTests`, `DocumentaryNarrationRegistryIntegrationTests`, `DocumentaryNarrationArchitectureTests`, `DocumentaryNarrationDeterminismTests`, and `DocumentaryNarrationNonMutationTests`.
+
+`Narration_block_is_synthesized_once_and_not_per_subtitle_segment` is the explicit English one-block regression. An equivalent Hindi test preserves the `hi-IN` identity and continuous narration architecture. Fixtures generate valid deterministic 16-bit PCM RIFF/WAVE entirely in memory/on local disk at 16 kHz mono, 24 kHz mono, and 48 kHz stereo; no FFmpeg dependency is used. MP3 inspection tests are deliberately limited to deterministic MPEG-1 Layer III headers, raw-frame and ID3-prefixed paths, invalid indices, markers, and short buffers.
+
+Normalization is tested both against the deterministic `DependencyMissing` default and a recording successful fake. Provider, inspector, and normalizer cancellation propagate as `OperationCanceledException`. Stable provider/configuration/audio/profile failures, final SHA-256/content identity, registry behavior, DI registration, architecture boundaries, determinism, and non-mutation are executable coverage. Azure operations always use `FakeAzureSpeechClient`; no credentials, network call, or paid provider is used.
+
+The actual focused command is:
+
+`dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-build --filter 'FullyQualifiedName~ProductionAdapters.DocumentaryNarration|FullyQualifiedName~ProductionAdapters.AzureSpeechDocumentaryNarration|FullyQualifiedName~ProductionAdapters.ExistingAzureSpeechDocumentaryNarration'`
+
+Result on 2026-07-27: **81 passed, 0 failed, 0 skipped (81 total; 1 second)**.

@@ -97,3 +97,23 @@ The concrete binding and core flow are implemented, but all tests did not pass i
 ✗ All tests passed cannot be asserted because the .NET SDK is unavailable
 
 ✓ A3.6 readiness was explicitly decided
+
+## A3.5 test closure (2026-07-27)
+
+The dedicated executable suite is now implemented in nine narration-focused source files under `Backend/tests/Astronomy.MediaFactory.Tests/ProductionAdapters`. It covers voice resolution (English and Hindi), Azure binding request translation/configuration/error mapping, deterministic PCM WAV and supported MPEG-1 Layer III fixtures, the default normalizer and successful normalization orchestration, full adapter finalization/checksum/content identity, mapper and real-registry behavior, DI and architecture boundaries, determinism, non-mutation, and caller cancellation.
+
+Production fixes driven by the suite harden WAV chunk/header validation, make MP3 prefix precedence explicit, normalize provider exceptions, reject null or externally-owned normalized paths, and permit certified files under an operating-system `/tmp` root while continuing to reject attempt `tmp` paths.
+
+The mandatory `Narration_block_is_synthesized_once_and_not_per_subtitle_segment` regression and the Hindi continuous narration test both execute and pass. They prove one SSML build, one fake provider call, and one registered final artifact per narration block. No subtitle collection or service participates.
+
+Commands executed:
+
+- `dotnet restore Backend/Astronomy.MediaFactory.slnx` — completed (with existing package warnings).
+- `dotnet build Backend/Astronomy.MediaFactory.slnx --no-restore` — initial test compile exposed and corrected test issues.
+- `dotnet build Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-restore` — passed with existing repository warnings.
+- `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-build --filter 'FullyQualifiedName~ProductionAdapters.DocumentaryNarration|FullyQualifiedName~ProductionAdapters.AzureSpeechDocumentaryNarration|FullyQualifiedName~ProductionAdapters.ExistingAzureSpeechDocumentaryNarration'` — **81 total, 81 passed, 0 failed, 0 skipped, 1 second**.
+- `dotnet test Backend/Astronomy.MediaFactory.slnx --no-build` — executed; unrelated pre-existing repository tests fail (including missing Postgres configuration and `ffprobe`, plus existing semantic/visual assertions). The dedicated A3.5 suite remains green.
+
+Known limitations: the production `ExistingDocumentaryNarrationAudioNormalizer` intentionally still returns `DependencyMissing`; tests use a recording fake to certify successful orchestration. MP3 coverage certifies only the inspector's deterministic MPEG-1 Layer III header subset, not arbitrary MP3/VBR streams. Real Azure tests executed: **0**; every Speech client is handwritten and offline.
+
+**READY FOR A3.6**
