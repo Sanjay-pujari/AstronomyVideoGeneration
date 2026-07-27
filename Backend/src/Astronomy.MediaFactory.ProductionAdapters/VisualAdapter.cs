@@ -219,5 +219,5 @@ public sealed class DocumentaryVisualGenerationResultMapper : IDocumentaryVisual
     }
 }
 
-public sealed class DocumentaryProductionAdapterRegistry(IDocumentaryProductionVisualAdapter visual) : IDocumentaryProductionAdapterRegistry
-{ public bool IsAvailable(DocumentaryProductionOperationKind operation)=>operation==DocumentaryProductionOperationKind.VisualGeneration; public IDocumentaryProductionVisualAdapter VisualGeneration=>visual; }
+public sealed class DocumentaryProductionAdapterRegistry(IDocumentaryProductionVisualAdapter visual, IDocumentaryProductionNarrationAdapter narration) : IDocumentaryProductionAdapterRegistry
+{ public bool IsAvailable(DocumentaryProductionOperationKind operation)=>operation is DocumentaryProductionOperationKind.VisualGeneration or DocumentaryProductionOperationKind.NarrationSynthesis; public IDocumentaryProductionVisualAdapter VisualGeneration=>visual; public IDocumentaryProductionNarrationAdapter NarrationSynthesis=>narration; }
