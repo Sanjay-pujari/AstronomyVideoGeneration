@@ -1,24 +1,24 @@
 # CG-A3 A3.9 — General FFprobe media verification adapter
 
-## Scope and invariant
-A3.9 verifies finalized media. A3.9 does not generate, render, repair, normalize, transcode, concatenate, publish, or upload media. Verification is read-only with respect to media bytes. Supported registered artifact kinds are narration audio, scene video, and variant video; image and subtitle documents remain outside this adapter.
+## Architecture
+A3.9 is a disabled-by-default, asynchronous, read-only verifier for finalized narration, scene, and variant artifacts. It resolves a registered artifact, validates its descriptor and physical SHA-256 identity, resolves a V1 policy, acquires structured metadata through the existing process runner/FFprobe boundary, evaluates pure rules, persists sanitized evidence when enabled, and maps the result. It never generates, renders, repairs, transcodes, finalizes, registers, publishes, uploads, or replaces media.
 
-## Existing capability reused
-`ExistingFfprobeDocumentaryMediaProbe` uses the Rendering project's `IProcessRunner`, `RenderingOptions.FfprobePath`, timeout/cancellation and process-tree termination. It requests JSON with `-v error -show_format -show_streams -of json`. The isolated typed parser reads format, duration, stream flags, dimensions, rational frame rate, sample rate, and channels. The stable binding ID is `ExistingFFprobeMediaVerifier`.
+## Certified boundaries implemented
+- The full-flow fixture uses the real registry, checksum and content-identity services, descriptor validator, policy resolver/evaluator, diagnostics serializer, and safe filename generator. Only the external provider binding is fake.
+- `ExistingFfprobeDocumentaryMediaProbe` has a timeout-aware A3.9 boundary. The adapter chooses `min(configured probe timeout, attempt timeout)`, the binding owns the request timeout, and the same `IProcessRunner` receives it. No second process runner exists.
+- Missing executable (`Win32Exception`) maps to `DependencyMissing`; other start/I/O failures, timeouts, exception text, nonzero exit, empty stdout, and malformed JSON have stable sanitized mappings.
+- Provider and diagnostics exceptions are normalized by `IDocumentaryProductionFailureNormalizer`; caller cancellation propagates.
+- The registry exposes `GetRegisteredAsync`, returning descriptor and stored kind. A3.9 requires the stored kind to equal the request kind while retaining `GetAsync` compatibility.
+- Descriptor checks require exactly 64 lowercase hexadecimal SHA-256 characters, matching physical bytes and `sha256:<checksum>` content identity.
+- Policy mismatches produce `Succeeded == true` and `Verified == false`; acquisition/contract failures produce `Succeeded == false`.
+- Diagnostics contain structured expected/measured evidence and omit commands, stderr, secrets, and physical paths.
+- Production DI binds both `IDocumentaryMediaProbe` and timeout-aware `IDocumentaryFfprobeProbe` to the same real `ExistingFfprobeDocumentaryMediaProbe` singleton by default.
+- Architecture specifications scan A3.9 for direct process start, shell invocation, blocking async, finalization, and registration calls, and check that Core does not reference ProductionAdapters.
 
-## Policies and evaluation
-The deterministic policies are `NarrationAudioVerificationV1`, `SceneVideoVerificationV1`, and `VariantVideoVerificationV1`. Acquisition and pure evaluation are separate. Checks have fixed order: container, streams, duration, dimensions, frame rate, sample rate, channels. MP4 accepts the FFprobe MOV/MP4 family; WAV, MP3, and raw AAC require their respective names. Durations use integer milliseconds and a default 500 ms tolerance; frame rates preserve decimal rational values and use a default 0.01 tolerance.
+## Verification status
+The certification suites were created, but this container has no .NET SDK (`dotnet: command not found`), so restore, build, focused tests, targeted groups, broad tests, and the optional real FFprobe smoke could not be executed. The smoke also requires both `FFPROBE_PATH` and `A39_SMOKE_MEDIA_PATH`.
 
-Narration requires valid duration/audio metadata and rejects video. Video policies validate required streams, positive duration/dimensions/frame rate, explicit expectations, and audio metadata when audio exists. Subtitle presence/absence is enforced only through explicit request flags.
+## Known limitations
+FFprobe parsing intentionally treats unusable numeric values as null; the evaluator rejects required null measurements deterministically. The normal suite records deterministic JSON and does not launch FFprobe. Real codec/container correctness remains covered only by the opt-in smoke. Production execution remains disabled.
 
-## Artifact identity and persistence
-The adapter resolves by asset ID exclusively through the physical artifact registry. It checks request/correlation ownership, descriptor validity, a nonempty existing final path outside the attempts tree, actual length, lowercase SHA-256, `sha256:<checksum>`, and expected content type. It uses result-only verification: the original registry descriptor is never replaced and no duplicate media descriptor is registered.
-
-## Failure, timeout, cancellation, and diagnostics
-Unsupported policies are rejected. Registry, identity, process start, timeout, nonzero exit, malformed response, and policy violations use stable production failure codes. Caller cancellation propagates. Raw stderr, commands, and paths are not emitted. One deterministic `verification-<safe-id>-<attempt>.json` records expectations, safe measurements, evidence, hashes, and outcome.
-
-## Result mapping and DI
-The immutable adapter evidence maps to the existing `DocumentaryMediaAssetResult` with Verified/Failed status. Bridge DI binds options (disabled by default), parser, the real probe, provider binding, resolver, evaluator, adapter, mapper, and typed registry availability. A pre-registered fake probe remains replaceable for tests.
-
-## Tests and limitations
-Focused tests cover deterministic policies, parsing, pure evaluation, stream/container/measurement checks, architecture independence, and physical-byte non-mutation. Normal tests do not require FFprobe. No real-FFprobe smoke sample is configured, so smoke execution is not part of the focused suite. AAC certification is limited to FFprobe's raw `aac` container name; M4A is accepted through the MP4 family when requested as MP4.
+**NOT READY FOR A3.10**
