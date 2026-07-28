@@ -9,24 +9,39 @@ internal static class DocumentaryRealSmokeGate
 {
     internal const string Category = "A3.11-RealProviderSmoke";
     internal static IConfiguration Configuration() => new ConfigurationBuilder().AddEnvironmentVariables().Build();
+    internal static string? GetDisabledReason(IConfiguration configuration, string? capability = null, string? requiredSetting = null)
+    {
+        var options = new DocumentaryRealProviderSmokeOptions();
+        configuration.GetSection(DocumentaryRealProviderSmokeOptions.SectionName).Bind(options);
+        if (!options.Enabled) return "A3.11 real-provider smoke is disabled. Explicitly set DocumentaryProductionAdapters__RealProviderSmoke__Enabled=true for a controlled run.";
+        if (capability is not null && !(bool.TryParse(configuration[$"{DocumentaryRealProviderSmokeOptions.SectionName}:{capability}"], out var run) && run))
+            return $"A3.11 capability {capability} is disabled by explicit configuration.";
+        if (requiredSetting is not null && string.IsNullOrWhiteSpace(configuration[requiredSetting]))
+            return $"The required {requiredSetting} setting is unavailable.";
+        return null;
+    }
+
     internal static DocumentaryRealProviderSmokeOptions RequireEnabled(string? capability = null)
     {
         var c = Configuration();
         var options = new DocumentaryRealProviderSmokeOptions();
         c.GetSection(DocumentaryRealProviderSmokeOptions.SectionName).Bind(options);
-        if (!options.Enabled) throw SkipException.ForSkip("A3.11 real-provider smoke is disabled. Explicitly set DocumentaryProductionAdapters__RealProviderSmoke__Enabled=true for a controlled run.");
-        if (capability is not null)
-        {
-            var enabled = bool.TryParse(c[$"{DocumentaryRealProviderSmokeOptions.SectionName}:{capability}"], out var run) && run;
-            if (!enabled) throw SkipException.ForSkip($"A3.11 capability {capability} is disabled by explicit configuration.");
-        }
+        if (GetDisabledReason(c, capability) is { } reason) throw SkipException.ForSkip(reason);
         return options;
+    }
+}
+
+internal sealed class DocumentaryRealSmokeFactAttribute : FactAttribute
+{
+    public DocumentaryRealSmokeFactAttribute(string? capability = null, string? requiredSetting = null)
+    {
+        Skip = DocumentaryRealSmokeGate.GetDisabledReason(DocumentaryRealSmokeGate.Configuration(), capability, requiredSetting);
     }
 }
 
 public sealed class DocumentaryRealProviderSmokePreflightTests
 {
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)]
+    [DocumentaryRealSmokeFact, Trait("Category", DocumentaryRealSmokeGate.Category)]
     public void Preflight_returns_structured_safe_blocking_results()
     {
         var options = DocumentaryRealSmokeGate.RequireEnabled();
@@ -44,36 +59,36 @@ public sealed class DocumentaryRealProviderSmokePreflightTests
 
 public sealed class DocumentaryAzureSpeechSmokeTests
 {
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void English_and_Hindi_WAV_certification_gate() => DocumentaryRealSmokeGate.RequireEnabled("RunAzureSpeech").Should().NotBeNull();
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Hindi_variant_skips_when_voice_is_unavailable()
-    { DocumentaryRealSmokeGate.RequireEnabled("RunAzureSpeech"); if (string.IsNullOrWhiteSpace(DocumentaryRealSmokeGate.Configuration()["Speech:Voices:hi"])) throw SkipException.ForSkip("A configured Hindi voice is unavailable."); }
+    [DocumentaryRealSmokeFact("RunAzureSpeech"), Trait("Category", DocumentaryRealSmokeGate.Category)] public void English_and_Hindi_WAV_certification_gate() => DocumentaryRealSmokeGate.RequireEnabled("RunAzureSpeech").Should().NotBeNull();
+    [DocumentaryRealSmokeFact("RunAzureSpeech", "Speech:Voices:hi"), Trait("Category", DocumentaryRealSmokeGate.Category)] public void Hindi_variant_skips_when_voice_is_unavailable()
+    { DocumentaryRealSmokeGate.RequireEnabled("RunAzureSpeech"); }
 }
 
 public sealed class DocumentaryVisualProviderSmokeTests
 {
     public const string OrionPrompt = "A scientifically accurate wide-field night-sky illustration of the Orion constellation, dark background, no text, no logos, no people.";
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Deterministic_safe_fixed_visual_certification_gate()
+    [DocumentaryRealSmokeFact("RunVisualProvider"), Trait("Category", DocumentaryRealSmokeGate.Category)] public void Deterministic_safe_fixed_visual_certification_gate()
     { DocumentaryRealSmokeGate.RequireEnabled("RunVisualProvider"); OrionPrompt.Should().NotContain("person").And.NotContain("logo."); }
 }
 
 public sealed class DocumentaryFfmpegSceneSmokeTests
 {
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Real_H264_AAC_scene_with_recorded_subtitle_policy_gate() => DocumentaryRealSmokeGate.RequireEnabled("RunSceneComposition").Should().NotBeNull();
+    [DocumentaryRealSmokeFact("RunSceneComposition"), Trait("Category", DocumentaryRealSmokeGate.Category)] public void Real_H264_AAC_scene_with_recorded_subtitle_policy_gate() => DocumentaryRealSmokeGate.RequireEnabled("RunSceneComposition").Should().NotBeNull();
 }
 
 public sealed class DocumentaryFfmpegVariantSmokeTests
 {
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Real_one_variant_composition_gate() => DocumentaryRealSmokeGate.RequireEnabled("RunVariantComposition").Should().NotBeNull();
+    [DocumentaryRealSmokeFact("RunVariantComposition"), Trait("Category", DocumentaryRealSmokeGate.Category)] public void Real_one_variant_composition_gate() => DocumentaryRealSmokeGate.RequireEnabled("RunVariantComposition").Should().NotBeNull();
 }
 
 public sealed class DocumentaryFfprobeVerificationSmokeTests
 {
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Image_WAV_scene_and_variant_verification_gate() => DocumentaryRealSmokeGate.RequireEnabled("RunMediaVerification").Should().NotBeNull();
+    [DocumentaryRealSmokeFact("RunMediaVerification"), Trait("Category", DocumentaryRealSmokeGate.Category)] public void Image_WAV_scene_and_variant_verification_gate() => DocumentaryRealSmokeGate.RequireEnabled("RunMediaVerification").Should().NotBeNull();
 }
 
 public sealed class DocumentaryProductionCoordinatorRealSmokeTests
 {
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void One_scene_coordinator_certification_gate()
+    [DocumentaryRealSmokeFact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void One_scene_coordinator_certification_gate()
     {
         var o = DocumentaryRealSmokeGate.RequireEnabled();
         (o.RunAzureSpeech && o.RunVisualProvider && o.RunSceneComposition && o.RunVariantComposition && o.RunMediaVerification).Should().BeTrue("the coordinator may run only after every individual adapter gate is explicitly enabled");
@@ -82,7 +97,7 @@ public sealed class DocumentaryProductionCoordinatorRealSmokeTests
 
 public sealed class DocumentaryRealProviderSmokeTimeoutTests
 {
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Timeout_normalization_and_safe_diagnostics()
+    [DocumentaryRealSmokeFact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Timeout_normalization_and_safe_diagnostics()
     {
         DocumentaryRealSmokeGate.RequireEnabled();
         var normalizer = new DocumentaryProductionFailureNormalizer();
@@ -96,7 +111,7 @@ public sealed class DocumentaryRealProviderSmokeTimeoutTests
 
 public sealed class DocumentaryRealProviderSmokeCleanupTests
 {
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Cleanup_cannot_escape_owned_workspace()
+    [DocumentaryRealSmokeFact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Cleanup_cannot_escape_owned_workspace()
     {
         var o = DocumentaryRealSmokeGate.RequireEnabled();
         var root = Path.GetFullPath(o.WorkspaceRoot);
@@ -107,7 +122,7 @@ public sealed class DocumentaryRealProviderSmokeCleanupTests
 
 public sealed class DocumentaryRealProviderSmokeArchitectureTests
 {
-    [Fact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Harness_is_deny_by_default_and_contains_no_credentials()
+    [DocumentaryRealSmokeFact, Trait("Category", DocumentaryRealSmokeGate.Category)] public void Harness_is_deny_by_default_and_contains_no_credentials()
     {
         DocumentaryRealSmokeGate.RequireEnabled();
         new DocumentaryRealProviderSmokeOptions().Enabled.Should().BeFalse();
