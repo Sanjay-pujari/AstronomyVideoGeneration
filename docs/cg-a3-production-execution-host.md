@@ -68,3 +68,7 @@ The production coordinator exists, but certification requires coordinator-level 
 ## Evidence still required
 
 The one-scene, multi-scene, four-variant, voice-resolution, narration-aggregation, multiple-visual, registry-dependency, verification-gate, retry, timeout, cancellation, persistence, execution-record, determinism, and non-mutation scenarios still require a real coordinator harness and successful behavioral runs. Until those exist, none of those properties are certified by this document.
+
+## Executed coordinator harness evidence (2026-07-28)
+
+The test project now contains a provider-free harness around the real coordinator and compatibility facade. A composite fake implements all six adapter ports, writes deterministic non-empty artifacts, computes SHA-256 identities, and registers them through the real physical artifact registry. The executed four-variant flow proves coordinator sequencing, English/Hindi voice resolution through the request builder, scene and final verification, persisted manifest/diagnostics, complete execution-record mapping, registry-based descriptor consumption, and the invariant that successful media production is not publishing eligibility. Three behavioral full-flow tests pass. The remaining mandated negative and resilience matrices are still outstanding, therefore A3.10 remains not certified and this evidence does not authorize A3.11.
