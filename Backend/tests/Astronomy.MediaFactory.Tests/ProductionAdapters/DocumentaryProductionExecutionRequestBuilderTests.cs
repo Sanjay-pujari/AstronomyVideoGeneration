@@ -15,7 +15,8 @@ public sealed class DocumentaryProductionExecutionRequestBuilderTests
  {
   var options=new AzureSpeechOptions{Voices=new Dictionary<string,string>{{"en","en-IN-NeerjaNeural"},{"hi","hi-IN-SwaraNeural"}}};
   var builder=new DocumentaryProductionExecutionRequestBuilder(new DocumentaryNarrationVoiceResolver(Options.Create(options)));
-  var block=new DocumentaryNarrationBlock("narration",language,"The sky",0,1000,[],"correlation");
+  var reference=new DocumentaryMediaKnowledgeReference("reference","payload",default,"source","artifact","v1","/",0,"correlation");
+  var block=new DocumentaryNarrationBlock("narration",language,"The sky",0,1000,[reference],"correlation");
   var request=builder.Narration(Plan(),block,language,1);
   request.VoiceProfileId.Should().Be(voice);
  }
