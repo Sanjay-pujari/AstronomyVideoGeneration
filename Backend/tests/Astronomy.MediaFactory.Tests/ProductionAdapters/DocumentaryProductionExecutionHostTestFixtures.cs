@@ -6,7 +6,6 @@ namespace Astronomy.MediaFactory.Tests.ProductionAdapters;
 /// <summary>Shared deterministic, provider-free infrastructure for the A3.10 host matrix.</summary>
 internal static class DocumentaryProductionExecutionHostTestFixtures
 {
- public const bool CertificationContract = true;
  public static string CreateWorkspaceRoot()
  {
   var path=Path.Combine(Path.GetTempPath(),"astronomy-a3-10",Guid.NewGuid().ToString("N"));
