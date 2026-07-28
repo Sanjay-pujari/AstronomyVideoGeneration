@@ -28,5 +28,5 @@ public sealed class DocumentaryProductionExecutionRequestBuilderTests
   builder.Verification(Plan(),DocumentaryPhysicalArtifactKind.SceneVideo,"variant","scene",1,DocumentaryProductionSubtitleStrategy.Sidecar,true).Should().Match<DocumentaryMediaVerificationRequest>(x=>x.RequireAudio&&!x.RequireSubtitle);
  }
 
- private static DocumentaryMediaAssetPlan Plan()=>new("asset",DocumentaryMediaAssetType.NarrationAudio,DocumentaryMediaAssetFormat.Wav,DocumentaryMediaVariantType.EnglishLong,"scene","source",DocumentaryMediaProviderCapability.TextToSpeech,0,[],1920,1080,1000,30,48000,2,[],"correlation");
+ private static DocumentaryMediaAssetPlan Plan()=>new("asset",DocumentaryMediaAssetType.NarrationAudio,DocumentaryMediaAssetFormat.Wav,DocumentaryMediaVariantType.LongEnglish,"scene","source",DocumentaryMediaProviderCapability.TextToSpeech,0,[],1920,1080,1000,30,48000,2,[],"correlation");
 }

@@ -34,5 +34,5 @@ public sealed class DocumentaryProductionExecutionDependencyResolverTests
   await action.Should().ThrowAsync<InvalidOperationException>().WithMessage("*registered dependency is missing*");
  }
 
- private static DocumentaryMediaAssetPlan Plan(string id,int sequence)=>new(id,DocumentaryMediaAssetType.SceneVideo,DocumentaryMediaAssetFormat.Mp4,DocumentaryMediaVariantType.EnglishLong,"scene","source",DocumentaryMediaProviderCapability.SceneComposition,sequence,[],1920,1080,1000,30,48000,2,[],"correlation-a3-10");
+ private static DocumentaryMediaAssetPlan Plan(string id,int sequence)=>new(id,DocumentaryMediaAssetType.SceneVideo,DocumentaryMediaAssetFormat.Mp4,DocumentaryMediaVariantType.LongEnglish,"scene","source",DocumentaryMediaProviderCapability.SceneComposition,sequence,[],1920,1080,1000,30,48000,2,[],"correlation-a3-10");
 }
