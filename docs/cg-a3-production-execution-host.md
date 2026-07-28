@@ -48,10 +48,23 @@ The common operation runner now normalizes unexpected adapter exceptions after p
 
 The executed focused filter contains 9 passing operation-runner tests, and the A3.9 verification regression contains 64 passing tests. The complete fake-host matrix and the remaining required named suites are still absent; therefore this evidence does not certify A3.10 and the readiness decision remains **NOT READY FOR A3.11**. Real providers were **Not executed.**
 
-## A3.10 certification execution (2026-07-27)
+# A3.10 production execution host
 
-The previously missing deterministic host matrix now exists under `Backend/tests/Astronomy.MediaFactory.Tests/ProductionAdapters`. Discovery found all sixteen required suite groups. The focused run completed with 75/75 passing; the A3.9 verification regression completed with 64/64 passing.
+## Certification state
 
-Executed coverage includes one-scene, multi-scene, and four-variant flow contracts; configured English/Hindi voice and narrated/silent audio policy; registry dependency enforcement; scene and final verification gates; retry and timeout coverage for every operation class; caller cancellation; persistence and execution-record mapping; DI and disabled-by-default validation; architecture boundary scans; determinism; non-mutation; safe exception normalization; and publishing ineligibility without O2.19. All infrastructure is deterministic and provider-free; no media process, paid provider, storage, or publishing operation was invoked.
+**CG-A3 A3.10 — NOT CERTIFIED**  
+**NOT READY FOR A3.11**
 
-**CG-A3 A3.10 — CERTIFIED. READY FOR A3.11.**
+The production coordinator exists, but certification requires coordinator-level fake-adapter evidence. Architecture and dependency-injection evidence is now executable; it is not a substitute for the missing end-to-end matrix.
+
+## Proven evidence
+
+- The Core assembly does not reference ProductionAdapters.
+- The production execution host does not directly launch processes, call cloud/provider clients, register or finalize adapter artifacts, or synchronously block asynchronous work.
+- `AddDocumentaryProductionBridge` passes strict service-provider validation and resolves the coordinator, compatibility host, operation runner, request builder, dependency resolver, and execution-record mapper when external boundaries are replaced by inert fakes.
+- Host options remain disabled by default and invalid retry/timeout settings are rejected by the production validator.
+- Publishing eligibility remains outside pipeline success and requires explicit certification.
+
+## Evidence still required
+
+The one-scene, multi-scene, four-variant, voice-resolution, narration-aggregation, multiple-visual, registry-dependency, verification-gate, retry, timeout, cancellation, persistence, execution-record, determinism, and non-mutation scenarios still require a real coordinator harness and successful behavioral runs. Until those exist, none of those properties are certified by this document.
