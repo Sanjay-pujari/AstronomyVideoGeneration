@@ -58,3 +58,20 @@ Executed behavioral evidence:
 | `Coordinator_consumes_registered_artifacts_and_preserves_semantic_order` | Coordinator and dependency resolver | Semantic acquisition precedes narration and output manifest maps registry-marker descriptors | Passed |
 
 Commands/results: restore passed with NU1510/NU1903 warnings; test-project build passed with 0 errors and 136 warnings; the new full-flow class passed 3/3 in 9 seconds. Placeholder `CertificationContract` scan remains empty. The broader required failure, retry, timeout, cancellation, persistence-failure, determinism, and non-mutation matrices have not all been implemented or executed, so the certification decision remains **NOT CERTIFIED / NOT READY FOR A3.11**. No A3.11 or external provider/process/publishing work was performed.
+
+## Resilience harness closure increment (2026-07-28 UTC)
+
+The original coordinator harness was extended rather than replaced. It now has independent, thread-safe outcome queues for every adapter operation and verification stage; all seven outcome semantics; asynchronous operation-start signals; request and attempt capture; nullable adapter exclusion; host enablement; deterministic clock injection; and controlled manifest/diagnostic failure boundaries. Recording workspace and registry counters make the disabled-host boundary observable.
+
+The production host now accepts a millisecond test timeout override while retaining precedence for all existing per-operation second overrides. This permits provider-free 75 ms timeout tests without invoking a real provider or media process.
+
+| Suite | Production class invoked | Behavior asserted | Result |
+|---|---|---|---|
+| `DocumentaryProductionExecutionHostFullFlowTests` | Coordinator and compatibility host | Four variants, registry evidence, complete record, persisted references | Passed |
+| `DocumentaryProductionExecutionHostFailureTests` | Coordinator and dependency resolver | Missing registration, verification gates, upstream preservation, disabled host, missing adapter | Implemented |
+| `DocumentaryProductionExecutionHostRetryTests` | Coordinator and operation runner | Six operation classes retry with stable identity; non-retryable failure stops | Implemented |
+| `DocumentaryProductionExecutionHostTimeoutTests` | Coordinator and operation runner | Six operation classes enforce timeout and normalize provider/process codes | Passed in focused run |
+| `DocumentaryProductionExecutionHostCancellationTests` | Coordinator and operation runner | Caller cancellation at visual, narration, scene composition, and final verification propagates | Passed in focused run |
+| `DocumentaryProductionExecutionHostPersistenceTests` | Coordinator, registry, diagnostics writer | Successful references and manifest/diagnostic failure behavior | Passed in focused run |
+
+SDK 10.0.302 restore succeeded with NU1510 and NU1903 warnings. The test-project build succeeded with zero errors and 136 warnings before final assertion corrections. An intermediate focused run reported 34 passed and 2 failed; both assertion-scope defects were corrected. Because the final focused run, A3.9 regression, shared regressions, broad solution run, determinism suite, non-mutation suite, exact one-scene fixture, and exact multi-scene fixture have not all executed successfully, the truthful decision remains **CG-A3 A3.10 — NOT CERTIFIED / NOT READY FOR A3.11**.
