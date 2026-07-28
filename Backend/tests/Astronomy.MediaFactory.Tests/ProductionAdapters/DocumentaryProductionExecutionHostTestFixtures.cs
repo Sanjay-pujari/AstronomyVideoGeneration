@@ -1,38 +1,68 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.ProductionAdapters;
+using Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Tests.ProductionAdapters;
 
-/// <summary>Shared deterministic, provider-free infrastructure for the A3.10 host matrix.</summary>
 internal static class DocumentaryProductionExecutionHostTestFixtures
 {
- public static string CreateWorkspaceRoot()
- {
-  var path=Path.Combine(Path.GetTempPath(),"astronomy-a3-10",Guid.NewGuid().ToString("N"));
-  Directory.CreateDirectory(path);
-  return path;
- }
- public static DocumentaryPhysicalArtifactDescriptor Descriptor(string root,string assetId,DocumentaryPhysicalArtifactKind kind,int sequence=1)
- {
-  var extension=kind is DocumentaryPhysicalArtifactKind.VisualImage?"png":kind is DocumentaryPhysicalArtifactKind.NarrationAudio?"wav":kind is DocumentaryPhysicalArtifactKind.SubtitleDocument?"srt":"mp4";
-  var path=Path.Combine(root,$"{sequence:D3}-{assetId}.{extension}");
-  File.WriteAllText(path,$"A3.10|{kind}|{assetId}|{sequence}\n");
-  var checksum=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
-  return new(assetId,$"sha256:{checksum}",path,kind is DocumentaryPhysicalArtifactKind.VisualImage?"image/png":kind is DocumentaryPhysicalArtifactKind.NarrationAudio?"audio/wav":kind is DocumentaryPhysicalArtifactKind.SubtitleDocument?"application/x-subrip":"video/mp4",new FileInfo(path).Length,checksum,kind is DocumentaryPhysicalArtifactKind.VisualImage or DocumentaryPhysicalArtifactKind.SubtitleDocument?null:1000,kind is DocumentaryPhysicalArtifactKind.VisualImage or DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?1920:null,kind is DocumentaryPhysicalArtifactKind.VisualImage or DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?1080:null,kind is DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?30m:null,kind is DocumentaryPhysicalArtifactKind.NarrationAudio or DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?48000:null,kind is DocumentaryPhysicalArtifactKind.NarrationAudio or DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?2:null,"deterministic-fake",1,"correlation-a3-10");
- }
+ public static string CreateWorkspaceRoot(){var path=Path.Combine(Path.GetTempPath(),"astronomy-a3-10",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(path);return path;}
+ public static DocumentaryPhysicalArtifactDescriptor Descriptor(string root,string assetId,DocumentaryPhysicalArtifactKind kind,int sequence=1){var extension=kind==DocumentaryPhysicalArtifactKind.VisualImage?"png":kind==DocumentaryPhysicalArtifactKind.NarrationAudio?"wav":kind==DocumentaryPhysicalArtifactKind.SubtitleDocument?"srt":"mp4";var path=Path.Combine(root,$"{sequence:D3}-{assetId}.{extension}");File.WriteAllText(path,$"A3.10|{kind}|{assetId}");var sum=Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();return new(assetId,"sha256:"+sum,path,kind==DocumentaryPhysicalArtifactKind.VisualImage?"image/png":kind==DocumentaryPhysicalArtifactKind.NarrationAudio?"audio/wav":kind==DocumentaryPhysicalArtifactKind.SubtitleDocument?"application/x-subrip":"video/mp4",new FileInfo(path).Length,sum,kind is DocumentaryPhysicalArtifactKind.VisualImage or DocumentaryPhysicalArtifactKind.SubtitleDocument?null:1000,kind is DocumentaryPhysicalArtifactKind.VisualImage or DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?1920:null,kind is DocumentaryPhysicalArtifactKind.VisualImage or DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?1080:null,kind is DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?30:null,kind is DocumentaryPhysicalArtifactKind.NarrationAudio or DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?48000:null,kind is DocumentaryPhysicalArtifactKind.NarrationAudio or DocumentaryPhysicalArtifactKind.SceneVideo or DocumentaryPhysicalArtifactKind.VariantVideo?2:null,"deterministic-fake",1,"correlation-a3-10");}
 }
 
-internal sealed class FakeDocumentaryProductionAdapterRegistry : IDocumentaryProductionAdapterRegistry
+internal enum FakeProductionAdapterOutcomeKind { Success, RetryableFailure, NonRetryableFailure, ThrowException, WaitUntilCancelled, SuccessWithoutRegistration, VerificationRejected }
+internal sealed record FakeProductionAdapterOutcome(FakeProductionAdapterOutcomeKind Kind, DocumentaryProductionFailure? Failure=null, Exception? Exception=null);
+internal sealed class DocumentaryProductionExecutionHarnessOptions
 {
- public IDocumentaryProductionVisualAdapter? VisualGeneration { get; init; }
- public IDocumentaryProductionNarrationAdapter? NarrationSynthesis { get; init; }
- public IDocumentaryProductionSubtitleAdapter? SubtitleGeneration { get; init; }
- public IDocumentaryProductionSceneCompositionAdapter? SceneComposition { get; init; }
- public IDocumentaryProductionVariantCompositionAdapter? VariantComposition { get; init; }
- public IDocumentaryProductionMediaVerificationAdapter? MediaVerification { get; init; }
- public ConcurrentQueue<string> InvocationOrder { get; } = new();
- public ConcurrentQueue<DocumentaryProductionAttemptContext> Attempts { get; } = new();
- public ConcurrentQueue<CancellationToken> CancellationTokens { get; } = new();
- public void Capture(string operation,DocumentaryProductionAttemptContext attempt,CancellationToken token){InvocationOrder.Enqueue(operation);Attempts.Enqueue(attempt);CancellationTokens.Enqueue(token);}
- public bool IsAvailable(DocumentaryProductionOperationKind operation)=>operation switch { DocumentaryProductionOperationKind.VisualGeneration=>VisualGeneration is not null,DocumentaryProductionOperationKind.NarrationSynthesis=>NarrationSynthesis is not null,DocumentaryProductionOperationKind.SubtitleGeneration=>SubtitleGeneration is not null,DocumentaryProductionOperationKind.SceneComposition=>SceneComposition is not null,DocumentaryProductionOperationKind.VariantComposition=>VariantComposition is not null,DocumentaryProductionOperationKind.MediaVerification=>MediaVerification is not null,_=>false };
+ public bool ContinueOtherVariantsAfterVariantFailure{get;init;}=true; public bool VerifySceneVideos{get;init;}=true; public bool VerifyFinalVariants{get;init;}=true;
+ public bool PersistArtifactManifest{get;init;}=true; public bool PersistExecutionRecord{get;init;}=true; public int MaximumAttemptsPerOperation{get;init;}=1; public int OperationTimeoutMilliseconds{get;init;}=5000;
+ public Func<DocumentaryMediaPipelineRequest>? RequestFactory{get;init;}
+}
+
+/// <summary>A provider-free harness which wires the real A3.10 coordinator and real filesystem/registry boundaries.</summary>
+internal sealed class DocumentaryProductionExecutionHostHarness : IAsyncDisposable
+{
+ public DocumentaryMediaPipelineRequest Request{get;} public IDocumentaryProductionExecutionCoordinator Coordinator{get;} public IDocumentaryProductionExecutionHost CompatibilityHost{get;}
+ public FakeDocumentaryProductionAdapterRegistry AdapterRegistry{get;} public IDocumentaryPhysicalArtifactRegistry ArtifactRegistry{get;} public RecordingDocumentaryProductionDiagnosticsWriter DiagnosticsWriter{get;}
+ public string WorkspaceRoot{get;} public DocumentaryProductionExecutionHostOptions HostOptions{get;} public DocumentaryProductionAdaptersOptions BridgeOptions{get;} public IReadOnlyList<string> InvocationOrder=>AdapterRegistry.InvocationOrder.ToArray();
+ public DocumentaryProductionExecutionHostHarness(DocumentaryProductionExecutionHarnessOptions? settings=null)
+ {
+  settings??=new(); WorkspaceRoot=Path.Combine(Path.GetTempPath(),"astronomy-a3-10",Guid.NewGuid().ToString("N"));
+  Request=settings.RequestFactory?.Invoke()??CreateRequest();
+  BridgeOptions=new(){Enabled=true,ExecutionMode=DocumentaryProductionExecutionMode.Certified,WorkspaceRoot=WorkspaceRoot,DefaultOperationTimeoutSeconds=Math.Max(1,(int)Math.Ceiling(settings.OperationTimeoutMilliseconds/1000d))};
+  HostOptions=new(){Enabled=true,MaximumAttemptsPerOperation=settings.MaximumAttemptsPerOperation,ContinueOtherVariantsAfterVariantFailure=settings.ContinueOtherVariantsAfterVariantFailure,VerifySceneVideos=settings.VerifySceneVideos,VerifyFinalVariants=settings.VerifyFinalVariants,PersistArtifactManifest=settings.PersistArtifactManifest,PersistExecutionRecord=settings.PersistExecutionRecord};
+  ArtifactRegistry=new DocumentaryPhysicalArtifactRegistry(); DiagnosticsWriter=new(); AdapterRegistry=new FakeDocumentaryProductionAdapterRegistry(ArtifactRegistry);
+  var clock=new SystemDocumentaryProductionClock(); var attemptFactory=new DocumentaryProductionAttemptContextFactory(clock);
+  var runner=new DocumentaryProductionOperationRunner(attemptFactory,new DocumentaryProductionFailureNormalizer());
+  var contextFactory=new DocumentaryProductionExecutionContextFactory(clock,new DocumentaryExecutionIdGenerator(),Options.Create(BridgeOptions));
+  var workspaceManager=new DocumentaryProductionWorkspaceManager(new DocumentarySafeFileNameGenerator(),new DocumentaryChecksumService());
+  var voices=new DocumentaryNarrationVoiceResolver(Options.Create(new AzureSpeechOptions{Voices=new Dictionary<string,string>{{"en","en-IN-NeerjaNeural"},{"hi","hi-IN-SwaraNeural"}}}));
+  Coordinator=new DocumentaryProductionExecutionCoordinator(Options.Create(HostOptions),Options.Create(BridgeOptions),contextFactory,workspaceManager,DiagnosticsWriter,ArtifactRegistry,AdapterRegistry,attemptFactory,new DocumentaryProductionExecutionRequestBuilder(voices),new DocumentaryProductionExecutionDependencyResolver(ArtifactRegistry),new DocumentaryProductionExecutionRecordMapper(),runner,clock);
+  CompatibilityHost=new DocumentaryProductionExecutionHost(Coordinator);
+ }
+ public Task<DocumentaryProductionExecutionResult> ExecuteAsync(CancellationToken cancellationToken=default)=>Coordinator.ExecuteAsync(Request,cancellationToken);
+ public ValueTask DisposeAsync(){if(Directory.Exists(WorkspaceRoot))Directory.Delete(WorkspaceRoot,true);return ValueTask.CompletedTask;}
+ static DocumentaryMediaPipelineRequest CreateRequest(){var project=DocumentaryMediaProjectionFixture.Complete(DocumentaryMediaProjectionFixture.Orion());return new(project,new DocumentaryMediaPipelinePolicy(DocumentaryMediaPipelineMode.Execute),new(project.Metadata.CreatedUtc,"a3.10-harness",project.Metadata.CorrelationId,$"{project.MediaProjectId}.execution.1"));}
+}
+
+internal sealed class RecordingDocumentaryProductionDiagnosticsWriter : IDocumentaryProductionDiagnosticsWriter
+{ readonly DocumentaryProductionDiagnosticsWriter inner=new(); public ConcurrentQueue<string> Files{get;}=new(); public async Task WriteAsync(string directory,string fileName,object value,CancellationToken token){await inner.WriteAsync(directory,fileName,value,token);Files.Enqueue(Path.Combine(directory,fileName));} }
+
+internal sealed class FakeDocumentaryProductionAdapterRegistry : IDocumentaryProductionAdapterRegistry, IDocumentaryProductionVisualAdapter, IDocumentaryProductionNarrationAdapter, IDocumentaryProductionSubtitleAdapter, IDocumentaryProductionSceneCompositionAdapter, IDocumentaryProductionVariantCompositionAdapter, IDocumentaryProductionMediaVerificationAdapter
+{
+ readonly IDocumentaryPhysicalArtifactRegistry artifacts; public ConcurrentQueue<string> InvocationOrder{get;}=new(); public ConcurrentQueue<DocumentaryProductionAttemptContext> Attempts{get;}=new();
+ public IDocumentaryProductionVisualAdapter VisualGeneration=>this; public IDocumentaryProductionNarrationAdapter NarrationSynthesis=>this; public IDocumentaryProductionSubtitleAdapter SubtitleGeneration=>this; public IDocumentaryProductionSceneCompositionAdapter SceneComposition=>this; public IDocumentaryProductionVariantCompositionAdapter VariantComposition=>this; public IDocumentaryProductionMediaVerificationAdapter MediaVerification=>this;
+ public FakeDocumentaryProductionAdapterRegistry(IDocumentaryPhysicalArtifactRegistry artifacts)=>this.artifacts=artifacts;
+ public bool IsAvailable(DocumentaryProductionOperationKind operation)=>operation is DocumentaryProductionOperationKind.VisualGeneration or DocumentaryProductionOperationKind.NarrationSynthesis or DocumentaryProductionOperationKind.SubtitleGeneration or DocumentaryProductionOperationKind.SceneComposition or DocumentaryProductionOperationKind.VariantComposition or DocumentaryProductionOperationKind.MediaVerification;
+ void Capture(string name,DocumentaryProductionAttemptContext attempt){InvocationOrder.Enqueue(name);Attempts.Enqueue(attempt);}
+ async Task<DocumentaryPhysicalArtifactDescriptor> Make(DocumentaryMediaAssetPlan p,DocumentaryPhysicalArtifactKind kind,DocumentaryProductionWorkspace w,DocumentaryProductionAttemptContext a,string contentType,long? duration=null,int? width=null,int? height=null,decimal? fps=null,int? sample=null,int? channels=null){var dir=Path.Combine(w.ExecutionRoot,"fake");Directory.CreateDirectory(dir);var path=Path.Combine(dir,p.AssetId.Replace('/','_')+"."+(kind==DocumentaryPhysicalArtifactKind.VisualImage?"png":kind==DocumentaryPhysicalArtifactKind.NarrationAudio?"wav":kind==DocumentaryPhysicalArtifactKind.SubtitleDocument?"srt":"mp4"));await File.WriteAllTextAsync(path,$"deterministic|{kind}|{p.AssetId}");var sum=Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(path))).ToLowerInvariant();var d=new DocumentaryPhysicalArtifactDescriptor(p.AssetId,"sha256:"+sum,path,contentType,new FileInfo(path).Length,sum,duration,width,height,fps,sample,channels,"registry-marker",a.AttemptNumber,p.CorrelationId);await artifacts.RegisterAsync(d,kind,default);return d;}
+ public async Task<DocumentaryProductionVisualAdapterResult> GenerateAsync(DocumentaryVisualGenerationRequest r,DocumentaryProductionExecutionContext e,DocumentaryProductionAttemptContext a,DocumentaryProductionWorkspace w,CancellationToken t){Capture($"VisualGeneration:{r.AssetPlan.VariantType}:{r.AssetPlan.SceneId}:{r.VisualPrompt.VisualPromptId}",a);var d=await Make(r.AssetPlan,DocumentaryPhysicalArtifactKind.VisualImage,w,a,"image/png",width:r.Width,height:r.Height);return DocumentaryProductionVisualAdapterResult.Success(d,"fake","returned-marker");}
+ public async Task<DocumentaryProductionNarrationAdapterResult> SynthesizeAsync(DocumentaryNarrationSynthesisRequest r,DocumentaryProductionExecutionContext e,DocumentaryProductionAttemptContext a,DocumentaryProductionWorkspace w,CancellationToken t){Capture($"NarrationSynthesis:{r.AssetPlan.VariantType}:{r.AssetPlan.SceneId}",a);var d=await Make(r.AssetPlan,DocumentaryPhysicalArtifactKind.NarrationAudio,w,a,"audio/wav",r.NarrationBlock.EstimatedDurationMilliseconds,sample:r.SampleRate,channels:r.ChannelCount);return DocumentaryProductionNarrationAdapterResult.Success(d,r.VoiceProfileId,r.Language,r.AssetFormat,false);}
+ public async Task<DocumentaryProductionSubtitleAdapterResult> GenerateAsync(DocumentarySubtitleGenerationRequest r,DocumentaryProductionExecutionContext e,DocumentaryProductionAttemptContext a,DocumentaryProductionWorkspace w,CancellationToken t){Capture($"SubtitleGeneration:{r.AssetPlan.VariantType}:{r.SceneId}",a);var d=await Make(r.AssetPlan,DocumentaryPhysicalArtifactKind.SubtitleDocument,w,a,"application/x-subrip");return DocumentaryProductionSubtitleAdapterResult.Success(d,r.Language,r.AssetFormat,r.SubtitleCues.Count,0,r.MeasuredNarrationDurationMilliseconds,"fake");}
+ public async Task<DocumentaryProductionSceneCompositionAdapterResult> ComposeAsync(DocumentarySceneCompositionRequest r,DocumentaryProductionExecutionContext e,DocumentaryProductionAttemptContext a,DocumentaryProductionWorkspace w,CancellationToken t){Capture($"SceneComposition:{r.AssetPlan.VariantType}:{r.MediaScene.SceneId}",a);var d=await Make(r.AssetPlan,DocumentaryPhysicalArtifactKind.SceneVideo,w,a,"video/mp4",r.EffectiveSceneDurationMilliseconds,r.Width,r.Height,r.FrameRate,48000,2);return DocumentaryProductionSceneCompositionAdapterResult.Success(d,"fake",r.MediaScene.SceneId,r.AssetPlan.VariantType.ToString(),r.EffectiveSceneDurationMilliseconds,r.Width,r.Height,r.FrameRate,true,DocumentarySceneSubtitleMode.BurnIn,"fake");}
+ public async Task<DocumentaryProductionVariantCompositionAdapterResult> ComposeAsync(DocumentaryVariantCompositionRequest r,DocumentaryProductionExecutionContext e,DocumentaryProductionAttemptContext a,DocumentaryProductionWorkspace w,CancellationToken t){Capture($"VariantComposition:{r.MediaVariant.VariantId}",a);var duration=r.SceneAssets.Sum(x=>x.DurationMilliseconds);var d=await Make(r.AssetPlan,DocumentaryPhysicalArtifactKind.VariantVideo,w,a,"video/mp4",duration,r.Width,r.Height,r.FrameRate,r.AudioSampleRate,r.AudioChannelCount);return new(true,d,null,"fake","returned-marker",r.MediaVariant.VariantId,r.MediaVariant.VariantType,r.VideoFormat,r.SceneAssets.Count,duration,r.Width,r.Height,r.FrameRate,true,true,"fake");}
+ public async Task<DocumentaryProductionMediaVerificationAdapterResult> VerifyAsync(DocumentaryMediaVerificationRequest r,DocumentaryProductionExecutionContext e,DocumentaryProductionAttemptContext a,DocumentaryProductionWorkspace w,CancellationToken t){Capture($"MediaVerification:{r.ArtifactKind}:{r.VariantId}:{r.SceneId}",a);var d=await artifacts.GetAsync(r.AssetId,t);return new(true,true,d,null,null,"fake","fake",r.AssetId,r.ArtifactKind,r.AssetType,r.AssetFormat,"mp4",d?.DurationMilliseconds,d?.Width,d?.Height,d?.FrameRate,true,r.RequireAudio,false,d?.AudioSampleRate,d?.AudioChannelCount,r.VerificationProfileId,"fake");}
 }

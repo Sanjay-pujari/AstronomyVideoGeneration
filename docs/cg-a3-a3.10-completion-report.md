@@ -44,3 +44,17 @@ This follow-up adds executable architecture and dependency-injection evidence. I
 A3.10 remains un-certified because this change does **not** yet provide the required coordinator fake-adapter harness or behavioral host suites for full flow, failures, retry, timeout, cancellation, persistence, determinism, non-mutation, and execution-record mapping. DI and architecture are now proven, but the remaining mandatory matrix, A3.9 regression, shared regressions, and broad-suite execution have not been completed and are not claimed.
 
 No A3.11 work was performed. No provider, FFmpeg/FFprobe, upload, or publishing operation was invoked.
+
+## Deterministic coordinator harness follow-up (2026-07-28 UTC)
+
+A real provider-free `DocumentaryProductionExecutionHostHarness` now constructs `DocumentaryProductionExecutionCoordinator`, the common operation runner, attempt/request/context factories, dependency resolver, record mapper, workspace manager, physical registry, diagnostics writer, failure normalizer, voice resolver, and production clock. One composite fake implements all six production adapter ports; every successful call creates and hashes a real deterministic file and registers registry-marker evidence in the real registry.
+
+Executed behavioral evidence:
+
+| Test | Production class invoked | Important assertions | Result |
+|---|---|---|---|
+| `Four_variants_execute_through_complete_fake_pipeline` | `DocumentaryProductionExecutionCoordinator` | Four canonical variants succeed and verify; complete record and manifest exist; registry files exist; publishing remains ineligible | Passed |
+| `Compatibility_host_returns_completed_execution_record` | `DocumentaryProductionExecutionHost` and coordinator | Compatibility facade returns a complete four-variant record | Passed |
+| `Coordinator_consumes_registered_artifacts_and_preserves_semantic_order` | Coordinator and dependency resolver | Semantic acquisition precedes narration and output manifest maps registry-marker descriptors | Passed |
+
+Commands/results: restore passed with NU1510/NU1903 warnings; test-project build passed with 0 errors and 136 warnings; the new full-flow class passed 3/3 in 9 seconds. Placeholder `CertificationContract` scan remains empty. The broader required failure, retry, timeout, cancellation, persistence-failure, determinism, and non-mutation matrices have not all been implemented or executed, so the certification decision remains **NOT CERTIFIED / NOT READY FOR A3.11**. No A3.11 or external provider/process/publishing work was performed.
