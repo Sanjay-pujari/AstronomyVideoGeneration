@@ -704,7 +704,7 @@ public sealed partial class ProductionPipelineExecutionService(
         "P1_RESUME_MANIFEST_INVALID"=>Phase1ExecutionKind.RegeneratedDueToManifestMismatch,
         _=>Phase1ExecutionKind.Generated
     };
-    private static string[] Phase1CanonicalFiles(string root)=>["execution-context.json","selected-plan.json","production-request.json","pipeline-state.json"].Select(x=>Path.Combine(root,"01-plan",x)).ToArray();
+    private static string[] Phase1CanonicalFiles(string root)=>new[] { "execution-context.json", "selected-plan.json", "production-request.json", "pipeline-state.json" }.Select(x=>Path.Combine(root,"01-plan",x)).ToArray();
     private static string[] Phase1CompatibilityFiles(string root)=>[Path.Combine(root,"plan-input","content-plan-production-request.json"),Path.Combine(root,"plan-input","production-event-intelligence.json")];
     private static bool Phase1ManifestIsValid(ProductionPhaseContext context)
     {
