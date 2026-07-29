@@ -87,7 +87,14 @@ public sealed class ViewerCuriosityArtifactProjectorTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddMediaFactory(new ConfigurationBuilder().Build());
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:Postgres"] = "Host=postgres.example;Database=astronomy_tests;Username=test;Password=test"
+            })
+            .Build();
+
+        services.AddMediaFactory(configuration);
         Assert.Contains(services, x => x.ServiceType == typeof(IViewerCuriosityArtifactProjector) && x.ImplementationType == typeof(ViewerCuriosityArtifactProjector) && x.Lifetime == ServiceLifetime.Singleton);
         Assert.False(typeof(ProductionPipelineExecutionService).GetConstructors().Single().GetParameters().Single(x => x.ParameterType == typeof(IViewerCuriosityArtifactProjector)).HasDefaultValue);
     }
