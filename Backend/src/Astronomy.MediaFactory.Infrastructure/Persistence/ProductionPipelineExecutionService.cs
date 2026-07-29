@@ -15665,7 +15665,7 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.Delete(path, recursive: true);
     }
 
-    private static void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context)
+    private void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context)
     {
         var deletedFiles = context.DeletedFilesDueToOverwrite as List<string>;
         var deletedDirectories = context.DeletedDirectoriesDueToOverwrite as List<string>;
