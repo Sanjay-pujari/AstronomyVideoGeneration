@@ -252,12 +252,15 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var result in phaseResults)
         {
             if (result.Status == ProductionPhaseStatus.Failed) return false;
-            if (result.Status == ProductionPhaseStatus.Skipped && IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase) && !string.Equals(result.Reason, "Valid Phase 3 authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase)) return false;
+            if (result.Status == ProductionPhaseStatus.Skipped && IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase) && !IsValidAuthorityReuseReason(result.PhaseNo, result.Reason)) return false;
             if (result.Status == ProductionPhaseStatus.Skipped && !IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, OutputTypeNotRequestedReason, StringComparison.OrdinalIgnoreCase)) return false;
         }
 
         return true;
     }
+
+    private static bool IsValidAuthorityReuseReason(int phaseNo, string? reason) =>
+        phaseNo is 3 or 4 && string.Equals(reason, $"Valid Phase {phaseNo} authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPhase12ThumbnailV9Successful(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
     {
@@ -373,13 +376,37 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var artifacts = names.Select(n => JsonSerializer.Deserialize<DocumentaryBlueprintArtifact>(File.ReadAllText(Path.Combine(root, n)), JsonOptions)).ToArray();
             var bank = JsonSerializer.Deserialize<ViewerQuestionBank>(File.ReadAllText(Path.Combine(context.OutputRoot, "03-questions", "viewer-question-bank.json")), JsonOptions);
+            var objectives = JsonSerializer.Deserialize<ViewerLearningObjectives>(File.ReadAllText(Path.Combine(context.OutputRoot, "03-questions", "learning-objectives.json")), JsonOptions);
+            var diagnostics = JsonSerializer.Deserialize<BlueprintBuildDiagnostics>(File.ReadAllText(Path.Combine(root, "blueprint-build-diagnostics.json")), JsonOptions);
+            if (bank is null || objectives is null || diagnostics is null || !Phase4ManifestIsValid(context, names.Select(n => Path.Combine(root, n)).Append(Path.Combine(root, "blueprint-build-diagnostics.json")).ToArray())) return false;
+            if (diagnostics.BuilderType.Length == 0 || diagnostics.IntegrationServiceType.Length == 0 || diagnostics.SourceChecksums.GetValueOrDefault("viewerQuestionBank") != bank.Metadata.Checksum
+                || diagnostics.QuestionCount != bank.Questions.Count || diagnostics.LearningObjectiveCount != objectives.Objectives.Count) return false;
             var variants = new[] { "Master", "Long", "Short" };
-            return bank is not null && artifacts.Select((a, i) => a is not null && a.Metadata.ExecutionId == context.Request.PlanId.ToString("D") && a.Metadata.EventId == context.EventId
-                && string.Equals(a.Metadata.Language, context.Request.Language, StringComparison.OrdinalIgnoreCase) && a.Metadata.Profile == (context.Request.PlannedFormat ?? context.Request.Category)
-                && a.Metadata.SourcePhase3Checksum == bank.Metadata.Checksum && a.Metadata.Variant == variants[i] && a.Blueprint.Scenes.Count > 0
-                && DocumentaryBlueprintIntegrationService.HasValidChecksum(a)).All(x => x);
+            var questionIds = bank.Questions.Select(q => q.QuestionId).ToHashSet(StringComparer.Ordinal);
+            var high = bank.Questions.Where(q => q.Priority == "High").Select(q => q.QuestionId).ToHashSet(StringComparer.Ordinal);
+            var objectiveIds = objectives.Objectives.Select(o => o.ObjectiveId).ToHashSet(StringComparer.Ordinal);
+            var references = bank.Questions.SelectMany(q => q.KnowledgeReferences).Select(r => r.ReferenceId).ToHashSet(StringComparer.Ordinal);
+            var requested = new HashSet<string>(["Long", "Short"], StringComparer.OrdinalIgnoreCase);
+            return artifacts.Select((a, i) => a is not null && DocumentaryBlueprintArtifactValidator.Validate(a,
+                new(context.Request.PlanId.ToString("D"), context.EventId, context.Request.Language, context.Request.PlannedFormat ?? context.Request.Category,
+                    variants[i], bank.Metadata.Checksum, questionIds, high, objectiveIds, references, requested)).IsValid).All(x => x);
         }
         catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException) { return false; }
+    }
+
+    private static bool Phase4ManifestIsValid(ProductionPhaseContext context, params string[] expectedPaths)
+    {
+        var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
+        if (!File.Exists(path)) return false;
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var root = document.RootElement;
+        if (!root.TryGetProperty("planId", out var plan) || !Guid.TryParse(plan.GetString(), out var id) || id != context.Request.PlanId
+            || !root.TryGetProperty("phase4Artifacts", out var entries) || entries.ValueKind != JsonValueKind.Array) return false;
+        var actual = entries.EnumerateArray().Select(e => (Path: NormalizePath(e.GetProperty("path").GetString() ?? ""), Role: e.GetProperty("role").GetString() ?? "")).ToArray();
+        var roles = new[] { "Authoritative", "VariantAuthority", "VariantAuthority", "Supporting" };
+        return actual.Length == expectedPaths.Length && actual.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() == actual.Length
+            && actual.Count(x => x.Role == "Authoritative") == 1
+            && expectedPaths.Select((p, i) => actual.Any(x => x.Path == NormalizePath(p) && x.Role == roles[i])).All(x => x);
     }
 
     private static bool ExistingViewerCuriosityArtifactsAreValid(ProductionPhaseContext context)
@@ -657,8 +684,24 @@ public sealed partial class ProductionPipelineExecutionService(
         if (errors.Count > 0 || !Phase3ManifestIsValid(context, Path.Combine(phase3Root, "viewer-question-bank.json"), Path.Combine(phase3Root, "question-answer-set.json"), Path.Combine(phase3Root, "learning-objectives.json"), Path.Combine(phase3Root, "question-plan.json")))
             throw new InvalidOperationException("Phase 4 rejected invalid Phase 3 authority: " + string.Join("; ", errors));
         var result = await documentaryBlueprintIntegrationService.BuildAsync(new(context.Request.PlanId.ToString("D"), context.EventId, context.Request.Title, context.Request.Language, profile, bank, objectives, plan, context.ProductionEventIntelligence, ResolveViewerVariants(context.Request.RequestedOutputs)), cancellationToken);
+        var questionIds = bank.Questions.Select(q => q.QuestionId).ToHashSet(StringComparer.Ordinal);
+        var highPriorityIds = bank.Questions.Where(q => q.Priority == "High").Select(q => q.QuestionId).ToHashSet(StringComparer.Ordinal);
+        var objectiveIds = objectives.Objectives.Select(o => o.ObjectiveId).ToHashSet(StringComparer.Ordinal);
+        var referenceIds = bank.Questions.SelectMany(q => q.KnowledgeReferences).Select(r => r.ReferenceId).ToHashSet(StringComparer.Ordinal);
+        // Phase 4's frozen contract materializes both future projections even when only one delivery output was requested.
+        var materializedVariants = new HashSet<string>(["Long", "Short"], StringComparer.OrdinalIgnoreCase);
+        var artifacts = new[] { ("Master", result.Master), ("Long", result.Long), ("Short", result.Short) };
+        foreach (var (variant, artifact) in artifacts)
+        {
+            var validation = DocumentaryBlueprintArtifactValidator.Validate(artifact,
+                new(context.Request.PlanId.ToString("D"), context.EventId, context.Request.Language, profile, variant,
+                    bank.Metadata.Checksum, questionIds, highPriorityIds, objectiveIds, referenceIds, materializedVariants));
+            if (!validation.IsValid)
+                throw new InvalidOperationException($"Phase 4 generated an invalid {variant} authority: " + string.Join("; ", validation.Errors.Select(e => $"{e.SceneId}:{e.Field} expected={e.Expected} actual={e.Actual}")));
+        }
         var root = Path.Combine(context.OutputRoot, "04-blueprint");
         var staging = Path.Combine(context.OutputRoot, $".04-blueprint-staging-{Guid.NewGuid():N}");
+        var backup = Path.Combine(context.OutputRoot, $".04-blueprint-backup-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
         try
         {
@@ -666,10 +709,26 @@ public sealed partial class ProductionPipelineExecutionService(
             await WriteJsonArtifactAsync(Path.Combine(staging, "documentary-blueprint.long.json"), result.Long, cancellationToken);
             await WriteJsonArtifactAsync(Path.Combine(staging, "documentary-blueprint.short.json"), result.Short, cancellationToken);
             await WriteJsonArtifactAsync(Path.Combine(staging, "blueprint-build-diagnostics.json"), result.Diagnostics, cancellationToken);
-            if (Directory.Exists(root)) Directory.Delete(root, true);
+            // Re-read the staged authority so serialization and complete-set failures happen before the swap.
+            foreach (var (variant, _) in artifacts)
+            {
+                var file = variant == "Master" ? "documentary-blueprint.json" : $"documentary-blueprint.{variant.ToLowerInvariant()}.json";
+                var staged = await ReadRequiredJsonAsync<DocumentaryBlueprintArtifact>(Path.Combine(staging, file), cancellationToken);
+                var validation = DocumentaryBlueprintArtifactValidator.Validate(staged,
+                    new(context.Request.PlanId.ToString("D"), context.EventId, context.Request.Language, profile, variant,
+                        bank.Metadata.Checksum, questionIds, highPriorityIds, objectiveIds, referenceIds, materializedVariants));
+                if (!validation.IsValid) throw new InvalidOperationException($"Staged Phase 4 {variant} authority failed validation.");
+            }
+            if (Directory.Exists(root)) Directory.Move(root, backup);
             Directory.Move(staging, root);
+            if (Directory.Exists(backup)) Directory.Delete(backup, true);
         }
-        catch { if (Directory.Exists(staging)) Directory.Delete(staging, true); throw; }
+        catch
+        {
+            if (Directory.Exists(staging)) Directory.Delete(staging, true);
+            if (!Directory.Exists(root) && Directory.Exists(backup)) Directory.Move(backup, root);
+            throw;
+        }
         logger.LogInformation("Phase 4 blueprint completed. MasterSections={MasterCount} LongSections={LongCount} ShortSections={ShortCount} Covered={Covered} Deferred={Deferred}", result.Master.Blueprint.Scenes.Count, result.Long.Blueprint.Scenes.Count, result.Short.Blueprint.Scenes.Count, result.Master.Coverage.CoveredViewerQuestionIds.Count, result.Master.Coverage.DeferredViewerQuestionIds.Count);
         return Directory.GetFiles(root).ToArray();
     }

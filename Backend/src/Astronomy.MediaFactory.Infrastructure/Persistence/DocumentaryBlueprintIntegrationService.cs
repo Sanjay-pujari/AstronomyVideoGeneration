@@ -82,13 +82,11 @@ public sealed class DocumentaryBlueprintIntegrationService(DocumentaryBlueprintB
         => new(Id("bp", b.BlueprintId, format.ToString()), b.KnowledgeId, b.SubjectId, b.SubjectName, format, b.PrimaryLanguage, b.Version, b.Metadata, scenes);
     private static DocumentaryBlueprintArtifact Artifact(string variant, DocumentaryBlueprint blueprint, BlueprintCoverage coverage, DocumentaryBlueprintIntegrationRequest r, string intelligenceChecksum)
     {
-        var checksum = CalculateChecksum(variant, blueprint, coverage);
+        var checksum = DocumentaryBlueprintChecksum.Calculate(variant, blueprint, coverage);
         return new(new(r.ExecutionId, r.EventId, r.Language, r.Profile, variant, Version, checksum, DateTimeOffset.UtcNow, r.QuestionBank.Metadata.Checksum, intelligenceChecksum), blueprint, coverage, []);
     }
     public static bool HasValidChecksum(DocumentaryBlueprintArtifact artifact)
-        => artifact.Metadata.Checksum == CalculateChecksum(artifact.Metadata.Variant, artifact.Blueprint, artifact.Coverage);
-    private static string CalculateChecksum(string variant, DocumentaryBlueprint blueprint, BlueprintCoverage coverage)
-        => Hash(JsonSerializer.Serialize(new { variant, blueprint.BlueprintId, blueprint.SubjectId, blueprint.PrimaryLanguage, Scenes = blueprint.Scenes.Select(s => new { s.SceneId, s.SceneNumber, Questions = coverage.SectionQuestionMap.GetValueOrDefault(s.SceneId), Knowledge = s.KnowledgeReferences.Select(k => k.KnowledgeEntryId).Order() }) }));
+        => DocumentaryBlueprintChecksum.HasValidChecksum(artifact);
     private static string Id(string prefix, params string[] values) => prefix + "-" + Hash(string.Join('|', values.Select(v => v.Trim().ToLowerInvariant())))[..16];
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }
