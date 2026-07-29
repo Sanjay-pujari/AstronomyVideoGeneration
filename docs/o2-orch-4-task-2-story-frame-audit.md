@@ -1,23 +1,38 @@
-# O2.ORCH.4 Task 2B — Phase 6 corrective audit
+# O2.ORCH.4 Task 2C — Phase 6 final certification audit
 
-This report records inspected code and executed evidence; the earlier Task 2 report is not treated as proof.
+This audit records production behavior inspected in `ProductionPipelineExecutionService`, the Story Frame
+integration/validation contracts, execution lock, DI registration, and the existing Phase 3–6 and Story Frame tests.
+A helper's existence is not counted as executable certification evidence.
 
-| Concern | Current behavior confirmed | Gap confirmed | Production change | Test added | Final result |
+| Concern | Confirmed production behavior | Confirmed gap | Production change | Tests added | Executed result |
 |---|---|---|---|---|---|
-| Validation | `ValidateDetailed` and `ValidateLegacyCore` were separate, with `message.Contains` code inference | Two substantive paths and unstable classification | Replaced by one structured engine; legacy strings are formatted projections | Compatibility and existing checksum tests retained; broader matrix remains required | Improved, not fully certified |
-| Compatibility | `Version.TryParse` accepted every 1.x minor at or below 1.1 | Missing/malformed policy and runtime identity context | Canonical major/minor parser, explicit 1.0/1.1 allow-list, compatibility context | `StoryFrameContractCompatibilityTests` | Implemented at validator boundary |
-| Identity | Authority ownership used suffix matching | An unrelated prefix could be accepted | Shared exact authority-ID constructor used by generation and validation | Canonical identity test | Implemented |
-| Complete set | Index and diagnostics were checked mainly by totals | Projection corruption could survive | Shared index projector plus semantic equality; diagnostics dictionaries/counts/stages reconcile | Existing checksum tests; dedicated full matrices remain required | Improved, incomplete evidence |
-| Variants/scenes/frames | Basic membership and sequence checks existed | Placeholder, canonical variant, safe-ID, tolerance, collection and mandatory-coverage gaps | Direct structured checks with stable code families | Full requested corruption suite remains required | Production hardened, evidence incomplete |
-| Concurrency | Static keyed semaphores were never removed | Unbounded key growth and lock logic embedded in service | Reference-counted cancellation-safe `IStoryFrameExecutionLock` abstraction | `ProductionPipelinePhase6ConcurrencyTests` | In-process serialization covered |
-| Recovery/commit | Staging and backup restoration exist inline | No stale recovery or injectable commit seam | No complete corrective change in this patch | Required failure/recovery suites not present | Open |
-| Manifest | Exact filenames existed with prefix containment | Cross-platform synthetic attack matrix absent | Existing behavior unchanged | Required security suite not present | Open |
-| Regression | Existing repository has Phase 3–6 and Story Frame tests | Runtime lacks the .NET SDK | No production workaround | Commands attempted and recorded | Not executed |
+| Locked resume decision | `RunAsync` checked Phase 6 reuse before calling the locked phase action | Concurrent callers could both make a reuse/generate decision outside the lock; `RetryFailedOnly` could bypass it | Removed both generic Phase 6 bypasses. Recovery, Phase 5 validation, resume reads, runtime validation, generation, staged validation, and commit now occur under one injected plan/output-keyed lease | Existing keyed-lock tests remain; production concurrency matrix is still required | Source inspection complete; execution unavailable |
+| Runtime compatibility | The structured validator accepted an optional compatibility context, but resume called the legacy projection without one | Builder and integration runtime changes could be reused | `StoryFrameIntegrationService` now provides its injected builder/integration identity. Locked resume and staged validation call `ValidateDetailed` with that context | Existing contract compatibility tests remain; requested runtime-resume matrix is still required | Source inspection complete; execution unavailable |
+| Explicit reuse outcome | Phase 6 returned paths only and the outer generic executor inferred success | A locked reuse could not preserve the public skipped outcome/reason | Added internal generated/reused outcome and the exact frozen reuse reason; a Phase 6-specific executor writes public validation without changing response contracts | No new executable matrix in this environment | Source inspection complete |
+| Atomic commit | Directory moves and rollback were inline and used static `Directory` calls | Deterministic move/delete failure injection was impossible; backup cleanup failure failed the phase | Added narrow filesystem and committer services. The critical two-move swap is uncancellable, precommit swap failures restore the backup, and postcommit backup cleanup failure returns a warning while retaining the new authority | Requested atomic failure matrix remains required | Source inspection complete; execution unavailable |
+| Temporary recovery | No stale staging/backup scan occurred | Crashes left temporary directories; a missing active authority could not recover a compatible backup | Added clock/filesystem-injected recovery. It deletes only stale temporaries, validates backups as complete compatible sets, and restores the newest valid backup when active is absent | Requested recovery matrix remains required | Source inspection complete; execution unavailable |
+| Manifest containment | Phase 6 used `StartsWith(workspace)` plus partial parent checks | Containment was not a reusable canonical policy and had insufficient attack evidence | Added canonical full-path/parent/exact-file helper with separator-delimited root containment, temporary-path and ADS rejection; malformed manifests return non-reusable | Requested manifest security matrix remains required | Source inspection complete; execution unavailable |
+| Cancellation | Generic executor already excluded `OperationCanceledException`, but boundaries and the swap were implicit | No executable cancellation-boundary proof | Added checks before/across lock, recovery, resume, builder, staging validation, and commit. No cancellation is observed between the critical moves | Requested cancellation matrix remains required | Source inspection complete; execution unavailable |
+| Dependency wiring | The execution lock was a static service field | Lock/filesystem/committer/recovery/runtime identity were not production-injected | Registered the keyed lock singleton; registered filesystem/clock, committer, recovery, and the integration runtime identity through repository DI conventions | DI registration tests still required | Source inspection complete; execution unavailable |
+| Overwrite and dry-run | Existing range cleanup and early dry-run paths remain | Full Phase 7–20 overwrite and no-side-effect evidence was absent | Phase 6 overwrite bypasses locked reuse while retaining the old active directory through staged validation; dry run still never reaches Phase 6 | Requested overwrite and dry-run matrices remain required | Not executed |
+| API/final suite | Production endpoint route and contracts remain unchanged | Required API/concurrency/failure/final certification files are absent | No endpoint contract change | Still required | Not executed |
 
-## Inspected architecture
+## Frozen architecture confirmation
 
-`ContentPlanningRc2Controller` → `Rc2ContentPlanningBatchOrchestrator` → `ProductionPipelineExecutionService.RunAsync` remains unchanged. The existing `CertifiedStoryFrameBuilderAdapter` and `CreativeStoryboardBuilder` remain the only Phase 6 builder path; Phase 7 was not implemented or changed.
+`ContentPlanningRc2Controller` → `Rc2ContentPlanningBatchOrchestrator` →
+`ProductionPipelineExecutionService.RunAsync` is unchanged. Phase numbers, names, artifact names, manifest root
+schema, Phase 3–5 authority formats, the certified production builder adapter, and Phase 7 implementation were not
+changed. No second Story Frame engine was introduced.
+
+## Runtime compatibility identity
+
+The production provider reports builder type/version directly from the registered `ICertifiedStoryFrameBuilder`.
+It reports integration type `StoryFrameIntegrationService`, integration version
+`RC2-Phase6-Integration-v1`, and current authority/index/diagnostics contract version `1.1`.
+Persisted explicit contract versions `1.0` and `1.1` remain the supported compatibility set.
 
 ## Certification conclusion
 
-The validator and in-process lock are materially safer, but atomic commit injection, stale recovery, the complete requested test-file matrix, and executed .NET regression proof are absent. Therefore this repository is **not ready for O2.ORCH.4 final certification**.
+The production gaps above were corrected in source, but the requested focused test-file matrix was not created and
+the container has no `dotnet` executable, so build, focused suites, regressions, and the complete suite could not be
+executed. These are open certification blockers; this audit therefore does **not** claim final certification.

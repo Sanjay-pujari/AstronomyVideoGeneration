@@ -629,7 +629,14 @@ public static class ServiceCollectionExtensions
         services.AddScoped<SceneIntentBuilder>();
         services.AddScoped<CreativeStoryboardBuilder>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.ICertifiedStoryFrameBuilder, CertifiedStoryFrameBuilderAdapter>();
-        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IStoryFrameIntegrationService, StoryFrameIntegrationService>();
+        services.AddScoped<StoryFrameIntegrationService>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IStoryFrameIntegrationService>(sp => sp.GetRequiredService<StoryFrameIntegrationService>());
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IStoryFrameRuntimeIdentityProvider>(sp => sp.GetRequiredService<StoryFrameIntegrationService>());
+        services.AddSingleton<IStoryFrameExecutionLock, InProcessStoryFrameExecutionLock>();
+        services.AddSingleton<IStoryFrameFileSystem, StoryFrameFileSystem>();
+        services.AddSingleton<IStoryFrameClock, StoryFrameClock>();
+        services.AddScoped<IStoryFrameAuthorityCommitter, StoryFrameAuthorityCommitter>();
+        services.AddScoped<IStoryFrameTemporaryDirectoryRecovery, StoryFrameTemporaryDirectoryRecovery>();
         services.AddScoped<NarrationPromptComposer>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries.DocumentaryVocabulary>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries.DocumentaryTransitionLibrary>();
