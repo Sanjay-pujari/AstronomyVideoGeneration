@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -30,6 +31,39 @@ public sealed record Phase1AuthoritySet(Phase1ExecutionContext ExecutionContext,
 public sealed record Phase1ValidationDiagnostic(string Code, string Message, string? Path = null);
 public sealed record Phase1AuthorityValidationResult(bool IsValid, bool IsCompatible, bool IsReusable, bool IsDownstreamReady, IReadOnlyList<Phase1ValidationDiagnostic> Errors, IReadOnlyList<Phase1ValidationDiagnostic> Warnings, string? ContractVersion, string? AuthorityChecksum, string? RequestIdentityChecksum, string RuntimeIdentity, Phase1AuthoritySet? AuthoritySet = null);
 public sealed record Phase1PersistenceResult(bool Reused, IReadOnlyList<string> Files, Phase1AuthorityValidationResult Validation, IReadOnlyList<string> Warnings);
+public enum Phase1ExecutionKind { Generated, Reused, RegeneratedDueToMissingAuthority, RegeneratedDueToCorruptAuthority, RegeneratedDueToRequestChange, RegeneratedDueToRuntimeIncompatibility, RecoveredAndReused, RecoveredAndRegenerated }
+public sealed record Phase1ResumeEvaluation(bool CanReuse, string ReasonCode, string Reason, Phase1AuthorityValidationResult Validation, Phase1AuthoritySet? ExistingAuthority, IReadOnlyList<string> Warnings);
+public sealed record Phase1RecoveryResult(string ActiveAuthorityState, bool Recovered, string? RestoredBackupPath, IReadOnlyList<string> RemovedStagingPaths, IReadOnlyList<string> RemovedBackupPaths, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
+public sealed record Phase1ExecutionOutcome(Phase1ExecutionKind Kind, string ReasonCode, string Reason, IReadOnlyList<string> OutputFiles, IReadOnlyList<string> Warnings, string? AuthorityChecksum, string? RequestIdentityChecksum, bool Reused, bool ReplacedExistingAuthority, bool DownstreamInvalidated, string CompatibilityProjectionStatus, Phase1RecoveryResult RecoveryStatus);
+
+public interface IPhase1FileSystem
+{
+    bool FileExists(string path); bool DirectoryExists(string path); void CreateDirectory(string path); void DeleteDirectory(string path, bool recursive); void MoveDirectory(string source, string destination);
+    IEnumerable<string> EnumerateDirectories(string path, string pattern); IEnumerable<string> EnumerateFiles(string path, string pattern); Stream OpenRead(string path); Task WriteAllTextAsync(string path, string contents, CancellationToken token);
+    string GetFullPath(string path); string GetFileName(string path); string? GetDirectoryName(string path); DateTimeOffset GetLastWriteTimeUtc(string path); FileAttributes GetAttributes(string path);
+}
+public sealed class Phase1FileSystem : IPhase1FileSystem
+{
+    public bool FileExists(string p)=>File.Exists(p); public bool DirectoryExists(string p)=>Directory.Exists(p); public void CreateDirectory(string p)=>Directory.CreateDirectory(p); public void DeleteDirectory(string p,bool r)=>Directory.Delete(p,r); public void MoveDirectory(string s,string d)=>Directory.Move(s,d);
+    public IEnumerable<string> EnumerateDirectories(string p,string pattern)=>Directory.Exists(p)?Directory.EnumerateDirectories(p,pattern,SearchOption.TopDirectoryOnly):[]; public IEnumerable<string> EnumerateFiles(string p,string pattern)=>Directory.Exists(p)?Directory.EnumerateFiles(p,pattern,SearchOption.TopDirectoryOnly):[]; public Stream OpenRead(string p)=>File.OpenRead(p); public Task WriteAllTextAsync(string p,string c,CancellationToken t)=>File.WriteAllTextAsync(p,c,t);
+    public string GetFullPath(string p)=>Path.GetFullPath(p); public string GetFileName(string p)=>Path.GetFileName(p); public string? GetDirectoryName(string p)=>Path.GetDirectoryName(p); public DateTimeOffset GetLastWriteTimeUtc(string p)=>Directory.GetLastWriteTimeUtc(p); public FileAttributes GetAttributes(string p)=>File.GetAttributes(p);
+}
+
+public interface IPhase1ExecutionLock { ValueTask<IAsyncDisposable> AcquireAsync(string workspaceRoot, CancellationToken token); int EntryCount { get; } }
+public sealed class InProcessPhase1ExecutionLock : IPhase1ExecutionLock
+{
+    private sealed class Entry { public readonly SemaphoreSlim Gate=new(1,1); public int References; }
+    private readonly ConcurrentDictionary<string,Entry> entries=new(OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal);
+    public int EntryCount=>entries.Count;
+    public async ValueTask<IAsyncDisposable> AcquireAsync(string root,CancellationToken token)
+    {
+        var key=Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)); Entry entry;
+        while(true){ entry=entries.GetOrAdd(key,_=>new()); lock(entry){ if(entries.TryGetValue(key,out var current)&&ReferenceEquals(current,entry)){entry.References++;break;}}}
+        try { await entry.Gate.WaitAsync(token); return new Lease(this,key,entry); } catch { ReleaseReference(key,entry,false); throw; }
+    }
+    private void ReleaseReference(string key,Entry entry,bool release){if(release)entry.Gate.Release();lock(entry){entry.References--;if(entry.References==0)entries.TryRemove(new KeyValuePair<string,Entry>(key,entry));}}
+    private sealed class Lease(InProcessPhase1ExecutionLock owner,string key,Entry entry):IAsyncDisposable{private int disposed;public ValueTask DisposeAsync(){if(Interlocked.Exchange(ref disposed,1)==0)owner.ReleaseReference(key,entry,true);return ValueTask.CompletedTask;}}
+}
 
 public interface IPhase1AuthorityProjector { Phase1AuthoritySet Project(ProductionPhaseContext context, DateTimeOffset generatedUtc); }
 public interface IPhase1AuthorityValidator { Task<Phase1AuthorityValidationResult> ValidateAsync(string workspaceRoot, string authorityRoot, bool allowStaging, CancellationToken cancellationToken); }
@@ -82,64 +116,74 @@ public sealed class Phase1AuthorityProjector : IPhase1AuthorityProjector
     private static string[] NormalizeVariants(IEnumerable<string> outputs) { var n = Normalize(outputs); var r = new List<string>(); if (n.Any(x => x.Contains("long", StringComparison.Ordinal))) r.Add("long"); if (n.Any(x => x.Contains("short", StringComparison.Ordinal))) r.Add("short"); return r.Count == 0 ? ["long", "short"] : r.ToArray(); }
 }
 
-public sealed class Phase1AuthorityValidator : IPhase1AuthorityValidator
+public static class Phase1PathSecurity
 {
-    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
-    public async Task<Phase1AuthorityValidationResult> ValidateAsync(string workspaceRoot, string authorityRoot, bool allowStaging, CancellationToken token)
+    private static readonly Regex TemporaryName = new(@"^\.01-plan\.(staging|backup)-[0-9a-f]{32}$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    public static bool TryValidateRoot(IPhase1FileSystem fs, string workspaceRoot, string authorityRoot, bool allowStaging, out string code)
     {
-        var errors = new List<Phase1ValidationDiagnostic>(); var fullWorkspace = Path.GetFullPath(workspaceRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar; var fullRoot = Path.GetFullPath(authorityRoot).TrimEnd(Path.DirectorySeparatorChar);
-        if (!fullRoot.StartsWith(fullWorkspace, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) errors.Add(new("P1_PATH_OUTSIDE_WORKSPACE", "Authority path is outside its workspace.", authorityRoot));
-        var name = Path.GetFileName(fullRoot);
-        if (!(name == Phase1AuthorityContract.DirectoryName || allowStaging && name.StartsWith(".01-plan.staging-", StringComparison.Ordinal))) errors.Add(new("P1_PATH_UNEXPECTED_DIRECTORY", "Authority directory is not active or approved staging.", authorityRoot));
-        if (name.Contains("backup", StringComparison.OrdinalIgnoreCase) || (!allowStaging && name.Contains("staging", StringComparison.OrdinalIgnoreCase))) errors.Add(new("P1_PATH_INACTIVE", "Staging or backup paths cannot be active authority.", authorityRoot));
-        Phase1AuthoritySet? set = null;
+        code="";
         try
         {
-            async Task<T?> Read<T>(string file) { var path = Path.Combine(fullRoot, file); if (!File.Exists(path)) { errors.Add(new("P1_ARTIFACT_MISSING", $"Required artifact '{file}' is missing.", path)); return default; } await using var stream = File.OpenRead(path); return await JsonSerializer.DeserializeAsync<T>(stream, Options, token); }
-            var context = await Read<Phase1ExecutionContext>("execution-context.json"); var plan = await Read<Phase1SelectedPlan>("selected-plan.json"); var request = await Read<Phase1ProductionRequest>("production-request.json"); var state = await Read<Phase1PipelineState>("pipeline-state.json");
-            if (context is not null && plan is not null && request is not null && state is not null) set = new(context, plan, request, state);
-        }
-        catch (JsonException ex) { errors.Add(new("P1_JSON_INVALID", ex.Message, authorityRoot)); }
-        if (set is not null) ValidateSet(set, errors);
-        var valid = errors.Count == 0;
-        return new(valid, valid, valid, valid, errors, [], set?.ExecutionContext.ContractVersion, set?.ExecutionContext.AuthorityChecksum, set?.ExecutionContext.RequestIdentityChecksum, Phase1AuthorityContract.ProjectorIdentity, set);
+            if (string.IsNullOrWhiteSpace(workspaceRoot)||string.IsNullOrWhiteSpace(authorityRoot)||authorityRoot.Contains('\0')) { code="P1_RESUME_PATH_INVALID"; return false; }
+            if (authorityRoot.StartsWith(@"\\",StringComparison.Ordinal)||authorityRoot.StartsWith("//",StringComparison.Ordinal)||authorityRoot.StartsWith(@"\\?\",StringComparison.Ordinal)||HasAlternateDataStream(authorityRoot)){code="P1_PATH_UNSAFE";return false;}
+            var workspace=Path.TrimEndingDirectorySeparator(fs.GetFullPath(workspaceRoot)); var candidate=Path.TrimEndingDirectorySeparator(fs.GetFullPath(authorityRoot));
+            var comparison=OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal;
+            if (!candidate.StartsWith(workspace+Path.DirectorySeparatorChar,comparison)||!string.Equals(fs.GetDirectoryName(candidate),workspace,comparison)){code="P1_PATH_OUTSIDE_WORKSPACE";return false;}
+            var name=fs.GetFileName(candidate); if(name!=Phase1AuthorityContract.DirectoryName && !(allowStaging&&TemporaryName.IsMatch(name))){code="P1_PATH_UNEXPECTED_DIRECTORY";return false;}
+            if (fs.DirectoryExists(workspace) && (fs.GetAttributes(workspace)&FileAttributes.ReparsePoint)!=0 || fs.DirectoryExists(candidate)&&(fs.GetAttributes(candidate)&FileAttributes.ReparsePoint)!=0){code="P1_PATH_REPARSE_POINT";return false;}
+            return true;
+        } catch(Exception ex) when(ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException){code="P1_PATH_INVALID";return false;}
     }
-    private static void ValidateSet(Phase1AuthoritySet set, List<Phase1ValidationDiagnostic> errors)
+    public static bool IsApprovedTemporaryName(string name)=>TemporaryName.IsMatch(name);
+    private static bool HasAlternateDataStream(string path){var colon=path.IndexOf(':');if(colon<0)return false;return !(OperatingSystem.IsWindows()&&colon==1&&char.IsLetter(path[0]))||path.IndexOf(':',colon+1)>=0;}
+}
+
+public sealed class Phase1AuthorityValidator(IPhase1FileSystem fileSystem) : IPhase1AuthorityValidator
+{
+    public Phase1AuthorityValidator():this(new Phase1FileSystem()){}
+    private static readonly JsonSerializerOptions Options=new(JsonSerializerDefaults.Web);
+    public async Task<Phase1AuthorityValidationResult> ValidateAsync(string workspaceRoot,string authorityRoot,bool allowStaging,CancellationToken token)
     {
-        var c = set.ExecutionContext; var p = set.SelectedPlan; var r = set.ProductionRequest; var s = set.PipelineState; void Require(bool ok, string code, string message) { if (!ok) errors.Add(new(code, message)); }
-        Require(c.ContractVersion == Phase1AuthorityContract.ContractVersion, "P1_CONTRACT_UNSUPPORTED", "Unsupported authority contract version."); Require(c.AuthorityType == Phase1AuthorityContract.AuthorityType && c.AuthorityVersion == Phase1AuthorityContract.AuthorityVersion, "P1_AUTHORITY_IDENTITY_INVALID", "Authority identity is invalid."); Require(c.CgIdentifier == Phase1AuthorityContract.CgIdentifier, "P1_CG_INVALID", "CG identifier must be CG1."); Require(c.ProjectorIdentity == Phase1AuthorityContract.ProjectorIdentity && c.CanonicalizationIdentity == Phase1AuthorityContract.CanonicalizationIdentity, "P1_RUNTIME_INCOMPATIBLE", "Runtime identity is incompatible.");
-        Require(c.ExecutionId != Guid.Empty && c.ExecutionId == r.ExecutionId && c.ExecutionId == s.ExecutionId, "P1_EXECUTION_ID_MISMATCH", "Execution IDs do not match."); Require(c.PlanId != Guid.Empty && c.PlanId == p.PlanId && c.PlanId == r.PlanId && c.PlanId == s.PlanId, "P1_PLAN_ID_MISMATCH", "Plan IDs do not match."); Require(!string.IsNullOrWhiteSpace(c.ResolvedLanguage) && c.ResolvedLanguage == p.RequestedLanguage && c.ResolvedLanguage == r.ResolvedLanguage, "P1_LANGUAGE_MISMATCH", "Languages do not match.");
-        Require(c.RequestedVariants.Count == c.RequestedVariants.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "P1_VARIANT_DUPLICATE", "Duplicate variants are forbidden."); Require(c.RequestedVariants.SequenceEqual(p.RequestedVariants) && c.RequestedVariants.SequenceEqual(r.RequestedVariants), "P1_VARIANT_MISMATCH", "Variants do not match."); Require(c.RequestedOutputs.SequenceEqual(p.RequestedOutputs) && c.RequestedOutputs.SequenceEqual(r.RequestedOutputs), "P1_OUTPUT_MISMATCH", "Outputs do not match.");
-        Require(c.EffectiveStartPhaseNo is >= 1 and <= 20 && c.EffectiveEndPhaseNo is >= 1 and <= 20 && c.EffectiveStartPhaseNo <= c.EffectiveEndPhaseNo, "P1_PHASE_RANGE_INVALID", "Effective phase range is invalid."); Require(c.RequestedStartPhaseNo == r.RequestedStartPhaseNo && c.RequestedEndPhaseNo == r.RequestedEndPhaseNo && c.EffectiveStartPhaseNo == r.EffectiveStartPhaseNo && c.EffectiveEndPhaseNo == r.EffectiveEndPhaseNo, "P1_PHASE_RANGE_MISMATCH", "Phase ranges do not match.");
-        Require(Phase1CanonicalJson.Checksum(p, nameof(Phase1SelectedPlan.SelectedPlanChecksum)) == p.SelectedPlanChecksum && c.SelectedPlanChecksum == p.SelectedPlanChecksum, "P1_SELECTED_PLAN_CHECKSUM_INVALID", "Selected-plan checksum is invalid."); Require(Phase1CanonicalJson.Checksum(r, nameof(Phase1ProductionRequest.RequestChecksum)) == r.RequestChecksum && c.ProductionRequestChecksum == r.RequestChecksum, "P1_REQUEST_CHECKSUM_INVALID", "Production-request checksum is invalid.");
-        var stateChecksum = Phase1CanonicalJson.Checksum(s, nameof(Phase1PipelineState.InitializedUtc)); Require(c.SupportingArtifactChecksums.GetValueOrDefault("pipeline-state.json") == stateChecksum && s.SelectedPlanChecksum == p.SelectedPlanChecksum && s.ProductionRequestChecksum == r.RequestChecksum, "P1_STATE_REFERENCE_INVALID", "Pipeline-state references are invalid."); Require(Phase1CanonicalJson.Checksum(new { p.SelectedPlanChecksum, r.RequestChecksum }) == c.RequestIdentityChecksum, "P1_REQUEST_IDENTITY_INVALID", "Request identity is invalid."); Require(Phase1CanonicalJson.Checksum(c, nameof(Phase1ExecutionContext.GeneratedUtc), nameof(Phase1ExecutionContext.AuthorityChecksum)) == c.AuthorityChecksum, "P1_AUTHORITY_CHECKSUM_INVALID", "Authority checksum is invalid.");
-        Require(s.DownstreamPhaseStates.All(x => !string.Equals(x.Value, "Succeeded", StringComparison.OrdinalIgnoreCase)), "P1_FALSE_DOWNSTREAM_SUCCESS", "Initial state asserts downstream success."); var json = Phase1CanonicalJson.Serialize(set); Require(!new[] { "apikey", "connectionstring", "accesstoken", "refreshtoken", "authorization", "sastoken", "credential", "secret" }.Any(x => json.Contains(x, StringComparison.OrdinalIgnoreCase)), "P1_SECRET_PROPERTY", "A secret-bearing property is present.");
+        var structural=new List<Phase1ValidationDiagnostic>();var compatibility=new List<Phase1ValidationDiagnostic>();var readiness=new List<Phase1ValidationDiagnostic>();
+        if(!Phase1PathSecurity.TryValidateRoot(fileSystem,workspaceRoot,authorityRoot,allowStaging,out var pathCode))structural.Add(new(pathCode,"Authority path failed canonical security policy.",authorityRoot));
+        Phase1AuthoritySet? set=null;
+        try{async Task<T?> Read<T>(string name){token.ThrowIfCancellationRequested();var path=Path.Combine(authorityRoot,name);if(!fileSystem.FileExists(path)){structural.Add(new("P1_ARTIFACT_MISSING",$"Required artifact '{name}' is missing.",path));return default;}await using var stream=fileSystem.OpenRead(path);return await JsonSerializer.DeserializeAsync<T>(stream,Options,token);}
+            var c=await Read<Phase1ExecutionContext>("execution-context.json");var p=await Read<Phase1SelectedPlan>("selected-plan.json");var r=await Read<Phase1ProductionRequest>("production-request.json");var st=await Read<Phase1PipelineState>("pipeline-state.json");if(c is not null&&p is not null&&r is not null&&st is not null)set=new(c,p,r,st);
+        }catch(JsonException ex){structural.Add(new("P1_RESUME_CORRUPT_JSON",ex.Message,authorityRoot));}
+        if(set is not null)ValidateSet(set,structural,compatibility,readiness);
+        var valid=structural.Count==0;var compatible=compatibility.Count==0;var downstreamReady=valid&&compatible&&readiness.Count==0;
+        return new(valid,compatible,valid&&compatible,downstreamReady,structural.Concat(compatibility).Concat(readiness).ToArray(),[],set?.ExecutionContext.ContractVersion,set?.ExecutionContext.AuthorityChecksum,set?.ExecutionContext.RequestIdentityChecksum,Phase1AuthorityContract.ProjectorIdentity,set);
+    }
+    private static void ValidateSet(Phase1AuthoritySet set,List<Phase1ValidationDiagnostic> e,List<Phase1ValidationDiagnostic> c,List<Phase1ValidationDiagnostic> ready)
+    {
+        var x=set.ExecutionContext;var p=set.SelectedPlan;var r=set.ProductionRequest;var s=set.PipelineState;void R(bool ok,string code,string message,List<Phase1ValidationDiagnostic>? target=null){if(!ok)(target??e).Add(new(code,message));}
+        R(x.ContractVersion==Phase1AuthorityContract.ContractVersion,"P1_AUTHORITY_CONTRACT_UNSUPPORTED","Unsupported authority contract.",c);R(p.ContractVersion==Phase1AuthorityContract.SelectedPlanContract,"P1_SELECTED_PLAN_CONTRACT_UNSUPPORTED","Unsupported selected-plan contract.",c);R(r.ContractVersion==Phase1AuthorityContract.ProductionRequestContract,"P1_PRODUCTION_REQUEST_CONTRACT_UNSUPPORTED","Unsupported production-request contract.",c);R(s.ContractVersion==Phase1AuthorityContract.PipelineStateContract,"P1_PIPELINE_STATE_CONTRACT_UNSUPPORTED","Unsupported pipeline-state contract.",c);
+        R(x.AuthorityType==Phase1AuthorityContract.AuthorityType&&x.AuthorityVersion==Phase1AuthorityContract.AuthorityVersion,"P1_AUTHORITY_IDENTITY_INVALID","Authority identity invalid.",c);R(x.CgIdentifier==Phase1AuthorityContract.CgIdentifier,"P1_CG_INVALID","CG identifier must be CG1.");R(x.OrchestrationVersion==Phase1AuthorityContract.OrchestrationVersion&&x.ProjectorIdentity==Phase1AuthorityContract.ProjectorIdentity&&x.CanonicalizationIdentity==Phase1AuthorityContract.CanonicalizationIdentity,"P1_RESUME_RUNTIME_INCOMPATIBLE","Runtime identity incompatible.",c);
+        R(x.ExecutionId!=Guid.Empty&&x.ExecutionId==r.ExecutionId&&x.ExecutionId==s.ExecutionId,"P1_EXECUTION_ID_MISMATCH","Execution IDs mismatch.");R(x.PlanId!=Guid.Empty&&x.PlanId==x.SelectedPlanId&&x.PlanId==p.PlanId&&x.PlanId==r.PlanId&&x.PlanId==s.PlanId,"P1_PLAN_ID_MISMATCH","Plan IDs mismatch.");R(x.EventIntelligenceId!=Guid.Empty,"P1_EVENT_ID_INVALID","Event intelligence ID missing.");R(x.CanonicalEventIdentity==p.CanonicalEventIdentity,"P1_EVENT_IDENTITY_MISMATCH","Canonical event identity mismatch.");R(x.ResolvedLanguage==p.RequestedLanguage&&x.ResolvedLanguage==r.ResolvedLanguage&&!string.IsNullOrWhiteSpace(x.ResolvedLanguage),"P1_LANGUAGE_MISMATCH","Language mismatch.");
+        R(x.RequestedVariants.SequenceEqual(p.RequestedVariants)&&x.RequestedVariants.SequenceEqual(r.RequestedVariants),"P1_VARIANT_MISMATCH","Variants mismatch.");R(x.RequestedOutputs.SequenceEqual(p.RequestedOutputs)&&x.RequestedOutputs.SequenceEqual(r.RequestedOutputs),"P1_OUTPUT_MISMATCH","Outputs mismatch.");
+        bool Range(int a,int b)=>a is>=1 and<=20&&b is>=1 and<=20&&a<=b;R(Range(x.RequestedStartPhaseNo,x.RequestedEndPhaseNo),"P1_REQUESTED_PHASE_RANGE_INVALID","Requested range invalid.");R(Range(x.EffectiveStartPhaseNo,x.EffectiveEndPhaseNo),"P1_EFFECTIVE_PHASE_RANGE_INVALID","Effective range invalid.");R(x.RequestedStartPhaseNo==r.RequestedStartPhaseNo&&x.RequestedEndPhaseNo==r.RequestedEndPhaseNo&&x.EffectiveStartPhaseNo==r.EffectiveStartPhaseNo&&x.EffectiveEndPhaseNo==r.EffectiveEndPhaseNo,"P1_PHASE_RANGE_MISMATCH","Ranges mismatch.");IEnumerable<int> planned=Range(x.EffectiveStartPhaseNo,x.EffectiveEndPhaseNo)?Enumerable.Range(x.EffectiveStartPhaseNo,x.EffectiveEndPhaseNo-x.EffectiveStartPhaseNo+1):Array.Empty<int>();R(s.PlannedPhases.SequenceEqual(planned),"P1_PLANNED_PHASES_MISMATCH","Planned phases mismatch.",ready);R(s.ExecutionContextPath=="01-plan/execution-context.json","P1_AUTHORITY_PATH_INVALID","Authority reference invalid.");R(s.InvalidationBoundary==2,"P1_INVALIDATION_BOUNDARY_INVALID","Invalidation boundary invalid.");R(s.Phase1Status=="Initialized","P1_PHASE1_STATE_INVALID","Phase 1 state invalid.",ready);R(!s.DownstreamPhaseStates.Any(v=>v.Value.Equals("Succeeded",StringComparison.OrdinalIgnoreCase)),"P1_FALSE_DOWNSTREAM_SUCCESS","Downstream success asserted.",ready);
+        var ps=Phase1CanonicalJson.Checksum(p,nameof(Phase1SelectedPlan.SelectedPlanChecksum));var rs=Phase1CanonicalJson.Checksum(r,nameof(Phase1ProductionRequest.RequestChecksum));var ss=Phase1CanonicalJson.Checksum(s,nameof(Phase1PipelineState.InitializedUtc));R(ps==p.SelectedPlanChecksum&&x.SelectedPlanChecksum==ps,"P1_SELECTED_PLAN_CHECKSUM_INVALID","Selected-plan checksum invalid.");R(rs==r.RequestChecksum&&x.ProductionRequestChecksum==rs,"P1_REQUEST_CHECKSUM_INVALID","Request checksum invalid.");var expected=new Dictionary<string,string>{{"selected-plan.json",ps},{"production-request.json",rs},{"pipeline-state.json",ss}};R(x.SupportingArtifactChecksums.Count==3&&expected.All(k=>x.SupportingArtifactChecksums.TryGetValue(k.Key,out var v)&&v==k.Value),"P1_SUPPORTING_CHECKSUM_INVALID","Supporting checksum map invalid.");R(Phase1CanonicalJson.Checksum(new{p.SelectedPlanChecksum,r.RequestChecksum})==x.RequestIdentityChecksum,"P1_REQUEST_IDENTITY_INVALID","Request identity invalid.");R(Phase1CanonicalJson.Checksum(x,nameof(Phase1ExecutionContext.GeneratedUtc),nameof(Phase1ExecutionContext.AuthorityChecksum))==x.AuthorityChecksum,"P1_AUTHORITY_CHECKSUM_INVALID","Authority checksum invalid.");
+        var json=Phase1CanonicalJson.Serialize(set);R(!new[]{"apikey","connectionstring","accesstoken","refreshtoken","authorization","sastoken","credential","secret","password"}.Any(term=>json.Contains(term,StringComparison.OrdinalIgnoreCase)),"P1_SECRET_CONTENT","Secret-bearing content detected.");R(!Path.IsPathRooted(x.WorkspaceIdentity),"P1_WORKSPACE_IDENTITY_UNSAFE","Workspace identity must not be absolute.");
     }
 }
 
-public sealed class Phase1AuthorityPersistence(IPhase1AuthorityValidator validator) : IPhase1AuthorityPersistence, IPhase1AuthorityReader
+public sealed class Phase1AuthorityPersistence(IPhase1AuthorityValidator validator,IPhase1FileSystem fileSystem,IPhase1ExecutionLock executionLock):IPhase1AuthorityPersistence,IPhase1AuthorityReader
 {
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-    public Task<Phase1AuthorityValidationResult> ReadAsync(string workspaceRoot, CancellationToken token) => validator.ValidateAsync(workspaceRoot, Path.Combine(workspaceRoot, Phase1AuthorityContract.DirectoryName), false, token);
-    public async Task<Phase1PersistenceResult> PersistAsync(string workspaceRoot, Phase1AuthoritySet authority, bool overwrite, CancellationToken token)
+    public Phase1AuthorityPersistence(IPhase1AuthorityValidator validator):this(validator,new Phase1FileSystem(),new InProcessPhase1ExecutionLock()){}
+    public Task<Phase1AuthorityValidationResult> ReadAsync(string root,CancellationToken token)=>validator.ValidateAsync(root,Path.Combine(root,Phase1AuthorityContract.DirectoryName),false,token);
+    public async Task<Phase1PersistenceResult> PersistAsync(string workspaceRoot,Phase1AuthoritySet authority,bool overwrite,CancellationToken token)
     {
-        var root = Path.GetFullPath(workspaceRoot); var gate = Locks.GetOrAdd(root, _ => new SemaphoreSlim(1, 1)); await gate.WaitAsync(token);
-        try
-        {
-            var active = Path.Combine(root, Phase1AuthorityContract.DirectoryName);
-            if (!overwrite && Directory.Exists(active)) { var existing = await validator.ValidateAsync(root, active, false, token); if (existing.IsReusable && existing.RequestIdentityChecksum == authority.ExecutionContext.RequestIdentityChecksum) return new(true, Paths(active), existing, []); }
-            token.ThrowIfCancellationRequested(); var staging = Path.Combine(root, $".01-plan.staging-{Guid.NewGuid():N}"); var backup = Path.Combine(root, $".01-plan.backup-{Guid.NewGuid():N}"); Directory.CreateDirectory(staging);
-            try
-            {
-                await WriteAsync(staging, "selected-plan.json", authority.SelectedPlan, token); await WriteAsync(staging, "production-request.json", authority.ProductionRequest, token); await WriteAsync(staging, "pipeline-state.json", authority.PipelineState, token); await WriteAsync(staging, "execution-context.json", authority.ExecutionContext, token);
-                var staged = await validator.ValidateAsync(root, staging, true, token); if (!staged.IsValid) throw new InvalidOperationException("Phase 1 staged validation failed: " + string.Join("; ", staged.Errors.Select(x => x.Code))); token.ThrowIfCancellationRequested();
-                if (Directory.Exists(active)) Directory.Move(active, backup); try { Directory.Move(staging, active); } catch { if (Directory.Exists(backup) && !Directory.Exists(active)) Directory.Move(backup, active); throw; } if (Directory.Exists(backup)) Directory.Delete(backup, true);
-                var committed = await validator.ValidateAsync(root, active, false, token); return new(false, Paths(active), committed, []);
-            }
-            finally { if (Directory.Exists(staging)) Directory.Delete(staging, true); }
-        }
-        finally { gate.Release(); }
+        var root=fileSystem.GetFullPath(workspaceRoot);await using var lease=await executionLock.AcquireAsync(root,token);var warnings=new List<string>();await RecoverAsync(root,warnings,token);var active=Path.Combine(root,Phase1AuthorityContract.DirectoryName);var existing=await validator.ValidateAsync(root,active,false,token);
+        if(!overwrite&&existing.IsReusable&&existing.IsDownstreamReady&&existing.RequestIdentityChecksum==authority.ExecutionContext.RequestIdentityChecksum)return new(true,Paths(active),existing,warnings);
+        token.ThrowIfCancellationRequested();var id=Guid.NewGuid().ToString("N");var staging=Path.Combine(root,$".01-plan.staging-{id}");var backup=Path.Combine(root,$".01-plan.backup-{id}");fileSystem.CreateDirectory(staging);
+        try{await Write(staging,"selected-plan.json",authority.SelectedPlan,token);await Write(staging,"production-request.json",authority.ProductionRequest,token);await Write(staging,"pipeline-state.json",authority.PipelineState,token);await Write(staging,"execution-context.json",authority.ExecutionContext,token);var staged=await validator.ValidateAsync(root,staging,true,token);if(!staged.IsValid||!staged.IsCompatible||!staged.IsDownstreamReady)throw new InvalidOperationException("P1_STAGED_VALIDATION_FAILED: "+string.Join(';',staged.Errors.Select(x=>x.Code)));token.ThrowIfCancellationRequested();
+            var hadActive=fileSystem.DirectoryExists(active);if(hadActive)fileSystem.MoveDirectory(active,backup);try{fileSystem.MoveDirectory(staging,active);}catch{if(hadActive&&fileSystem.DirectoryExists(backup)&&!fileSystem.DirectoryExists(active))fileSystem.MoveDirectory(backup,active);throw;}
+            // Directory renames form a deliberately non-interruptible transaction. Cancellation resumes after a valid active set exists.
+            var committed=await validator.ValidateAsync(root,active,false,new CancellationToken(canceled: false));if(!committed.IsValid||!committed.IsCompatible||!committed.IsDownstreamReady){var failed=Path.Combine(root,$".01-plan.failed-{id}");if(fileSystem.DirectoryExists(active))fileSystem.MoveDirectory(active,failed);if(hadActive&&fileSystem.DirectoryExists(backup))fileSystem.MoveDirectory(backup,active);var restored=hadActive?await validator.ValidateAsync(root,active,false,new CancellationToken(canceled: false)):null;if(hadActive&&(restored is null||!restored.IsValid||!restored.IsDownstreamReady))throw new InvalidOperationException("P1_ROLLBACK_VALIDATION_FAILED");throw new InvalidOperationException("P1_COMMITTED_VALIDATION_FAILED_ROLLBACK_RESTORED");}
+            if(fileSystem.DirectoryExists(backup))fileSystem.DeleteDirectory(backup,true);token.ThrowIfCancellationRequested();return new(false,Paths(active),committed,warnings);
+        }finally{if(fileSystem.DirectoryExists(staging))try{fileSystem.DeleteDirectory(staging,true);}catch(IOException ex){warnings.Add("P1_STAGING_CLEANUP_WARNING: "+ex.Message);}}
     }
-    private static Task WriteAsync<T>(string root, string name, T value, CancellationToken token) => File.WriteAllTextAsync(Path.Combine(root, name), Phase1CanonicalJson.Serialize(value), token);
-    private static string[] Paths(string root) => new[] { "execution-context.json", "selected-plan.json", "production-request.json", "pipeline-state.json" }.Select(x => Path.Combine(root, x)).ToArray();
+    private async Task RecoverAsync(string root,List<string>warnings,CancellationToken token){token.ThrowIfCancellationRequested();var active=Path.Combine(root,"01-plan");var activeValidation=await validator.ValidateAsync(root,active,false,token);var staging=fileSystem.EnumerateDirectories(root,".01-plan.staging-*").Where(x=>Phase1PathSecurity.IsApprovedTemporaryName(fileSystem.GetFileName(x))).ToArray();foreach(var s in staging){token.ThrowIfCancellationRequested();try{fileSystem.DeleteDirectory(s,true);}catch(IOException ex){warnings.Add("P1_RECOVERY_CLEANUP_WARNING: "+ex.Message);}}
+        var backups=fileSystem.EnumerateDirectories(root,".01-plan.backup-*").Where(x=>Phase1PathSecurity.IsApprovedTemporaryName(fileSystem.GetFileName(x))).OrderByDescending(fileSystem.GetLastWriteTimeUtc).ThenByDescending(x=>x,StringComparer.Ordinal).ToArray();if(activeValidation.IsValid&&activeValidation.IsDownstreamReady){foreach(var b in backups)try{fileSystem.DeleteDirectory(b,true);}catch(IOException ex){warnings.Add("P1_RECOVERY_CLEANUP_WARNING: "+ex.Message);}return;}foreach(var b in backups){token.ThrowIfCancellationRequested();var v=await validator.ValidateAsync(root,b,true,token);if(!v.IsValid||!v.IsCompatible||!v.IsDownstreamReady)continue;if(fileSystem.DirectoryExists(active))fileSystem.MoveDirectory(active,Path.Combine(root,$".01-plan.failed-{Guid.NewGuid():N}"));fileSystem.MoveDirectory(b,active);var restored=await validator.ValidateAsync(root,active,false,token);if(!restored.IsValid||!restored.IsDownstreamReady)throw new InvalidOperationException("P1_RECOVERY_RESTORED_VALIDATION_FAILED");warnings.Add("P1_RECOVERY_BACKUP_RESTORED");break;}}
+    private Task Write<T>(string root,string name,T value,CancellationToken token)=>fileSystem.WriteAllTextAsync(Path.Combine(root,name),Phase1CanonicalJson.Serialize(value),token);private static string[] Paths(string root)=>["execution-context.json","selected-plan.json","production-request.json","pipeline-state.json"].Select(x=>Path.Combine(root,x)).ToArray();
 }

@@ -618,6 +618,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOrionContentGenerationPlanSeeder, OrionContentGenerationPlanSeeder>();
         services.AddScoped<IContentPlanProductionRequestMapper, ContentPlanProductionRequestMapper>();
         services.AddSingleton<IPhase1AuthorityProjector, Phase1AuthorityProjector>();
+        services.AddSingleton<IPhase1FileSystem, Phase1FileSystem>();
+        services.AddSingleton<IPhase1ExecutionLock, InProcessPhase1ExecutionLock>();
         services.AddSingleton<IPhase1AuthorityValidator, Phase1AuthorityValidator>();
         services.AddSingleton<Phase1AuthorityPersistence>();
         services.AddSingleton<IPhase1AuthorityPersistence>(sp => sp.GetRequiredService<Phase1AuthorityPersistence>());
