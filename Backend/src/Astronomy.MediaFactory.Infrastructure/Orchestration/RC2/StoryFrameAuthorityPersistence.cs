@@ -11,6 +11,7 @@ public interface IStoryFrameFileSystem
     void DeleteDirectory(string path, bool recursive);
     IEnumerable<string> EnumerateDirectories(string path, string searchPattern);
     DateTimeOffset GetDirectoryLastWriteTimeUtc(string path);
+    Stream OpenRead(string path);
 }
 
 public sealed class StoryFrameFileSystem : IStoryFrameFileSystem
@@ -23,6 +24,7 @@ public sealed class StoryFrameFileSystem : IStoryFrameFileSystem
     public IEnumerable<string> EnumerateDirectories(string path, string searchPattern) =>
         Directory.Exists(path) ? Directory.EnumerateDirectories(path, searchPattern, SearchOption.TopDirectoryOnly) : [];
     public DateTimeOffset GetDirectoryLastWriteTimeUtc(string path) => Directory.GetLastWriteTimeUtc(path);
+    public Stream OpenRead(string path) => File.OpenRead(path);
 }
 
 public sealed record StoryFrameCommitRequest(string ActiveDirectory, string StagingDirectory, string BackupDirectory);
@@ -120,17 +122,21 @@ public sealed class StoryFrameTemporaryDirectoryRecovery(IStoryFrameFileSystem f
         void Delete(string path) { if (fileSystem.DirectoryExists(path)) { fileSystem.DeleteDirectory(path, true); deleted.Add(path); } }
     }
 
-    private static async Task<bool> IsValidAsync(string directory, StoryFrameRecoveryRequest request, CancellationToken token)
+    private async Task<bool> IsValidAsync(string directory, StoryFrameRecoveryRequest request, CancellationToken token)
     {
         try
         {
-            async Task<T> Read<T>(string name) => (await System.Text.Json.JsonSerializer.DeserializeAsync<T>(
-                File.OpenRead(Path.Combine(directory, name)), JsonOptions, token))!;
+            async Task<T> Read<T>(string name)
+            {
+                await using var stream = fileSystem.OpenRead(Path.Combine(directory, name));
+                return (await System.Text.Json.JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, token))!;
+            }
             var result = new StoryFrameIntegrationResult(await Read<StoryFramesAuthority>("story-frames.json"),
                 await Read<StoryFrameIndex>("story-frame-index.json"), await Read<StoryFrameDiagnostics>("story-frame-diagnostics.json"));
             return StoryFrameArtifactValidator.ValidateDetailed(result, request.ValidationRequest, request.CompatibilityContext).IsValid;
         }
-        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or InvalidOperationException) { return false; }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { return false; }
     }
 }
 
@@ -139,7 +145,7 @@ public static class StoryFramePathSecurity
     public static bool IsCanonicalContainedPath(string root, string candidate, string expectedDirectoryName, string expectedFileName)
     {
         if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(candidate)
-            || candidate.Contains(':') && !Path.IsPathRooted(candidate)
+            || HasAlternateDataStream(candidate)
             || candidate.Contains("staging", StringComparison.OrdinalIgnoreCase)
             || candidate.Contains("backup", StringComparison.OrdinalIgnoreCase)) return false;
         try
@@ -153,5 +159,16 @@ public static class StoryFramePathSecurity
                 && string.Equals(Path.GetFileName(full), expectedFileName, StringComparison.Ordinal);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+    }
+
+    private static bool HasAlternateDataStream(string path)
+    {
+        // A colon is valid only as the drive designator in a Windows rooted path. On Unix,
+        // Windows paths are not canonical local paths and any colon is therefore rejected.
+        var firstColon = path.IndexOf(':');
+        if (firstColon < 0) return false;
+        var hasDriveDesignator = firstColon == 1 && char.IsAsciiLetter(path[0])
+            && path.Length > 2 && (path[2] == '\\' || path[2] == '/');
+        return !hasDriveDesignator || path.IndexOf(':', firstColon + 1) >= 0;
     }
 }
