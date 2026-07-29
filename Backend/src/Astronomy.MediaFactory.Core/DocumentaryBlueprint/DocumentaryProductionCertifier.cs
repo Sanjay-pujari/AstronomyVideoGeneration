@@ -3,6 +3,29 @@ namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 /// <summary>Read-only final architecture certifier for the retained O2.16-O2.18 production bridge.</summary>
 public sealed class DocumentaryProductionCertifier
 {
+    /// <summary>Certifies the complete Phase 4 blueprint authority before production assets exist.</summary>
+    public DocumentaryBlueprintCertification Certify(DocumentaryBlueprintCertificationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var variants = new[] { request.Master, request.Long, request.Short };
+        var blocking = new List<string>();
+        foreach (var artifact in variants)
+            if (!DocumentaryBlueprintChecksum.HasValidChecksum(artifact)) blocking.Add($"Invalid {artifact.Metadata.Variant} blueprint checksum.");
+        if (request.Phase4Diagnostics.ValidationErrors.Count != 0) blocking.AddRange(request.Phase4Diagnostics.ValidationErrors);
+        var requested = request.RequestedVariants.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        var warnings = variants.SelectMany(x => x.Warnings).Concat(request.Phase4Diagnostics.Warnings).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var passed = blocking.Count == 0;
+        var status = !passed ? DocumentaryBlueprintCertificationStatus.Rejected : warnings.Length == 0 ? DocumentaryBlueprintCertificationStatus.Certified : DocumentaryBlueprintCertificationStatus.CertifiedWithWarnings;
+        var scenes = variants.SelectMany(a => a.Blueprint.Scenes.Select(s => new DocumentaryBlueprintSceneOutcome(s.SceneId, a.Metadata.Variant, s.SceneNumber, s.NarrativeStage, s.SceneRole, passed, s.KnowledgeReferences.Select(k => k.KnowledgeEntryId).Order(StringComparer.Ordinal).ToArray()))).ToArray();
+        var source = DocumentaryBlueprintCertificationChecksum.SourcePhase4(request);
+        var value = new DocumentaryBlueprintCertification($"{request.ExecutionId}.blueprint-certification", request.ExecutionId, request.PlanId, request.EventId, request.Language, request.Profile, source,
+            request.Master.Metadata.Checksum, request.Long.Metadata.Checksum, request.Short.Metadata.Checksum, "1.0", nameof(DocumentaryProductionCertifier), status, passed,
+            blocking.Distinct().Order(StringComparer.Ordinal).ToArray(), warnings, passed ? requested : [], passed ? [] : requested, scenes,
+            request.Master.Coverage.CoveredViewerQuestionIds.Order(StringComparer.Ordinal).ToArray(), scenes.SelectMany(x => x.KnowledgeReferenceIds).Distinct().Order(StringComparer.Ordinal).ToArray(),
+            request.Master.Blueprint.Scenes.Select(x => $"{x.SceneId}:{x.SceneRole}").ToArray(), DateTimeOffset.UtcNow, string.Empty);
+        return value with { SemanticChecksum = DocumentaryBlueprintCertificationChecksum.Calculate(value) };
+    }
+
     public DocumentaryProductionCertificationResult Certify(DocumentaryProductionCertificationRequest request)
     {
         var reasons=DocumentaryProductionCertificationValidator.ValidateRequest(request);
