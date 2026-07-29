@@ -485,10 +485,19 @@ public sealed partial class ProductionPipelineExecutionService(
             ||!document.RootElement.TryGetProperty("phase6Artifacts",out var entries)||entries.ValueKind!=JsonValueKind.Array) return false;
         var actual=entries.EnumerateArray().Select(e=>(Path:NormalizePath(e.GetProperty("path").GetString()??""),Role:e.GetProperty("role").GetString()??"")).ToArray();
         var roles=new[]{"Authoritative","DownstreamContract","Supporting"};
-        var workspace=Path.GetFullPath(context.OutputRoot)+Path.DirectorySeparatorChar;
+        var workspace=Path.GetFullPath(context.OutputRoot).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar)+Path.DirectorySeparatorChar;
         return actual.Length==3&&actual.Count(x=>x.Role=="Authoritative")==1&&actual.Select(x=>x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count()==3
-            &&actual.All(x=>Path.GetFullPath(x.Path).StartsWith(workspace,StringComparison.OrdinalIgnoreCase))
+            &&actual.All(x=>IsSafePhase6AuthorityPath(x.Path,workspace))
             &&expectedPaths.Select((p,i)=>actual.Any(x=>x.Path==NormalizePath(p)&&x.Role==roles[i])).All(x=>x);
+    }
+
+    private static bool IsSafePhase6AuthorityPath(string path,string workspace)
+    {
+        if(string.IsNullOrWhiteSpace(path)||path.Contains("staging",StringComparison.OrdinalIgnoreCase)||path.Contains("backup",StringComparison.OrdinalIgnoreCase)) return false;
+        var full=Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+        return full.StartsWith(workspace,StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetDirectoryName(full),Path.Combine(workspace,"06-story-frames").TrimEnd(Path.DirectorySeparatorChar),StringComparison.OrdinalIgnoreCase)
+            && new[]{"story-frames.json","story-frame-index.json","story-frame-diagnostics.json"}.Contains(Path.GetFileName(full),StringComparer.Ordinal);
     }
 
     private static bool Phase4ManifestIsValid(ProductionPhaseContext context, params string[] expectedPaths)

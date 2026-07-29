@@ -628,6 +628,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Rc2PipelinePhaseRegistry>();
         services.AddScoped<SceneIntentBuilder>();
         services.AddScoped<CreativeStoryboardBuilder>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.ICertifiedStoryFrameBuilder, CertifiedStoryFrameBuilderAdapter>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IStoryFrameIntegrationService, StoryFrameIntegrationService>();
         services.AddScoped<NarrationPromptComposer>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries.DocumentaryVocabulary>();
