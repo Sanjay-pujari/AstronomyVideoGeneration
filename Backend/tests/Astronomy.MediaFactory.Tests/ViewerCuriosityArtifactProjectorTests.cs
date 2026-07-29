@@ -1,4 +1,8 @@
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Extensions;
+using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -12,7 +16,7 @@ public sealed class ViewerCuriosityArtifactProjectorTests
         var result = Project();
         Assert.Equal(2, result.ViewerQuestionBank.Questions.Count);
         Assert.Equal("en", result.ViewerQuestionBank.Metadata.Language);
-        Assert.All(result.ViewerQuestionBank.Questions, q => Assert.Equal([EventId.ToString("D")], q.KnowledgeReferences));
+        Assert.All(result.ViewerQuestionBank.Questions, q => Assert.All(q.KnowledgeReferences, r => Assert.Equal("Resolved", r.ResolutionStatus)));
     }
 
     [Fact]
@@ -28,8 +32,69 @@ public sealed class ViewerCuriosityArtifactProjectorTests
     }
 
     [Fact]
+    public void ViewerCuriosityArtifactProjector_keeps_question_id_when_source_order_changes()
+    {
+        var first = Project().ViewerQuestionBank.Questions.Single(x => x.QuestionText.StartsWith("What", StringComparison.Ordinal)).QuestionId;
+        var reordered = Source() with { Answers = Source().Answers.Select(x => x with { DisplayOrder = 10 - x.DisplayOrder }).ToArray() };
+        var second = projector.Project(reordered, Intelligence(), ExecutionId, "Gold", ["Long", "Short"], CreatedUtc).ViewerQuestionBank.Questions.Single(x => x.QuestionText.StartsWith("What", StringComparison.Ordinal)).QuestionId;
+        Assert.Equal(first, second);
+    }
+
+    [Theory]
+    [InlineData("What", "Recognition")]
+    [InlineData("Why", "ScientificExplanation")]
+    [InlineData("Where", "LocationGuidance")]
+    [InlineData("When", "TimingGuidance")]
+    [InlineData("How", "ObservationGuidance")]
+    [InlineData("Action", "PracticalViewingAdvice")]
+    public void ViewerCuriosityArtifactProjector_maps_known_question_types(string type, string category)
+    {
+        var source = Source() with { Answers = [Source().Answers[0] with { QuestionType = type }] };
+        Assert.Equal(category, projector.Project(source, Intelligence(), ExecutionId, "Gold", ["Long"], CreatedUtc).ViewerQuestionBank.Questions.Single().Category);
+    }
+
+    [Fact]
+    public void ViewerCuriosityChecksum_is_stable_after_round_trip()
+    {
+        var questions = Project().ViewerQuestionBank.Questions;
+        var json = System.Text.Json.JsonSerializer.Serialize(questions, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        var roundTrip = System.Text.Json.JsonSerializer.Deserialize<ViewerQuestion[]>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        Assert.Equal(ViewerCuriosityChecksum.For(questions), ViewerCuriosityChecksum.For(roundTrip));
+    }
+
+    [Fact]
+    public void ViewerCuriosityChecksum_is_stable_when_dictionary_insertion_order_changes()
+    {
+        var plan = Project().QuestionPlan;
+        var reversed = plan with { CategoryCoverage = plan.CategoryCoverage.Reverse().ToDictionary(x => x.Key, x => x.Value) };
+        Assert.Equal(ViewerCuriosityChecksum.ForPlan(plan), ViewerCuriosityChecksum.ForPlan(reversed));
+    }
+
+    [Fact]
+    public void ViewerCuriosityChecksum_changes_when_semantic_payload_changes() =>
+        Assert.NotEqual(ViewerCuriosityChecksum.For(Project().ViewerQuestionBank.Questions), ViewerCuriosityChecksum.For(Project().ViewerQuestionBank.Questions.Select(x => x with { QuestionText = x.QuestionText + " changed" }).ToArray()));
+
+    [Fact]
+    public void ViewerCuriosityChecksum_ignores_created_utc()
+    {
+        var first = Project();
+        var second = projector.Project(Source(), Intelligence(), ExecutionId, "Gold", ["Long", "Short"], CreatedUtc.AddDays(1));
+        Assert.Equal(first.ViewerQuestionBank.Metadata.Checksum, second.ViewerQuestionBank.Metadata.Checksum);
+    }
+
+    [Fact]
+    public void AddMediaFactory_registers_mandatory_viewer_curiosity_projector()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMediaFactory(new ConfigurationBuilder().Build());
+        Assert.Contains(services, x => x.ServiceType == typeof(IViewerCuriosityArtifactProjector) && x.ImplementationType == typeof(ViewerCuriosityArtifactProjector) && x.Lifetime == ServiceLifetime.Singleton);
+        Assert.False(typeof(ProductionPipelineExecutionService).GetConstructors().Single().GetParameters().Single(x => x.ParameterType == typeof(IViewerCuriosityArtifactProjector)).HasDefaultValue);
+    }
+
+    [Fact]
     public void ViewerCuriosityArtifactProjector_maps_knowledge_references() =>
-        Assert.All(Project().ViewerQuestionBank.Questions, x => Assert.Contains(EventId.ToString("D"), x.KnowledgeReferences));
+        Assert.All(Project().ViewerQuestionBank.Questions, x => Assert.All(x.KnowledgeReferences, r => Assert.Equal("plan-input/production-event-intelligence.json", r.SourceArtifact)));
 
     [Fact]
     public void ViewerCuriosityArtifactProjector_derives_learning_objectives()
@@ -43,7 +108,7 @@ public sealed class ViewerCuriosityArtifactProjectorTests
     public void ViewerCuriosityArtifactProjector_deduplicates_normalized_questions()
     {
         var source = Source() with { Answers = [Source().Answers[0], Source().Answers[0] with { QuestionText = "  WHAT   is visible ", DisplayOrder = 3 }] };
-        var result = projector.Project(source, Intelligence(), ExecutionId, "Gold", CreatedUtc);
+        var result = projector.Project(source, Intelligence(), ExecutionId, "Gold", ["Long", "Short"], CreatedUtc);
         Assert.Single(result.ViewerQuestionBank.Questions);
         Assert.Single(result.QuestionPlan.ProjectionWarnings);
     }
@@ -106,7 +171,7 @@ public sealed class ViewerCuriosityArtifactProjectorTests
         Assert.Equal(value.ViewerQuestionBank.Questions.Count, value.QuestionPlan.CategoryCoverage.Values.Sum());
     }
 
-    private ViewerCuriosityProjection Project() => projector.Project(Source(), Intelligence(), ExecutionId, "Gold", CreatedUtc);
+    private ViewerCuriosityProjection Project() => projector.Project(Source(), Intelligence(), ExecutionId, "Gold", ["Long", "Short"], CreatedUtc);
     private static ViewerCuriosityProjection Rechecksum(ViewerCuriosityProjection value) => value with
     {
         ViewerQuestionBank = value.ViewerQuestionBank with { Metadata = value.ViewerQuestionBank.Metadata with { Checksum = ViewerCuriosityChecksum.For(value.ViewerQuestionBank.Questions) } }

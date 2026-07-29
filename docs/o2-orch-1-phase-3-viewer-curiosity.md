@@ -18,7 +18,8 @@ request was added.
 | Phase registration | `ProductionPipelineExecutionService` | `PhaseDefinitions` | Phase number remains 3 |
 | Question provider | `IQuestionEngine` / `AstronomyQuestionEngine` | `GenerateQuestionAnswersAsync` | None |
 | Phase 3 | `ProductionPipelineExecutionService` | `PhaseGenerateQuestionsAsync` | Project, validate, and write four canonical files |
-| Serialization/writer | Pipeline `JsonOptions` and phase writers | `WritePhaseManifestAsync` | Atomic JSON helper for the four related writes; manifest roles added |
+| Production composition | `ServiceCollectionExtensions.AddMediaFactory` | `TryAddSingleton<IViewerCuriosityArtifactProjector, ViewerCuriosityArtifactProjector>` | Stateless projector is mandatory in the runner constructor; there is no runner fallback |
+| Serialization/writer | Pipeline `JsonOptions` and phase writers | `PhaseGenerateQuestionsAsync` / `WritePhaseManifestAsync` | Complete set is written to staging and installed by directory rename; manifest roles added |
 | Checksum | SHA-256 content identity used throughout production | `ViewerCuriosityChecksum` | Canonical payload-only SHA-256 for new artifacts |
 | Validation | Phase execution validation | `ViewerCuriosityArtifactValidator.Validate` | Validate metadata, identity, references, counts, and checksums before success |
 | Resume/state | `phase-XX-validation.json` | `PreviousPhaseSucceeded` | Existing phase-state mechanism retained |
@@ -37,9 +38,31 @@ legacy consumers. Phase 3 additionally owns `03-questions/`:
 | `question-plan.json` | Supporting |
 
 The new artifacts carry execution ID (the stable plan execution ID), language, profile,
-schema version `1.0`, UTC creation time, and a payload checksum. IDs and checksums are
+schema version `1.1`, UTC creation time, and a payload checksum. IDs and checksums are
 deterministic; creation time is deliberately excluded from checksums. The phase manifest
 records each path and role.
+
+## Grounding, identity, and variant scope
+
+Each typed `ViewerKnowledgeReference` identifies a concrete JSON field in the Phase 2
+`plan-input/production-event-intelligence.json` artifact. Its reference type is
+`ProductionIntelligenceField`, its source artifact is explicit, and accepted references
+have `Resolved` status. Recognition, timing/location, observing, and scientific questions
+select only corresponding non-empty Phase 2 fields. Scientific and cultural/historical
+categories are rejected by validation without a resolved reference; unsupported source
+types map deliberately to `Other`, produce a warning, and are listed for editorial
+attention rather than being mislabeled as comparisons.
+
+Applicable variants come only from explicit `RequestedOutputs` (`long`/`longVideo` and
+`short`/`shortVideo`), not profile-name substring inference. Question identity includes
+normalized profile, language, question text, category, sorted typed references, and sorted
+variant scope. Provider display order is excluded from identity, retained as
+`SourceDisplayOrder`, and canonical `Order` is normalized to `1..N` after deduplication.
+Priority uses category importance first and source display order as its deterministic
+fallback because the current Question Engine DTO has no source-priority field.
+
+Checksums serialize payloads without creation timestamps or checksum fields and key-sort
+every plan dictionary. Semantically unordered identity inputs are sorted.
 
 ## Invocation
 
@@ -89,8 +112,11 @@ response, manifest, and phase validation files are the current status contract.
 
 Dry-run still avoids all provider calls and authoritative writes. A failed-only retry
 skips Phase 3 only when its previous validation says `Succeeded` and required outputs
-are valid; partial or corrupt authority must be regenerated under pipeline retry
-semantics. Overwrite removes Phase 3-owned outputs and downstream Phase 4–20 validation
+are valid. Resume deserializes the compatibility DTO and checks event identity, language,
+collection/count reconciliation, supporting checksums, and the authoritative bank. It
+also parses `phase-manifest.json`, checks plan identity, all required paths and roles,
+workspace containment, uniqueness, and exactly one Phase 3 authority. Missing, malformed,
+unrelated, or role-inconsistent state is not reused. Overwrite removes Phase 3-owned outputs and downstream Phase 4–20 validation
 records while preserving Phase 1–2. Legacy consumers continue to read the unchanged
 `question-engine/question-answer-set.json`.
 
@@ -103,9 +129,14 @@ does not migrate Phase 7.
 Confirm Phase 1 `plan-input/content-plan-production-request.json`, Phase 2
 `plan-input/production-event-intelligence.json`, all four Phase 3 files, the phase
 manifest, and `validation/phase-03-validation.json`. Verify one language/profile,
-resolved event knowledge references, nonduplicate questions, objective references,
+resolved Phase 2 field knowledge references, nonduplicate questions, objective references,
 reconciled plan counts, and checksums. With `endPhaseNo=3`, no blueprint, narration,
 media, or publishing output should be generated.
+
+Focused tests cover type mapping, stable semantic IDs across source reordering, typed
+knowledge references, dictionary-order-independent and round-trip checksums, creation-time
+exclusion, and production DI registration. Existing pipeline tests cover overwrite cleanup
+and the public orchestration contract.
 
 ## Deferred O2.ORCH.2 work
 
