@@ -124,7 +124,7 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(executionContext.ValidationRoot!);
 
         var context = new ProductionPhaseContext(request, productionRequest, eventIdResolution.EventId ?? Guid.Empty, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite, deletedDirectoriesDueToOverwrite, skippedDirectoriesDueToOverwrite);
-        if (request.OverwriteExisting)
+        if (request.OverwriteExisting && startPhaseNo != 1)
         {
             LogPhase15SrtExistence(context, "before-cleanup");
             ClearPhaseRangeOutputsForOverwrite(context);
@@ -179,16 +179,19 @@ public sealed partial class ProductionPipelineExecutionService(
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
             }
-            if (request.RetryFailedOnly && phase.No != 6 && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
+            if (request.RetryFailedOnly && phase.No is not (1 or 6) && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], "retryFailedOnly=true: previous successful phase was not rerun.", false, cancellationToken);
                 phaseResults.Add(skipped);
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
             }
-            var result = phase.No == 6
-                ? await ExecutePhase6Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken)
-                : await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken);
+            var result = phase.No switch
+            {
+                1 => await ExecutePhase1Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
+                6 => await ExecutePhase6Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
+                _ => await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken)
+            };
             phaseResults.Add(result);
             generatedFiles.AddRange(result.OutputFiles.Where(File.Exists));
             warnings.AddRange(result.Warnings);
@@ -290,7 +293,8 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static bool IsValidAuthorityReuseReason(int phaseNo, string? reason) =>
-        phaseNo is 3 or 4 or 5 or 6 && string.Equals(reason, $"Valid Phase {phaseNo} authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase);
+        phaseNo == 1 && reason?.StartsWith("P1_RESUME_REUSABLE:", StringComparison.Ordinal) == true
+        || phaseNo is 3 or 4 or 5 or 6 && string.Equals(reason, $"Valid Phase {phaseNo} authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPhase12ThumbnailV9Successful(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
     {
@@ -633,6 +637,37 @@ public sealed partial class ProductionPipelineExecutionService(
                 : null;
             var failedOutputs = phaseNo == 7 ? ExistingPhase7DiagnosticOutputs(context) : [];
             return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], failedOutputs, [], [ex.Message], ex.Message, true, cancellationToken, started, phase10TitleDiagnostics);
+        }
+    }
+
+    private async Task<ProductionPhaseResult> ExecutePhase1Async(ProductionPhaseContext context, string phaseName, CancellationToken cancellationToken)
+    {
+        var started = DateTimeOffset.UtcNow;
+        try
+        {
+            ValidatePhaseInputContract(context, 1);
+            var authority = _phase1AuthorityProjector.Project(context, DateTimeOffset.UtcNow);
+            var persisted = await _phase1AuthorityPersistence.PersistAsync(context.OutputRoot, authority, context.OverwriteExisting, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await WritePlanInputAsync(context.OutputRoot, context.Request, context.ProductionEventIntelligence, cancellationToken);
+            var outputs = persisted.Files.Concat([
+                Path.Combine(context.OutputRoot, "plan-input", "content-plan-production-request.json"),
+                Path.Combine(context.OutputRoot, "plan-input", "production-event-intelligence.json")]).ToArray();
+            if (!persisted.Validation.IsValid || !persisted.Validation.IsCompatible || !persisted.Validation.IsDownstreamReady)
+                throw new InvalidOperationException("P1_COMMITTED_AUTHORITY_NOT_DOWNSTREAM_READY");
+            if (context.OverwriteExisting && !persisted.Reused)
+                ClearPhaseRangeOutputsForOverwrite(context, 2);
+            var reason = persisted.Reused
+                ? "P1_RESUME_REUSABLE: complete canonical authority reused."
+                : "P1_GENERATED: complete canonical authority committed.";
+            return await WritePhaseValidationAsync(context, 1, phaseName,
+                persisted.Reused ? ProductionPhaseStatus.Skipped : ProductionPhaseStatus.Succeeded,
+                [], outputs, persisted.Warnings, [], reason, false, cancellationToken, started);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
+        {
+            return await WritePhaseValidationAsync(context, 1, phaseName, ProductionPhaseStatus.Failed,
+                [], [], [], [ex.Message], ex.Message, true, cancellationToken, started);
         }
     }
 
@@ -15939,12 +15974,12 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.Delete(path, recursive: true);
     }
 
-    private void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context)
+    private void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context, int? deferredStartPhaseNo = null)
     {
         var deletedFiles = context.DeletedFilesDueToOverwrite as List<string>;
         var deletedDirectories = context.DeletedDirectoriesDueToOverwrite as List<string>;
         var skippedDirectories = context.SkippedDirectoriesDueToOverwrite as List<string>;
-        var deleteStartPhaseNo = context.StartPhaseNo;
+        var deleteStartPhaseNo = deferredStartPhaseNo ?? context.StartPhaseNo;
         var deleteEndPhaseNo = context.EndPhaseNo;
 
         if (deleteStartPhaseNo <= 3 && deleteEndPhaseNo >= 3)
