@@ -52,6 +52,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IPhase1ExecutionLock phase1ExecutionLock,
     IPhase1ResumeEvaluator phase1ResumeEvaluator,
     IPhase1CompatibilityPublisher phase1CompatibilityPublisher,
+    IPhase1RecoveryService phase1RecoveryService,
+    IPhase1ManifestValidator phase1ManifestValidator,
     IOptions<AzureSpeechOptions>? azureSpeechOptions = null,
     IAzureSpeechClient? azureSpeechClient = null,
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
@@ -79,6 +81,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private readonly IPhase1ExecutionLock _phase1ExecutionLock = phase1ExecutionLock;
     private readonly IPhase1ResumeEvaluator _phase1ResumeEvaluator = phase1ResumeEvaluator;
     private readonly IPhase1CompatibilityPublisher _phase1CompatibilityPublisher = phase1CompatibilityPublisher;
+    private readonly IPhase1RecoveryService _phase1RecoveryService = phase1RecoveryService;
+    private readonly IPhase1ManifestValidator _phase1ManifestValidator = phase1ManifestValidator;
     private readonly IStoryFrameExecutionLock _storyFrameExecutionLock = storyFrameExecutionLock ?? new InProcessStoryFrameExecutionLock();
     private readonly IStoryFrameAuthorityCommitter _storyFrameAuthorityCommitter = storyFrameAuthorityCommitter ?? new StoryFrameAuthorityCommitter(new StoryFrameFileSystem());
     private readonly IStoryFrameTemporaryDirectoryRecovery _storyFrameTemporaryDirectoryRecovery = storyFrameTemporaryDirectoryRecovery ?? new StoryFrameTemporaryDirectoryRecovery(new StoryFrameFileSystem(), new StoryFrameClock());
@@ -293,15 +297,15 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var result in phaseResults)
         {
             if (result.Status == ProductionPhaseStatus.Failed) return false;
-            if (result.Status == ProductionPhaseStatus.Skipped && IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase) && !IsValidAuthorityReuseReason(result.PhaseNo, result.Reason)) return false;
+            if (result.Status == ProductionPhaseStatus.Skipped && IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase) && !IsValidAuthorityReuseReason(result.PhaseNo, result.ReasonCode, result.Reason)) return false;
             if (result.Status == ProductionPhaseStatus.Skipped && !IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, OutputTypeNotRequestedReason, StringComparison.OrdinalIgnoreCase)) return false;
         }
 
         return true;
     }
 
-    private static bool IsValidAuthorityReuseReason(int phaseNo, string? reason) =>
-        phaseNo == 1 && reason?.StartsWith("P1_RESUME_REUSABLE:", StringComparison.Ordinal) == true
+    private static bool IsValidAuthorityReuseReason(int phaseNo, string? reasonCode, string? reason) =>
+        phaseNo == 1 && reasonCode is "P1_RESUME_REUSABLE" or "P1_RESUME_RECOVERED_AUTHORITY" or "P1_COMPATIBILITY_REPAIRED"
         || phaseNo is 3 or 4 or 5 or 6 && string.Equals(reason, $"Valid Phase {phaseNo} authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPhase12ThumbnailV9Successful(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
@@ -388,10 +392,11 @@ public sealed partial class ProductionPipelineExecutionService(
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             if (!doc.RootElement.TryGetProperty("status", out var status)) return false;
             if (string.Equals(status.GetString(), ProductionPhaseStatus.Succeeded.ToString(), StringComparison.OrdinalIgnoreCase)) return true;
+            if(phaseNo==1 && string.Equals(status.GetString(),ProductionPhaseStatus.Skipped.ToString(),StringComparison.OrdinalIgnoreCase) && doc.RootElement.TryGetProperty("reasonCode",out var phase1Code))return IsValidAuthorityReuseReason(1,phase1Code.GetString(),null);
             return phaseNo is 3 or 4 or 5 or 6
                 && string.Equals(status.GetString(), ProductionPhaseStatus.Skipped.ToString(), StringComparison.OrdinalIgnoreCase)
                 && doc.RootElement.TryGetProperty("reason", out var reason)
-                && IsValidAuthorityReuseReason(phaseNo, reason.GetString());
+                && IsValidAuthorityReuseReason(phaseNo, null, reason.GetString());
         }
         catch (JsonException)
         {
@@ -657,10 +662,12 @@ public sealed partial class ProductionPipelineExecutionService(
             ValidatePhaseInputContract(context, 1);
             var authority = _phase1AuthorityProjector.Project(context, DateTimeOffset.UtcNow);
             var compatibility = _phase1CompatibilityPublisher.Project(context);
+            var recovery = await _phase1RecoveryService.RecoverAsync(context.OutputRoot, authority, compatibility, cancellationToken);
+            if (recovery.Errors.Count > 0) throw new InvalidOperationException("P1_RECOVERY_FAILED: "+string.Join(';',recovery.Errors));
             var existing = await _phase1AuthorityReader.ReadAsync(context.OutputRoot, cancellationToken);
             var compatibilityValidation = await _phase1CompatibilityPublisher.ValidateAsync(context.OutputRoot, compatibility, cancellationToken);
-            var recovery = new Phase1RecoveryResult(existing.AuthoritySet is null ? "Missing" : existing.IsValid ? "Valid" : "Invalid",false,null,[],[],[],[]);
-            var resume = _phase1ResumeEvaluator.Evaluate(authority, existing, Phase1ManifestIsValid(context), compatibilityValidation, recovery);
+            var manifestValidation = await _phase1ManifestValidator.ValidateAsync(context.OutputRoot, authority, compatibility, cancellationToken);
+            var resume = _phase1ResumeEvaluator.Evaluate(authority, existing, manifestValidation.IsValid, compatibilityValidation, recovery);
             Phase1ExecutionOutcome outcome;
             if (!context.OverwriteExisting && resume.CanReuse)
             {
@@ -671,31 +678,43 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 var hadExisting=existing.AuthoritySet is not null;
                 var persisted = await _phase1AuthorityPersistence.PersistAsync(context.OutputRoot, authority, true, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested(); // last interruptible checkpoint before publication.
-                var nonInterruptiblePublicationToken = new CancellationToken(false);
+                // The persistence staging checkpoint is the final externally interruptible point.
+                var nonInterruptiblePublicationToken = Phase1PublicationCancellation.NonInterruptible;
                 var compatibilityFiles = await _phase1CompatibilityPublisher.PublishAsync(context.OutputRoot, compatibility, nonInterruptiblePublicationToken);
                 var committedCompatibility=await _phase1CompatibilityPublisher.ValidateAsync(context.OutputRoot,compatibility,nonInterruptiblePublicationToken);
                 if(!committedCompatibility.IsValid)throw new InvalidOperationException("P1_COMPATIBILITY_COMMITTED_VALIDATION_FAILED");
                 var invalidated=context.OverwriteExisting&&hadExisting;
                 if(invalidated)ClearPhaseRangeOutputsForOverwrite(context,2);
                 var kind=MapPhase1ExecutionKind(resume.ReasonCode,recovery.Recovered);
-                outcome=new(kind,resume.ReasonCode,resume.Reason,persisted.Files.Concat(compatibilityFiles).ToArray(),persisted.Warnings, persisted.Validation.AuthorityChecksum,persisted.Validation.RequestIdentityChecksum,false,hadExisting,invalidated,"Valid",recovery){ManifestStatus="Published",ValidationStatus="Published"};
+                var reasonCode=kind==Phase1ExecutionKind.Generated?"P1_GENERATED":resume.ReasonCode;
+                outcome=new(kind,reasonCode,resume.Reason,persisted.Files.Concat(compatibilityFiles).ToArray(),persisted.Warnings.Concat(recovery.Warnings).Distinct().ToArray(), persisted.Validation.AuthorityChecksum,persisted.Validation.RequestIdentityChecksum,false,hadExisting,invalidated,"Valid",recovery){ManifestStatus="Published",ValidationStatus="Published"};
             }
             var status=outcome.Reused?ProductionPhaseStatus.Skipped:ProductionPhaseStatus.Succeeded;
-            var result=await WritePhaseValidationAsync(context,1,phaseName,status,[],outcome.OutputFiles,outcome.Warnings,[],outcome.Reason,false,new CancellationToken(false),started,phase1Outcome:outcome);
-            await WritePhaseManifestAsync(context,[result],new CancellationToken(false));
+            var result=await WritePhaseValidationAsync(context,1,phaseName,status,[],outcome.OutputFiles,outcome.Warnings,[],outcome.Reason,false,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:outcome);
+            await WritePhaseManifestAsync(context,[result],Phase1PublicationCancellation.NonInterruptible);
             return result;
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
+            var failureCode=ex.Message.Split(':',2)[0] switch
+            {
+                "P1_RECOVERY_FAILED"=>"P1_RECOVERY_FAILED",
+                "P1_COMPATIBILITY_COMMITTED_VALIDATION_FAILED"=>"P1_COMPATIBILITY_COMMITTED_VALIDATION_FAILED",
+                "P1_COMMITTED_VALIDATION_FAILED_ROLLBACK_RESTORED"=>"P1_CANONICAL_COMMITTED_VALIDATION_FAILED",
+                "P1_ROLLBACK_VALIDATION_FAILED"=>"P1_ROLLBACK_FAILED",
+                _=>"P1_CANONICAL_COMMIT_FAILED"
+            };
+            var recovery=new Phase1RecoveryResult("Unknown",false,null,[],[],[],[ex.Message]);
+            var failed=new Phase1ExecutionOutcome(Phase1ExecutionKind.Failed,failureCode,"Phase 1 publication failed.",[],[],null,null,false,false,false,"Failed",recovery)
+            { Errors=[ex.Message],ManifestStatus="Failed",ValidationStatus="Failed",RollbackPerformed=ex.Message.Contains("ROLLBACK",StringComparison.Ordinal),RollbackSucceeded=ex.Message.Contains("ROLLBACK_RESTORED",StringComparison.Ordinal) };
             return await WritePhaseValidationAsync(context, 1, phaseName, ProductionPhaseStatus.Failed,
-                [], [], [], [ex.Message], ex.Message, true, cancellationToken, started);
+                [], [], [], [ex.Message], failed.Reason, true, Phase1PublicationCancellation.NonInterruptible, started,phase1Outcome:failed);
         }
     }
 
     private static Phase1ExecutionKind MapPhase1ExecutionKind(string reasonCode,bool recovered)=>recovered?Phase1ExecutionKind.RecoveredAndRegenerated:reasonCode switch
     {
-        "P1_RESUME_NO_AUTHORITY"=>Phase1ExecutionKind.RegeneratedDueToMissingAuthority,
+        "P1_RESUME_NO_AUTHORITY"=>Phase1ExecutionKind.Generated,
         "P1_RESUME_INCOMPLETE_SET"=>Phase1ExecutionKind.RegeneratedDueToIncompleteAuthority,
         "P1_RESUME_CORRUPT_JSON"=>Phase1ExecutionKind.RegeneratedDueToCorruptAuthority,
         "P1_RESUME_CHECKSUM_MISMATCH"=>Phase1ExecutionKind.RegeneratedDueToChecksumMismatch,
@@ -706,12 +725,6 @@ public sealed partial class ProductionPipelineExecutionService(
     };
     private static string[] Phase1CanonicalFiles(string root)=>new[] { "execution-context.json", "selected-plan.json", "production-request.json", "pipeline-state.json" }.Select(x=>Path.Combine(root,"01-plan",x)).ToArray();
     private static string[] Phase1CompatibilityFiles(string root)=>[Path.Combine(root,"plan-input","content-plan-production-request.json"),Path.Combine(root,"plan-input","production-event-intelligence.json")];
-    private static bool Phase1ManifestIsValid(ProductionPhaseContext context)
-    {
-        var path=Path.Combine(context.OutputRoot,"phase-manifest.json");if(!File.Exists(path))return false;
-        try{using var doc=JsonDocument.Parse(File.ReadAllText(path));return doc.RootElement.TryGetProperty("phase1Artifacts",out var entries)&&entries.ValueKind==JsonValueKind.Array&&entries.GetArrayLength()==6&&entries.EnumerateArray().Count(x=>x.GetProperty("role").GetString()=="Authoritative")==1;}
-        catch(Exception ex) when(ex is IOException or JsonException or InvalidOperationException){return false;}
-    }
 
     private async Task<ProductionPhaseResult> ExecutePhase6Async(ProductionPhaseContext context, string phaseName, CancellationToken cancellationToken)
     {
@@ -14240,7 +14253,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var declaredOutputFiles = resultOutputFiles.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var verifiedOutputFiles = resultOutputFiles.Where(p => File.Exists(p) || Directory.Exists(p)).Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var missingOutputFiles = resultOutputFiles.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason);
+        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason) { ReasonCode = phase1Outcome?.ReasonCode };
         if (phaseNo == 14 && File.Exists(validationPath))
             return result;
         var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
@@ -14336,8 +14349,8 @@ public sealed partial class ProductionPipelineExecutionService(
             manifestValidationStatus = phase1Outcome?.ManifestStatus,
             replacedExistingAuthority = phase1Outcome?.ReplacedExistingAuthority,
             downstreamInvalidated = phase1Outcome?.DownstreamInvalidated,
-            rollbackPerformed = false,
-            rollbackSucceeded = false,
+            rollbackPerformed = phase1Outcome?.RollbackPerformed ?? false,
+            rollbackSucceeded = phase1Outcome?.RollbackSucceeded ?? false,
             canRetry,
             validationFileCreated = phase12ValidationPersistence?.ValidationFileCreated,
             validationFileSourcePath = phase12ValidationPersistence?.ValidationFileSourcePath,
