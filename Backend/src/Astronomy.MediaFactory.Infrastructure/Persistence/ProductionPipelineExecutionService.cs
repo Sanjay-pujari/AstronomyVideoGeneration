@@ -40,6 +40,7 @@ public sealed partial class ProductionPipelineExecutionService(
     IProductionPipelineQualityValidator qualityValidator,
     IOptions<RenderingOptions> renderingOptions,
     ILogger<ProductionPipelineExecutionService> logger,
+    IViewerCuriosityArtifactProjector viewerCuriosityProjector,
     IOptions<AzureSpeechOptions>? azureSpeechOptions = null,
     IAzureSpeechClient? azureSpeechClient = null,
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
@@ -54,8 +55,7 @@ public sealed partial class ProductionPipelineExecutionService(
     ILongStoryFramePlanner? longStoryFramePlanner = null,
     IShortStoryFramePlanner? shortStoryFramePlanner = null,
     NarrationGeneratorV5? narrationGeneratorV5 = null,
-    ServiceRegistrationDiagnosticsSnapshot? serviceRegistrationDiagnostics = null,
-    IViewerCuriosityArtifactProjector? viewerCuriosityProjector = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    ServiceRegistrationDiagnosticsSnapshot? serviceRegistrationDiagnostics = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -364,18 +364,47 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!File.Exists(compatibilityPath) || !File.Exists(bankPath) || !File.Exists(objectivesPath) || !File.Exists(planPath)) return false;
         try
         {
+            var source = JsonSerializer.Deserialize<QuestionAnswerSetDto>(File.ReadAllText(compatibilityPath), JsonOptions);
             var bank = JsonSerializer.Deserialize<ViewerQuestionBank>(File.ReadAllText(bankPath), JsonOptions);
             var objectives = JsonSerializer.Deserialize<ViewerLearningObjectives>(File.ReadAllText(objectivesPath), JsonOptions);
             var plan = JsonSerializer.Deserialize<ViewerQuestionPlan>(File.ReadAllText(planPath), JsonOptions);
-            if (bank is null || objectives is null || plan is null) return false;
+            if (source is null || bank is null || objectives is null || plan is null || source.Answers is null) return false;
+            if (source.AstronomyEventIntelligenceId == Guid.Empty || source.AstronomyEventIntelligenceId != context.AstronomyEventIntelligenceId
+                || !string.Equals(source.Language, context.Request.Language, StringComparison.OrdinalIgnoreCase)
+                || source.Answers.Count != plan.TotalGeneratedQuestions) return false;
             var projection = new ViewerCuriosityProjection(bank, objectives, plan);
             var profile = context.Request.PlannedFormat ?? context.Request.Category;
-            return ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile).Count == 0;
+            return ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile, ResolveViewerVariants(context.Request.RequestedOutputs)).Count == 0
+                && Phase3ManifestIsValid(context, bankPath, compatibilityPath, objectivesPath, planPath);
         }
         catch (JsonException)
         {
             return false;
         }
+    }
+
+    private static bool Phase3ManifestIsValid(ProductionPhaseContext context, params string[] expectedPaths)
+    {
+        var manifestPath = Path.Combine(context.OutputRoot, "phase-manifest.json");
+        if (!File.Exists(manifestPath)) return false;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("planId", out var planId) || !Guid.TryParse(planId.GetString(), out var id) || id != context.Request.PlanId
+                || !root.TryGetProperty("phase3Artifacts", out var entries) || entries.ValueKind != JsonValueKind.Array) return false;
+            var expectedRoles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [NormalizePath(expectedPaths[0])] = "Authoritative", [NormalizePath(expectedPaths[1])] = "Compatibility",
+                [NormalizePath(expectedPaths[2])] = "Supporting", [NormalizePath(expectedPaths[3])] = "Supporting"
+            };
+            var actual = entries.EnumerateArray().Select(x => (Path: NormalizePath(x.GetProperty("path").GetString() ?? ""), Role: x.GetProperty("role").GetString() ?? "")).ToArray();
+            if (actual.Count(x => x.Role == "Authoritative") != 1 || actual.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != actual.Length) return false;
+            var workspace = Path.GetFullPath(context.OutputRoot) + Path.DirectorySeparatorChar;
+            return actual.All(x => Path.GetFullPath(x.Path).StartsWith(workspace, StringComparison.OrdinalIgnoreCase))
+                && expectedRoles.All(x => actual.Any(a => string.Equals(a.Path, x.Key, StringComparison.OrdinalIgnoreCase) && a.Role == x.Value));
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or IOException or ArgumentException) { return false; }
     }
 
     private static void ValidatePhaseInputContract(ProductionPhaseContext context, int phaseNo)
@@ -508,23 +537,49 @@ public sealed partial class ProductionPipelineExecutionService(
         var response = await questionEngine.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(context.Request.RegionId, PlanIds: [context.Request.PlanId.ToString("D")], MaxEvents: 1, Language: context.Request.Language, DryRun: false, OverwriteExisting: context.OverwriteExisting, ProductionContext: context.ExecutionContext), cancellationToken);
         var source = response.QuestionSets.SingleOrDefault() ?? throw new InvalidOperationException("Question Engine did not return a QuestionAnswerSet for Phase 3 projection.");
         var profile = context.Request.PlannedFormat ?? context.Request.Category;
-        var projector = viewerCuriosityProjector ?? new ViewerCuriosityArtifactProjector();
-        var projection = projector.Project(source, context.ProductionEventIntelligence, context.Request.PlanId.ToString("D"), profile, DateTimeOffset.UtcNow);
-        var validationErrors = ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile);
+        if (!string.Equals(source.Language, context.Request.Language, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Phase 3 Question Engine language mismatch: expected '{context.Request.Language}', actual '{source.Language}'.");
+        var variants = ResolveViewerVariants(context.Request.RequestedOutputs);
+        var projection = viewerCuriosityProjector.Project(source, context.ProductionEventIntelligence, context.Request.PlanId.ToString("D"), profile, variants, DateTimeOffset.UtcNow);
+        var validationErrors = ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile, variants);
         if (validationErrors.Count > 0) throw new InvalidOperationException($"Phase 3 Viewer Curiosity validation failed: {string.Join("; ", validationErrors)}");
 
         var root = Path.Combine(context.OutputRoot, "03-questions");
-        Directory.CreateDirectory(root);
+        var stagingRoot = Path.Combine(context.OutputRoot, $".03-questions-staging-{Guid.NewGuid():N}");
+        var backupRoot = Path.Combine(context.OutputRoot, $".03-questions-backup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(stagingRoot);
         var compatibilityPath = Path.Combine(root, "question-answer-set.json");
         var bankPath = Path.Combine(root, "viewer-question-bank.json");
         var objectivesPath = Path.Combine(root, "learning-objectives.json");
         var planPath = Path.Combine(root, "question-plan.json");
-        await WriteJsonArtifactAsync(compatibilityPath, source, cancellationToken);
-        await WriteJsonArtifactAsync(bankPath, projection.ViewerQuestionBank, cancellationToken);
-        await WriteJsonArtifactAsync(objectivesPath, projection.LearningObjectives, cancellationToken);
-        await WriteJsonArtifactAsync(planPath, projection.QuestionPlan, cancellationToken);
+        try
+        {
+            await WriteJsonArtifactAsync(Path.Combine(stagingRoot, "question-answer-set.json"), source, cancellationToken);
+            await WriteJsonArtifactAsync(Path.Combine(stagingRoot, "viewer-question-bank.json"), projection.ViewerQuestionBank, cancellationToken);
+            await WriteJsonArtifactAsync(Path.Combine(stagingRoot, "learning-objectives.json"), projection.LearningObjectives, cancellationToken);
+            await WriteJsonArtifactAsync(Path.Combine(stagingRoot, "question-plan.json"), projection.QuestionPlan, cancellationToken);
+            // The complete staged set is validated above in-memory. A directory rename makes it
+            // impossible for resume to observe only a subset as the current authority.
+            if (Directory.Exists(root)) Directory.Move(root, backupRoot);
+            Directory.Move(stagingRoot, root);
+            if (Directory.Exists(backupRoot)) Directory.Delete(backupRoot, recursive: true);
+        }
+        catch
+        {
+            if (Directory.Exists(stagingRoot)) Directory.Delete(stagingRoot, recursive: true);
+            if (!Directory.Exists(root) && Directory.Exists(backupRoot)) Directory.Move(backupRoot, root);
+            throw;
+        }
         logger.LogInformation("Phase 3 Viewer Curiosity generation completed. ExecutionId={ExecutionId}; SourceQuestionCount={SourceCount}; ViewerQuestionCount={QuestionCount}; LearningObjectiveCount={ObjectiveCount}; WarningCount={WarningCount}; ViewerQuestionBankPath={BankPath}", context.Request.PlanId, source.Answers.Count, projection.ViewerQuestionBank.Questions.Count, projection.LearningObjectives.Objectives.Count, projection.QuestionPlan.ProjectionWarnings.Count, NormalizePath(bankPath));
         return response.GeneratedFiles.Concat([compatibilityPath, bankPath, objectivesPath, planPath]).ToArray();
+    }
+
+    private static IReadOnlyList<string> ResolveViewerVariants(IReadOnlyList<string> requestedOutputs)
+    {
+        var variants = requestedOutputs.Where(x => x is not null).Select(x => x.Trim().ToLowerInvariant()).Select(x => x switch
+        { "long" or "longvideo" => "Long", "short" or "shortvideo" => "Short", _ => null }).Where(x => x is not null).Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
+        if (variants.Length == 0) throw new InvalidOperationException("Phase 3 requires LongVideo and/or ShortVideo in RequestedOutputs to establish Viewer Question variant scope.");
+        return variants;
     }
 
     private static async Task WriteJsonArtifactAsync<T>(string path, T value, CancellationToken cancellationToken)

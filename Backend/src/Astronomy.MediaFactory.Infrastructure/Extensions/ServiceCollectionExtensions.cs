@@ -1,4 +1,5 @@
 using System.Net.Http;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Astronomy.MediaFactory.AIOptimization;
 using Astronomy.MediaFactory.AstroData.Clients;
 using Astronomy.MediaFactory.AstroData.Services;
@@ -678,7 +679,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEventSceneValidationStrategy, GenericEventSceneValidationStrategy>();
         services.AddScoped<IProductionPipelineQualityValidator, ProductionPipelineQualityValidator>();
         services.AddScoped<IQuestionEngine, AstronomyQuestionEngine>();
-        services.AddSingleton<IViewerCuriosityArtifactProjector, ViewerCuriosityArtifactProjector>();
+        services.TryAddSingleton<IViewerCuriosityArtifactProjector, ViewerCuriosityArtifactProjector>();
         services.AddScoped<IHeroAssetIntelligenceEngine, HeroAssetIntelligenceEngine>();
         services.AddScoped<IHeroAssetSceneSelector, HeroAssetSceneSelector>();
         services.AddScoped<IHeroCompositionEngine, HeroCompositionEngine>();
