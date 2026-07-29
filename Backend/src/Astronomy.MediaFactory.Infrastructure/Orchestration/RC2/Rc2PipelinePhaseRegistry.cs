@@ -14,7 +14,7 @@ public sealed class Rc2PipelinePhaseRegistry
         new(3, "Question / Story Planning"),
         new(4, "Story Intelligence"),
         new(5, "Editorial Intelligence"),
-        new(6, "Creative Intelligence / Story Frames"),
+        new(6, "Story Frames Authority"),
         new(7, "Narration Studio V5"),
         new(8, "Format-Aware Scene Asset Generation")
     ];
