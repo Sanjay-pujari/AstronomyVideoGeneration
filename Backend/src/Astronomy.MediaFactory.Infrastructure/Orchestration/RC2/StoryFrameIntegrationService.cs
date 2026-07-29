@@ -13,21 +13,13 @@ public sealed class StoryFrameIntegrationService(ICertifiedStoryFrameBuilder bui
         var watch=Stopwatch.StartNew();
         var frames=await builder.BuildAsync(request.EditorialContract, request.RequestedVariants, cancellationToken);
         var now=DateTimeOffset.UtcNow;
-        var authority=new StoryFramesAuthority($"story-frames-{request.ExecutionId}", request.ExecutionId, request.PlanId,
+        var authority=new StoryFramesAuthority(StoryFrameAuthorityIdentity.BuildAuthorityId(request.ExecutionId), request.ExecutionId, request.PlanId,
             request.EventId, request.Language, request.Profile, request.Certification.CertificationId,
             request.Certification.SemanticChecksum, request.EditorialContract.ContractId, request.EditorialContract.Checksum,
             request.EditorialContract.SourcePhase4Checksum, builder.BuilderType, builder.BuilderVersion,
             request.RequestedVariants, frames, now, "");
         authority=authority with { SemanticChecksum=StoryFrameAuthorityChecksum.Authority(authority) };
-        var variants=request.RequestedVariants.Select(v=> { var vf=frames.Where(f=>f.Variant.Equals(v,StringComparison.OrdinalIgnoreCase)).ToArray();
-            return new StoryFrameVariantIndex(v, vf.Select(x=>x.SceneId).Distinct().Count(), vf.Length,
-                vf.Select(x=>x.SceneId).Distinct().ToArray(), vf.Select(x=>x.FrameId).ToArray()); }).ToArray();
-        var scenes=frames.GroupBy(x=>new{x.Variant,x.SceneId}).Select(g=>new StoryFrameSceneIndex(g.Key.Variant,g.Key.SceneId,
-            g.First().SceneNumber,g.First().NarrativeStage,g.First().SceneRole,g.Select(x=>x.FrameId).ToArray(),g.Count(),
-            g.Sum(x=>x.EstimatedDuration),g.Any(x=>x.NarrationRequired),g.Any(x=>x.ImageRequirements.Count+x.BrollRequirements.Count>0))).ToArray();
-        var index=new StoryFrameIndex($"story-frame-index-{request.ExecutionId}",request.ExecutionId,request.EventId,request.Language,
-            request.Profile,authority.AuthorityId,authority.SemanticChecksum,request.EditorialContract.Checksum,variants,scenes,frames.Count,now,"");
-        index=index with { Checksum=StoryFrameAuthorityChecksum.Index(index) };
+        var index=StoryFrameIndexProjector.Project(authority, request.EditorialContract.Checksum);
         var diagnostics=new StoryFrameDiagnostics(request.ExecutionId,builder.BuilderType,builder.BuilderVersion,
             nameof(StoryFrameIntegrationService),Version,["05-blueprint-certification/blueprint-certification.json","05-blueprint-certification/editorial-contract.json","05-blueprint-certification/certification-diagnostics.json"],
             new Dictionary<string,string>{{"certification",request.Certification.SemanticChecksum},{"editorialContract",request.EditorialContract.Checksum},{"phase4",request.EditorialContract.SourcePhase4Checksum}},
