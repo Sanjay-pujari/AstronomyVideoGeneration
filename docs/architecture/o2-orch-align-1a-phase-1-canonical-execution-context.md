@@ -8,7 +8,11 @@ This is the sole current Phase 1 architecture declaration. The historical 1C–1
 
 Phase 1 owns one lifecycle-locked decision sequence: validate input, project canonical and compatibility publications, perform pair-aware recovery, read and aggregate active validation, then select reuse, manifest repair, compatibility repair, or full combined publication. Independent canonical and compatibility commit APIs are blocked with `P1_TRANSACTION_COORDINATOR_REQUIRED`.
 
-The combined coordinator uses one transaction ID for canonical authority, compatibility projection, validation, and manifest staging/backups/failed evidence. The first active-to-backup rename begins a non-interruptible boundary. Every ordinary exception after that boundary enters rollback, which restores manifest and validation before compatibility and canonical authority. Successful metadata is never written directly to its active path.
+The combined coordinator uses one transaction ID for canonical authority, compatibility projection, validation, and manifest staging/backups/failed evidence. Manifest staging reads its six checksums exclusively from the canonical and compatibility staging roots while recording only their final active workspace paths and expected authority lineage. The mutation boundary is non-interruptible and every ordinary exception after it enters rollback, which restores manifest and validation before compatibility and canonical authority.
+
+Manifest-only repair stages and validates a replacement, backs up the active manifest, atomically promotes the replacement, validates it against the unchanged active publication, and retains failed evidence while restoring the backup on failure. Compatibility-only repair similarly stages both projections and a manifest sourced from those staged projections, then promotes and validates the pair without rewriting canonical authority or invalidating downstream outputs.
+
+The final execution outcome is assembled from the completed transaction result; provisional validation cannot claim downstream invalidation or a successful manifest. Rollback compatibility acceptance is semantic: restored file checksums must match the compatibility lineage recorded by the restored canonical execution context, rather than merely containing parseable JSON.
 
 Manifest validation requires exactly six recognized Phase 1 artifacts, exact semantic role cardinality, checksum and lineage fields, and active workspace-contained paths. Malformed properties and unsafe staging, backup, failed, quarantine, or transaction paths produce structured validation diagnostics rather than escaping as property-access exceptions.
 
@@ -23,13 +27,9 @@ Recovery considers only canonical/compatibility backup pairs with the same trans
 
 ## Certification evidence (2026-07-29)
 
-Actual failed checks (each exited 127 with `dotnet: command not found`; no test process or totals existed):
+Actual failed checks (the .NET SDK is unavailable, so no test process or totals existed):
 
-- `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-restore --filter FullyQualifiedName~Phase1PublicationTransactionCoordinator --verbosity minimal`
-- `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-restore --filter FullyQualifiedName~Phase1Authority --verbosity minimal`
-- `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-restore --filter FullyQualifiedName~Phase1 --verbosity minimal`
-- `dotnet build Backend/Astronomy.MediaFactory.slnx --no-restore`
-- `dotnet test Backend/Astronomy.MediaFactory.slnx --no-restore --verbosity minimal`
+- Required focused tests, solution build, and full solution tests: `/bin/bash: dotnet: command not found` (exit 127).
 
 **O2.ORCH.ALIGN.1F**
 
