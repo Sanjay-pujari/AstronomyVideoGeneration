@@ -62,7 +62,7 @@ public sealed partial class ProductionPipelineExecutionService(
     NarrationGeneratorV5? narrationGeneratorV5 = null,
     ServiceRegistrationDiagnosticsSnapshot? serviceRegistrationDiagnostics = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Phase6Locks = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly IStoryFrameExecutionLock Phase6Lock = new InProcessStoryFrameExecutionLock();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
     private const double DefaultLongNarrationWordsPerMinute = 135.0;
@@ -883,19 +883,11 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseChronicleDocumentaryArchitectAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var key = Path.GetFullPath(Path.Combine(context.OutputRoot, "06-story-frames"));
-        var gate = Phase6Locks.GetOrAdd(key, static _ => new SemaphoreSlim(1, 1));
         logger.LogInformation("Phase 6 concurrency wait. PlanId={PlanId}", context.Request.PlanId);
-        await gate.WaitAsync(cancellationToken);
-        try
-        {
-            logger.LogInformation("Phase 6 concurrency lock acquired. PlanId={PlanId}", context.Request.PlanId);
-            return await PhaseChronicleDocumentaryArchitectCoreAsync(context, cancellationToken);
-        }
-        finally
-        {
-            gate.Release();
-            logger.LogInformation("Phase 6 concurrency lock released. PlanId={PlanId}", context.Request.PlanId);
-        }
+        await using var lease = await Phase6Lock.AcquireAsync(key, cancellationToken);
+        logger.LogInformation("Phase 6 concurrency lock acquired. PlanId={PlanId}", context.Request.PlanId);
+        try { return await PhaseChronicleDocumentaryArchitectCoreAsync(context, cancellationToken); }
+        finally { logger.LogInformation("Phase 6 concurrency lock released. PlanId={PlanId}", context.Request.PlanId); }
     }
 
     private async Task<IReadOnlyList<string>> PhaseChronicleDocumentaryArchitectCoreAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
