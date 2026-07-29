@@ -149,3 +149,34 @@ Structured Phase 1 reason codes, recovery-before-resume wiring, real recovery-re
 **O2.ORCH.ALIGN.1D**
 **PHASE 1 FINAL ARCHITECTURE CONFORMANCE: BLOCKED**
 **PHASE 1 STATUS: NOT FROZEN**
+
+## O2.ORCH.ALIGN.1E — Phase 1 Final Transaction Certification and Freeze
+
+### Transaction and rollback state machines
+
+The lifecycle-locked production path now projects and validates both staged sets before its final external cancellation checkpoint. One `Phase1PublicationTransactionCoordinator` then moves canonical active→backup→active, validates it, moves compatibility active→backup→active, validates it, publishes validation and manifest, rereads the manifest, and only then invokes downstream invalidation. Completion precedes deletion of either backup. Commit and rollback use `Phase1PublicationCancellation.NonInterruptible` after the first rename.
+
+A post-rename failure isolates compatibility first, restores its matching backup, then isolates canonical, restores its matching backup, and validates both restored sets. Failed sets use the transaction's shared ID. A rollback defect is surfaced as `P1_ROLLBACK_FAILED`; it is not hidden. Fresh-workspace rollback leaves neither new set active.
+
+### Repair, recovery, and retention
+
+The aggregate validation record is now constructed by production from independently measured canonical, runtime, request, compatibility, manifest, and downstream facts. Failed evidence cleanup retains three entries per canonical and compatibility prefix, ordered by last-write time descending and full path. Compatibility-only repair, manifest-only repair, and matching-pair recovery remain acceptance blockers pending their focused production tests and completion of pair-aware recovery.
+
+### Manifest certification
+
+Each of the six manifest records now carries phase number, exact path and role, contract, SHA-256 file checksum, plan and execution IDs, authority and request-identity checksums, committed publication state, and valid validation status. Validation compares every field and file hash and rejects non-active, duplicate, foreign, or stale entries.
+
+### Commands and results
+
+* `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-restore --filter FullyQualifiedName~Phase1 --verbosity minimal` — exit 127: `/bin/bash: dotnet: command not found`; no test process or totals existed.
+* `git diff --check` — exit 0.
+
+### Final conformance matrix
+
+Implemented by inspection: combined coordinator, shared transaction ID, backup lifetime, combined rollback order, non-interruptible commit boundary, downstream ordering, aggregate validation use, complete manifest metadata/checks, structured transaction result, DI registration, and newest-three evidence retention.
+
+Failed acceptance checks: focused tests and production integration tests could not run because the .NET CLI is absent; build could not run for the same concrete environment condition; compatibility-only repair, manifest-only repair, and pair-aware canonical/compatibility recovery are not complete. Therefore final architecture conformance cannot be approved.
+
+**O2.ORCH.ALIGN.1E — PHASE 1 FINAL ARCHITECTURE CONFORMANCE: BLOCKED**
+
+**PHASE 1 STATUS: NOT FROZEN**

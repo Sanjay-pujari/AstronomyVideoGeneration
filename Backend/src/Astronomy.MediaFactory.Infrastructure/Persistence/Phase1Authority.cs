@@ -68,6 +68,26 @@ public interface IPhase1CompatibilityPublisher
     Phase1CompatibilityPublication Project(ProductionPhaseContext context);
     Task<Phase1CompatibilityValidationResult> ValidateAsync(string workspaceRoot, Phase1CompatibilityPublication expected, CancellationToken token);
     Task<IReadOnlyList<string>> PublishAsync(string workspaceRoot, Phase1CompatibilityPublication publication, CancellationToken token);
+    Task StageAsync(string stagingRoot, Phase1CompatibilityPublication publication, CancellationToken token);
+    Task<Phase1CompatibilityValidationResult> ValidateDirectoryAsync(string stagingRoot, Phase1CompatibilityPublication expected, CancellationToken token);
+}
+
+public sealed record Phase1PublicationTransactionRequest(
+    string WorkspaceRoot,
+    Phase1AuthoritySet ExpectedCanonicalAuthority,
+    Phase1CompatibilityPublication ExpectedCompatibilityPublication,
+    bool ExistingCanonicalPublicationExists,
+    bool DownstreamInvalidationRequired,
+    Func<CancellationToken,Task> InvalidateDownstreamAsync,
+    Func<CancellationToken,Task> PublishValidationAsync,
+    Func<CancellationToken,Task> PublishManifestAsync);
+
+public sealed record Phase1PublicationTransactionResult(bool Succeeded,string TransactionId,string ReasonCode,
+    IReadOnlyList<string> Files,IReadOnlyList<string> Warnings,IReadOnlyList<string> Errors,bool RollbackPerformed,bool RollbackSucceeded,bool DownstreamInvalidated);
+
+public interface IPhase1PublicationTransactionCoordinator
+{
+    Task<Phase1PublicationTransactionResult> PublishAsync(Phase1PublicationTransactionRequest request,CancellationToken cancellationToken);
 }
 
 public sealed class Phase1ResumeEvaluator : IPhase1ResumeEvaluator
@@ -219,6 +239,69 @@ public sealed class Phase1CompatibilityPublisher(IPhase1FileSystem fileSystem) :
         }
         finally{if(fileSystem.DirectoryExists(staging))fileSystem.DeleteDirectory(staging,true);}
     }
+    public async Task StageAsync(string stagingRoot,Phase1CompatibilityPublication publication,CancellationToken token)
+    {
+        fileSystem.CreateDirectory(stagingRoot);
+        foreach(var item in publication.Payloads)
+            await fileSystem.WriteAllTextAsync(Path.Combine(stagingRoot,Path.GetFileName(item.Key)),item.Value,token);
+    }
+    public async Task<Phase1CompatibilityValidationResult> ValidateDirectoryAsync(string directory,Phase1CompatibilityPublication expected,CancellationToken token)
+    {
+        var errors=new List<Phase1ValidationDiagnostic>();var missing=false;
+        foreach(var item in expected.Payloads){token.ThrowIfCancellationRequested();var path=Path.Combine(directory,Path.GetFileName(item.Key));if(!fileSystem.FileExists(path)){missing=true;errors.Add(new("P1_RESUME_COMPATIBILITY_MISSING","Compatibility artifact is missing.",path));continue;}await using var stream=fileSystem.OpenRead(path);using var reader=new StreamReader(stream,Encoding.UTF8);var actual=await reader.ReadToEndAsync(token);var checksum=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actual))).ToLowerInvariant();if(!string.Equals(checksum,expected.Checksums[item.Key],StringComparison.Ordinal))errors.Add(new("P1_RESUME_COMPATIBILITY_MISMATCH","Compatibility checksum mismatch.",path));}
+        return new(errors.Count==0,missing,errors);
+    }
+}
+
+/// <summary>Owns the single, lock-free Phase 1 publication transaction.  Its caller owns the lifecycle lease.</summary>
+public sealed class Phase1PublicationTransactionCoordinator(IPhase1FileSystem fileSystem,IPhase1AuthorityValidator authorityValidator,IPhase1CompatibilityPublisher compatibilityPublisher,IPhase1ManifestValidator manifestValidator):IPhase1PublicationTransactionCoordinator
+{
+    public async Task<Phase1PublicationTransactionResult> PublishAsync(Phase1PublicationTransactionRequest request,CancellationToken cancellationToken)
+    {
+        var id=Guid.NewGuid().ToString("N");var root=fileSystem.GetFullPath(request.WorkspaceRoot);
+        var canonical=Path.Combine(root,"01-plan");var compatibility=Path.Combine(root,"plan-input");
+        var canonicalStage=Path.Combine(root,$".01-plan.staging-{id}");var compatibilityStage=Path.Combine(root,$".plan-input.staging-{id}");
+        var canonicalBackup=Path.Combine(root,$".01-plan.backup-{id}");var compatibilityBackup=Path.Combine(root,$".plan-input.backup-{id}");
+        var canonicalFailed=Path.Combine(root,$".01-plan.failed-{id}");var compatibilityFailed=Path.Combine(root,$".plan-input.failed-{id}");
+        var warnings=new List<string>();var swapped=false;var phase="P1_CANONICAL_COMMIT_FAILED";
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();fileSystem.CreateDirectory(canonicalStage);
+            await Write(canonicalStage,"selected-plan.json",request.ExpectedCanonicalAuthority.SelectedPlan,cancellationToken);
+            await Write(canonicalStage,"production-request.json",request.ExpectedCanonicalAuthority.ProductionRequest,cancellationToken);
+            await Write(canonicalStage,"pipeline-state.json",request.ExpectedCanonicalAuthority.PipelineState,cancellationToken);
+            await Write(canonicalStage,"execution-context.json",request.ExpectedCanonicalAuthority.ExecutionContext,cancellationToken);
+            var staged=await authorityValidator.ValidateAsync(root,canonicalStage,true,cancellationToken);if(!staged.IsValid||!staged.IsCompatible||!staged.IsDownstreamReady)throw new InvalidOperationException("P1_CANONICAL_COMMIT_FAILED: staged canonical authority is invalid");
+            await compatibilityPublisher.StageAsync(compatibilityStage,request.ExpectedCompatibilityPublication,cancellationToken);
+            var stagedCompatibility=await compatibilityPublisher.ValidateDirectoryAsync(compatibilityStage,request.ExpectedCompatibilityPublication,cancellationToken);if(!stagedCompatibility.IsValid)throw new InvalidOperationException("P1_COMPATIBILITY_COMMIT_FAILED: staged compatibility publication is invalid");
+            cancellationToken.ThrowIfCancellationRequested();var token=Phase1PublicationCancellation.NonInterruptible;
+            if(fileSystem.DirectoryExists(canonical))fileSystem.MoveDirectory(canonical,canonicalBackup);swapped=true;
+            fileSystem.MoveDirectory(canonicalStage,canonical);phase="P1_CANONICAL_COMMITTED_VALIDATION_FAILED";
+            var committed=await authorityValidator.ValidateAsync(root,canonical,false,token);if(!committed.IsValid||!committed.IsCompatible||!committed.IsDownstreamReady)throw new InvalidOperationException(phase);
+            phase="P1_COMPATIBILITY_COMMIT_FAILED";if(fileSystem.DirectoryExists(compatibility))fileSystem.MoveDirectory(compatibility,compatibilityBackup);fileSystem.MoveDirectory(compatibilityStage,compatibility);
+            phase="P1_COMPATIBILITY_COMMITTED_VALIDATION_FAILED";if(!(await compatibilityPublisher.ValidateAsync(root,request.ExpectedCompatibilityPublication,token)).IsValid)throw new InvalidOperationException(phase);
+            phase="P1_VALIDATION_PUBLICATION_FAILED";await request.PublishValidationAsync(token);
+            phase="P1_MANIFEST_PUBLICATION_FAILED";await request.PublishManifestAsync(token);
+            phase="P1_MANIFEST_COMMITTED_VALIDATION_FAILED";if(!(await manifestValidator.ValidateAsync(root,request.ExpectedCanonicalAuthority,request.ExpectedCompatibilityPublication,token)).IsValid)throw new InvalidOperationException(phase);
+            phase="P1_DOWNSTREAM_INVALIDATION_FAILED";if(request.DownstreamInvalidationRequired)await request.InvalidateDownstreamAsync(token);
+            if(fileSystem.DirectoryExists(canonicalBackup))fileSystem.DeleteDirectory(canonicalBackup,true);if(fileSystem.DirectoryExists(compatibilityBackup))fileSystem.DeleteDirectory(compatibilityBackup,true);
+            Retain(root,".01-plan.failed-*",warnings);Retain(root,".plan-input.failed-*",warnings);
+            return new(true,id,"P1_PUBLICATION_COMMITTED",Files(root),warnings,[],false,false,request.DownstreamInvalidationRequired);
+        }
+        catch(Exception ex) when(ex is IOException or InvalidOperationException)
+        {
+            if(!swapped)throw;var rollbackErrors=new List<string>();
+            try{if(fileSystem.DirectoryExists(compatibility))fileSystem.MoveDirectory(compatibility,compatibilityFailed);if(fileSystem.DirectoryExists(compatibilityBackup))fileSystem.MoveDirectory(compatibilityBackup,compatibility);if(fileSystem.DirectoryExists(compatibility)&&!await IsCompatibilityStructurallyCoherent(compatibility))rollbackErrors.Add("restored compatibility is not coherent");}catch(Exception rollback){rollbackErrors.Add(rollback.Message);}
+            try{if(fileSystem.DirectoryExists(canonical))fileSystem.MoveDirectory(canonical,canonicalFailed);if(fileSystem.DirectoryExists(canonicalBackup))fileSystem.MoveDirectory(canonicalBackup,canonical);if(request.ExistingCanonicalPublicationExists&&(!fileSystem.DirectoryExists(canonical)||(await authorityValidator.ValidateAsync(root,canonical,false,Phase1PublicationCancellation.NonInterruptible)).IsValid==false))rollbackErrors.Add("restored canonical authority is not coherent");}catch(Exception rollback){rollbackErrors.Add(rollback.Message);}
+            Retain(root,".01-plan.failed-*",warnings);Retain(root,".plan-input.failed-*",warnings);var ok=rollbackErrors.Count==0;
+            return new(false,id,ok?phase:"P1_ROLLBACK_FAILED",[],warnings,[ex.Message,..rollbackErrors],true,ok,false);
+        }
+        finally{foreach(var p in new[]{canonicalStage,compatibilityStage})if(fileSystem.DirectoryExists(p))try{fileSystem.DeleteDirectory(p,true);}catch(Exception ex)when(ex is IOException or UnauthorizedAccessException){warnings.Add("P1_STAGING_CLEANUP_WARNING: "+ex.Message);}}
+    }
+    private Task Write<T>(string root,string name,T value,CancellationToken token)=>fileSystem.WriteAllTextAsync(Path.Combine(root,name),Phase1CanonicalJson.Serialize(value),token);
+    private async Task<bool> IsCompatibilityStructurallyCoherent(string root){foreach(var name in new[]{"content-plan-production-request.json","production-event-intelligence.json"}){var path=Path.Combine(root,name);if(!fileSystem.FileExists(path))return false;await using var stream=fileSystem.OpenRead(path);try{using var document=await JsonDocument.ParseAsync(stream,cancellationToken:Phase1PublicationCancellation.NonInterruptible);_ = document.RootElement.ValueKind;}catch(JsonException){return false;}}return true;}
+    private void Retain(string root,string pattern,List<string> warnings){foreach(var path in fileSystem.EnumerateDirectories(root,pattern).OrderByDescending(fileSystem.GetLastWriteTimeUtc).ThenBy(x=>x,StringComparer.Ordinal).Skip(3))try{fileSystem.DeleteDirectory(path,true);}catch(Exception ex)when(ex is IOException or UnauthorizedAccessException){warnings.Add("P1_FAILED_EVIDENCE_CLEANUP_WARNING: "+ex.Message);}}
+    private static string[] Files(string root)=>new[]{"01-plan/execution-context.json","01-plan/selected-plan.json","01-plan/production-request.json","01-plan/pipeline-state.json","plan-input/content-plan-production-request.json","plan-input/production-event-intelligence.json"}.Select(x=>Path.Combine(root,x.Replace('/',Path.DirectorySeparatorChar))).ToArray();
 }
 
 public sealed class Phase1ManifestValidator(IPhase1FileSystem fileSystem) : IPhase1ManifestValidator
@@ -255,7 +338,14 @@ public sealed class Phase1ManifestValidator(IPhase1FileSystem fileSystem) : IPha
                 var item=matches[0];if(!full.StartsWith(workspace+Path.DirectorySeparatorChar,comparison)||full.Contains(".staging-",comparison)||full.Contains(".backup-",comparison)||full.Contains(".failed-",comparison))errors.Add(new("P1_MANIFEST_PATH_UNSAFE","Only contained active publication paths are allowed.",full));
                 if(!item.TryGetProperty("role",out var role)||role.GetString()!=expected.Role)errors.Add(new("P1_MANIFEST_ROLE_INVALID","Artifact role is invalid.",full));
                 if(!item.TryGetProperty("contractVersion",out var contract)||contract.GetString()!=expected.Contract)errors.Add(new("P1_MANIFEST_CONTRACT_INVALID","Artifact contract is invalid.",full));
+                if(!item.TryGetProperty("phaseNo",out var phaseNo)||phaseNo.GetInt32()!=1)errors.Add(new("P1_MANIFEST_PHASE_INVALID","Artifact phase is invalid.",full));
+                if(!item.TryGetProperty("executionId",out var executionId)||executionId.GetString()!=authority.ExecutionContext.ExecutionId.ToString("D"))errors.Add(new("P1_MANIFEST_EXECUTION_ID_MISMATCH","Artifact execution ID is stale or foreign.",full));
+                if(!item.TryGetProperty("planId",out var artifactPlan)||artifactPlan.GetString()!=authority.ExecutionContext.PlanId.ToString("D"))errors.Add(new("P1_MANIFEST_PLAN_ID_MISMATCH","Artifact plan ID is stale.",full));
+                if(!item.TryGetProperty("authorityChecksum",out var authorityChecksum)||authorityChecksum.GetString()!=authority.ExecutionContext.AuthorityChecksum)errors.Add(new("P1_MANIFEST_AUTHORITY_CHECKSUM_MISMATCH","Artifact authority checksum is stale.",full));
+                if(!item.TryGetProperty("requestIdentityChecksum",out var requestChecksum)||requestChecksum.GetString()!=authority.ExecutionContext.RequestIdentityChecksum)errors.Add(new("P1_MANIFEST_REQUEST_IDENTITY_MISMATCH","Artifact request identity is stale.",full));
+                if(!item.TryGetProperty("publicationState",out var publication)||publication.GetString()!="Committed"||!item.TryGetProperty("validationStatus",out var validation)||validation.GetString()!="Valid")errors.Add(new("P1_MANIFEST_PUBLICATION_STATE_INVALID","Artifact is not a validated committed publication.",full));
                 if(!fileSystem.FileExists(full))errors.Add(new("P1_MANIFEST_ARTIFACT_MISSING","Declared artifact is missing.",full));
+                else {await using var artifactStream=fileSystem.OpenRead(full);var actual=Convert.ToHexString(await SHA256.HashDataAsync(artifactStream,token)).ToLowerInvariant();if(!item.TryGetProperty("checksum",out var checksum)||checksum.GetString()!=actual)errors.Add(new("P1_MANIFEST_CHECKSUM_MISMATCH","Artifact checksum differs from the committed file.",full));}
             }
             if(items.Count(i=>i.GetProperty("role").GetString()=="Authoritative")!=1||items.Count(i=>i.GetProperty("role").GetString()=="Supporting")!=3||items.Count(i=>i.GetProperty("role").GetString()=="Compatibility")!=2)errors.Add(new("P1_MANIFEST_ROLE_CARDINALITY","Role cardinality must be 1/3/2.",manifestPath));
         }
