@@ -74,7 +74,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IStoryFrameAuthorityCommitter? storyFrameAuthorityCommitter = null,
     IStoryFrameTemporaryDirectoryRecovery? storyFrameTemporaryDirectoryRecovery = null,
     IStoryFrameRuntimeIdentityProvider? storyFrameRuntimeIdentityProvider = null,
-    IStoryFrameFileSystem? storyFrameFileSystem = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IStoryFrameFileSystem? storyFrameFileSystem = null,
+    IPhase1DownstreamInvalidationTransaction? phase1DownstreamInvalidationTransaction = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private readonly IPhase1AuthorityProjector _phase1AuthorityProjector = phase1AuthorityProjector;
     private readonly IPhase1AuthorityPersistence _phase1AuthorityPersistence = phase1AuthorityPersistence;
@@ -85,6 +86,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private readonly IPhase1RecoveryService _phase1RecoveryService = phase1RecoveryService;
     private readonly IPhase1ManifestValidator _phase1ManifestValidator = phase1ManifestValidator;
     private readonly IPhase1PublicationTransactionCoordinator _phase1PublicationTransactionCoordinator = phase1PublicationTransactionCoordinator;
+    private readonly IPhase1DownstreamInvalidationTransaction _phase1DownstreamInvalidationTransaction = phase1DownstreamInvalidationTransaction ?? new Phase1DownstreamInvalidationTransaction(new Phase1FileSystem());
     private readonly IStoryFrameExecutionLock _storyFrameExecutionLock = storyFrameExecutionLock ?? new InProcessStoryFrameExecutionLock();
     private readonly IStoryFrameAuthorityCommitter _storyFrameAuthorityCommitter = storyFrameAuthorityCommitter ?? new StoryFrameAuthorityCommitter(new StoryFrameFileSystem());
     private readonly IStoryFrameTemporaryDirectoryRecovery _storyFrameTemporaryDirectoryRecovery = storyFrameTemporaryDirectoryRecovery ?? new StoryFrameTemporaryDirectoryRecovery(new StoryFrameFileSystem(), new StoryFrameClock());
@@ -393,7 +395,13 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             if (!doc.RootElement.TryGetProperty("status", out var status)) return false;
-            if (string.Equals(status.GetString(), ProductionPhaseStatus.Succeeded.ToString(), StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(status.GetString(), ProductionPhaseStatus.Succeeded.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                if(phaseNo!=1)return true;
+                return doc.RootElement.TryGetProperty("publicationCommitted",out var committed)&&committed.ValueKind==JsonValueKind.True
+                    &&doc.RootElement.TryGetProperty("validationStatus",out var validationStatus)&&string.Equals(validationStatus.GetString(),"Valid",StringComparison.Ordinal)
+                    &&doc.RootElement.TryGetProperty("reasonCode",out _);
+            }
             if(phaseNo==1 && string.Equals(status.GetString(),ProductionPhaseStatus.Skipped.ToString(),StringComparison.OrdinalIgnoreCase) && doc.RootElement.TryGetProperty("reasonCode",out var phase1Code))return IsValidAuthorityReuseReason(1,phase1Code.GetString(),null);
             return phaseNo is 3 or 4 or 5 or 6
                 && string.Equals(status.GetString(), ProductionPhaseStatus.Skipped.ToString(), StringComparison.OrdinalIgnoreCase)
@@ -705,13 +713,13 @@ public sealed partial class ProductionPipelineExecutionService(
                 var files=Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).ToArray();
                 outcome=new(kind,reasonCode,resume.Reason,files,recovery.Warnings,authority.ExecutionContext.AuthorityChecksum,authority.ExecutionContext.RequestIdentityChecksum,false,hadExisting,false,"Publishing",recovery){ManifestStatus="Publishing",ValidationStatus="Publishing"};
                 ProductionPhaseResult? publishedResult=null;
-                var transaction=await _phase1PublicationTransactionCoordinator.PublishAsync(new(context.OutputRoot,authority,compatibility,hadExisting,invalidationRequired,
-                    _=>{ClearPhaseRangeOutputsForOverwrite(context,2);return Task.CompletedTask;},
-                    async (path,token)=>publishedResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,recovery.Warnings,[],outcome.Reason,false,token,started,phase1Outcome:outcome,outputPath:path),
-                    WritePhase1StagedManifestAsync),cancellationToken);
+                var transaction=await _phase1PublicationTransactionCoordinator.PublishAsync(new(context.OutputRoot,context,authority,compatibility,hadExisting,invalidationRequired,
+                    async (path,token)=>publishedResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Publishing,[],files,recovery.Warnings,[],outcome.Reason,false,token,started,phase1Outcome:outcome,outputPath:path),
+                    async (path,invalidated,token)=>{var committedOutcome=outcome with{DownstreamInvalidated=invalidated,ManifestStatus="Valid",ValidationStatus="Valid",CompatibilityProjectionStatus="Valid"};publishedResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,recovery.Warnings,[],committedOutcome.Reason,false,token,started,phase1Outcome:committedOutcome,outputPath:path);},
+                    WritePhase1StagedManifestAsync,_phase1DownstreamInvalidationTransaction),cancellationToken);
                 if(!transaction.Succeeded){var failedOutcome=outcome with{Kind=Phase1ExecutionKind.Failed,ReasonCode=transaction.ReasonCode,Reason="Phase 1 publication failed.",OutputFiles=[],Warnings=transaction.Warnings,DownstreamInvalidated=false,CompatibilityProjectionStatus="Failed",Errors=transaction.Errors,ManifestStatus="Failed",ValidationStatus="Failed",RollbackPerformed=transaction.RollbackPerformed,RollbackSucceeded=transaction.RollbackSucceeded};return await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Failed,[],[],transaction.Warnings,transaction.Errors,failedOutcome.Reason,true,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:failedOutcome);}
                 outcome=outcome with{DownstreamInvalidated=transaction.DownstreamInvalidated,RollbackPerformed=transaction.RollbackPerformed,RollbackSucceeded=transaction.RollbackSucceeded,ManifestStatus="Valid",ValidationStatus="Valid",CompatibilityProjectionStatus="Valid"};
-                return await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,transaction.Warnings,[],outcome.Reason,false,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:outcome);
+                return publishedResult ?? throw new InvalidOperationException("P1_FINAL_VALIDATION_PUBLICATION_FAILED");
             }
             var status=outcome.Reused?ProductionPhaseStatus.Skipped:ProductionPhaseStatus.Succeeded;
             var result=await WritePhaseValidationAsync(context,1,phaseName,status,[],outcome.OutputFiles,outcome.Warnings,[],outcome.Reason,false,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:outcome);
@@ -14374,6 +14382,9 @@ public sealed partial class ProductionPipelineExecutionService(
             downstreamInvalidated = phase1Outcome?.DownstreamInvalidated,
             rollbackPerformed = phase1Outcome?.RollbackPerformed ?? false,
             rollbackSucceeded = phase1Outcome?.RollbackSucceeded ?? false,
+            transactionId = phaseNo == 1 && phase1Outcome is not null ? phase1Outcome.RecoveryStatus.TransactionId : null,
+            publicationCommitted = phaseNo == 1 && status == ProductionPhaseStatus.Succeeded && phase1Outcome?.ValidationStatus == "Valid",
+            validationStatus = phase1Outcome?.ValidationStatus,
             canRetry,
             validationFileCreated = phase12ValidationPersistence?.ValidationFileCreated,
             validationFileSourcePath = phase12ValidationPersistence?.ValidationFileSourcePath,

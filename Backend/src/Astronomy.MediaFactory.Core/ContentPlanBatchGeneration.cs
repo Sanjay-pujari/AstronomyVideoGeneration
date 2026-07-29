@@ -341,6 +341,7 @@ public enum ProductionPhaseStatus
 {
     Pending,
     Running,
+    Publishing,
     Succeeded,
     Skipped,
     Failed

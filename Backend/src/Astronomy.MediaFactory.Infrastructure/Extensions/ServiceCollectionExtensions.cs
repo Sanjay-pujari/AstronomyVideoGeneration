@@ -624,6 +624,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPhase1ResumeEvaluator, Phase1ResumeEvaluator>();
         services.AddSingleton<IPhase1CompatibilityPublisher, Phase1CompatibilityPublisher>();
         services.AddSingleton<IPhase1ManifestValidator, Phase1ManifestValidator>();
+        services.AddSingleton<IPhase1DownstreamInvalidationTransaction, Phase1DownstreamInvalidationTransaction>();
         services.AddSingleton<IPhase1PublicationTransactionCoordinator, Phase1PublicationTransactionCoordinator>();
         services.AddSingleton<Phase1AuthorityPersistence>();
         services.AddSingleton<IPhase1AuthorityPersistence>(sp => sp.GetRequiredService<Phase1AuthorityPersistence>());
