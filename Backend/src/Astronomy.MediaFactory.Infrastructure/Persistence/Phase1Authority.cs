@@ -141,5 +141,5 @@ public sealed class Phase1AuthorityPersistence(IPhase1AuthorityValidator validat
         finally { gate.Release(); }
     }
     private static Task WriteAsync<T>(string root, string name, T value, CancellationToken token) => File.WriteAllTextAsync(Path.Combine(root, name), Phase1CanonicalJson.Serialize(value), token);
-    private static string[] Paths(string root) => ["execution-context.json", "selected-plan.json", "production-request.json", "pipeline-state.json"].Select(x => Path.Combine(root, x)).ToArray();
+    private static string[] Paths(string root) => new[] { "execution-context.json", "selected-plan.json", "production-request.json", "pipeline-state.json" }.Select(x => Path.Combine(root, x)).ToArray();
 }
