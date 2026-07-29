@@ -65,8 +65,12 @@ public sealed partial class ProductionPipelineExecutionService(
     IStoryFrameAuthorityCommitter? storyFrameAuthorityCommitter = null,
     IStoryFrameTemporaryDirectoryRecovery? storyFrameTemporaryDirectoryRecovery = null,
     IStoryFrameRuntimeIdentityProvider? storyFrameRuntimeIdentityProvider = null,
-    IStoryFrameFileSystem? storyFrameFileSystem = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IStoryFrameFileSystem? storyFrameFileSystem = null,
+    IPhase1AuthorityProjector? phase1AuthorityProjector = null,
+    IPhase1AuthorityPersistence? phase1AuthorityPersistence = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
+    private readonly IPhase1AuthorityProjector _phase1AuthorityProjector = phase1AuthorityProjector ?? new Phase1AuthorityProjector();
+    private readonly IPhase1AuthorityPersistence _phase1AuthorityPersistence = phase1AuthorityPersistence ?? new Phase1AuthorityPersistence(new Phase1AuthorityValidator());
     private readonly IStoryFrameExecutionLock _storyFrameExecutionLock = storyFrameExecutionLock ?? new InProcessStoryFrameExecutionLock();
     private readonly IStoryFrameAuthorityCommitter _storyFrameAuthorityCommitter = storyFrameAuthorityCommitter ?? new StoryFrameAuthorityCommitter(new StoryFrameFileSystem());
     private readonly IStoryFrameTemporaryDirectoryRecovery _storyFrameTemporaryDirectoryRecovery = storyFrameTemporaryDirectoryRecovery ?? new StoryFrameTemporaryDirectoryRecovery(new StoryFrameFileSystem(), new StoryFrameClock());
@@ -698,8 +702,10 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseLoadPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
+        var authority = _phase1AuthorityProjector.Project(context, DateTimeOffset.UtcNow);
+        var canonical = await _phase1AuthorityPersistence.PersistAsync(context.OutputRoot, authority, context.OverwriteExisting, cancellationToken);
         await WritePlanInputAsync(context.OutputRoot, context.Request, context.ProductionEventIntelligence, cancellationToken);
-        return [Path.Combine(context.OutputRoot, "plan-input", "content-plan-production-request.json"), Path.Combine(context.OutputRoot, "plan-input", "production-event-intelligence.json")];
+        return canonical.Files.Concat([Path.Combine(context.OutputRoot, "plan-input", "content-plan-production-request.json"), Path.Combine(context.OutputRoot, "plan-input", "production-event-intelligence.json")]).ToArray();
     }
 
     private async Task<IReadOnlyList<string>> PhaseBuildProductionIntelligenceAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -15723,6 +15729,15 @@ public sealed partial class ProductionPipelineExecutionService(
         var dependencyExpansionApplied = requestedStartPhase != context.StartPhaseNo || requestedEndPhase != context.EndPhaseNo;
         var filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray();
         var phasesActuallyExecuted = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray();
+        var phase1Artifacts = new[]
+        {
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "execution-context.json")), role = "Authoritative", contractVersion = Phase1AuthorityContract.ContractVersion },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "selected-plan.json")), role = "Supporting", contractVersion = Phase1AuthorityContract.SelectedPlanContract },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "production-request.json")), role = "Supporting", contractVersion = Phase1AuthorityContract.ProductionRequestContract },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "pipeline-state.json")), role = "Supporting", contractVersion = Phase1AuthorityContract.PipelineStateContract },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "plan-input", "content-plan-production-request.json")), role = "Compatibility", contractVersion = "legacy" },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "plan-input", "production-event-intelligence.json")), role = "Compatibility", contractVersion = "legacy" }
+        }.Where(x => File.Exists(x.path)).ToArray();
         var phase3Artifacts = new[]
         {
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "03-questions", "viewer-question-bank.json")), role = "Authoritative" },
@@ -15749,7 +15764,7 @@ public sealed partial class ProductionPipelineExecutionService(
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-index.json")), role = "DownstreamContract" },
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-diagnostics.json")), role = "Supporting" }
         }.Where(x => File.Exists(x.path)).ToArray();
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, phase1Artifacts, executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
             cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
             cleanupSkippedDirectories = context.SkippedDirectoriesDueToOverwrite ?? Array.Empty<string>(), readOnlyDependencyRoots = BuildReadOnlyDependencyRootsDiagnostics(context), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun, executedPhaseNumbers = phasesActuallyExecuted, skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
