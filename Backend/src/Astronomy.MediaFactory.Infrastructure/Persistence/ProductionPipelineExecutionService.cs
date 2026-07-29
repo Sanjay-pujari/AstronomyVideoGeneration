@@ -307,7 +307,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static bool IsValidAuthorityReuseReason(int phaseNo, string? reasonCode, string? reason) =>
-        phaseNo == 1 && reasonCode is "P1_RESUME_REUSABLE" or "P1_RESUME_RECOVERED_AUTHORITY" or "P1_COMPATIBILITY_REPAIRED"
+        phaseNo == 1 && reasonCode is "P1_RESUME_REUSABLE" or "P1_RESUME_RECOVERED_AUTHORITY" or "P1_COMPATIBILITY_REPAIRED" or "P1_MANIFEST_REPAIRED"
         || phaseNo is 3 or 4 or 5 or 6 && string.Equals(reason, $"Valid Phase {phaseNo} authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPhase12ThumbnailV9Successful(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
@@ -682,6 +682,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 var files = Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).ToArray();
                 outcome = new(recovery.Recovered?Phase1ExecutionKind.RecoveredAndReused:Phase1ExecutionKind.Reused,resume.ReasonCode,resume.Reason,files,resume.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Valid",ValidationStatus="Valid"};
             }
+            else if(!context.OverwriteExisting&&existing.IsValid&&existing.IsCompatible&&publicationValidation.IsRequestCompatible&&compatibilityValidation.IsValid&&existing.IsDownstreamReady&&manifestValidation.IsRepairable)
+            {
+                var files=Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).ToArray();
+                outcome=new(Phase1ExecutionKind.Reused,"P1_MANIFEST_REPAIRED","The safely repairable Phase 1 manifest was rebuilt without changing authority or downstream outputs.",files,manifestValidation.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Repaired",ValidationStatus="Valid"};
+            }
             else
             {
                 var hadExisting=existing.AuthoritySet is not null;
@@ -693,8 +698,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 ProductionPhaseResult? publishedResult=null;
                 var transaction=await _phase1PublicationTransactionCoordinator.PublishAsync(new(context.OutputRoot,authority,compatibility,hadExisting,invalidated,
                     _=>{ClearPhaseRangeOutputsForOverwrite(context,2);return Task.CompletedTask;},
-                    async token=>publishedResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,recovery.Warnings,[],outcome.Reason,false,token,started,phase1Outcome:outcome),
-                    token=>WritePhaseManifestAsync(context,publishedResult is null?[]:[publishedResult],token)),cancellationToken);
+                    async (path,token)=>publishedResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,recovery.Warnings,[],outcome.Reason,false,token,started,phase1Outcome:outcome,outputPath:path),
+                    (path,token)=>WritePhaseManifestAsync(context,publishedResult is null?[]:[publishedResult],token,path)),cancellationToken);
                 if(!transaction.Succeeded){var failedOutcome=outcome with{Kind=Phase1ExecutionKind.Failed,ReasonCode=transaction.ReasonCode,Reason="Phase 1 publication failed.",OutputFiles=[],Warnings=transaction.Warnings,DownstreamInvalidated=false,CompatibilityProjectionStatus="Failed",Errors=transaction.Errors,ManifestStatus="Failed",ValidationStatus="Failed",RollbackPerformed=transaction.RollbackPerformed,RollbackSucceeded=transaction.RollbackSucceeded};return await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Failed,[],[],transaction.Warnings,transaction.Errors,failedOutcome.Reason,true,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:failedOutcome);}
                 return publishedResult!;
             }
@@ -14212,11 +14217,11 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
-    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, Phase10ValidationDiagnostics? phase10TitleDiagnostics = null, Phase1ExecutionOutcome? phase1Outcome = null)
+    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, Phase10ValidationDiagnostics? phase10TitleDiagnostics = null, Phase1ExecutionOutcome? phase1Outcome = null, string? outputPath = null)
     {
         var started = startedUtc ?? DateTimeOffset.UtcNow;
         var finished = DateTimeOffset.UtcNow;
-        var validationPath = Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json");
+        var validationPath = outputPath ?? Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json");
         Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
         var phase7NarrationDiagnostics = phaseNo == 7
             ? BuildPhase7NarrationDiagnostics(BuildQuestionDrivenNarrationRequest(context), context)
@@ -15827,9 +15832,9 @@ public sealed partial class ProductionPipelineExecutionService(
         JsonElement? TitleValidationSourceDiagnostics,
         JsonElement? Phase10VisualSourceInputDiagnostics);
 
-    private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken)
+    private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken, string? outputPath = null)
     {
-        var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
+        var path = outputPath ?? Path.Combine(context.OutputRoot, "phase-manifest.json");
         var requestedStartPhase = context.PipelineRequest.RequestedStartPhaseNo ?? context.StartPhaseNo;
         var requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo;
         var dependencyExpansionApplied = requestedStartPhase != context.StartPhaseNo || requestedEndPhase != context.EndPhaseNo;
