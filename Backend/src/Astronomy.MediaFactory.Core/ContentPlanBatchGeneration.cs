@@ -378,7 +378,11 @@ public sealed record ProductionPhaseResult(
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
     bool CanRetry,
-    string? Reason = null);
+    string? Reason = null)
+{
+    /// <summary>Stable machine-readable outcome code; Reason is operator text only.</summary>
+    public string? ReasonCode { get; init; }
+}
 
 public interface IProductionPhase
 {

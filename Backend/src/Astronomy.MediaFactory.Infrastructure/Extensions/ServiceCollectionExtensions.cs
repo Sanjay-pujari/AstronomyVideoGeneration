@@ -623,9 +623,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPhase1AuthorityValidator, Phase1AuthorityValidator>();
         services.AddSingleton<IPhase1ResumeEvaluator, Phase1ResumeEvaluator>();
         services.AddSingleton<IPhase1CompatibilityPublisher, Phase1CompatibilityPublisher>();
+        services.AddSingleton<IPhase1ManifestValidator, Phase1ManifestValidator>();
         services.AddSingleton<Phase1AuthorityPersistence>();
         services.AddSingleton<IPhase1AuthorityPersistence>(sp => sp.GetRequiredService<Phase1AuthorityPersistence>());
         services.AddSingleton<IPhase1AuthorityReader>(sp => sp.GetRequiredService<Phase1AuthorityPersistence>());
+        services.AddSingleton<IPhase1RecoveryService>(sp => sp.GetRequiredService<Phase1AuthorityPersistence>());
         services.AddScoped<ProductionPipelineExecutionService>();
         services.AddScoped<IProductionPipelineExecutionService>(sp => sp.GetRequiredService<ProductionPipelineExecutionService>());
         services.AddScoped<IProductionPhaseRunner>(sp => sp.GetRequiredService<ProductionPipelineExecutionService>());

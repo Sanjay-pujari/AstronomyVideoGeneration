@@ -1,8 +1,8 @@
-# O2.ORCH.ALIGN.1C — Phase 1 Final Transactional Certification and Freeze
+# O2.ORCH.ALIGN.1D — Phase 1 Final Corrective Certification and Freeze
 
 ## 1. Decision
 
-**O2.ORCH.ALIGN.1C — PHASE 1 FINAL ARCHITECTURE CONFORMANCE: BLOCKED.**
+**O2.ORCH.ALIGN.1D — PHASE 1 FINAL ARCHITECTURE CONFORMANCE: BLOCKED.**
 
 **PHASE 1 STATUS: NOT FROZEN.** The code now establishes the final lifecycle ownership model, but certification cannot be approved because this container has no `dotnet` executable. Build and runtime evidence therefore remains unavailable.
 
@@ -110,4 +110,42 @@ Blocked: exact build/test evidence; combined canonical rollback after compatibil
 **O2.ORCH.ALIGN.1C**
 **PHASE 1 FINAL ARCHITECTURE CONFORMANCE: BLOCKED**
 
+**PHASE 1 STATUS: NOT FROZEN**
+
+
+## O2.ORCH.ALIGN.1D corrective delta (2026-07-29)
+
+### Corrected defects and final call graph
+
+Phase 1 pipeline decisions now use `ProductionPhaseResult.ReasonCode`; operator-facing `Reason` is never parsed for Phase 1. `CalculatePipelineSuccess` and `PreviousPhaseSucceeded` accept only `P1_RESUME_REUSABLE`, `P1_RESUME_RECOVERED_AUTHORITY`, and `P1_COMPATIBILITY_REPAIRED` for a skipped Phase 1. Phase 3–6 legacy reason behavior is unchanged. Fresh `P1_RESUME_NO_AUTHORITY` workspaces map to `Generated / P1_GENERATED`.
+
+The corrected beginning of the call graph is: lifecycle lock → input validation → canonical and compatibility projection → `IPhase1RecoveryService.RecoverAsync` → canonical reread → compatibility validation → `IPhase1ManifestValidator.ValidateAsync` → resume evaluation. The actual recovery result, including warnings and isolated evidence, flows into the execution outcome and centralized validation; persistence no longer performs hidden recovery.
+
+`Phase1PublicationCancellation.NonInterruptible` names the post-rename cancellation policy. Phase 1 failure validation now receives a failed `Phase1ExecutionOutcome` with a stable code, recovery/error status, and rollback flags rather than only exception text. `Phase1PublicationValidationResult` separates canonical, request, runtime, manifest, compatibility, downstream, and aggregate reuse state.
+
+### Manifest validation
+
+`IPhase1ManifestValidator` replaces the count-only helper. It checks the plan identity, exact six active paths, uniqueness, workspace containment, staging/backup/failed exclusion, exact 1/3/2 role cardinality, exact roles, exact contracts, and on-disk presence. Missing manifests are explicitly repairable; malformed or structurally foreign manifests are not. Full per-entry checksum/publication-lineage metadata remains a blocker because the current manifest writer does not yet emit those fields.
+
+### Transaction, rollback, compatibility repair, and evidence retention
+
+Canonical and compatibility publishers still own separate backups. Consequently the required combined publication transaction, cross-set rollback, compatibility-only repair transaction, post-publication manifest reread, and bounded newest-three failed-evidence cleanup are not complete. Downstream invalidation therefore cannot yet be certified against every injected transaction failure. Phase 1 remains not frozen.
+
+### Commands and exact results
+
+* `git status --short` — exit 0; the four implementation files and this architecture document were modified.
+* `git rev-parse HEAD` — exit 0; `8a15c75de5df105eacfaed17b7187a34f5847752`.
+* `dotnet --info` — exit 127; `bash: command not found: dotnet`.
+* `dotnet restore Astronomy.MediaFactory.slnx` — exit 127; `bash: command not found: dotnet`.
+* `dotnet build Astronomy.MediaFactory.slnx --no-restore` — exit 127; `bash: command not found: dotnet`.
+* `git diff --check` — exit 0.
+
+No test totals are reported because the SDK was unavailable and no test process started.
+
+### Final conformance matrix and declaration
+
+Structured Phase 1 reason codes, recovery-before-resume wiring, real recovery-result flow, fresh generation mapping, aggregate validation contract, named cancellation token, structured failed outcomes, mandatory DI, and the stronger manifest structural validator are implemented. Combined canonical/compatibility commit and rollback, complete manifest checksum/lineage validation and repair, compatibility-only repair, bounded evidence retention, all requested fault/cancellation tests, production integration tests, and build certification remain blocked.
+
+**O2.ORCH.ALIGN.1D**
+**PHASE 1 FINAL ARCHITECTURE CONFORMANCE: BLOCKED**
 **PHASE 1 STATUS: NOT FROZEN**
