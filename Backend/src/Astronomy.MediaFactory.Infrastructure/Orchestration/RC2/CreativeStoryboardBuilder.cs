@@ -1,12 +1,52 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
 public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder> logger)
 {
+    public const string AuthorityBuilderVersion = "Chronicle-StoryFrameBuilder-v1";
+
+    // This is the single in-memory production generation boundary used by RC2 Phase 6.
+    // The legacy file-writing entry point remains for compatibility outside the authority pipeline.
+    public Task<IReadOnlyList<StoryFrameAuthorityFrame>> BuildCertifiedFramesAsync(
+        DocumentaryBlueprintEditorialContract editorial, IReadOnlyList<string> variants,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var frames = new List<StoryFrameAuthorityFrame>();
+        foreach (var variant in variants)
+        {
+            double start = 0;
+            for (var index = 0; index < editorial.SceneOrder.Count; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var sceneId = editorial.SceneOrder[index];
+                var role = editorial.SceneRoles.GetValueOrDefault(sceneId, "SupportingDetail");
+                var stage = editorial.NarrativeStages.GetValueOrDefault(sceneId, "Development");
+                var duration = variant.Equals("Short", StringComparison.OrdinalIgnoreCase) ? 10d : 18d;
+                frames.Add(new($"{variant.ToLowerInvariant()}-{sceneId}-frame-001", sceneId, index + 1, 1,
+                    variant, stage, role, "Primary", editorial.MandatoryViewerQuestions,
+                    editorial.LearningObjectives, editorial.KnowledgeReferenceConstraints,
+                    $"Advance the certified {role} scene without adding editorial claims.",
+                    $"Cinematic astronomy composition supporting the certified {role} intent.",
+                    variant.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "Medium" : "Wide",
+                    "Maintain certified subject orientation", "Restrained cinematic drift", "Certified astronomy subject",
+                    "Fact-consistent night-sky setting", variant.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "Portrait safe framing" : "Landscape safe framing",
+                    "Natural astronomical lighting", "Documentary", "Slow observational motion", index == 0 ? "FadeIn" : "ContinuityCut",
+                    index == editorial.SceneOrder.Count - 1 ? "FadeOut" : "ContinuityCut", editorial.DownstreamRequirements.Where(x=>x.Contains("overlay",StringComparison.OrdinalIgnoreCase)).ToArray(),
+                    editorial.DownstreamRequirements.Where(x=>x.Contains("lower",StringComparison.OrdinalIgnoreCase)).ToArray(),
+                    ["Generate or select a fact-consistent visual asset downstream."], [], true, "Phase7NarrationLifecycle",
+                    start, duration, editorial.DownstreamRequirements, editorial.BlockingConstraints, editorial.ApprovedEditorialWarnings));
+                start += duration;
+            }
+        }
+        logger.LogInformation("Existing CreativeStoryboardBuilder generated {FrameCount} certified authority frames for {VariantCount} variants.", frames.Count, variants.Count);
+        return Task.FromResult<IReadOnlyList<StoryFrameAuthorityFrame>>(frames);
+    }
     private const string PhaseName = "Creative Intelligence / Story Frames";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static readonly string[] SupportedArchetypes = ["event-observation-science", "eclipse-sequence", "meteor-shower-guide", "comet-observation", "constellation-profile", "deep-sky-object-profile", "scientific-explainer", "discovery-story", "historical-mission", "weekly-sky-forecast", "comparative-documentary", "educational-journey"];
