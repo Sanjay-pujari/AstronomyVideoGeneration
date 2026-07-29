@@ -27,16 +27,18 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
                 var sceneId = editorial.SceneOrder[index];
                 var role = editorial.SceneRoles.GetValueOrDefault(sceneId, "SupportingDetail");
                 var stage = editorial.NarrativeStages.GetValueOrDefault(sceneId, "Development");
-                var duration = variant.Equals("Short", StringComparison.OrdinalIgnoreCase) ? 10d : 18d;
+                var isShort=variant.Equals("Short", StringComparison.OrdinalIgnoreCase);
+                var duration = isShort ? 11d : 18d;
+                var visualGoal=BuildVisualGoal(sceneId,role);
+                var composition=BuildComposition(role,variant);
+                var cameraPlan=BuildCameraPlan(role,variant);
                 frames.Add(new($"{variant.ToLowerInvariant()}-{sceneId}-frame-001", sceneId, index + 1, 1,
                     variant, stage, role, "Primary", editorial.MandatoryViewerQuestions,
                     editorial.LearningObjectives, editorial.KnowledgeReferenceConstraints,
-                    $"Advance the certified {role} scene without adding editorial claims.",
-                    $"Cinematic astronomy composition supporting the certified {role} intent.",
-                    variant.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "Medium" : "Wide",
-                    "Maintain certified subject orientation", "Restrained cinematic drift", "Certified astronomy subject",
-                    "Fact-consistent night-sky setting", variant.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "Portrait safe framing" : "Landscape safe framing",
-                    "Natural astronomical lighting", "Documentary", "Slow observational motion", index == 0 ? "FadeIn" : "ContinuityCut",
+                    $"Advance the certified {role} scene without adding editorial claims.", visualGoal,
+                    isShort ? "Medium" : "Wide", cameraPlan, BuildMotionHint(role,variant),
+                    BuildSubjectFocus(sceneId,editorial), BuildBackground(role,variant), composition,
+                    "Natural astronomical lighting", "Documentary", BuildMotionHint(role,variant), index == 0 ? "FadeIn" : "ContinuityCut",
                     index == editorial.SceneOrder.Count - 1 ? "FadeOut" : "ContinuityCut", editorial.DownstreamRequirements.Where(x=>x.Contains("overlay",StringComparison.OrdinalIgnoreCase)).ToArray(),
                     editorial.DownstreamRequirements.Where(x=>x.Contains("lower",StringComparison.OrdinalIgnoreCase)).ToArray(),
                     ["Generate or select a fact-consistent visual asset downstream."], [], true, "Phase7NarrationLifecycle",
@@ -47,6 +49,15 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
         logger.LogInformation("Existing CreativeStoryboardBuilder generated {FrameCount} certified authority frames for {VariantCount} variants.", frames.Count, variants.Count);
         return Task.FromResult<IReadOnlyList<StoryFrameAuthorityFrame>>(frames);
     }
+
+    // Shared pure production rules. Both the legacy writer and the Phase 6 authority projection call
+    // these methods, so format, visual, camera and motion behavior cannot drift into parallel engines.
+    private static string BuildVisualGoal(string sourceId,string role)=>$"Create a visual-only {role.ToLowerInvariant()} frame using only facts certified for {sourceId}.";
+    private static string BuildComposition(string role,string format)=>format.Equals("short",StringComparison.OrdinalIgnoreCase)?$"Portrait composition with the primary subject in the central mobile scan path; emphasize {role.ToLowerInvariant()} hierarchy and preserve top/bottom label-safe zones.":$"Landscape documentary composition with broad sky context; emphasize {role.ToLowerInvariant()} hierarchy and reserve lower-third label-safe space.";
+    private static string BuildCameraPlan(string role,string format)=>format.Equals("short",StringComparison.OrdinalIgnoreCase)?"Grounded vertical sky view with restrained tilt or hold; visual planning metadata only.":"Grounded wide documentary sky view with restrained drift; visual planning metadata only.";
+    private static string BuildSubjectFocus(string sourceId,DocumentaryBlueprintEditorialContract editorial)=>$"Certified astronomy subject for {sourceId}; preserve {editorial.KnowledgeReferenceConstraints.Count} certified knowledge reference(s).";
+    private static string BuildBackground(string role,string format)=>"Verified sky context only; no invented constellations, timings, surface details, or unsupported objects.";
+    private static string BuildMotionHint(string role,string format)=>role switch { "Science"=>"Mostly static explanatory hold with only subtle guide motion; preserve true spatial meaning.", "Observation"=>"Gentle lookup motion from horizon context toward the target, ending on a steady hold.", "Hook"=>"Slow reveal from negative sky space toward the primary subject.", _=>"Restrained documentary drift that supports visual comprehension only." };
     private const string PhaseName = "Creative Intelligence / Story Frames";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static readonly string[] SupportedArchetypes = ["event-observation-science", "eclipse-sequence", "meteor-shower-guide", "comet-observation", "constellation-profile", "deep-sky-object-profile", "scientific-explainer", "discovery-story", "historical-mission", "weekly-sky-forecast", "comparative-documentary", "educational-journey"];
@@ -319,17 +330,17 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
     private static string Signature(IEnumerable<DocumentaryBeat> beats)=>string.Join("|",beats.Select(b=>$"{b.NarrativeRole}:{string.Join(',',b.SourceSemanticBeatIds)}:{b.ExpansionDecision.Action}"));
     private static bool LooksLikeNarration(string s)=>s.Contains("VOICEOVER",StringComparison.OrdinalIgnoreCase)||s.Contains("Narrator:",StringComparison.OrdinalIgnoreCase);
 
-    private static string BuildVisualGoal(DocumentaryBeat b, DocumentaryContract c)=>$"Create a visual-only {b.NarrativeRole.ToLowerInvariant()} frame for {c.DocumentaryId}, using only source facts attached to {b.BeatId}.";
-    private static string BuildComposition(DocumentaryBeat b,string format)=>format=="short"?$"Portrait composition with the primary subject in the central mobile scan path; emphasize {b.NarrativeRole.ToLowerInvariant()} hierarchy and preserve top/bottom label-safe zones.":$"Landscape documentary composition with broad sky context; emphasize {b.NarrativeRole.ToLowerInvariant()} hierarchy and reserve lower-third label-safe space.";
-    private static string BuildCameraPlan(DocumentaryBeat b,string format)=>format=="short"?"Grounded vertical sky view with restrained tilt or hold; visual planning metadata only.":"Grounded wide documentary sky view with restrained drift; visual planning metadata only.";
+    private static string BuildVisualGoal(DocumentaryBeat b, DocumentaryContract c)=>BuildVisualGoal(b.BeatId,b.NarrativeRole);
+    private static string BuildComposition(DocumentaryBeat b,string format)=>BuildComposition(b.NarrativeRole,format);
+    private static string BuildCameraPlan(DocumentaryBeat b,string format)=>BuildCameraPlan(b.NarrativeRole,format);
     private static string BuildSubjectFocus(DocumentaryBeat b,DocumentaryContract c)=>$"Primary: {string.Join(" + ", c.SuccessCriteria.ViewerShouldRecognize.DefaultIfEmpty(c.DocumentaryId))}. Source beat: {b.BeatId}.";
     private static string BuildForeground(DocumentaryBeat b,string format)=>b.ObservationObjective is null?"Minimal or absent; do not invent observing context.":"Subtle horizon/location reference only when supported by allocated observation facts.";
-    private static string BuildBackground(DocumentaryBeat b,string format)=>"Verified sky context only; no invented constellations, timings, surface details, or unsupported objects.";
+    private static string BuildBackground(DocumentaryBeat b,string format)=>BuildBackground(b.NarrativeRole,format);
     private static string BuildObjectPlacement(DocumentaryBeat b,string format)=>format=="short"?"Keep essential objects away from the top 12%, bottom 18%, and side 8% safe zones.":"Keep essential objects away from lower 18% caption zone and side 6% margins.";
     private static string BuildSafeFramingPlan(string format)=>format=="short"?"Protect top 12%, bottom 18%, side 8%, and a central readable subject lane.":"Protect lower 18%, side 6%, and optional upper-left documentary label area.";
     private static string BuildNegativeSpacePlan(string format)=>format=="short"?"Use clean vertical negative space above and below the subject for mobile labels.":"Use calm side and lower-third negative space for labels without covering the subject.";
     private static string BuildOverlaySafeArea(string format)=>format=="short"?"Exact safe zones: top 12%, bottom 18%, side 8%, central 60% readable.":"Exact safe zones: lower 18%, side 6%, upper-left 20% optional label area.";
-    private static string BuildMotionHint(DocumentaryBeat b,string format)=>b.NarrativeRole switch { "Science"=>"Mostly static explanatory hold with only subtle guide motion; preserve true spatial meaning.", "Observation"=>"Gentle lookup motion from horizon context toward the target, ending on a steady hold.", "Hook"=>"Slow reveal from negative sky space toward the primary subject.", _=>"Restrained documentary drift that supports visual comprehension only." };
+    private static string BuildMotionHint(DocumentaryBeat b,string format)=>BuildMotionHint(b.NarrativeRole,format);
     private static string ResolvePrimarySubjectFromContract(JsonElement? contract,string eventName){ var objects=FindContractFactArray(contract,"primaryObjects").Concat(FindContractFactArray(contract,"secondaryObjects")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(); return objects.Length==0?eventName:string.Join(" + ",objects); }
     private static IReadOnlyList<string> ResolveSecondarySubjectsFromContract(JsonElement? contract){ var subjects=new List<string>(); foreach(var (k,l) in new[]{("angularSeparationDegrees","Angular separation"),("bestViewingWindowLocal","Best viewing window"),("skyDirectionHint","Sky direction")}){ var v=FindContractFactString(contract,k); if(!string.IsNullOrWhiteSpace(v)) subjects.Add($"{l}: {v}"); } return subjects; }
     private static IReadOnlyList<string> FindContractFactArray(JsonElement? element,string name){ var fact=FindProperty(element,name); if(fact is not {ValueKind:JsonValueKind.Object} obj||!TryGetProperty(obj,"value",out var value)||value.ValueKind!=JsonValueKind.Array)return[]; return value.EnumerateArray().Select(ValueToString).Where(v=>!string.IsNullOrWhiteSpace(v)).Select(v=>v!).ToArray(); }
