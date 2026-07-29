@@ -62,6 +62,8 @@ public sealed record Phase1ExecutionOutcome(Phase1ExecutionKind Kind, string Rea
 
 public sealed record Phase1CompatibilityPublication(IReadOnlyDictionary<string,string> Payloads, IReadOnlyDictionary<string,string> Checksums);
 public sealed record Phase1CompatibilityValidationResult(bool IsValid, bool IsMissing, IReadOnlyList<Phase1ValidationDiagnostic> Errors);
+public sealed record Phase1ManifestStagingContext(string WorkspaceRoot,string CanonicalStagingRoot,string CompatibilityStagingRoot,string ManifestStagingPath,string TransactionId,Phase1AuthoritySet ExpectedCanonicalAuthority,Phase1CompatibilityPublication ExpectedCompatibilityPublication);
+public sealed record Phase1PreviousPublicationDescriptor(Phase1AuthoritySet? CanonicalAuthority,IReadOnlyDictionary<string,string> CompatibilityChecksums,string? ManifestChecksum,string? ValidationChecksum);
 public sealed record Phase1ManifestValidationResult(bool IsPresent, bool IsValid, bool IsRepairable, IReadOnlyList<Phase1ValidationDiagnostic> Errors, IReadOnlyList<Phase1ValidationDiagnostic> Warnings, IReadOnlyList<string> ArtifactEntries);
 public sealed record Phase1PublicationValidationResult(Phase1AuthorityValidationResult CanonicalValidation, Phase1ManifestValidationResult ManifestValidation, Phase1CompatibilityValidationResult CompatibilityValidation, bool IsRequestCompatible, bool IsRuntimeCompatible, bool IsManifestCompatible, bool IsCompatibilityProjectionValid, bool IsDownstreamReady, bool IsReusable, IReadOnlyList<Phase1ValidationDiagnostic> Errors, IReadOnlyList<Phase1ValidationDiagnostic> Warnings);
 public interface IPhase1RecoveryService { Task<Phase1RecoveryResult> RecoverAsync(string outputRoot, Phase1AuthoritySet expectedAuthority, Phase1CompatibilityPublication expectedCompatibility, CancellationToken cancellationToken); }
@@ -85,8 +87,11 @@ public sealed record Phase1PublicationTransactionRequest(
     bool DownstreamInvalidationRequired,
     Func<CancellationToken,Task> InvalidateDownstreamAsync,
     Func<string,CancellationToken,Task> StageValidationAsync,
-    Func<string,CancellationToken,Task> StageManifestAsync,
+    Func<Phase1ManifestStagingContext,CancellationToken,Task> StageManifestAsync,
     Func<CancellationToken,Task>? RestoreDownstreamAsync = null);
+
+public sealed record Phase1ManifestRepairRequest(string WorkspaceRoot,Phase1AuthoritySet ActiveCanonicalAuthority,Phase1CompatibilityPublication ActiveCompatibilityPublication,Func<Phase1ManifestStagingContext,CancellationToken,Task> StageManifestAsync);
+public sealed record Phase1CompatibilityRepairRequest(string WorkspaceRoot,Phase1AuthoritySet ActiveCanonicalAuthority,Phase1CompatibilityPublication ExpectedCompatibilityPublication,Func<Phase1ManifestStagingContext,CancellationToken,Task> StageManifestAsync);
 
 public sealed record Phase1PublicationTransactionResult(bool Succeeded,string TransactionId,string ReasonCode,
     IReadOnlyList<string> Files,IReadOnlyList<string> Warnings,IReadOnlyList<string> Errors,bool RollbackPerformed,bool RollbackSucceeded,bool DownstreamInvalidated);
@@ -94,6 +99,8 @@ public sealed record Phase1PublicationTransactionResult(bool Succeeded,string Tr
 public interface IPhase1PublicationTransactionCoordinator
 {
     Task<Phase1PublicationTransactionResult> PublishAsync(Phase1PublicationTransactionRequest request,CancellationToken cancellationToken);
+    Task<Phase1PublicationTransactionResult> RepairManifestAsync(Phase1ManifestRepairRequest request,CancellationToken cancellationToken);
+    Task<Phase1PublicationTransactionResult> RepairCompatibilityAsync(Phase1CompatibilityRepairRequest request,CancellationToken cancellationToken);
 }
 
 public sealed class Phase1ResumeEvaluator : IPhase1ResumeEvaluator
@@ -261,16 +268,18 @@ public sealed class Phase1PublicationTransactionCoordinator(IPhase1FileSystem fi
         var validation=Path.Combine(root,"validation","phase-01-validation.json"); var validationStage=Path.Combine(root,"validation",$".phase-01-validation.staging-{id}.json"); var validationBackup=Path.Combine(root,"validation",$".phase-01-validation.backup-{id}.json"); var validationFailed=Path.Combine(root,"validation",$".phase-01-validation.failed-{id}.json");
         var manifest=Path.Combine(root,"phase-manifest.json"); var manifestStage=Path.Combine(root,$".phase-manifest.staging-{id}.json"); var manifestBackup=Path.Combine(root,$".phase-manifest.backup-{id}.json"); var manifestFailed=Path.Combine(root,$".phase-manifest.failed-{id}.json");
         var warnings=new List<string>(); var transactionStarted=false; var downstreamStaged=false; var phase="P1_CANONICAL_COMMIT_FAILED";
+        var previousCanonical=fileSystem.DirectoryExists(canonical)?await authorityValidator.ValidateAsync(root,canonical,false,cancellationToken):null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested(); fileSystem.CreateDirectory(canonicalStage);
             await Write(canonicalStage,"selected-plan.json",request.ExpectedCanonicalAuthority.SelectedPlan,cancellationToken); await Write(canonicalStage,"production-request.json",request.ExpectedCanonicalAuthority.ProductionRequest,cancellationToken); await Write(canonicalStage,"pipeline-state.json",request.ExpectedCanonicalAuthority.PipelineState,cancellationToken); await Write(canonicalStage,"execution-context.json",request.ExpectedCanonicalAuthority.ExecutionContext,cancellationToken);
             var staged=await authorityValidator.ValidateAsync(root,canonicalStage,true,cancellationToken); if(!staged.IsValid||!staged.IsCompatible||!staged.IsDownstreamReady)throw new InvalidOperationException("P1_CANONICAL_COMMIT_FAILED: staged canonical authority is invalid");
             await compatibilityPublisher.StageAsync(compatibilityStage,request.ExpectedCompatibilityPublication,cancellationToken); if(!(await compatibilityPublisher.ValidateDirectoryAsync(compatibilityStage,request.ExpectedCompatibilityPublication,cancellationToken)).IsValid)throw new InvalidOperationException("P1_COMPATIBILITY_COMMIT_FAILED: staged compatibility publication is invalid");
-            fileSystem.CreateDirectory(Path.GetDirectoryName(validationStage)!); await request.StageValidationAsync(validationStage,cancellationToken); await request.StageManifestAsync(manifestStage,cancellationToken);
+            fileSystem.CreateDirectory(Path.GetDirectoryName(validationStage)!); await request.StageValidationAsync(validationStage,cancellationToken);
+            await request.StageManifestAsync(new(root,canonicalStage,compatibilityStage,manifestStage,id,request.ExpectedCanonicalAuthority,request.ExpectedCompatibilityPublication),cancellationToken);
             await ValidateJsonAsync(validationStage,cancellationToken,"P1_VALIDATION_STAGED_VALIDATION_FAILED"); await ValidateJsonAsync(manifestStage,cancellationToken,"P1_MANIFEST_STAGED_VALIDATION_FAILED");
             cancellationToken.ThrowIfCancellationRequested(); var token=Phase1PublicationCancellation.NonInterruptible;
-            if(fileSystem.DirectoryExists(canonical))fileSystem.MoveDirectory(canonical,canonicalBackup); transactionStarted=true;
+            transactionStarted=true; if(fileSystem.DirectoryExists(canonical))fileSystem.MoveDirectory(canonical,canonicalBackup);
             fileSystem.MoveDirectory(canonicalStage,canonical); phase="P1_CANONICAL_COMMITTED_VALIDATION_FAILED"; var committed=await authorityValidator.ValidateAsync(root,canonical,false,token); if(!committed.IsValid||!committed.IsCompatible||!committed.IsDownstreamReady)throw new InvalidOperationException(phase);
             phase="P1_COMPATIBILITY_COMMIT_FAILED"; if(fileSystem.DirectoryExists(compatibility))fileSystem.MoveDirectory(compatibility,compatibilityBackup); fileSystem.MoveDirectory(compatibilityStage,compatibility); phase="P1_COMPATIBILITY_COMMITTED_VALIDATION_FAILED"; if(!(await compatibilityPublisher.ValidateAsync(root,request.ExpectedCompatibilityPublication,token)).IsValid)throw new InvalidOperationException(phase);
             phase="P1_VALIDATION_PUBLICATION_FAILED"; if(fileSystem.FileExists(validation))fileSystem.MoveFile(validation,validationBackup); fileSystem.MoveFile(validationStage,validation);
@@ -286,7 +295,7 @@ public sealed class Phase1PublicationTransactionCoordinator(IPhase1FileSystem fi
             var rollbackErrors=new List<string>(); var token=Phase1PublicationCancellation.NonInterruptible;
             if(downstreamStaged&&request.RestoreDownstreamAsync is not null)try{await request.RestoreDownstreamAsync(token);}catch(Exception e){rollbackErrors.Add("downstream: "+e.Message);}
             RestoreFile(manifest,manifestBackup,manifestFailed,rollbackErrors); RestoreFile(validation,validationBackup,validationFailed,rollbackErrors);
-            try{if(fileSystem.DirectoryExists(compatibility))fileSystem.MoveDirectory(compatibility,compatibilityFailed);if(fileSystem.DirectoryExists(compatibilityBackup))fileSystem.MoveDirectory(compatibilityBackup,compatibility);if(fileSystem.DirectoryExists(compatibility)&&!await IsCompatibilityStructurallyCoherent(compatibility))rollbackErrors.Add("restored compatibility is not coherent");}catch(Exception e){rollbackErrors.Add(e.Message);}
+            try{if(fileSystem.DirectoryExists(compatibility))fileSystem.MoveDirectory(compatibility,compatibilityFailed);if(fileSystem.DirectoryExists(compatibilityBackup))fileSystem.MoveDirectory(compatibilityBackup,compatibility);if(previousCanonical?.AuthoritySet is not null&&!(await compatibilityPublisher.ValidateDirectoryAsync(compatibility,new(request.ExpectedCompatibilityPublication.Payloads,previousCanonical.AuthoritySet.ExecutionContext.CompatibilityArtifactChecksums),token)).IsValid)rollbackErrors.Add("restored compatibility does not match restored canonical lineage");}catch(Exception e){rollbackErrors.Add(e.Message);}
             try{if(fileSystem.DirectoryExists(canonical))fileSystem.MoveDirectory(canonical,canonicalFailed);if(fileSystem.DirectoryExists(canonicalBackup))fileSystem.MoveDirectory(canonicalBackup,canonical);if(request.ExistingCanonicalPublicationExists&&(!fileSystem.DirectoryExists(canonical)||(await authorityValidator.ValidateAsync(root,canonical,false,token)).IsValid==false))rollbackErrors.Add("restored canonical authority is not coherent");}catch(Exception e){rollbackErrors.Add(e.Message);}
             var ok=rollbackErrors.Count==0; return new(false,id,ok?phase:"P1_ROLLBACK_FAILED",[],warnings,[ex.Message,..rollbackErrors],true,ok,false);
         }
@@ -296,10 +305,45 @@ public sealed class Phase1PublicationTransactionCoordinator(IPhase1FileSystem fi
             foreach(var f in new[]{validationStage,manifestStage})if(fileSystem.FileExists(f))try{fileSystem.DeleteFile(f);}catch(Exception e)when(e is IOException or UnauthorizedAccessException){warnings.Add("P1_STAGING_CLEANUP_WARNING: "+e.Message);}
         }
     }
+    public async Task<Phase1PublicationTransactionResult> RepairManifestAsync(Phase1ManifestRepairRequest request,CancellationToken cancellationToken)
+    {
+        var id=Guid.NewGuid().ToString("N");var root=fileSystem.GetFullPath(request.WorkspaceRoot);var active=Path.Combine(root,"phase-manifest.json");var stage=Path.Combine(root,$".phase-manifest.staging-{id}.json");var backup=Path.Combine(root,$".phase-manifest.backup-{id}.json");var failed=Path.Combine(root,$".phase-manifest.failed-{id}.json");var started=false;
+        try
+        {
+            await request.StageManifestAsync(new(root,Path.Combine(root,"01-plan"),Path.Combine(root,"plan-input"),stage,id,request.ActiveCanonicalAuthority,request.ActiveCompatibilityPublication),cancellationToken);
+            await ValidateJsonAsync(stage,cancellationToken,"P1_MANIFEST_STAGED_VALIDATION_FAILED");cancellationToken.ThrowIfCancellationRequested();started=true;
+            if(fileSystem.FileExists(active))fileSystem.MoveFile(active,backup);fileSystem.MoveFile(stage,active);
+            if(!(await manifestValidator.ValidateAsync(root,request.ActiveCanonicalAuthority,request.ActiveCompatibilityPublication,Phase1PublicationCancellation.NonInterruptible)).IsValid)throw new InvalidOperationException("P1_MANIFEST_COMMITTED_VALIDATION_FAILED");
+            if(fileSystem.FileExists(backup))fileSystem.DeleteFile(backup);
+            return new(true,id,"P1_MANIFEST_REPAIRED",Files(root),[],[],false,false,false);
+        }
+        catch(Exception ex) when(started)
+        {
+            var errors=new List<string>();RestoreFile(active,backup,failed,errors);var restored=!fileSystem.FileExists(backup)&&fileSystem.FileExists(active);
+            return new(false,id,errors.Count==0?"P1_MANIFEST_PUBLICATION_FAILED":"P1_ROLLBACK_FAILED",[],[],[ex.Message,..errors],true,errors.Count==0&&restored,false);
+        }
+        finally{if(fileSystem.FileExists(stage))try{fileSystem.DeleteFile(stage);}catch(IOException){}}
+    }
+    public async Task<Phase1PublicationTransactionResult> RepairCompatibilityAsync(Phase1CompatibilityRepairRequest request,CancellationToken cancellationToken)
+    {
+        var id=Guid.NewGuid().ToString("N");var root=fileSystem.GetFullPath(request.WorkspaceRoot);var active=Path.Combine(root,"plan-input");var stage=Path.Combine(root,$".plan-input.staging-{id}");var backup=Path.Combine(root,$".plan-input.backup-{id}");var failed=Path.Combine(root,$".plan-input.failed-{id}");var manifest=Path.Combine(root,"phase-manifest.json");var manifestStage=Path.Combine(root,$".phase-manifest.staging-{id}.json");var manifestBackup=Path.Combine(root,$".phase-manifest.backup-{id}.json");var manifestFailed=Path.Combine(root,$".phase-manifest.failed-{id}.json");var started=false;
+        try
+        {
+            await compatibilityPublisher.StageAsync(stage,request.ExpectedCompatibilityPublication,cancellationToken);if(!(await compatibilityPublisher.ValidateDirectoryAsync(stage,request.ExpectedCompatibilityPublication,cancellationToken)).IsValid)throw new InvalidOperationException("P1_COMPATIBILITY_COMMIT_FAILED");
+            await request.StageManifestAsync(new(root,Path.Combine(root,"01-plan"),stage,manifestStage,id,request.ActiveCanonicalAuthority,request.ExpectedCompatibilityPublication),cancellationToken);await ValidateJsonAsync(manifestStage,cancellationToken,"P1_MANIFEST_STAGED_VALIDATION_FAILED");cancellationToken.ThrowIfCancellationRequested();started=true;
+            if(fileSystem.DirectoryExists(active))fileSystem.MoveDirectory(active,backup);fileSystem.MoveDirectory(stage,active);if(!(await compatibilityPublisher.ValidateAsync(root,request.ExpectedCompatibilityPublication,Phase1PublicationCancellation.NonInterruptible)).IsValid)throw new InvalidOperationException("P1_COMPATIBILITY_COMMITTED_VALIDATION_FAILED");
+            if(fileSystem.FileExists(manifest))fileSystem.MoveFile(manifest,manifestBackup);fileSystem.MoveFile(manifestStage,manifest);if(!(await manifestValidator.ValidateAsync(root,request.ActiveCanonicalAuthority,request.ExpectedCompatibilityPublication,Phase1PublicationCancellation.NonInterruptible)).IsValid)throw new InvalidOperationException("P1_MANIFEST_COMMITTED_VALIDATION_FAILED");
+            if(fileSystem.DirectoryExists(backup))fileSystem.DeleteDirectory(backup,true);if(fileSystem.FileExists(manifestBackup))fileSystem.DeleteFile(manifestBackup);return new(true,id,"P1_COMPATIBILITY_REPAIRED",Files(root),[],[],false,false,false);
+        }
+        catch(Exception ex) when(started)
+        {
+            var errors=new List<string>();RestoreFile(manifest,manifestBackup,manifestFailed,errors);try{if(fileSystem.DirectoryExists(active))fileSystem.MoveDirectory(active,failed);if(fileSystem.DirectoryExists(backup))fileSystem.MoveDirectory(backup,active);if(!(await compatibilityPublisher.ValidateDirectoryAsync(active,new(request.ExpectedCompatibilityPublication.Payloads,request.ActiveCanonicalAuthority.ExecutionContext.CompatibilityArtifactChecksums),Phase1PublicationCancellation.NonInterruptible)).IsValid)errors.Add("restored compatibility is not coherent");}catch(Exception e){errors.Add(e.Message);}var ok=errors.Count==0;return new(false,id,ok?"P1_COMPATIBILITY_COMMIT_FAILED":"P1_ROLLBACK_FAILED",[],[],[ex.Message,..errors],true,ok,false);
+        }
+        finally{if(fileSystem.DirectoryExists(stage))try{fileSystem.DeleteDirectory(stage,true);}catch(IOException){}if(fileSystem.FileExists(manifestStage))try{fileSystem.DeleteFile(manifestStage);}catch(IOException){}}
+    }
     private void RestoreFile(string active,string backup,string failed,List<string> errors){try{if(fileSystem.FileExists(active))fileSystem.MoveFile(active,failed);if(fileSystem.FileExists(backup))fileSystem.MoveFile(backup,active);}catch(Exception e){errors.Add(e.Message);}}
     private async Task ValidateJsonAsync(string path,CancellationToken token,string code){if(!fileSystem.FileExists(path))throw new InvalidOperationException(code);await using var s=fileSystem.OpenRead(path);try{using var d=await JsonDocument.ParseAsync(s,cancellationToken:token);_ = d.RootElement.ValueKind;}catch(JsonException e){throw new InvalidOperationException(code,e);}}
     private Task Write<T>(string root,string name,T value,CancellationToken token)=>fileSystem.WriteAllTextAsync(Path.Combine(root,name),Phase1CanonicalJson.Serialize(value),token);
-    private async Task<bool> IsCompatibilityStructurallyCoherent(string root){foreach(var name in new[]{"content-plan-production-request.json","production-event-intelligence.json"}){var path=Path.Combine(root,name);if(!fileSystem.FileExists(path))return false;await using var stream=fileSystem.OpenRead(path);try{using var document=await JsonDocument.ParseAsync(stream,cancellationToken:Phase1PublicationCancellation.NonInterruptible);_ = document.RootElement.ValueKind;}catch(JsonException){return false;}}return true;}
     private void Retain(string root,string pattern,List<string> warnings){foreach(var path in fileSystem.EnumerateDirectories(root,pattern).OrderByDescending(fileSystem.GetLastWriteTimeUtc).ThenBy(x=>x,StringComparer.Ordinal).Skip(3))try{fileSystem.DeleteDirectory(path,true);}catch(Exception ex)when(ex is IOException or UnauthorizedAccessException){warnings.Add("P1_FAILED_EVIDENCE_CLEANUP_WARNING: "+ex.Message);}}
     private static string[] Files(string root)=>new[]{"01-plan/execution-context.json","01-plan/selected-plan.json","01-plan/production-request.json","01-plan/pipeline-state.json","plan-input/content-plan-production-request.json","plan-input/production-event-intelligence.json"}.Select(x=>Path.Combine(root,x.Replace('/',Path.DirectorySeparatorChar))).ToArray();
 }
