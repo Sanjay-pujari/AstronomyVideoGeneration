@@ -680,6 +680,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IProductionPipelineQualityValidator, ProductionPipelineQualityValidator>();
         services.AddScoped<IQuestionEngine, AstronomyQuestionEngine>();
         services.TryAddSingleton<IViewerCuriosityArtifactProjector, ViewerCuriosityArtifactProjector>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintBuilder>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintIntegrationService, DocumentaryBlueprintIntegrationService>();
         services.AddScoped<IHeroAssetIntelligenceEngine, HeroAssetIntelligenceEngine>();
         services.AddScoped<IHeroAssetSceneSelector, HeroAssetSceneSelector>();
         services.AddScoped<IHeroCompositionEngine, HeroCompositionEngine>();
