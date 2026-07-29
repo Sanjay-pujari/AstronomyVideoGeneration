@@ -678,6 +678,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEventSceneValidationStrategy, GenericEventSceneValidationStrategy>();
         services.AddScoped<IProductionPipelineQualityValidator, ProductionPipelineQualityValidator>();
         services.AddScoped<IQuestionEngine, AstronomyQuestionEngine>();
+        services.AddSingleton<IViewerCuriosityArtifactProjector, ViewerCuriosityArtifactProjector>();
         services.AddScoped<IHeroAssetIntelligenceEngine, HeroAssetIntelligenceEngine>();
         services.AddScoped<IHeroAssetSceneSelector, HeroAssetSceneSelector>();
         services.AddScoped<IHeroCompositionEngine, HeroCompositionEngine>();
