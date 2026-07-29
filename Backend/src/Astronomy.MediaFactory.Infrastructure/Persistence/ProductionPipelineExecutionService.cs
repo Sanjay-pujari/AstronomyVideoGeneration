@@ -54,7 +54,8 @@ public sealed partial class ProductionPipelineExecutionService(
     ILongStoryFramePlanner? longStoryFramePlanner = null,
     IShortStoryFramePlanner? shortStoryFramePlanner = null,
     NarrationGeneratorV5? narrationGeneratorV5 = null,
-    ServiceRegistrationDiagnosticsSnapshot? serviceRegistrationDiagnostics = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    ServiceRegistrationDiagnosticsSnapshot? serviceRegistrationDiagnostics = null,
+    IViewerCuriosityArtifactProjector? viewerCuriosityProjector = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -129,6 +130,14 @@ public sealed partial class ProductionPipelineExecutionService(
             if (!IsPhaseRequiredForRequestedOutputs(context, phase.No))
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], OutputTypeNotRequestedReason, false, cancellationToken);
+                phaseResults.Add(skipped);
+                await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+                continue;
+            }
+            if (!request.OverwriteExisting && phase.No == 3 && PreviousPhaseSucceeded(context, 3) && PreviousPhaseRequiredOutputsExist(context, 3))
+            {
+                logger.LogInformation("Phase 3 skipped because its authoritative Viewer Curiosity artifact is valid. ExecutionId={ExecutionId}", context.Request.PlanId);
+                var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], "Valid Phase 3 authority was reused; overwriteExisting=false.", false, cancellationToken);
                 phaseResults.Add(skipped);
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
@@ -234,7 +243,7 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var result in phaseResults)
         {
             if (result.Status == ProductionPhaseStatus.Failed) return false;
-            if (result.Status == ProductionPhaseStatus.Skipped && IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase)) return false;
+            if (result.Status == ProductionPhaseStatus.Skipped && IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase) && !string.Equals(result.Reason, "Valid Phase 3 authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase)) return false;
             if (result.Status == ProductionPhaseStatus.Skipped && !IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, OutputTypeNotRequestedReason, StringComparison.OrdinalIgnoreCase)) return false;
         }
 
@@ -323,8 +332,12 @@ public sealed partial class ProductionPipelineExecutionService(
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            return doc.RootElement.TryGetProperty("status", out var status)
-                && string.Equals(status.GetString(), ProductionPhaseStatus.Succeeded.ToString(), StringComparison.OrdinalIgnoreCase);
+            if (!doc.RootElement.TryGetProperty("status", out var status)) return false;
+            if (string.Equals(status.GetString(), ProductionPhaseStatus.Succeeded.ToString(), StringComparison.OrdinalIgnoreCase)) return true;
+            return phaseNo == 3
+                && string.Equals(status.GetString(), ProductionPhaseStatus.Skipped.ToString(), StringComparison.OrdinalIgnoreCase)
+                && doc.RootElement.TryGetProperty("reason", out var reason)
+                && string.Equals(reason.GetString(), "Valid Phase 3 authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase);
         }
         catch (JsonException)
         {
@@ -335,10 +348,35 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool PreviousPhaseRequiredOutputsExist(ProductionPhaseContext context, int phaseNo)
         => phaseNo switch
         {
+            3 => ExistingViewerCuriosityArtifactsAreValid(context),
             6 => File.Exists(BuildEnrichedScenePlanPath(context)),
             7 => File.Exists(BuildNarrationV5Path(context)),
             _ => true
         };
+
+    private static bool ExistingViewerCuriosityArtifactsAreValid(ProductionPhaseContext context)
+    {
+        var root = Path.Combine(context.OutputRoot, "03-questions");
+        var compatibilityPath = Path.Combine(root, "question-answer-set.json");
+        var bankPath = Path.Combine(root, "viewer-question-bank.json");
+        var objectivesPath = Path.Combine(root, "learning-objectives.json");
+        var planPath = Path.Combine(root, "question-plan.json");
+        if (!File.Exists(compatibilityPath) || !File.Exists(bankPath) || !File.Exists(objectivesPath) || !File.Exists(planPath)) return false;
+        try
+        {
+            var bank = JsonSerializer.Deserialize<ViewerQuestionBank>(File.ReadAllText(bankPath), JsonOptions);
+            var objectives = JsonSerializer.Deserialize<ViewerLearningObjectives>(File.ReadAllText(objectivesPath), JsonOptions);
+            var plan = JsonSerializer.Deserialize<ViewerQuestionPlan>(File.ReadAllText(planPath), JsonOptions);
+            if (bank is null || objectives is null || plan is null) return false;
+            var projection = new ViewerCuriosityProjection(bank, objectives, plan);
+            var profile = context.Request.PlannedFormat ?? context.Request.Category;
+            return ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile).Count == 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     private static void ValidatePhaseInputContract(ProductionPhaseContext context, int phaseNo)
     {
@@ -466,8 +504,34 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseGenerateQuestionsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
+        logger.LogInformation("Phase 3 Viewer Curiosity generation started. ExecutionId={ExecutionId}; Language={Language}; Profile={Profile}", context.Request.PlanId, context.Request.Language, context.Request.PlannedFormat ?? context.Request.Category);
         var response = await questionEngine.GenerateQuestionAnswersAsync(new QuestionAnswerGenerationRequest(context.Request.RegionId, PlanIds: [context.Request.PlanId.ToString("D")], MaxEvents: 1, Language: context.Request.Language, DryRun: false, OverwriteExisting: context.OverwriteExisting, ProductionContext: context.ExecutionContext), cancellationToken);
-        return response.GeneratedFiles;
+        var source = response.QuestionSets.SingleOrDefault() ?? throw new InvalidOperationException("Question Engine did not return a QuestionAnswerSet for Phase 3 projection.");
+        var profile = context.Request.PlannedFormat ?? context.Request.Category;
+        var projector = viewerCuriosityProjector ?? new ViewerCuriosityArtifactProjector();
+        var projection = projector.Project(source, context.ProductionEventIntelligence, context.Request.PlanId.ToString("D"), profile, DateTimeOffset.UtcNow);
+        var validationErrors = ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile);
+        if (validationErrors.Count > 0) throw new InvalidOperationException($"Phase 3 Viewer Curiosity validation failed: {string.Join("; ", validationErrors)}");
+
+        var root = Path.Combine(context.OutputRoot, "03-questions");
+        Directory.CreateDirectory(root);
+        var compatibilityPath = Path.Combine(root, "question-answer-set.json");
+        var bankPath = Path.Combine(root, "viewer-question-bank.json");
+        var objectivesPath = Path.Combine(root, "learning-objectives.json");
+        var planPath = Path.Combine(root, "question-plan.json");
+        await WriteJsonArtifactAsync(compatibilityPath, source, cancellationToken);
+        await WriteJsonArtifactAsync(bankPath, projection.ViewerQuestionBank, cancellationToken);
+        await WriteJsonArtifactAsync(objectivesPath, projection.LearningObjectives, cancellationToken);
+        await WriteJsonArtifactAsync(planPath, projection.QuestionPlan, cancellationToken);
+        logger.LogInformation("Phase 3 Viewer Curiosity generation completed. ExecutionId={ExecutionId}; SourceQuestionCount={SourceCount}; ViewerQuestionCount={QuestionCount}; LearningObjectiveCount={ObjectiveCount}; WarningCount={WarningCount}; ViewerQuestionBankPath={BankPath}", context.Request.PlanId, source.Answers.Count, projection.ViewerQuestionBank.Questions.Count, projection.LearningObjectives.Objectives.Count, projection.QuestionPlan.ProjectionWarnings.Count, NormalizePath(bankPath));
+        return response.GeneratedFiles.Concat([compatibilityPath, bankPath, objectivesPath, planPath]).ToArray();
+    }
+
+    private static async Task WriteJsonArtifactAsync<T>(string path, T value, CancellationToken cancellationToken)
+    {
+        var temporaryPath = path + ".tmp";
+        await File.WriteAllTextAsync(temporaryPath, JsonSerializer.Serialize(value, JsonOptions), new UTF8Encoding(false), cancellationToken);
+        File.Move(temporaryPath, path, overwrite: true);
     }
 
     private Task<IReadOnlyList<string>> PhaseValidateQuestionsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -15247,7 +15311,14 @@ public sealed partial class ProductionPipelineExecutionService(
         var dependencyExpansionApplied = requestedStartPhase != context.StartPhaseNo || requestedEndPhase != context.EndPhaseNo;
         var filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray();
         var phasesActuallyExecuted = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray();
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
+        var phase3Artifacts = new[]
+        {
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "03-questions", "viewer-question-bank.json")), role = "Authoritative" },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "03-questions", "question-answer-set.json")), role = "Compatibility" },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "03-questions", "learning-objectives.json")), role = "Supporting" },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "03-questions", "question-plan.json")), role = "Supporting" }
+        }.Where(x => File.Exists(x.path)).ToArray();
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
             cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
             cleanupSkippedDirectories = context.SkippedDirectoriesDueToOverwrite ?? Array.Empty<string>(), readOnlyDependencyRoots = BuildReadOnlyDependencyRootsDiagnostics(context), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun, executedPhaseNumbers = phasesActuallyExecuted, skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
@@ -15429,6 +15500,16 @@ public sealed partial class ProductionPipelineExecutionService(
         var skippedDirectories = context.SkippedDirectoriesDueToOverwrite as List<string>;
         var deleteStartPhaseNo = context.StartPhaseNo;
         var deleteEndPhaseNo = context.EndPhaseNo;
+
+        if (deleteStartPhaseNo <= 3 && deleteEndPhaseNo >= 3)
+        {
+            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "03-questions"), deletedFiles, deletedDirectories);
+            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-answer-set.json"), deletedFiles);
+            // Phase 3 is an upstream authority. Existing phase validation records are the pipeline's
+            // success state, so removing downstream records prevents stale Phase 4-20 resume decisions.
+            for (var downstreamPhaseNo = 4; downstreamPhaseNo <= 20; downstreamPhaseNo++)
+                DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{downstreamPhaseNo:00}-validation.json"), deletedFiles);
+        }
 
         if (deleteStartPhaseNo <= 6 && deleteEndPhaseNo >= 6)
         {
