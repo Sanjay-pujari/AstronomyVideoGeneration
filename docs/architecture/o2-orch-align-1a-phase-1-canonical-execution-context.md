@@ -1,155 +1,113 @@
-# O2.ORCH.ALIGN.1B — Phase 1 Final Certification and Freeze
+# O2.ORCH.ALIGN.1C — Phase 1 Final Transactional Certification and Freeze
 
 ## 1. Decision
 
-**O2.ORCH.ALIGN.1B — PHASE 1 FINAL ARCHITECTURE CONFORMANCE: BLOCKED.** The implementation hardening is present, but this environment has no .NET SDK; consequently build, focused tests, regression tests, and the complete suite could not be certified. Phase 1 is **not frozen**.
+**O2.ORCH.ALIGN.1C — PHASE 1 FINAL ARCHITECTURE CONFORMANCE: BLOCKED.**
+
+**PHASE 1 STATUS: NOT FROZEN.** The code now establishes the final lifecycle ownership model, but certification cannot be approved because this container has no `dotnet` executable. Build and runtime evidence therefore remains unavailable.
 
 ## 2. Governing documents
 
-The following frozen Word documents were extracted and read before production edits:
-
-1. `docs/implementation/RC2_Pipeline_Implementation_Guide_RPIG_v1.1.docx`.
-2. `docs/implementation/Drashyam_RC2_Pipeline_Development_Guide_v1.1_Final.docx`.
-3. `docs/implementation/Drashyam_RC2_Orchestration_Code_Integration_Guide_v1.0.docx`.
-
-The detailed v1.1 complete-set requirements govern Phase 1; the v1.0 instruction to retain plan-input is interpreted as compatibility preservation, never competing authority.
+The audit read `RC2_Pipeline_Implementation_Guide_RPIG_v1.1.docx`, `Drashyam_RC2_Pipeline_Development_Guide_v1.1_Final.docx`, and `Drashyam_RC2_Orchestration_Code_Integration_Guide_v1.0.docx`. The implementation preserves the endpoint, twenty phases, one-language execution, CG1 ownership, `execution-context.json` authority, and the existing production runner.
 
 ## 3. Repository audit findings
 
-The endpoint-to-runner call graph remains intact. Before 1B, Phase 1 used generic `ExecutePhaseAsync`; `retryFailedOnly` could skip it from centralized validation alone; overwrite cleanup ran before replacement; persistence used static filesystem calls, permanent semaphore dictionary entries, deleted backup before committed validation, and had no stale-directory recovery. The centralized runner was and remains the only writer of `validation/phase-01-validation.json` and `phase-manifest.json`. `PhaseLoadPlanAsync` was the `01-plan` and `plan-input` writer. Phase 2 remains unchanged. Phase 6 supplied the repository model for cancellable keyed execution, filesystem injection, recovery, commit, warning, and resume concepts; its behavior was not changed.
+Before editing, searches covered every `AcquireAsync`, `PersistAsync`, `WritePlanInputAsync`, `ClearPhaseRangeOutputsForOverwrite`, `WritePhaseValidationAsync`, and `WritePhaseManifestAsync` call and every literal reference to `01-plan`, `plan-input`, `phase-01-validation.json`, and `phase-manifest.json`.
+
+The 1B lifecycle acquired its lock inside `Phase1AuthorityPersistence.PersistAsync`; compatibility projection, downstream invalidation, centralized validation, and manifest publication happened after release. Compatibility files were written separately by `WritePlanInputAsync`. External cancellation was observed after canonical commit. `Phase1ExecutionOutcome`, `Phase1ResumeEvaluation`, and `Phase1RecoveryResult` were declarations rather than the production decision/result path. `PhaseLoadPlanAsync` duplicated projection, persistence, and compatibility writing. Manifest entries were based on `File.Exists`, had only path/role/contract, and a dry run could claim an old authority. The production constructor used fallback `new` expressions for Phase 1 dependencies.
+
+Readers outside the Phase 1 writer include `ContentPlanProductionExecutionService`, `Rc2ContentPlanningBatchOrchestrator`, `EventProductionIntelligence`, `SceneIntentBuilder`, `NarrationGeneratorV5`, blueprint integration, and certification services. The centralized runner remains the writer of `validation/phase-01-validation.json` and `phase-manifest.json`.
 
 ## 4. Final call graph
 
-`POST /api/content-planning/rc2/batch-generate-from-plans` → `ContentPlanningRc2Controller` → `Rc2ContentPlanningBatchOrchestrator` → `ContentPlanBatchGenerationService` → `ContentPlanProductionExecutionService` → `ProductionPipelineExecutionService.RunAsync` → `ExecutePhase1Async` → projector → keyed persistence lifecycle → compatibility publication → centralized validation/manifest publication. Phase 1 is excluded from generic retry skipping and generic execution.
+`RunAsync` → `ExecutePhase1Async` → `IPhase1ExecutionLock.AcquireAsync` → project canonical and compatibility publications → read/validate existing authority → validate compatibility → `IPhase1ResumeEvaluator.Evaluate` → reuse or lock-free `IPhase1AuthorityPersistence.PersistAsync` → `IPhase1CompatibilityPublisher.PublishAsync` → committed compatibility validation → deferred downstream invalidation → `WritePhaseValidationAsync` → `WritePhaseManifestAsync` → release lease.
 
-## 5. Artifact tree and roles
+Phase 1's generic action throws `P1_DEDICATED_LIFECYCLE_REQUIRED`; only the dedicated switch can execute it.
 
-```text
-<workspace>/
-├── 01-plan/
-│   ├── execution-context.json       # Authoritative
-│   ├── selected-plan.json           # Supporting
-│   ├── production-request.json      # Supporting
-│   └── pipeline-state.json          # Supporting
-├── plan-input/
-│   ├── content-plan-production-request.json # Compatibility
-│   └── production-event-intelligence.json   # Compatibility
-├── validation/phase-01-validation.json
-└── phase-manifest.json
-```
+## 5. Full lifecycle lock scope
 
-There is exactly one Phase 1 `Authoritative` manifest role. Compatibility artifacts never acquire authority.
+The normalized, keyed, asynchronous lock covers projection, validation, persistence recovery/staging/commit, compatibility staging/commit, invalidation, validation, manifest publication, and warning aggregation. Persistence is the selected lock-free internal component (design B), called only by the locked production lifecycle. Same roots serialize, different roots use distinct entries, waiting cancellation propagates, and reference-counted entries are removed.
 
-## 6. Contract identities
+## 6. Artifact trees and contracts
 
-Supported identities are `drashyam.phase1.v1`, `drashyam.phase1-selected-plan/1.0`, `drashyam.phase1-production-request/1.0`, `drashyam.phase1-pipeline-state/1.0`, `CanonicalExecutionContext/1.0`, `CG1`, `rc2.1.1`, `drashyam.phase1-projector/1.0`, and `drashyam.canonical-json.sha256/1.0`. Independent failures use `P1_AUTHORITY_CONTRACT_UNSUPPORTED`, `P1_SELECTED_PLAN_CONTRACT_UNSUPPORTED`, `P1_PRODUCTION_REQUEST_CONTRACT_UNSUPPORTED`, and `P1_PIPELINE_STATE_CONTRACT_UNSUPPORTED`.
+Canonical: `01-plan/{execution-context.json,selected-plan.json,production-request.json,pipeline-state.json}`. Compatibility: `plan-input/{content-plan-production-request.json,production-event-intelligence.json}`. Frozen canonical contract identities remain `drashyam.phase1.v1`, `drashyam.phase1-selected-plan/1.0`, `drashyam.phase1-production-request/1.0`, and `drashyam.phase1-pipeline-state/1.0`.
 
-## 7. Checksum rules
+## 7. Compatibility checksum lineage
 
-Canonical SHA-256 recursively orders object keys. Projected collections are normalized, de-duplicated, and ordinal-sorted. `GeneratedUtc`, `InitializedUtc`, and self-checksum properties are excluded as appropriate. The authority binds the exact three supporting checksums; request identity binds selected-plan and production-request checksums. Unknown or missing supporting references fail validation.
+`Phase1ExecutionContext.CompatibilityArtifactChecksums` binds both exact UTF-8 serialized compatibility payloads. `CompatibilityInputChecksum` binds that exact two-entry map, and `AuthorityChecksum` binds the context including the map. Unknown, absent, or non-SHA-256 entries invalidate canonical validation.
 
-## 8. Complete-set validation
+## 8. Validation semantics
 
-`Phase1AuthorityValidator` reads all four files through `IPhase1FileSystem`. It independently calculates structural validity, runtime/contract compatibility, reusability, and downstream readiness. It validates identity, lineage, requested/effective ranges, planned phases, state, references, checksums, safe workspace identity, and secret-bearing content. A complete valid set alone is insufficient when runtime compatibility or downstream readiness fails.
+`IsValid` is canonical structural/checksum validity; `IsCompatible` is contract/runtime identity; `IsRequestCompatible` is exposed separately; `IsManifestCompatible` and `IsCompatibilityProjectionValid` are independent; `IsDownstreamReady` covers pipeline state; `IsReusable` requires valid, compatible, and downstream-ready canonical state. The expected request identity comparison is exclusively made by the resume evaluator before reuse.
 
-## 9. Path security model
+## 9. Resume decision table
 
-`Phase1PathSecurity` requires a normalized direct child of the normalized workspace, separator-boundary containment, exact active name, and approved GUID-suffixed staging/backup names only when temporary validation is explicitly enabled. It rejects root-prefix collision, traversal resolution, UNC/device roots, alternate data streams, unexpected parents/names, staging or backup as active, and workspace/candidate reparse points.
+The evaluator emits `P1_RESUME_REUSABLE`, `P1_RESUME_NO_AUTHORITY`, `P1_RESUME_INCOMPLETE_SET`, `P1_RESUME_CORRUPT_JSON`, `P1_RESUME_CONTRACT_UNSUPPORTED`, `P1_RESUME_RUNTIME_INCOMPATIBLE`, `P1_RESUME_REQUEST_CHANGED`, `P1_RESUME_CHECKSUM_MISMATCH`, `P1_RESUME_PATH_INVALID`, `P1_RESUME_MANIFEST_INVALID`, `P1_RESUME_COMPATIBILITY_MISSING`, `P1_RESUME_COMPATIBILITY_MISMATCH`, `P1_RESUME_RECOVERED_AUTHORITY`, or `P1_RESUME_VALIDATION_REPAIR_REQUIRED`. Only reusable or recovered-authority decisions authorize reuse.
 
-## 10. Lock lifecycle
+## 10. Structured execution outcome
 
-`InProcessPhase1ExecutionLock` normalizes the workspace key, asynchronously serializes equal roots, permits independent roots, propagates waiter cancellation, reference-counts owners and waiters, removes the entry after the final release, and releases on exceptions. Scope covers recovery through canonical commit. This lock is **in-process only**; multi-instance/distributed safety is not claimed.
+Production consumes `Phase1ExecutionOutcome`, with `Phase1ExecutionKind`, reason code/reason, files, warnings/errors, authority/request checksums, reuse/replacement/invalidation flags, compatibility/recovery/manifest/validation status. Centralized validation serializes stable structured fields rather than requiring reason-string parsing.
 
-## 11. Recovery decision table
+## 11. Recovery decision table and retention
 
-| Active | Backups | Result |
-|---|---|---|
-| valid/downstream-ready | any | remove approved stale staging and obsolete backups; warnings retained |
-| missing/invalid | newest valid compatible backup | isolate invalid active, restore deterministically, revalidate |
-| missing/invalid | invalid newest, older valid | skip invalid evidence and restore older valid candidate |
-| missing/invalid | none valid | continue to generation |
+The existing canonical recovery removes approved staging, retains a valid active set, removes obsolete backups only after active validation, and selects valid backups newest-first. `Phase1RecoveryResult` now carries isolated paths, compatibility recovery, and manifest-repair state. Failed directories are never considered active. **Remaining blocker:** bounded failed-evidence retention and fully rollback-safe move-boundary recovery are not yet runtime-certified.
 
-Foreign temporary names are ignored. Cancellation is checked before destructive recovery work.
+## 12. Canonical and compatibility transaction sequences
 
-## 12. Resume decision table
+Canonical persistence writes four staged files, validates, renames active to backup and staging to active, validates committed state with the named non-interruptible boundary, and restores backup on canonical validation failure. Compatibility publication builds two in-memory payloads, hashes exact text, stages and re-reads both, backs up `plan-input`, atomically renames the set, revalidates both, and restores the prior set on failure. No compatibility file is published independently by Phase 1.
 
-| Complete-set state | Request identity | Decision/code |
-|---|---|---|
-| valid, compatible, downstream-ready | equal | reuse / `P1_RESUME_REUSABLE` |
-| missing | any | regenerate / `P1_RESUME_NO_AUTHORITY` |
-| corrupt or checksum-invalid | any | regenerate / structured `P1_*` diagnostic |
-| runtime/contract incompatible | any | regenerate / incompatibility diagnostic |
-| valid | changed | regenerate / request identity mismatch |
+**Remaining blocker:** canonical persistence currently deletes its backup before compatibility commit; therefore a compatibility failure cannot yet roll canonical authority back as one combined transaction.
 
-Previous centralized success and file existence alone never authorize reuse.
+## 13. Cancellation boundary and downstream invalidation
 
-## 13. Atomic commit and rollback
+Cancellation propagates through lock waiting, projection, reads, and staging. The final interruptible checkpoint occurs before compatibility publication. A named `nonInterruptiblePublicationToken` covers compatibility commit, committed validation, downstream invalidation, centralized validation, and manifest publication. Downstream invalidation occurs only after both committed sets validate.
 
-The sequence is staging write → staged complete-set validation → cancellation check → active-to-backup → staging-to-active → committed complete-set validation → backup deletion. Directory rename transaction and rollback validation are intentionally non-interruptible so cancellation cannot strand a valid backup without an active authority. Failed committed validation isolates the new active, restores the backup, revalidates it, and returns structured failure. Backup is never deleted before committed validation.
+## 14. Validation and manifest ownership
 
-## 14. Compatibility publication policy
+`ProductionPipelineExecutionService` remains the sole centralized validation and single-manifest writer. Phase 1 writes both while holding its lifecycle lease. Manifest diagnostic collections now include `phasesGenerated`, `phasesReused`, `phasesFailed`, `phasesDryRunSkipped`, and `phasesNotRequested`.
 
-Both legacy projections are produced from the same in-memory normalized request after canonical commit and before Phase 1 success publication. The centralized outcome fails if publication throws; it does not publish success. A future certification pass must add injectable compatibility failure tests and verify the selected repair/rollback policy end-to-end.
+## 15. Manifest metadata and dry-run behavior
 
-## 15. RetryFailedOnly
+Roles remain exactly one Authoritative, three Supporting, and two Compatibility entries. A dry run emits no Phase 1 current-run entries, exposes pre-existing files only as `existingDependencies`, performs no recovery or invalidation, and lists Phase 1 in `phasesDryRunSkipped` when requested. **Remaining blocker:** complete checksum and lineage metadata on each manifest entry has not been implemented and certified.
 
-Phase 1 is explicitly excluded from the generic shortcut. Every retry enters `ExecutePhase1Async` and complete-set validation. Reuse is published as `Skipped` with stable `P1_RESUME_REUSABLE`, and pipeline success recognizes that structured prefix rather than generic validation text.
+## 16. DI construction and duplicate path removal
 
-## 16. Overwrite and downstream invalidation
+`IPhase1AuthorityProjector`, `IPhase1AuthorityPersistence`, `IPhase1AuthorityReader`, `IPhase1ExecutionLock`, `IPhase1ResumeEvaluator`, and `IPhase1CompatibilityPublisher` are mandatory constructor parameters. `AddMediaFactory` registers one singleton lock, filesystem, persistence, reader alias, evaluator, and publisher. There are no Phase 1 fallback constructions in the runner. `PhaseLoadPlanAsync` was removed.
 
-When the effective range starts at Phase 1, initial cleanup is deferred. Only after validated canonical commit and successful compatibility publication does Phase 1 invoke the existing `ClearPhaseRangeOutputsForOverwrite` mechanism with boundary 2. Reuse and dry-run never invalidate downstream output. Non-Phase-1 range behavior is unchanged.
+## 17. Test classes
 
-## 17. Dry-run behavior
+`Phase1AuthorityTests` covers canonical hashing, secret-safe contracts, and missing sets. `Phase1LifecycleLockTests` adds same-workspace serialization, workspace independence, cancellation propagation, and entry cleanup. Existing `ProductionPipelineExecutionServiceTests` retain production, retry, overwrite, manifest, cancellation, dry-run, and downstream regression coverage.
 
-The existing early return precedes Phase 1 execution and recovery: it does not project, create/replace canonical or compatibility artifacts, inspect/delete temporary directories, invalidate downstream output, or publish Phase 1 artifact roles. Only centralized skipped validation and manifest conventions execute.
+## 18. Exact commands and evidence
 
-## 18. Cancellation boundary
+Repository baseline: `e36be0401d480a021937f32e5fabf55a8d90d511`.
 
-Cancellation propagates while waiting, before recovery mutation, during staged writes, before swap, before compatibility publication, and before invalidation. Once active-to-backup begins, rename, committed validation, and required rollback are non-interruptible; cancellation is observed again only after a valid active authority exists.
+| Command | Exit | Total / Passed / Failed / Skipped | Duration |
+|---|---:|---|---:|
+| `git status --short` | 0 | n/a | <1s |
+| `git rev-parse HEAD` | 0 | n/a | <1s |
+| `git log -10 --oneline` | 0 | n/a | <1s |
+| `dotnet --info` | 127 | 0 / 0 / 0 / 0 | <1s |
+| `dotnet restore Astronomy.MediaFactory.slnx` | not reached | 0 / 0 / 0 / 0 | n/a |
+| `dotnet build Astronomy.MediaFactory.slnx --no-restore` | not reached | 0 / 0 / 0 / 0 | n/a |
+| focused and full `dotnet test` commands | not reached | 0 / 0 / 0 / 0 | n/a |
+| `git diff --check` | 0 | n/a | <1s |
 
-## 19. Validation and manifest ownership
+Skipped-test reason: the image does not contain the .NET CLI (`bash: command not found: dotnet`).
 
-`ProductionPipelineExecutionService.WritePhaseValidationAsync` remains the sole Phase 1 validation publisher. `WritePhaseManifestAsync` remains the sole manifest writer. Projector, filesystem, path policy, validator, lock, recovery, and persistence return diagnostics only.
+## 19. Known deployment limitations
 
-## 20. Test classes and evidence
+The lock is deliberately process-local, not distributed. Directory rename atomicity requires staging and active paths on the same volume. The absent SDK prevents compile and runtime certification in this environment.
 
-Existing applicable classes are `Phase1AuthorityTests`, `ProductionPipelineExecutionServiceTests`, `ServiceCollectionExtensionsTests`, and the Phase 6 authority lifecycle tests used as design evidence. Runtime-focused 1B test expansion and execution remain a certification blocker because no SDK is installed.
+## 20. Final conformance matrix
 
-## 21. Commands and exact results
+Passed by inspection: governing documents, CG1/public path, canonical/supporting/compatibility topology, one implementation path, dedicated lifecycle and lock ownership, lock cleanup design, structured outcome/evaluator contracts, request identity decision, canonical and compatibility checksums/staging/validation, deferred invalidation, failure-before-invalidation, dry-run classification, single writers, and mandatory DI.
 
-| Command | Exit | Tests |
-|---|---:|---|
-| `git status --short` | 0 | n/a |
-| `git rev-parse HEAD` | 0 | n/a; `73f5e90291b2cb6281a9699acd58522471e228bb` |
-| `git log -10 --oneline` | 0 | n/a |
-| `dotnet --info` | 127 | unavailable |
-| `dotnet restore Backend/Astronomy.MediaFactory.slnx` | 127 | unavailable |
-| `dotnet build Backend/Astronomy.MediaFactory.slnx --no-restore` | 127 | unavailable |
-| focused `dotnet test` commands | not run | total 0, passed 0, failed 0, skipped 0 |
-| `dotnet test Backend/Astronomy.MediaFactory.slnx --no-build` | not run | total 0, passed 0, failed 0, skipped 0 |
+Blocked: exact build/test evidence; combined canonical rollback after compatibility failure; fully rollback-safe recovery/failure injection; bounded evidence retention; complete per-entry manifest metadata; exhaustive focused/integration tests.
 
-No test pass is claimed.
+## 21. Final declaration
 
-## 22. Known deployment limitations
-
-The lock is process-local, not distributed. Compatibility publication is atomic per existing file writer rather than a cross-directory filesystem transaction. The unavailable SDK prevents compile/runtime evidence and exact suite counts. Phase 6's older unavailable-SDK audit is historical and unrelated, and is not Phase 1 evidence.
-
-## 23. Final conformance matrix
-
-| Gate | State |
-|---|---|
-| governing documents, CG1, endpoint, 20 phases, one authority, complete set, contracts/checksums | implemented; runtime certification blocked |
-| dedicated lifecycle, complete-set retry/reuse, structured codes | implemented; runtime certification blocked |
-| filesystem, path policy, keyed lock cleanup, staging/backup recovery | implemented; runtime certification blocked |
-| staged commit, committed validation, retained backup, rollback validation | implemented; runtime certification blocked |
-| compatibility bridge, centralized validation/manifest ownership | preserved; failure-injection certification blocked |
-| deferred downstream invalidation, dry run, cancellation boundary | implemented; runtime certification blocked |
-| focused tests, regression tests, full build and suite | **BLOCKED: .NET SDK unavailable** |
-| architecture document | current |
-
-## 24. Final declaration
-
-**O2.ORCH.ALIGN.1B**
+**O2.ORCH.ALIGN.1C**
 **PHASE 1 FINAL ARCHITECTURE CONFORMANCE: BLOCKED**
 
-Remaining blockers: compile/build evidence; exhaustive focused runtime tests; related regressions; complete suite with exact totals; compatibility publication failure/repair proof. **PHASE 1 STATUS: NOT FROZEN.**
+**PHASE 1 STATUS: NOT FROZEN**
