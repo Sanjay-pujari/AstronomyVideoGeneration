@@ -60,9 +60,19 @@ public sealed partial class ProductionPipelineExecutionService(
     ILongStoryFramePlanner? longStoryFramePlanner = null,
     IShortStoryFramePlanner? shortStoryFramePlanner = null,
     NarrationGeneratorV5? narrationGeneratorV5 = null,
-    ServiceRegistrationDiagnosticsSnapshot? serviceRegistrationDiagnostics = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    ServiceRegistrationDiagnosticsSnapshot? serviceRegistrationDiagnostics = null,
+    IStoryFrameExecutionLock? storyFrameExecutionLock = null,
+    IStoryFrameAuthorityCommitter? storyFrameAuthorityCommitter = null,
+    IStoryFrameTemporaryDirectoryRecovery? storyFrameTemporaryDirectoryRecovery = null,
+    IStoryFrameRuntimeIdentityProvider? storyFrameRuntimeIdentityProvider = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
-    private static readonly IStoryFrameExecutionLock Phase6Lock = new InProcessStoryFrameExecutionLock();
+    private readonly IStoryFrameExecutionLock _storyFrameExecutionLock = storyFrameExecutionLock ?? new InProcessStoryFrameExecutionLock();
+    private readonly IStoryFrameAuthorityCommitter _storyFrameAuthorityCommitter = storyFrameAuthorityCommitter ?? new StoryFrameAuthorityCommitter(new StoryFrameFileSystem());
+    private readonly IStoryFrameTemporaryDirectoryRecovery _storyFrameTemporaryDirectoryRecovery = storyFrameTemporaryDirectoryRecovery ?? new StoryFrameTemporaryDirectoryRecovery(new StoryFrameFileSystem(), new StoryFrameClock());
+    private readonly IStoryFrameRuntimeIdentityProvider _storyFrameRuntimeIdentityProvider = storyFrameRuntimeIdentityProvider
+        ?? storyFrameIntegrationService as IStoryFrameRuntimeIdentityProvider
+        ?? throw new InvalidOperationException("The Story Frame integration service must provide its runtime compatibility identity.");
+    private const string ValidPhase6ReuseReason = "Valid Phase 6 authority was reused; overwriteExisting=false.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
     private const double DefaultLongNarrationWordsPerMinute = 135.0;
@@ -163,22 +173,16 @@ public sealed partial class ProductionPipelineExecutionService(
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
             }
-            if (!request.OverwriteExisting && phase.No == 6 && PreviousPhaseSucceeded(context, 6) && PreviousPhaseRequiredOutputsExist(context, 6))
-            {
-                logger.LogInformation("Phase 6 reused valid Story Frames authority. ExecutionId={ExecutionId}", context.Request.PlanId);
-                var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], "Valid Phase 6 authority was reused; overwriteExisting=false.", false, cancellationToken);
-                phaseResults.Add(skipped);
-                await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
-                continue;
-            }
-            if (request.RetryFailedOnly && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
+            if (request.RetryFailedOnly && phase.No != 6 && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], "retryFailedOnly=true: previous successful phase was not rerun.", false, cancellationToken);
                 phaseResults.Add(skipped);
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
             }
-            var result = await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken);
+            var result = phase.No == 6
+                ? await ExecutePhase6Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken)
+                : await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken);
             phaseResults.Add(result);
             generatedFiles.AddRange(result.OutputFiles.Where(File.Exists));
             warnings.AddRange(result.Warnings);
@@ -481,25 +485,20 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static bool Phase6ManifestIsValid(ProductionPhaseContext context,IReadOnlyList<string> expectedPaths)
     {
-        var path=Path.Combine(context.OutputRoot,"phase-manifest.json"); if(!File.Exists(path)) return false;
-        using var document=JsonDocument.Parse(File.ReadAllText(path));
-        if(!document.RootElement.TryGetProperty("planId",out var planId)||!Guid.TryParse(planId.GetString(),out var parsedPlanId)||parsedPlanId!=context.Request.PlanId
-            ||!document.RootElement.TryGetProperty("phase6Artifacts",out var entries)||entries.ValueKind!=JsonValueKind.Array) return false;
-        var actual=entries.EnumerateArray().Select(e=>(Path:NormalizePath(e.GetProperty("path").GetString()??""),Role:e.GetProperty("role").GetString()??"")).ToArray();
-        var roles=new[]{"Authoritative","DownstreamContract","Supporting"};
-        var workspace=Path.GetFullPath(context.OutputRoot).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar)+Path.DirectorySeparatorChar;
-        return actual.Length==3&&actual.Count(x=>x.Role=="Authoritative")==1&&actual.Select(x=>x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count()==3
-            &&actual.All(x=>IsSafePhase6AuthorityPath(x.Path,workspace))
-            &&expectedPaths.Select((p,i)=>actual.Any(x=>x.Path==NormalizePath(p)&&x.Role==roles[i])).All(x=>x);
-    }
-
-    private static bool IsSafePhase6AuthorityPath(string path,string workspace)
-    {
-        if(string.IsNullOrWhiteSpace(path)||path.Contains("staging",StringComparison.OrdinalIgnoreCase)||path.Contains("backup",StringComparison.OrdinalIgnoreCase)) return false;
-        var full=Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
-        return full.StartsWith(workspace,StringComparison.OrdinalIgnoreCase)
-            && string.Equals(Path.GetDirectoryName(full),Path.Combine(workspace,"06-story-frames").TrimEnd(Path.DirectorySeparatorChar),StringComparison.OrdinalIgnoreCase)
-            && new[]{"story-frames.json","story-frame-index.json","story-frame-diagnostics.json"}.Contains(Path.GetFileName(full),StringComparer.Ordinal);
+        try
+        {
+            var path=Path.Combine(context.OutputRoot,"phase-manifest.json"); if(!File.Exists(path)) return false;
+            using var document=JsonDocument.Parse(File.ReadAllText(path));
+            if(!document.RootElement.TryGetProperty("planId",out var planId)||!Guid.TryParse(planId.GetString(),out var parsedPlanId)||parsedPlanId!=context.Request.PlanId
+                ||!document.RootElement.TryGetProperty("phase6Artifacts",out var entries)||entries.ValueKind!=JsonValueKind.Array) return false;
+            var actual=entries.EnumerateArray().Select(e => e.TryGetProperty("path", out var p) && e.TryGetProperty("role", out var r)
+                ? (Path:NormalizePath(p.GetString()??""),Role:r.GetString()??"") : (Path:"",Role:"")).ToArray();
+            var roles=new[]{"Authoritative","DownstreamContract","Supporting"};
+            return actual.Length==3&&actual.Count(x=>x.Role=="Authoritative")==1&&actual.Select(x=>x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count()==3
+                &&actual.All(x=>StoryFramePathSecurity.IsCanonicalContainedPath(context.OutputRoot,x.Path,"06-story-frames",Path.GetFileName(x.Path)))
+                &&expectedPaths.Select((p,i)=>actual.Any(x=>x.Path==NormalizePath(p)&&x.Role==roles[i])).All(x=>x);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or ArgumentException or NotSupportedException) { return false; }
     }
 
     private static bool Phase4ManifestIsValid(ProductionPhaseContext context, params string[] expectedPaths)
@@ -628,6 +627,21 @@ public sealed partial class ProductionPipelineExecutionService(
                 : null;
             var failedOutputs = phaseNo == 7 ? ExistingPhase7DiagnosticOutputs(context) : [];
             return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], failedOutputs, [], [ex.Message], ex.Message, true, cancellationToken, started, phase10TitleDiagnostics);
+        }
+    }
+
+    private async Task<ProductionPhaseResult> ExecutePhase6Async(ProductionPhaseContext context, string phaseName, CancellationToken cancellationToken)
+    {
+        var started = DateTimeOffset.UtcNow;
+        try
+        {
+            var outcome = await ExecuteLockedPhase6Async(context, cancellationToken);
+            var status = outcome.Kind == StoryFramePhase6ExecutionKind.Reused ? ProductionPhaseStatus.Skipped : ProductionPhaseStatus.Succeeded;
+            return await WritePhaseValidationAsync(context, 6, phaseName, status, [], outcome.OutputFiles, [], [], outcome.Reason, false, cancellationToken, started);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
+        {
+            return await WritePhaseValidationAsync(context, 6, phaseName, ProductionPhaseStatus.Failed, [], [], [], [ex.Message], ex.Message, true, cancellationToken, started);
         }
     }
 
@@ -881,16 +895,21 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private async Task<IReadOnlyList<string>> PhaseChronicleDocumentaryArchitectAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+        => (await ExecuteLockedPhase6Async(context, cancellationToken)).OutputFiles;
+
+    private async Task<StoryFramePhase6ExecutionOutcome> ExecuteLockedPhase6Async(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var key = Path.GetFullPath(Path.Combine(context.OutputRoot, "06-story-frames"));
         logger.LogInformation("Phase 6 concurrency wait. PlanId={PlanId}", context.Request.PlanId);
-        await using var lease = await Phase6Lock.AcquireAsync(key, cancellationToken);
+        await using var lease = await _storyFrameExecutionLock.AcquireAsync(key, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         logger.LogInformation("Phase 6 concurrency lock acquired. PlanId={PlanId}", context.Request.PlanId);
         try { return await PhaseChronicleDocumentaryArchitectCoreAsync(context, cancellationToken); }
         finally { logger.LogInformation("Phase 6 concurrency lock released. PlanId={PlanId}", context.Request.PlanId); }
     }
 
-    private async Task<IReadOnlyList<string>> PhaseChronicleDocumentaryArchitectCoreAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    private async Task<StoryFramePhase6ExecutionOutcome> PhaseChronicleDocumentaryArchitectCoreAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!PreviousPhaseSucceeded(context, 5) || !ExistingBlueprintCertificationArtifactsAreValid(context))
@@ -903,10 +922,25 @@ public sealed partial class ProductionPipelineExecutionService(
             context.Request.Language,context.Request.PlannedFormat??context.Request.Category,certification,editorial,diagnostics,
             ResolveViewerVariants(context.Request.RequestedOutputs));
         if (!editorial.StoryFrameEligible) throw new InvalidOperationException("Phase 5 editorial contract has StoryFrameEligible=false.");
-        var result=await storyFrameIntegrationService.BuildAsync(request,cancellationToken);
-        var errors=StoryFrameArtifactValidator.Validate(result,request);
-        if(errors.Count>0) throw new InvalidOperationException("Phase 6 authority validation failed: "+string.Join("; ",errors));
+        cancellationToken.ThrowIfCancellationRequested();
         var root=Path.Combine(context.OutputRoot,"06-story-frames");
+        var compatibility = _storyFrameRuntimeIdentityProvider.GetCompatibilityContext();
+        await _storyFrameTemporaryDirectoryRecovery.RecoverAsync(new(context.OutputRoot, root, request, compatibility, TimeSpan.FromHours(1)), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!context.OverwriteExisting)
+        {
+            var existing = TryReadReusableStoryFrameAuthority(context, request, compatibility);
+            if (existing is not null)
+                return new(StoryFramePhase6ExecutionKind.Reused,
+                    [Path.Combine(root,"story-frames.json"),Path.Combine(root,"story-frame-index.json"),Path.Combine(root,"story-frame-diagnostics.json")],
+                    ValidPhase6ReuseReason);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        var result=await storyFrameIntegrationService.BuildAsync(request,cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        var errors=StoryFrameArtifactValidator.ValidateDetailed(result,request,compatibility).Errors;
+        if(errors.Count>0) throw new InvalidOperationException("Phase 6 authority validation failed: "+string.Join("; ",errors.Select(x=>x.Message)));
         var staging=Path.Combine(context.OutputRoot,$".06-story-frames-staging-{Guid.NewGuid():N}");
         var backup=Path.Combine(context.OutputRoot,$".06-story-frames-backup-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
@@ -919,11 +953,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 await ReadRequiredJsonAsync<StoryFramesAuthority>(Path.Combine(staging,"story-frames.json"),cancellationToken),
                 await ReadRequiredJsonAsync<StoryFrameIndex>(Path.Combine(staging,"story-frame-index.json"),cancellationToken),
                 await ReadRequiredJsonAsync<StoryFrameDiagnostics>(Path.Combine(staging,"story-frame-diagnostics.json"),cancellationToken));
-            var stagedErrors=StoryFrameArtifactValidator.Validate(staged,request);
-            if(stagedErrors.Count>0) throw new InvalidOperationException("Staged Phase 6 authority failed validation: "+string.Join("; ",stagedErrors));
-            if(Directory.Exists(root)) Directory.Move(root,backup);
-            Directory.Move(staging,root);
-            if(Directory.Exists(backup)) Directory.Delete(backup,true);
+            var stagedErrors=StoryFrameArtifactValidator.ValidateDetailed(staged,request,compatibility).Errors;
+            if(stagedErrors.Count>0) throw new InvalidOperationException("Staged Phase 6 authority failed validation: "+string.Join("; ",stagedErrors.Select(x=>x.Message)));
+            cancellationToken.ThrowIfCancellationRequested();
+            await _storyFrameAuthorityCommitter.CommitAsync(new(root, staging, backup), cancellationToken);
         }
         catch
         {
@@ -933,7 +966,25 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         logger.LogInformation("Phase 6 Story Frames authority completed. ExecutionId={ExecutionId} PlanId={PlanId} EventId={EventId} Language={Language} Profile={Profile} CertificationId={CertificationId} CertificationChecksum={CertificationChecksum} EditorialContractId={EditorialContractId} EditorialChecksum={EditorialChecksum} RequestedVariants={RequestedVariants} BuilderType={BuilderType} BuilderVersion={BuilderVersion} SceneCount={SceneCount} FrameCount={FrameCount} NarrationFrameCount={NarrationFrameCount} VisualFrameCount={VisualFrameCount} WarningCount={WarningCount} BlockingIssueCount={BlockingIssueCount} OutputRoot={OutputRoot}",
             request.ExecutionId,request.PlanId,request.EventId,request.Language,request.Profile,certification.CertificationId,certification.SemanticChecksum,editorial.ContractId,editorial.Checksum,string.Join(",",request.RequestedVariants),result.Authority.BuilderType,result.Authority.BuilderVersion,result.Diagnostics.GeneratedSceneCount,result.Diagnostics.GeneratedFrameCount,result.Diagnostics.NarrationFrameCount,result.Diagnostics.VisualFrameCount,result.Diagnostics.WarningCount,result.Diagnostics.BlockingIssueCount,root);
-        return Directory.GetFiles(root).ToArray();
+        return new(StoryFramePhase6ExecutionKind.Generated, Directory.GetFiles(root).ToArray(), "Validation passed.");
+    }
+
+    private StoryFrameIntegrationResult? TryReadReusableStoryFrameAuthority(ProductionPhaseContext context,
+        StoryFrameIntegrationRequest request, StoryFrameValidationCompatibilityContext compatibility)
+    {
+        if (!PreviousPhaseSucceeded(context, 6)) return null;
+        var root = Path.Combine(context.OutputRoot, "06-story-frames");
+        var paths = new[] { Path.Combine(root,"story-frames.json"), Path.Combine(root,"story-frame-index.json"), Path.Combine(root,"story-frame-diagnostics.json") };
+        try
+        {
+            if (paths.Any(p => !File.Exists(p)) || !Phase6ManifestIsValid(context, paths)) return null;
+            var result = new StoryFrameIntegrationResult(
+                JsonSerializer.Deserialize<StoryFramesAuthority>(File.ReadAllText(paths[0]),JsonOptions)!,
+                JsonSerializer.Deserialize<StoryFrameIndex>(File.ReadAllText(paths[1]),JsonOptions)!,
+                JsonSerializer.Deserialize<StoryFrameDiagnostics>(File.ReadAllText(paths[2]),JsonOptions)!);
+            return StoryFrameArtifactValidator.ValidateDetailed(result, request, compatibility).IsValid ? result : null;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or ArgumentException) { return null; }
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateNarrationPlanAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -16341,3 +16392,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private sealed record Phase8ProfessionalSlideFormat(string Format, AstronomyInfographicRenderVariant RenderVariant);
 }
+
+internal enum StoryFramePhase6ExecutionKind { Reused, Generated }
+internal sealed record StoryFramePhase6ExecutionOutcome(StoryFramePhase6ExecutionKind Kind,
+    IReadOnlyList<string> OutputFiles, string Reason);

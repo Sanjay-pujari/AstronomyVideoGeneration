@@ -125,6 +125,13 @@ public interface IStoryFrameIntegrationService
     Task<StoryFrameIntegrationResult> BuildAsync(StoryFrameIntegrationRequest request, CancellationToken cancellationToken);
 }
 
+/// <summary>Reports the identity of the builder and integration runtime which may safely reuse
+/// persisted Story Frame authorities.</summary>
+public interface IStoryFrameRuntimeIdentityProvider
+{
+    StoryFrameValidationCompatibilityContext GetCompatibilityContext();
+}
+
 /// <summary>Mockable boundary over the production storyboard builder. Implementations must adapt the
 /// existing production planner; this is deliberately not a second planning engine.</summary>
 public interface ICertifiedStoryFrameBuilder

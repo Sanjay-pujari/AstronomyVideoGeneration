@@ -3,9 +3,14 @@ using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
-public sealed class StoryFrameIntegrationService(ICertifiedStoryFrameBuilder builder) : IStoryFrameIntegrationService
+public sealed class StoryFrameIntegrationService(ICertifiedStoryFrameBuilder builder) : IStoryFrameIntegrationService, IStoryFrameRuntimeIdentityProvider
 {
     public const string Version = "RC2-Phase6-Integration-v1";
+
+    public StoryFrameValidationCompatibilityContext GetCompatibilityContext() => new(
+        builder.BuilderType, builder.BuilderVersion, nameof(StoryFrameIntegrationService), Version,
+        StoryFrameContractCompatibility.CurrentVersion, StoryFrameContractCompatibility.CurrentVersion,
+        StoryFrameContractCompatibility.CurrentVersion);
 
     public async Task<StoryFrameIntegrationResult> BuildAsync(StoryFrameIntegrationRequest request, CancellationToken cancellationToken)
     {
