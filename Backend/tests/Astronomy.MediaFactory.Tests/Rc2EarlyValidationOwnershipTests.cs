@@ -16,7 +16,10 @@ public sealed class Rc2EarlyValidationOwnershipTests
         var root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "rc2-validation-owner-" + Guid.NewGuid())).FullName;
         var validationPath = Path.Combine(root, "validation", $"phase-{phaseNo:00}-validation.json");
         Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
-        await File.WriteAllTextAsync(validationPath, $$"""{"phaseNo":{{phaseNo}},"status":"Succeeded","errors":[],"authorityMarker":"keep-me"}""");
+        var phase3Certification = phaseNo == 3
+            ? ""","reasonCode":"P3_REGENERATED","publicationCommitted":true,"semanticValidationPassed":true,"checksumValidationPassed":true,"manifestValidationPassed":true,"compatibilityEquivalencePassed":true,"phase2LineageValidationPassed":true,"questionPlanReconciliationPassed":true,"downstreamReady":true,"validationStatus":"Valid","manifestValidationStatus":"Valid","compatibilityValidationStatus":"Valid"""
+            : string.Empty;
+        await File.WriteAllTextAsync(validationPath, $$"""{"phaseNo":{{phaseNo}},"status":"Succeeded","errors":[],"authorityMarker":"keep-me"{{phase3Certification}}}""");
         var beforeHash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(validationPath)));
         var beforeWrite = File.GetLastWriteTimeUtc(validationPath);
         var phase = new ProductionPhaseResult(phaseNo, "authoritative", ProductionPhaseStatus.Succeeded, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, [], ["authority-output.json"], validationPath, [], [], false);
@@ -44,6 +47,22 @@ public sealed class Rc2EarlyValidationOwnershipTests
         Assert.False(reconciled.Success);
         Assert.Equal(2, reconciled.LastFailedPhaseNo);
         Assert.Equal(ProductionPhaseStatus.Failed, Assert.Single(reconciled.Steps.OfType<ProductionPhaseResult>()).Status);
+    }
+
+    [Fact]
+    public async Task Phase3_API_fails_when_final_physical_validation_report_is_incoherent()
+    {
+        var root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "rc2-phase3-incoherent-" + Guid.NewGuid())).FullName;
+        var path = Path.Combine(root, "validation", "phase-03-validation.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, """{"phaseNo":3,"phaseName":"Viewer Curiosity Framework","status":"Succeeded","reasonCode":"P3_REGENERATED","publicationCommitted":false,"validationStatus":"Valid","manifestValidationStatus":"Valid","compatibilityValidationStatus":"Valid"}""");
+        var phase = new ProductionPhaseResult(3, "Viewer Curiosity Framework", ProductionPhaseStatus.Succeeded, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, [], [], path, [], [], false) { ReasonCode = "P3_REGENERATED" };
+
+        var reconciled = await InvokeReconciliation(Response(root, phase), [3]);
+
+        Assert.False(reconciled.Success);
+        Assert.Equal(3, reconciled.LastFailedPhaseNo);
+        Assert.Contains(reconciled.Errors, error => error.Contains("publicationCommitted", StringComparison.Ordinal));
     }
 
     [Fact]
