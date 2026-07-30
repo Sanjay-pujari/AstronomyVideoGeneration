@@ -744,7 +744,9 @@ public sealed partial class ProductionPipelineExecutionService(
                     WritePhase1StagedManifestAsync,_phase1DownstreamInvalidationTransaction),cancellationToken);
                 if(!transaction.Succeeded){var failedOutcome=outcome with{Kind=Phase1ExecutionKind.Failed,ReasonCode=transaction.ReasonCode,Reason="Phase 1 publication failed.",OutputFiles=[],Warnings=transaction.Warnings,DownstreamInvalidated=false,CompatibilityProjectionStatus="Failed",Errors=transaction.Errors,ManifestStatus="Failed",ValidationStatus="Failed",RollbackPerformed=transaction.RollbackPerformed,RollbackSucceeded=transaction.RollbackSucceeded};return await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Failed,[],[],transaction.Warnings,transaction.Errors,failedOutcome.Reason,true,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:failedOutcome);}
                 outcome=outcome with{DownstreamInvalidated=transaction.DownstreamInvalidated,RollbackPerformed=transaction.RollbackPerformed,RollbackSucceeded=transaction.RollbackSucceeded,ManifestStatus="Valid",ValidationStatus="Valid",CompatibilityProjectionStatus="Valid"};
-                return publishedResult ?? throw new InvalidOperationException("P1_FINAL_VALIDATION_PUBLICATION_FAILED");
+                var result=publishedResult ?? throw new InvalidOperationException("P1_FINAL_VALIDATION_PUBLICATION_FAILED");
+                var stableValidationPath=Path.Combine(context.OutputRoot,"validation","phase-01-validation.json");
+                return result with { ValidationReportPath=stableValidationPath, OutputFiles=result.OutputFiles.Select(x=>x.Contains(".phase-01-validation.final-",StringComparison.Ordinal)?stableValidationPath:x).Distinct(StringComparer.OrdinalIgnoreCase).ToArray() };
             }
             var status=outcome.Reused?ProductionPhaseStatus.Skipped:ProductionPhaseStatus.Succeeded;
             var result=await WritePhaseValidationAsync(context,1,phaseName,status,[],outcome.OutputFiles,outcome.Warnings,[],outcome.Reason,false,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:outcome);
@@ -15917,15 +15919,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase1AuthorityPath=Path.Combine(context.OutputRoot,"01-plan","execution-context.json");
         Phase1ExecutionContext? phase1Authority=null;
         if(File.Exists(phase1AuthorityPath))phase1Authority=JsonSerializer.Deserialize<Phase1ExecutionContext>(await File.ReadAllTextAsync(phase1AuthorityPath,cancellationToken),JsonOptions);
-        (string path,string role,string contractVersion)[] phase1ArtifactDefinitions =
-        {
-            (path:NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "execution-context.json")), role:"Authoritative", contractVersion:Phase1AuthorityContract.ContractVersion),
-            (NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "selected-plan.json")), "Supporting", Phase1AuthorityContract.SelectedPlanContract),
-            (NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "production-request.json")), "Supporting", Phase1AuthorityContract.ProductionRequestContract),
-            (NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "pipeline-state.json")), "Supporting", Phase1AuthorityContract.PipelineStateContract),
-            (NormalizePath(Path.Combine(context.OutputRoot, "plan-input", "content-plan-production-request.json")), "Compatibility", "legacy")
-        };
-        var phase1Artifacts = phase1ArtifactDefinitions.Where(x => !context.DryRun && phaseResults.Any(p=>p.PhaseNo==1&&p.OutputFiles.Count>0) && File.Exists(x.path)).Select(x=>new { phaseNo=1,x.path,x.role,x.contractVersion,checksum=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(x.path))).ToLowerInvariant(),planId=phase1Authority?.PlanId,executionId=phase1Authority?.ExecutionId,authorityChecksum=phase1Authority?.AuthorityChecksum,requestIdentityChecksum=phase1Authority?.RequestIdentityChecksum,publicationState="Committed",validationStatus="Valid" }).ToArray();
+        var phase1Artifacts = Phase1ArtifactCatalog.Required.Select(x=>new{definition=x,path=NormalizePath(x.ResolveFinalPath(context.OutputRoot))}).Where(x => !context.DryRun && phaseResults.Any(p=>p.PhaseNo==1&&p.OutputFiles.Count>0) && File.Exists(x.path)).Select(x=>new { phaseNo=1,x.path,role=x.definition.Role,contractVersion=x.definition.ContractVersion,checksum=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(x.path))).ToLowerInvariant(),planId=phase1Authority?.PlanId,executionId=phase1Authority?.ExecutionId,authorityChecksum=phase1Authority?.AuthorityChecksum,requestIdentityChecksum=phase1Authority?.RequestIdentityChecksum,publicationState="Committed",validationStatus="Valid" }).ToArray();
         var phase2Artifacts = new[]
         {
             new { path=NormalizePath(Path.Combine(context.OutputRoot,"02-intelligence","production-event-intelligence.json")), role="Authoritative" },
@@ -15969,21 +15963,12 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static async Task WritePhase1StagedManifestAsync(Phase1ManifestStagingContext staging,CancellationToken cancellationToken)
     {
-        (string Source,string Final,string Role,string Contract)[] definitions=
-        {
-            (Source:Path.Combine(staging.CanonicalStagingRoot,"execution-context.json"),Final:Path.Combine(staging.WorkspaceRoot,"01-plan","execution-context.json"),Role:"Authoritative",Contract:Phase1AuthorityContract.ContractVersion),
-            (Path.Combine(staging.CanonicalStagingRoot,"selected-plan.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","selected-plan.json"),"Supporting",Phase1AuthorityContract.SelectedPlanContract),
-            (Path.Combine(staging.CanonicalStagingRoot,"production-request.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","production-request.json"),"Supporting",Phase1AuthorityContract.ProductionRequestContract),
-            (Path.Combine(staging.CanonicalStagingRoot,"pipeline-state.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","pipeline-state.json"),"Supporting",Phase1AuthorityContract.PipelineStateContract),
-            (Path.Combine(staging.CompatibilityStagingRoot,"content-plan-production-request.json"),Path.Combine(staging.WorkspaceRoot,"plan-input","content-plan-production-request.json"),"Compatibility","legacy"),
-            (Path.Combine(staging.CompatibilityStagingRoot,"production-event-intelligence.json"),Path.Combine(staging.WorkspaceRoot,"plan-input","production-event-intelligence.json"),"Compatibility","legacy")
-        };
         var artifacts=new List<object>(6);var authority=staging.ExpectedCanonicalAuthority.ExecutionContext;
-        foreach(var definition in definitions)
+        foreach(var definition in Phase1ArtifactCatalog.Required)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await using var stream=File.OpenRead(definition.Source);var checksum=Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream,cancellationToken)).ToLowerInvariant();
-            artifacts.Add(new{phaseNo=1,path=NormalizePath(definition.Final),role=definition.Role,contractVersion=definition.Contract,checksum,planId=authority.PlanId,executionId=authority.ExecutionId,authorityChecksum=authority.AuthorityChecksum,requestIdentityChecksum=authority.RequestIdentityChecksum,publicationState="Committed",validationStatus="Valid"});
+            await using var stream=File.OpenRead(definition.StagingSourceResolver(staging));var checksum=Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream,cancellationToken)).ToLowerInvariant();
+            artifacts.Add(new{phaseNo=1,path=NormalizePath(definition.ResolveFinalPath(staging.WorkspaceRoot)),role=definition.Role,contractVersion=definition.ContractVersion,checksum,planId=authority.PlanId,executionId=authority.ExecutionId,authorityChecksum=authority.AuthorityChecksum,requestIdentityChecksum=authority.RequestIdentityChecksum,publicationState="Committed",validationStatus="Valid"});
         }
         await File.WriteAllTextAsync(staging.ManifestStagingPath,JsonSerializer.Serialize(new{planId=authority.PlanId,transactionId=staging.TransactionId,phase1Artifacts=artifacts},JsonOptions),cancellationToken);
     }
