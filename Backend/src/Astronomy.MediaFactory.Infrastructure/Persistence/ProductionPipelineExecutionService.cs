@@ -15975,7 +15975,8 @@ public sealed partial class ProductionPipelineExecutionService(
             (Path.Combine(staging.CanonicalStagingRoot,"selected-plan.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","selected-plan.json"),"Supporting",Phase1AuthorityContract.SelectedPlanContract),
             (Path.Combine(staging.CanonicalStagingRoot,"production-request.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","production-request.json"),"Supporting",Phase1AuthorityContract.ProductionRequestContract),
             (Path.Combine(staging.CanonicalStagingRoot,"pipeline-state.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","pipeline-state.json"),"Supporting",Phase1AuthorityContract.PipelineStateContract),
-            (Path.Combine(staging.CompatibilityStagingRoot,"content-plan-production-request.json"),Path.Combine(staging.WorkspaceRoot,"plan-input","content-plan-production-request.json"),"Compatibility","legacy")
+            (Path.Combine(staging.CompatibilityStagingRoot,"content-plan-production-request.json"),Path.Combine(staging.WorkspaceRoot,"plan-input","content-plan-production-request.json"),"Compatibility","legacy"),
+            (Path.Combine(staging.CompatibilityStagingRoot,"production-event-intelligence.json"),Path.Combine(staging.WorkspaceRoot,"plan-input","production-event-intelligence.json"),"Compatibility","legacy")
         };
         var artifacts=new List<object>(6);var authority=staging.ExpectedCanonicalAuthority.ExecutionContext;
         foreach(var definition in definitions)
