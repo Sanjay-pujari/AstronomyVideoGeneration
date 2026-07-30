@@ -104,6 +104,27 @@ public sealed class ViewerCuriosityArtifactProjectorTests
         Assert.All(Project().ViewerQuestionBank.Questions, x => Assert.All(x.KnowledgeReferences, r => Assert.Equal("02-intelligence/production-event-intelligence.json", r.SourceArtifact)));
 
     [Theory]
+    [InlineData("When", "TimingGuidance", "Best viewing is 5:30 PM India Standard Time")]
+    [InlineData("Where", "LocationGuidance", "Look toward the clearest open horizon")]
+    [InlineData("How", "ObservationGuidance", "Use binoculars")]
+    [InlineData("Action", "PracticalViewingAdvice", "Bring special equipment")]
+    public void Provider_specific_answer_is_not_certified_without_Phase2_support(string type, string category, string providerAnswer)
+    {
+        var source = Source() with { Answers = [new(null, type, "What should the viewer do?", "Viewer guidance", providerAnswer, 1)] };
+        var intelligence = Intelligence() with { LocalPeakTime = null, BestViewingWindowLocal = null, SkyDirectionHint = null, ViewerInstructions = [] };
+
+        var question = Assert.Single(projector.Project(source, intelligence, ExecutionId, "Gold", ["Long"], CreatedUtc).ViewerQuestionBank.Questions);
+
+        Assert.Equal(category, question.Category);
+        Assert.Equal(providerAnswer, question.SourceAnswer);
+        Assert.DoesNotContain(providerAnswer, question.CertifiedAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Unresolved", question.AnswerResolutionStatus);
+        Assert.Equal("EditorialOnly", question.AnswerUsability);
+        Assert.True(question.RequiresEditorialAttention);
+        Assert.NotEmpty(question.GroundingWarnings);
+    }
+
+    [Theory]
     [InlineData("ShortVideo", "Short")]
     [InlineData("short", "Short")]
     [InlineData("LongVideo", "Long")]

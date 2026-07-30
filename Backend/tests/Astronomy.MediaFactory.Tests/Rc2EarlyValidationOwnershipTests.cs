@@ -10,6 +10,7 @@ public sealed class Rc2EarlyValidationOwnershipTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
+    [InlineData(3)]
     public async Task Authoritative_validation_is_preserved_and_not_overwritten_by_generic_validator(int phaseNo)
     {
         var root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "rc2-validation-owner-" + Guid.NewGuid())).FullName;
@@ -46,15 +47,13 @@ public sealed class Rc2EarlyValidationOwnershipTests
     }
 
     [Fact]
-    public void Generic_validator_retains_ownership_for_phase_three_only()
+    public void ViewerCuriosity_is_the_only_writer_of_phase03_validation()
     {
         var source = File.ReadAllText(FindRepositoryFile("Backend", "src", "Astronomy.MediaFactory.Infrastructure", "Orchestration", "RC2", "Rc2ContentPlanningBatchOrchestrator.cs"));
-        var mapStart = source.IndexOf("var map = new Dictionary", StringComparison.Ordinal);
-        var mapEnd = source.IndexOf("foreach (var phaseNo in requestedPhases.Where(map.ContainsKey))", mapStart, StringComparison.Ordinal);
-        var map = source[mapStart..mapEnd];
-        Assert.Contains("[3]", map);
-        Assert.DoesNotContain("[1]", map);
-        Assert.DoesNotContain("[2]", map);
+        Assert.Contains("phase is 1 or 2 or 3", source);
+        Assert.Contains("Phase 3 authoritative validation owner: Viewer Curiosity Framework publication lifecycle", source);
+        Assert.DoesNotContain("Question / Story Planning", source);
+        Assert.DoesNotContain("question-driven-scene-plan.json\")])", source);
         Assert.DoesNotContain("production-pipeline-request.json", source);
         Assert.DoesNotContain("production-event-intelligence-diagnostics.json", source);
     }

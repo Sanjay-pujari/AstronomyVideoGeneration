@@ -8,7 +8,15 @@ public sealed record ViewerCuriosityArtifactMetadata(string ExecutionId, string 
 public sealed record ViewerKnowledgeReference(string ReferenceId, string ReferenceType, string SourceArtifact, string ResolutionStatus);
 public sealed record ViewerQuestion(string QuestionId, string QuestionText, string Priority, string Category,
     IReadOnlyList<ViewerKnowledgeReference> KnowledgeReferences, string ExpectedLearningOutcome,
-    IReadOnlyList<string> ApplicableVariants, string Language, int Order, int SourceDisplayOrder);
+    IReadOnlyList<string> ApplicableVariants, string Language, int Order, int SourceDisplayOrder)
+{
+    public string SourceAnswer { get; init; } = "";
+    public string CertifiedAnswer { get; init; } = "";
+    public string AnswerResolutionStatus { get; init; } = "Unresolved";
+    public string AnswerUsability { get; init; } = "EditorialOnly";
+    public bool RequiresEditorialAttention { get; init; } = true;
+    public IReadOnlyList<string> GroundingWarnings { get; init; } = [];
+}
 public sealed record ViewerQuestionBank(ViewerCuriosityArtifactMetadata Metadata, IReadOnlyList<ViewerQuestion> Questions);
 public sealed record LearningObjective(string ObjectiveId, string Text, IReadOnlyList<string> ViewerQuestionIds);
 public sealed record ViewerLearningObjectives(ViewerCuriosityArtifactMetadata Metadata, IReadOnlyList<LearningObjective> Objectives);
@@ -26,7 +34,7 @@ public interface IViewerCuriosityArtifactProjector
 
 public sealed class ViewerCuriosityArtifactProjector : IViewerCuriosityArtifactProjector
 {
-    public const string Version = "1.1";
+    public const string Version = "1.2";
     private static readonly HashSet<string> SupportedTypes = new(["what", "why", "where", "when", "action", "how"], StringComparer.OrdinalIgnoreCase);
 
     public ViewerCuriosityProjection Project(QuestionAnswerSetDto source, ProductionEventIntelligence intelligence, string executionId,
@@ -59,14 +67,24 @@ public sealed class ViewerCuriosityArtifactProjector : IViewerCuriosityArtifactP
             var outcome = string.IsNullOrWhiteSpace(answer.Title) ? answer.AnswerText.Trim() : answer.Title.Trim();
             var identityRefs = string.Join(',', references.OrderBy(x => x.ReferenceType).ThenBy(x => x.ReferenceId).Select(x => $"{x.ReferenceType}:{x.ReferenceId}"));
             var id = "vq-" + Hash($"{Normalize(profile)}|{Normalize(source.Language)}|{normalized}|{category}|{identityRefs}|{string.Join(',', variants.Order())}")[..16];
-            projected.Add(new(id, answer.QuestionText.Trim(), Priority(category, answer.DisplayOrder), category, references, outcome, variants, source.Language, 0, answer.DisplayOrder));
+            var resolved = references.Count > 0;
+            var groundingWarning = resolved ? Array.Empty<string>() : new[] { $"{category} answer is not supported by certified Phase 2 event intelligence and requires editorial completion." };
+            projected.Add(new(id, answer.QuestionText.Trim(), Priority(category, answer.DisplayOrder), category, references, outcome, variants, source.Language, 0, answer.DisplayOrder)
+            {
+                SourceAnswer = answer.AnswerText?.Trim() ?? "",
+                CertifiedAnswer = resolved ? answer.AnswerText?.Trim() ?? outcome : $"{category} guidance is not available in the certified event intelligence and requires editorial completion.",
+                AnswerResolutionStatus = resolved ? "Resolved" : "Unresolved",
+                AnswerUsability = resolved ? "Certified" : "EditorialOnly",
+                RequiresEditorialAttention = !resolved,
+                GroundingWarnings = groundingWarning
+            });
         }
         var questions = projected.Select((q, i) => q with { Order = i + 1 }).ToArray();
         var metadata = new ViewerCuriosityArtifactMetadata(executionId, source.Language, profile, Version, "", createdUtc);
         var bank = new ViewerQuestionBank(metadata, questions); bank = bank with { Metadata = metadata with { Checksum = ViewerCuriosityChecksum.For(bank.Questions) } };
         var learning = new ViewerLearningObjectives(metadata, questions.Select(q => new LearningObjective("lo-" + Hash($"{q.QuestionId}|{q.ExpectedLearningOutcome}")[..16], q.ExpectedLearningOutcome, [q.QuestionId])).ToArray());
         learning = learning with { Metadata = metadata with { Checksum = ViewerCuriosityChecksum.For(learning.Objectives) } };
-        var attention = questions.Where(q => q.Category == "Other" || q.KnowledgeReferences.Count == 0).Select(q => q.QuestionId).ToArray();
+        var attention = questions.Where(q => q.RequiresEditorialAttention).Select(q => q.QuestionId).ToArray();
         foreach (var q in questions.Where(q => q.KnowledgeReferences.Count == 0)) warnings.Add($"Question '{q.QuestionId}' has no resolvable Phase 2 knowledge field and requires editorial attention.");
         var plan = new ViewerQuestionPlan(metadata, source.Answers.Count, questions.Length, Count(questions, q => q.Category), Count(questions, q => q.Priority),
             questions.SelectMany(q => q.ApplicableVariants).GroupBy(x => x).OrderBy(x => x.Key).ToDictionary(x => x.Key, x => x.Count()),
@@ -81,7 +99,9 @@ public sealed class ViewerCuriosityArtifactProjector : IViewerCuriosityArtifactP
         {
             "Recognition" => i.PrimaryObjects.Count > 0 ? ["primaryObjects"] : ["title"],
             "ScientificExplanation" or "EventSignificance" => !string.IsNullOrWhiteSpace(i.ScientificContext) ? ["scientificContext"] : Array.Empty<string>(),
-            "ObservationGuidance" or "TimingGuidance" or "LocationGuidance" => !string.IsNullOrWhiteSpace(i.BestViewingWindowLocal) ? ["bestViewingWindowLocal"] : !string.IsNullOrWhiteSpace(i.LocalPeakTime) ? ["localPeakTime"] : !string.IsNullOrWhiteSpace(i.SkyDirectionHint) ? ["skyDirectionHint"] : Array.Empty<string>(),
+            "TimingGuidance" => !string.IsNullOrWhiteSpace(i.BestViewingWindowLocal) ? ["bestViewingWindowLocal"] : !string.IsNullOrWhiteSpace(i.LocalPeakTime) ? ["localPeakTime"] : Array.Empty<string>(),
+            "LocationGuidance" => !string.IsNullOrWhiteSpace(i.SkyDirectionHint) ? ["skyDirectionHint"] : Array.Empty<string>(),
+            "ObservationGuidance" => i.ViewerInstructions.Count > 0 ? ["viewerInstructions"] : Array.Empty<string>(),
             "PracticalViewingAdvice" => i.ViewerInstructions.Count > 0 ? ["viewerInstructions"] : Array.Empty<string>(),
             _ => Array.Empty<string>()
         };
@@ -127,6 +147,8 @@ public static class ViewerCuriosityArtifactValidator
         foreach (var x in q)
         {
             if (string.IsNullOrWhiteSpace(x.ExpectedLearningOutcome)) e.Add($"Viewer Question Bank question '{x.QuestionId}' field ExpectedLearningOutcome is empty.");
+            if (x.RequiresEditorialAttention && (x.AnswerResolutionStatus != "Unresolved" || x.AnswerUsability != "EditorialOnly")) e.Add($"Viewer Question Bank question '{x.QuestionId}' has inconsistent editorial grounding status.");
+            if (!x.RequiresEditorialAttention && (x.AnswerResolutionStatus != "Resolved" || x.AnswerUsability != "Certified" || x.KnowledgeReferences.Count == 0)) e.Add($"Viewer Question Bank question '{x.QuestionId}' claims certification without resolved grounding.");
             if (!Priorities.Contains(x.Priority)) e.Add($"Viewer Question Bank question '{x.QuestionId}' field Priority has unsupported value '{x.Priority}'.");
             if (!Categories.Contains(x.Category)) e.Add($"Viewer Question Bank question '{x.QuestionId}' field Category has unsupported value '{x.Category}'.");
             if (!string.Equals(x.Language, language, StringComparison.OrdinalIgnoreCase)) e.Add($"Viewer Question Bank question '{x.QuestionId}' language expected '{language}', actual '{x.Language}'.");
