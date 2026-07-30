@@ -80,8 +80,14 @@ public sealed class PhaseArtifactRegistry : IPhaseArtifactRegistry
         var v = $"validation/phase-{phaseNumber:00}-validation.json";
         return phaseNumber switch
         {
-            1 => [Req("phase-01-validation",1,v), Req("content-plan-production-request",1,"plan-input/content-plan-production-request.json"), Req("production-pipeline-request",1,"plan-input/production-pipeline-request.json")],
-            2 => [Req("phase-02-validation",2,v), Req("production-event-intelligence",2,"plan-input/production-event-intelligence.json"), Req("production-event-intelligence-diagnostics",2,"plan-input/production-event-intelligence-diagnostics.json")],
+            // Phase 1 certification reads the same six artifacts owned by its canonical manifest.
+            1 => Rc2CanonicalArtifactCatalog.Phase1ManifestArtifacts.Select((path, index) => Req($"phase-01-manifest-artifact-{index + 1}", 1, path)).ToArray(),
+            // Phase 2 authority lives under 02-intelligence. The validation report is a
+            // post-publication certification input; plan-input is only a compatibility projection.
+            2 => Rc2CanonicalArtifactCatalog.Phase2AuthorityArtifacts
+                .Append(v)
+                .Select((path, index) => Req($"phase-02-authority-artifact-{index + 1}", 2, path))
+                .ToArray(),
             3 => [Req("phase-03-validation",3,v), Req("question-answer-set",3,"question-engine/question-answer-set.json"), Req("question-driven-scene-plan",3,"question-engine/question-driven-scene-plan.json"), Opt("question-driven-scene-plan-enriched",3,"question-engine/question-driven-scene-plan.enriched.json")],
             4 => [Req("phase-04-validation",4,v), Req("story-graph",4,"editorial/story-graph.json")],
             5 => [Req("phase-05-validation",5,v), Req("observation-metadata",5,"editorial/observation-metadata.json"), Req("scene-intents",5,"editorial/scene-intents.json"), Req("editorial-contract",5,"editorial/editorial-contract.json"), Opt("editorial-diagnostics",5,"editorial/editorial-diagnostics.json")],
@@ -92,6 +98,29 @@ public sealed class PhaseArtifactRegistry : IPhaseArtifactRegistry
     }
     private static PhaseArtifactDefinition Req(string id,int p,string path)=>new(){ArtifactId=id,PhaseNumber=p,RelativePath=path,Required=true,ValidateJson=true,RequireNonEmpty=true};
     private static PhaseArtifactDefinition Opt(string id,int p,string path)=>new(){ArtifactId=id,PhaseNumber=p,RelativePath=path,Required=false,ValidateJson=true,RequireNonEmpty=true};
+}
+
+/// <summary>Canonical RC2 Phase 1-2 artifact catalog shared by certification consumers.</summary>
+public static class Rc2CanonicalArtifactCatalog
+{
+    public static readonly IReadOnlyList<string> Phase1ManifestArtifacts =
+    [
+        "01-plan/execution-context.json",
+        "01-plan/selected-plan.json",
+        "01-plan/production-request.json",
+        "01-plan/pipeline-state.json",
+        "plan-input/content-plan-production-request.json",
+        "plan-input/production-event-intelligence.json"
+    ];
+
+    public static readonly IReadOnlyList<string> Phase2AuthorityArtifacts =
+    [
+        "02-intelligence/production-event-intelligence.json",
+        "02-intelligence/certified-knowledge-context.json",
+        "02-intelligence/observation-context.json",
+        "02-intelligence/source-registry.json",
+        "02-intelligence/production-intelligence-diagnostics.json"
+    ];
 }
 
 public static class CertificationPathHelpers
