@@ -45,17 +45,32 @@ public sealed class CgA1PhaseCertificationTests
     public async Task PhaseOneCertifier_ReturnsPassedWithWarnings_WhenRequiredArtifactsExistAndOptionalArtifactsAreAbsent()
     {
         var root = NewRoot();
-        Directory.CreateDirectory(Path.Combine(root, "validation"));
-        Directory.CreateDirectory(Path.Combine(root, "plan-input"));
-        await File.WriteAllTextAsync(Path.Combine(root, "validation", "phase-01-validation.json"), "{}");
-        await File.WriteAllTextAsync(Path.Combine(root, "plan-input", "content-plan-production-request.json"), "{}");
-        await File.WriteAllTextAsync(Path.Combine(root, "plan-input", "production-pipeline-request.json"), "{}");
+        foreach (var relativePath in Rc2CanonicalArtifactCatalog.Phase1ManifestArtifacts)
+        {
+            var path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, "{}");
+        }
         var provider = new ServiceCollection().AddCgA1CertificationFoundation().BuildServiceProvider();
         var certifier = provider.GetServices<IPhaseCertifier>().Single(c => c.PhaseNumber == 1);
         var result = await certifier.CertifyAsync(Context(root), CancellationToken.None);
         result.StructuralStatus.Should().Be(CertificationStatus.Passed);
         result.SemanticStatus.Should().Be(CertificationStatus.NotEvaluated);
         result.Issues.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void PhaseOneAndTwoRegistries_UseCanonicalAuthority_NotDeprecatedPlanInputArtifacts()
+    {
+        var registry = new PhaseArtifactRegistry();
+        var phase1 = registry.GetDefinitions(1, Context(NewRoot())).Select(item => item.RelativePath).ToArray();
+        var phase2 = registry.GetDefinitions(2, Context(NewRoot())).Select(item => item.RelativePath).ToArray();
+
+        phase1.Should().BeEquivalentTo(Rc2CanonicalArtifactCatalog.Phase1ManifestArtifacts);
+        phase2.Should().Contain(Rc2CanonicalArtifactCatalog.Phase2AuthorityArtifacts);
+        phase2.Should().Contain("validation/phase-02-validation.json");
+        phase1.Should().NotContain("plan-input/production-pipeline-request.json");
+        phase2.Should().NotContain("plan-input/production-event-intelligence-diagnostics.json");
     }
 
     private static string NewRoot() => Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "cg-a1-" + Guid.NewGuid())).FullName;

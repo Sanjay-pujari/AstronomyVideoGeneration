@@ -37,7 +37,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
 
         var response = await v4BatchGeneration.GenerateFromPlansAsync(ExpandProductionRangeForRc2PhaseContract(request, requestedPhases), cancellationToken);
         response = ValidateManualPlanExecutionResponse(request, response, requestedPhases);
-        await RewriteEarlyPhaseValidationsAsync(response, requestedPhases, cancellationToken);
+        response = await ReconcileEarlyPhaseValidationsAsync(response, requestedPhases, cancellationToken);
         if (requestedPhases.Contains(4) && CanRunRc2Overlay(response, 4))
         {
             response = await ExecuteRc2OverlayPhaseAsync(
@@ -396,13 +396,19 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             ? request with { EndPhaseNo = 6 }
             : request;
 
-    private static async Task RewriteEarlyPhaseValidationsAsync(BatchGenerateFromPlansResponse response, IReadOnlyList<int> requestedPhases, CancellationToken cancellationToken)
+    private static async Task<BatchGenerateFromPlansResponse> ReconcileEarlyPhaseValidationsAsync(BatchGenerateFromPlansResponse response, IReadOnlyList<int> requestedPhases, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(response.OutputRoot)) return;
+        if (string.IsNullOrWhiteSpace(response.OutputRoot)) return response;
+
+        // Phases 1 and 2 publish their stable validation reports inside their
+        // authoritative transactions. RC2 only reads those reports and reconciles
+        // API state; it must never become a second writer for either stable file.
+        foreach (var phaseNo in requestedPhases.Where(phase => phase is 1 or 2))
+            response = await ReconcileAuthoritativeValidationAsync(response, phaseNo, cancellationToken);
+
+        // Generic validation owns only early phases without an authoritative writer.
         var map = new Dictionary<int, (string Name, string[] Inputs, string[] Outputs)>
         {
-            [1] = ("Run Setup / Plan Selection", [], [Combine(response.OutputRoot, "plan-input", "content-plan-production-request.json"), Combine(response.OutputRoot, "plan-input", "production-pipeline-request.json")]),
-            [2] = ("Domain Intelligence", [Combine(response.OutputRoot, "plan-input", "content-plan-production-request.json")], [Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json"), Combine(response.OutputRoot, "plan-input", "production-event-intelligence-diagnostics.json")]),
             [3] = ("Question / Story Planning", [Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json")], [Combine(response.OutputRoot, "question-engine", "question-answer-set.json"), Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.json"), Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.enriched.json")])
         };
         foreach (var phaseNo in requestedPhases.Where(map.ContainsKey))
@@ -413,7 +419,63 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             var errors = spec.Outputs.Except(outputs, StringComparer.OrdinalIgnoreCase).Select(path => $"Expected RC2 output was not created in this run: {NormalizePath(path)}").ToArray();
             await WriteRc2PhaseValidationAsync(response.OutputRoot, phaseNo, spec.Name, errors.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, spec.Inputs, outputs, string.Empty, [], errors, errors.Length == 0 ? "Validation passed." : string.Join("; ", errors), errors.Length > 0, null, cancellationToken);
         }
+        return response;
     }
+
+    private static async Task<BatchGenerateFromPlansResponse> ReconcileAuthoritativeValidationAsync(BatchGenerateFromPlansResponse response, int phaseNo, CancellationToken cancellationToken)
+    {
+        var phase = response.Steps.OfType<ProductionPhaseResult>().FirstOrDefault(item => item.PhaseNo == phaseNo)
+            ?? response.Results?.OfType<ContentPlanProductionExecutionResult>().SelectMany(item => item.PhaseResults ?? []).FirstOrDefault(item => item.PhaseNo == phaseNo);
+        var validationPath = string.IsNullOrWhiteSpace(phase?.ValidationReportPath)
+            ? Combine(response.OutputRoot, "validation", $"phase-{phaseNo:00}-validation.json")
+            : phase.ValidationReportPath!;
+        var errors = new List<string>();
+        JsonDocument? document = null;
+        if (!File.Exists(validationPath)) errors.Add($"Authoritative Phase {phaseNo} validation report was not published: {NormalizePath(validationPath)}");
+        else
+        {
+            try { document = JsonDocument.Parse(await File.ReadAllTextAsync(validationPath, cancellationToken)); }
+            catch (JsonException ex) { errors.Add($"Authoritative Phase {phaseNo} validation report is invalid JSON: {ex.Message}"); }
+        }
+
+        if (document is not null)
+        {
+            using (document)
+            {
+                var root = document.RootElement;
+                if (!TryReadInt(root, "phaseNo", out var physicalPhaseNo) || physicalPhaseNo != phaseNo)
+                    errors.Add($"Authoritative validation phase identity mismatch; expected {phaseNo}.");
+                var physicalStatus = ReadString(root, "status");
+                if (!IsSuccessfulPhysicalStatus(physicalStatus))
+                    errors.Add($"Authoritative Phase {phaseNo} physical validation status is '{physicalStatus ?? "missing"}'.");
+            }
+        }
+
+        if (errors.Count == 0 || phase is null) return errors.Count == 0 ? response : MarkResponseFailed(response, phaseNo, errors);
+        var failedPhase = phase with { Status = ProductionPhaseStatus.Failed, Errors = phase.Errors.Concat(errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), CanRetry = true, Reason = errors[0] };
+        return MarkResponseFailed(UpsertResponsePhase(response, failedPhase), phaseNo, errors);
+    }
+
+    private static bool TryReadInt(JsonElement root, string name, out int value)
+    {
+        value = 0;
+        foreach (var property in root.EnumerateObject())
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) && property.Value.TryGetInt32(out value)) return true;
+        return false;
+    }
+
+    private static string? ReadString(JsonElement root, string name)
+    {
+        foreach (var property in root.EnumerateObject())
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) && property.Value.ValueKind == JsonValueKind.String) return property.Value.GetString();
+        return null;
+    }
+
+    private static bool IsSuccessfulPhysicalStatus(string? status)
+        => status is not null && (status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("Skipped", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("Valid", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("Passed", StringComparison.OrdinalIgnoreCase));
 
     private static BatchGenerateFromPlansResponse ApplyRc2Phase4Response(BatchGenerateFromPlansResponse response, StoryGraphBuilderResult storyGraphResult)
     {
