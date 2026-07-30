@@ -2,6 +2,8 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -30,6 +32,8 @@ public sealed class Phase2DependencyInjectionTests
 
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
         services.AddMediaFactory(configuration);
 
         return services.BuildServiceProvider(new ServiceProviderOptions
@@ -69,7 +73,7 @@ public sealed class Phase2DependencyInjectionTests
         var capabilities = scope.ServiceProvider.GetServices<IProductionEventIntelligenceCapability>().ToArray();
 
         Assert.Equal(
-            ["Comet", "Constellation", "DeepSkyObject", "Eclipse", "GenericAstronomy", "LunarEvent", "MeteorShower", "PlanetaryAlignment", "PlanetGrouping"],
+            ["Comet", "Constellation", "DeepSkyObject", "Eclipse", "GenericAstronomy", "LunarEvent", "MeteorShower", "PlanetGrouping", "PlanetaryAlignment"],
             capabilities.Select(capability => capability.CapabilityId).Order(StringComparer.Ordinal));
         Assert.Equal(
             capabilities.Length,
@@ -160,5 +164,13 @@ public sealed class Phase2DependencyInjectionTests
         Assert.True(resolution.FallbackUsed);
         Assert.Equal("GenericAstronomy", resolution.CapabilityId);
         Assert.False(string.IsNullOrWhiteSpace(resolution.FallbackReason));
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+        public string ApplicationName { get; set; } = typeof(Phase2DependencyInjectionTests).Assembly.GetName().Name!;
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 }
