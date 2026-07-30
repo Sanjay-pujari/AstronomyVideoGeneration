@@ -55,20 +55,31 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddPhase2ProductionEventIntelligence(this IServiceCollection services)
     {
-        services.AddScoped<IProductionEventFamilyResolver, ProductionEventFamilyResolver>();
-        services.AddScoped<IProductionEventIntelligenceCapabilityResolver, ProductionEventIntelligenceCapabilityResolver>();
-        services.AddScoped<IProductionEventIntelligenceValidator, ProductionEventIntelligenceValidator>();
-        services.AddScoped<IProductionEventIntelligenceCertifier, ProductionEventIntelligenceCertifier>();
-        services.AddScoped<IProductionEventIntelligencePhaseService, ProductionEventIntelligencePhaseService>();
-        services.AddScoped<IProductionEventIntelligenceCapability, ConstellationIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, MeteorShowerIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, PlanetaryAlignmentIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, PlanetGroupingIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, LunarEventIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, EclipseIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, CometIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, DeepSkyObjectIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, GenericAstronomyIntelligenceCapability>();
+        services.TryAddScoped<IProductionEventFamilyResolver, ProductionEventFamilyResolver>();
+        services.TryAddScoped<IProductionEventIntelligenceCapabilityResolver, ProductionEventIntelligenceCapabilityResolver>();
+        services.TryAddScoped<IProductionEventIntelligenceValidator, ProductionEventIntelligenceValidator>();
+        services.TryAddScoped<IProductionEventIntelligenceCertifier, ProductionEventIntelligenceCertifier>();
+        services.TryAddScoped<IProductionEventIntelligencePhaseService, ProductionEventIntelligencePhaseService>();
+        services.TryAddScoped<IEventProductionIntelligenceAdapter, AstronomyEventProductionIntelligenceAdapter>();
+        services.TryAddScoped<IMediaEventStrategyResolver, MediaEventStrategyResolver>();
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IProductionEventIntelligenceCapability, ConstellationIntelligenceCapability>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IProductionEventIntelligenceCapability, MeteorShowerIntelligenceCapability>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IProductionEventIntelligenceCapability, PlanetaryAlignmentIntelligenceCapability>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IProductionEventIntelligenceCapability, PlanetGroupingIntelligenceCapability>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IProductionEventIntelligenceCapability, LunarEventIntelligenceCapability>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IProductionEventIntelligenceCapability, EclipseIntelligenceCapability>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IProductionEventIntelligenceCapability, CometIntelligenceCapability>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IProductionEventIntelligenceCapability, DeepSkyObjectIntelligenceCapability>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IProductionEventIntelligenceCapability, GenericAstronomyIntelligenceCapability>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IMediaEventStrategy, MeteorShowerStrategy>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IMediaEventStrategy, PlanetPairingStrategy>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IMediaEventStrategy, PlanetGroupingStrategy>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IMediaEventStrategy, ConjunctionStrategy>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IMediaEventStrategy, NamedFullMoonStrategy>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IMediaEventStrategy, NewMoonStrategy>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IMediaEventStrategy, LunarEclipseStrategy>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IMediaEventStrategy, SolarEclipseStrategy>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IMediaEventStrategy, GenericAstronomyEventStrategy>());
 
         return services;
     }
@@ -705,18 +716,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAstronomyCategoryReadinessService, AstronomyCategoryReadinessService>();
         services.AddScoped<IAstronomyVideoPlanningService, AstronomyVideoPlanningService>();
         services.AddScoped<IAstronomyAssetPlanningService, AstronomyAssetPlanningService>();
-        services.AddScoped<IEventProductionIntelligenceAdapter, AstronomyEventProductionIntelligenceAdapter>();
-        services.AddScoped<IMediaEventStrategyResolver, MediaEventStrategyResolver>();
         services.AddScoped<IVisualSourceResolver, DefaultVisualSourceResolver>();
-        services.AddScoped<IMediaEventStrategy, MeteorShowerStrategy>();
-        services.AddScoped<IMediaEventStrategy, PlanetPairingStrategy>();
-        services.AddScoped<IMediaEventStrategy, PlanetGroupingStrategy>();
-        services.AddScoped<IMediaEventStrategy, ConjunctionStrategy>();
-        services.AddScoped<IMediaEventStrategy, NamedFullMoonStrategy>();
-        services.AddScoped<IMediaEventStrategy, NewMoonStrategy>();
-        services.AddScoped<IMediaEventStrategy, LunarEclipseStrategy>();
-        services.AddScoped<IMediaEventStrategy, SolarEclipseStrategy>();
-        services.AddScoped<IMediaEventStrategy, GenericAstronomyEventStrategy>();
         services.AddScoped<IEventSceneValidationStrategyResolver, EventSceneValidationStrategyResolver>();
         services.AddScoped<IEventSceneValidationStrategy, MeteorShowerSceneValidationStrategy>();
         services.AddScoped<IEventSceneValidationStrategy, PlanetPairingSceneValidationStrategy>();

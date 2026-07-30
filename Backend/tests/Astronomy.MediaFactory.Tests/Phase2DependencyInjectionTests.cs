@@ -7,10 +7,25 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Phase2DependencyInjectionTests
 {
-    private static ServiceProvider CreateProvider()
+    private static ServiceProvider CreatePhase2Provider()
+    {
+        var services = new ServiceCollection();
+        services.AddPhase2ProductionEventIntelligence();
+
+        return services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+    }
+
+    private static ServiceProvider CreateProductionProvider()
     {
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:Postgres"] = "Host=phase2-di-test.invalid;Port=5432;Database=astronomy_mediafactory_test;Username=test_user;Password=test_password;Pooling=false"
+            })
             .Build();
 
         var services = new ServiceCollection();
@@ -25,9 +40,9 @@ public sealed class Phase2DependencyInjectionTests
     }
 
     [Fact]
-    public void Phase2_services_resolve_from_production_composition_root()
+    public void Phase2_module_resolves_its_complete_service_graph()
     {
-        using var provider = CreateProvider();
+        using var provider = CreatePhase2Provider();
         using var scope = provider.CreateScope();
 
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionEventIntelligencePhaseService>());
@@ -38,9 +53,18 @@ public sealed class Phase2DependencyInjectionTests
     }
 
     [Fact]
+    public void Phase2_service_resolves_from_production_composition_root()
+    {
+        using var provider = CreateProductionProvider();
+        using var scope = provider.CreateScope();
+
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionEventIntelligencePhaseService>());
+    }
+
+    [Fact]
     public void All_required_phase2_capabilities_are_registered_once()
     {
-        using var provider = CreateProvider();
+        using var provider = CreatePhase2Provider();
         using var scope = provider.CreateScope();
         var capabilities = scope.ServiceProvider.GetServices<IProductionEventIntelligenceCapability>().ToArray();
 
@@ -56,7 +80,7 @@ public sealed class Phase2DependencyInjectionTests
     [Fact]
     public void Production_pipeline_resolves_with_phase2_dependencies()
     {
-        using var provider = CreateProvider();
+        using var provider = CreateProductionProvider();
         using var scope = provider.CreateScope();
 
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionPipelineExecutionService>());
@@ -66,7 +90,7 @@ public sealed class Phase2DependencyInjectionTests
     [Fact]
     public void Production_pipeline_interfaces_resolve_to_same_scoped_instance()
     {
-        using var provider = CreateProvider();
+        using var provider = CreateProductionProvider();
         using var scope = provider.CreateScope();
 
         var pipeline = scope.ServiceProvider.GetRequiredService<IProductionPipelineExecutionService>();
@@ -83,7 +107,7 @@ public sealed class Phase2DependencyInjectionTests
     [InlineData("SOLAR_ECLIPSE", "Eclipse")]
     public void Capability_resolution_uses_registered_production_capabilities(string eventType, string expectedCapabilityId)
     {
-        using var provider = CreateProvider();
+        using var provider = CreatePhase2Provider();
         using var scope = provider.CreateScope();
         var familyResolver = scope.ServiceProvider.GetRequiredService<IProductionEventFamilyResolver>();
         var capabilityResolver = scope.ServiceProvider.GetRequiredService<IProductionEventIntelligenceCapabilityResolver>();
@@ -109,7 +133,7 @@ public sealed class Phase2DependencyInjectionTests
     [InlineData("DEEP_SKY_OBJECT")]
     public void Known_families_do_not_use_generic_fallback(string eventType)
     {
-        using var provider = CreateProvider();
+        using var provider = CreatePhase2Provider();
         using var scope = provider.CreateScope();
         var familyResolver = scope.ServiceProvider.GetRequiredService<IProductionEventFamilyResolver>();
         var capabilityResolver = scope.ServiceProvider.GetRequiredService<IProductionEventIntelligenceCapabilityResolver>();
@@ -124,7 +148,7 @@ public sealed class Phase2DependencyInjectionTests
     [Fact]
     public void Unknown_family_uses_explicit_generic_fallback()
     {
-        using var provider = CreateProvider();
+        using var provider = CreatePhase2Provider();
         using var scope = provider.CreateScope();
         var familyResolver = scope.ServiceProvider.GetRequiredService<IProductionEventFamilyResolver>();
         var capabilityResolver = scope.ServiceProvider.GetRequiredService<IProductionEventIntelligenceCapabilityResolver>();
