@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -143,7 +144,12 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(executionContext.ValidationRoot!);
 
         var context = new ProductionPhaseContext(request, productionRequest, eventIdResolution.EventId ?? Guid.Empty, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite, deletedDirectoriesDueToOverwrite, skippedDirectoriesDueToOverwrite);
-        if (request.OverwriteExisting && startPhaseNo != 1)
+        var genericOverwriteCleanupExecuted = ShouldRunGenericOverwriteCleanup(request.OverwriteExisting, startPhaseNo);
+        LogBuildAndCleanupIdentity(request, requestedStartPhaseNo, startPhaseNo, requestedEndPhaseNo, genericOverwriteCleanupExecuted);
+        // Phase 1 has a dedicated atomic publication lifecycle. Generic cleanup before it
+        // would destroy stable validation/manifest state, and its transaction exclusively
+        // owns both Phase 1 replacement and downstream invalidation.
+        if (genericOverwriteCleanupExecuted)
         {
             LogPhase15SrtExistence(context, "before-cleanup");
             ClearPhaseRangeOutputsForOverwrite(context);
@@ -250,6 +256,19 @@ public sealed partial class ProductionPipelineExecutionService(
         var requestedOutputCompletion = BuildRequestedOutputCompletion(context, phaseResults);
         var success = CalculatePipelineSuccess(context, phaseResults, errors);
         return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, HeroContractExists(outputRoot), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-tts-audio.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-tts-audio.mp3")), File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, requestedOutputCompletion);
+    }
+
+    internal static bool ShouldRunGenericOverwriteCleanup(bool overwriteExisting, int startPhaseNo)
+        => overwriteExisting && startPhaseNo > 1;
+
+    private void LogBuildAndCleanupIdentity(ProductionPipelineRequest request, int requestedStart, int effectiveStart, int requestedEnd, bool cleanupExecuted)
+    {
+        var assembly = typeof(ProductionPipelineExecutionService).Assembly;
+        var name = assembly.GetName();
+        logger.LogInformation(
+            "RC2 pipeline build identity: AssemblyName={AssemblyName}; AssemblyVersion={AssemblyVersion}; InformationalVersion={InformationalVersion}; ModuleVersionId={ModuleVersionId}; AssemblyLocation={AssemblyLocation}; genericOverwriteCleanupExecuted={GenericOverwriteCleanupExecuted}; requestedStartPhaseNo={RequestedStartPhaseNo}; effectiveStartPhaseNo={EffectiveStartPhaseNo}; requestedEndPhaseNo={RequestedEndPhaseNo}; overwriteExisting={OverwriteExisting}",
+            name.Name, name.Version, assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+            assembly.ManifestModule.ModuleVersionId, assembly.Location, cleanupExecuted, requestedStart, effectiveStart, requestedEnd, request.OverwriteExisting);
     }
 
     private IReadOnlyList<(int No, string Name, Func<ProductionPhaseContext, CancellationToken, Task<IReadOnlyList<string>>> Action)> PhaseDefinitions() =>
@@ -15961,7 +15980,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase1AuthorityPath=Path.Combine(context.OutputRoot,"01-plan","execution-context.json");
         Phase1ExecutionContext? phase1Authority=null;
         if(File.Exists(phase1AuthorityPath))phase1Authority=JsonSerializer.Deserialize<Phase1ExecutionContext>(await File.ReadAllTextAsync(phase1AuthorityPath,cancellationToken),JsonOptions);
-        var phase1Artifacts = Phase1ArtifactCatalog.Required.Select(x=>new{definition=x,path=NormalizePath(x.ResolveFinalPath(context.OutputRoot))}).Where(x => !context.DryRun && phaseResults.Any(p=>p.PhaseNo==1&&p.OutputFiles.Count>0) && File.Exists(x.path)).Select(x=>new { phaseNo=1,x.path,role=x.definition.Role,contractVersion=x.definition.ContractVersion,checksum=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(x.path))).ToLowerInvariant(),planId=phase1Authority?.PlanId,executionId=phase1Authority?.ExecutionId,authorityChecksum=phase1Authority?.AuthorityChecksum,requestIdentityChecksum=phase1Authority?.RequestIdentityChecksum,publicationState="Committed",validationStatus="Valid" }).ToArray();
+        // A partial execution owns only its phase range. Rebuild the Phase 1 manifest projection
+        // from the still-physical certified authority even when Phase 1 did not execute, rather
+        // than silently dropping upstream entries from the shared manifest.
+        var phase1Artifacts = Phase1ArtifactCatalog.Required.Select(x=>new{definition=x,path=NormalizePath(x.ResolveFinalPath(context.OutputRoot))}).Where(x => !context.DryRun && File.Exists(x.path)).Select(x=>new { phaseNo=1,x.path,role=x.definition.Role,contractVersion=x.definition.ContractVersion,checksum=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(x.path))).ToLowerInvariant(),planId=phase1Authority?.PlanId,executionId=phase1Authority?.ExecutionId,authorityChecksum=phase1Authority?.AuthorityChecksum,requestIdentityChecksum=phase1Authority?.RequestIdentityChecksum,publicationState="Committed",validationStatus="Valid" }).ToArray();
         var phase2Artifacts = new[]
         {
             new { path=NormalizePath(Path.Combine(context.OutputRoot,"02-intelligence","production-event-intelligence.json")), role="Authoritative" },

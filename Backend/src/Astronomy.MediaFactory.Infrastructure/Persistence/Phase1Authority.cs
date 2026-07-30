@@ -116,17 +116,42 @@ public interface IPhase1CompatibilityPublisher
 }
 
 public sealed record Phase1DownstreamPathMove(string OriginalPath,string QuarantinePath,bool IsDirectory);
-public sealed record PhaseOutputTarget(int PhaseNo,string Path,bool IsDirectory);
+public sealed record PhaseOutputTarget(
+    int PhaseNo,
+    string Path,
+    bool IsDirectory,
+    string RelativePath,
+    string ArtifactKind,
+    string Owner,
+    bool IsAuthority,
+    bool IsCompatibility,
+    bool IsValidation,
+    bool IsSharedManifest,
+    bool CanDeleteOnOverwrite);
 public interface IPhaseOutputTargetResolver { IReadOnlyList<PhaseOutputTarget> Resolve(ProductionPhaseContext context,int startPhaseNo,int endPhaseNo); }
 public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
 {
     public IReadOnlyList<PhaseOutputTarget> Resolve(ProductionPhaseContext context,int start,int end)
     {
         var root=Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.OutputRoot));var comparison=OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal;var targets=new List<PhaseOutputTarget>();
-        void Add(int phase,string? path,bool directory=true){if(phase<start||phase>end||string.IsNullOrWhiteSpace(path))return;var full=Path.GetFullPath(path);if(!full.StartsWith(root+Path.DirectorySeparatorChar,comparison))throw new InvalidOperationException($"Phase {phase} output target is outside the workspace: {full}");targets.Add(new(phase,full,directory));}
+        void Add(int phase,string? path,bool directory=true,bool compatibility=false,bool validation=false)
+        {
+            if(phase<start||phase>end||string.IsNullOrWhiteSpace(path))return;
+            var full=Path.GetFullPath(path);
+            if(!full.StartsWith(root+Path.DirectorySeparatorChar,comparison))throw new InvalidOperationException($"Phase {phase} output target is outside the workspace: {full}");
+            targets.Add(new(phase,full,directory,Path.GetRelativePath(root,full).Replace('\\','/'),validation?"Validation":compatibility?"Compatibility":"Authority",$"Phase{phase}",!compatibility&&!validation,compatibility,validation,false,true));
+        }
         Add(2,Path.Combine(root,"02-intelligence"));Add(3,Path.Combine(root,"03-questions"));Add(3,context.ExecutionContext.QuestionRoot);Add(4,Path.Combine(root,"04-blueprint"));Add(5,Path.Combine(root,"05-blueprint-certification"));Add(6,Path.Combine(root,"06-story-frames"));Add(7,context.ExecutionContext.NarrationRoot);Add(8,context.ExecutionContext.SceneRoot);Add(11,context.ExecutionContext.HeroRoot);Add(12,context.ExecutionContext.ThumbnailRoot);Add(13,Path.Combine(root,"gallery"));Add(14,Path.Combine(root,"sync"));Add(15,context.ExecutionContext.TtsRoot);Add(18,context.ExecutionContext.VideoAssemblyRoot);
-        for(var phase=Math.Max(2,start);phase<=Math.Min(20,end);phase++)Add(phase,Path.Combine(context.ExecutionContext.ValidationRoot!,$"phase-{phase:00}-validation.json"),false);
+        for(var phase=Math.Max(2,start);phase<=Math.Min(20,end);phase++)Add(phase,Path.Combine(context.ExecutionContext.ValidationRoot!,$"phase-{phase:00}-validation.json"),false,validation:true);
         return targets.GroupBy(x=>x.Path,OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal).Select(g=>g.OrderBy(x=>x.PhaseNo).First()).OrderBy(x=>x.PhaseNo).ThenBy(x=>x.Path,StringComparer.Ordinal).ToArray();
+    }
+}
+public static class UpstreamPhaseMutationGuard
+{
+    public static void AssertAllowed(int startPhaseNo,PhaseOutputTarget target,string operation)
+    {
+        if(target.PhaseNo>=startPhaseNo)return;
+        throw new InvalidOperationException($"RC2_UPSTREAM_PHASE_MUTATION_ATTEMPT: startPhaseNo={startPhaseNo}; targetPhaseNo={target.PhaseNo}; targetPath={target.Path}; targetOwner={target.Owner}; operation={operation}");
     }
 }
 public sealed record Phase1DownstreamInvalidationState(string TransactionId,string WorkspaceRoot,string QuarantineRoot,IReadOnlyList<Phase1DownstreamPathMove> Moves,bool HasMutatedActiveState,bool IsFullyStaged);
@@ -340,7 +365,9 @@ public sealed class Phase1DownstreamInvalidationTransaction(IPhase1FileSystem fi
         try
         {
             token.ThrowIfCancellationRequested();
-            var candidates=targetResolver.Resolve(context,2,20).Where(x=>x.IsDirectory?fileSystem.DirectoryExists(x.Path):fileSystem.FileExists(x.Path)).Select(x=>(Path:x.Path,Directory:x.IsDirectory)).ToList();
+            var resolved=targetResolver.Resolve(context,2,20);
+            foreach(var target in resolved)UpstreamPhaseMutationGuard.AssertAllowed(2,target,"phase1-downstream-invalidation");
+            var candidates=resolved.Where(x=>x.IsDirectory?fileSystem.DirectoryExists(x.Path):fileSystem.FileExists(x.Path)).Select(x=>(Path:x.Path,Directory:x.IsDirectory)).ToList();
             foreach(var candidate in candidates.OrderBy(x=>x.Path,StringComparer.Ordinal))
             {
                 token.ThrowIfCancellationRequested();var relative=Path.GetRelativePath(root,candidate.Path);var destination=Path.Combine(quarantine,relative);fileSystem.CreateDirectory(fileSystem.GetDirectoryName(destination)!);
