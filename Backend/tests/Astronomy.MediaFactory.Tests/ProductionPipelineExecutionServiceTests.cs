@@ -10,6 +10,26 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class ProductionPipelineExecutionServiceTests
 {
     [Theory]
+    [InlineData(false, 1, false)]
+    [InlineData(false, 3, false)]
+    [InlineData(true, 1, false)]
+    [InlineData(true, 2, true)]
+    [InlineData(true, 20, true)]
+    public void GenericOverwriteCleanupPolicy_protects_phase1(bool overwriteExisting, int startPhaseNo, bool expected)
+    {
+        Assert.Equal(expected, ProductionPipelineExecutionService.ShouldRunGenericOverwriteCleanup(overwriteExisting, startPhaseNo));
+    }
+
+    [Fact]
+    public void Protected_upstream_target_causes_RC2_UPSTREAM_PHASE_MUTATION_ATTEMPT()
+    {
+        var target = new PhaseOutputTarget(2, "/workspace/02-intelligence", true, "02-intelligence", "Authority", "Phase2", true, false, false, false, true);
+        var error = Assert.Throws<InvalidOperationException>(() => UpstreamPhaseMutationGuard.AssertAllowed(3, target, "overwrite-cleanup"));
+        Assert.Contains("RC2_UPSTREAM_PHASE_MUTATION_ATTEMPT", error.Message, StringComparison.Ordinal);
+        Assert.Contains("startPhaseNo=3", error.Message, StringComparison.Ordinal);
+        Assert.Contains("targetPhaseNo=2", error.Message, StringComparison.Ordinal);
+    }
+    [Theory]
     [InlineData("Solar Eclipse", "TOTAL SOLAR ECLIPSE", "A solar eclipse is rare and dramatic because Moon and Sun align from our viewpoint.")]
     [InlineData("Planetary Conjunction", "LOOK FOR JUPITER AND VENUS", "Jupiter and Venus form a conjunction, an apparent alignment in Udaipur sky.")]
     [InlineData("Meteor Shower", "DON'T MISS THIS PEAK", "Watch during 2026-08-12 23:30 using certified eye protection throughout.")]
