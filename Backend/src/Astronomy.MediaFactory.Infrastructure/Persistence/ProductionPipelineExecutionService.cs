@@ -55,6 +55,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IPhase1RecoveryService phase1RecoveryService,
     IPhase1ManifestValidator phase1ManifestValidator,
     IPhase1PublicationTransactionCoordinator phase1PublicationTransactionCoordinator,
+    IPhase1SuccessValidationValidator phase1SuccessValidationValidator,
+    IPhase1DownstreamInvalidationTransaction phase1DownstreamInvalidationTransaction,
     IOptions<AzureSpeechOptions>? azureSpeechOptions = null,
     IAzureSpeechClient? azureSpeechClient = null,
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
@@ -74,8 +76,7 @@ public sealed partial class ProductionPipelineExecutionService(
     IStoryFrameAuthorityCommitter? storyFrameAuthorityCommitter = null,
     IStoryFrameTemporaryDirectoryRecovery? storyFrameTemporaryDirectoryRecovery = null,
     IStoryFrameRuntimeIdentityProvider? storyFrameRuntimeIdentityProvider = null,
-    IStoryFrameFileSystem? storyFrameFileSystem = null,
-    IPhase1DownstreamInvalidationTransaction? phase1DownstreamInvalidationTransaction = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IStoryFrameFileSystem? storyFrameFileSystem = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     private readonly IPhase1AuthorityProjector _phase1AuthorityProjector = phase1AuthorityProjector;
     private readonly IPhase1AuthorityPersistence _phase1AuthorityPersistence = phase1AuthorityPersistence;
@@ -86,7 +87,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private readonly IPhase1RecoveryService _phase1RecoveryService = phase1RecoveryService;
     private readonly IPhase1ManifestValidator _phase1ManifestValidator = phase1ManifestValidator;
     private readonly IPhase1PublicationTransactionCoordinator _phase1PublicationTransactionCoordinator = phase1PublicationTransactionCoordinator;
-    private readonly IPhase1DownstreamInvalidationTransaction _phase1DownstreamInvalidationTransaction = phase1DownstreamInvalidationTransaction ?? new Phase1DownstreamInvalidationTransaction(new Phase1FileSystem());
+    private readonly IPhase1SuccessValidationValidator _phase1SuccessValidationValidator = phase1SuccessValidationValidator;
+    private readonly IPhase1DownstreamInvalidationTransaction _phase1DownstreamInvalidationTransaction = phase1DownstreamInvalidationTransaction;
     private readonly IStoryFrameExecutionLock _storyFrameExecutionLock = storyFrameExecutionLock ?? new InProcessStoryFrameExecutionLock();
     private readonly IStoryFrameAuthorityCommitter _storyFrameAuthorityCommitter = storyFrameAuthorityCommitter ?? new StoryFrameAuthorityCommitter(new StoryFrameFileSystem());
     private readonly IStoryFrameTemporaryDirectoryRecovery _storyFrameTemporaryDirectoryRecovery = storyFrameTemporaryDirectoryRecovery ?? new StoryFrameTemporaryDirectoryRecovery(new StoryFrameFileSystem(), new StoryFrameClock());
@@ -309,7 +311,7 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static bool IsValidAuthorityReuseReason(int phaseNo, string? reasonCode, string? reason) =>
-        phaseNo == 1 && reasonCode is "P1_RESUME_REUSABLE" or "P1_RESUME_RECOVERED_AUTHORITY" or "P1_COMPATIBILITY_REPAIRED" or "P1_MANIFEST_REPAIRED"
+        phaseNo == 1 && reasonCode is "P1_RESUME_REUSABLE" or "P1_RESUME_RECOVERED_AUTHORITY" or "P1_COMPATIBILITY_REPAIRED" or "P1_MANIFEST_REPAIRED" or "P1_VALIDATION_REPAIRED"
         || phaseNo is 3 or 4 or 5 or 6 && string.Equals(reason, $"Valid Phase {phaseNo} authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPhase12ThumbnailV9Successful(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
@@ -678,31 +680,39 @@ public sealed partial class ProductionPipelineExecutionService(
             var existing = await _phase1AuthorityReader.ReadAsync(context.OutputRoot, cancellationToken);
             var compatibilityValidation = await _phase1CompatibilityPublisher.ValidateAsync(context.OutputRoot, compatibility, cancellationToken);
             var manifestValidation = await _phase1ManifestValidator.ValidateAsync(context.OutputRoot, authority, compatibility, cancellationToken);
-            var publicationValidation = new Phase1PublicationValidationResult(existing,manifestValidation,compatibilityValidation,
+            var successValidation = await _phase1SuccessValidationValidator.ValidateAsync(context.OutputRoot,authority,cancellationToken);
+            var publicationValidation = new Phase1PublicationValidationResult(existing,manifestValidation,compatibilityValidation,successValidation,
                 string.Equals(existing.RequestIdentityChecksum,authority.ExecutionContext.RequestIdentityChecksum,StringComparison.Ordinal),existing.IsCompatible,
                 manifestValidation.IsValid,compatibilityValidation.IsValid,existing.IsDownstreamReady,
-                existing.IsValid&&existing.IsCompatible&&string.Equals(existing.RequestIdentityChecksum,authority.ExecutionContext.RequestIdentityChecksum,StringComparison.Ordinal)&&manifestValidation.IsValid&&compatibilityValidation.IsValid&&existing.IsDownstreamReady,
-                existing.Errors.Concat(manifestValidation.Errors).Concat(compatibilityValidation.Errors).ToArray(),existing.Warnings.Concat(manifestValidation.Warnings).ToArray());
+                existing.IsValid&&existing.IsCompatible&&string.Equals(existing.RequestIdentityChecksum,authority.ExecutionContext.RequestIdentityChecksum,StringComparison.Ordinal)&&manifestValidation.IsValid&&compatibilityValidation.IsValid&&successValidation.IsValid&&existing.IsDownstreamReady&&!recovery.ValidationRepairRequired,
+                existing.Errors.Concat(manifestValidation.Errors).Concat(compatibilityValidation.Errors).Concat(successValidation.Errors).ToArray(),existing.Warnings.Concat(manifestValidation.Warnings).Concat(successValidation.Warnings).ToArray());
             var resume = _phase1ResumeEvaluator.Evaluate(authority, existing, manifestValidation.IsValid, compatibilityValidation, recovery);
             Phase1ExecutionOutcome outcome;
             if (!context.OverwriteExisting && publicationValidation.IsReusable)
             {
                 var files = Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).ToArray();
-                outcome = new(recovery.Recovered?Phase1ExecutionKind.RecoveredAndReused:Phase1ExecutionKind.Reused,resume.ReasonCode,resume.Reason,files,resume.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Valid",ValidationStatus="Valid"};
+                outcome = new(recovery.Recovered?Phase1ExecutionKind.RecoveredAndReused:Phase1ExecutionKind.Reused,resume.ReasonCode,resume.Reason,files,resume.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Valid",ValidationStatus="Valid",PublicationTransactionId=successValidation.TransactionId};
             }
             else if(!context.OverwriteExisting&&existing.IsValid&&existing.IsCompatible&&publicationValidation.IsRequestCompatible&&compatibilityValidation.IsValid&&existing.IsDownstreamReady&&manifestValidation.IsRepairable)
             {
                 var files=Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).ToArray();
-                var repair=await _phase1PublicationTransactionCoordinator.RepairManifestAsync(new(context.OutputRoot,existing.AuthoritySet!,compatibility,WritePhase1StagedManifestAsync),cancellationToken);
+                Phase1ExecutionOutcome? repairOutcome=null;ProductionPhaseResult? repairResult=null;var repair=await _phase1PublicationTransactionCoordinator.RepairManifestAsync(new(context.OutputRoot,existing.AuthoritySet!,compatibility,WritePhase1StagedManifestAsync,async (staging,token)=>{repairOutcome=new(Phase1ExecutionKind.ManifestRepaired,"P1_MANIFEST_REPAIRED","Phase 1 manifest repaired.",files,[],existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Repaired",ValidationStatus="Valid",PublicationTransactionId=staging.TransactionId};repairResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,[],[],repairOutcome.Reason,false,token,started,phase1Outcome:repairOutcome,outputPath:staging.OutputPath);}),cancellationToken);
                 if(!repair.Succeeded)throw new InvalidOperationException(repair.ReasonCode+": "+string.Join(';',repair.Errors));
-                outcome=new(Phase1ExecutionKind.Reused,"P1_MANIFEST_REPAIRED","The safely repairable Phase 1 manifest was rebuilt without changing authority or downstream outputs.",files,manifestValidation.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Repaired",ValidationStatus="Valid"};
+                outcome=new(Phase1ExecutionKind.Reused,"P1_MANIFEST_REPAIRED","The safely repairable Phase 1 manifest was rebuilt without changing authority or downstream outputs.",files,manifestValidation.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Repaired",ValidationStatus="Valid"};return repairResult!;
             }
             else if(!context.OverwriteExisting&&existing.IsValid&&existing.IsCompatible&&publicationValidation.IsRequestCompatible&&existing.IsDownstreamReady&&!compatibilityValidation.IsValid)
             {
                 var files=Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).ToArray();
-                var repair=await _phase1PublicationTransactionCoordinator.RepairCompatibilityAsync(new(context.OutputRoot,existing.AuthoritySet!,compatibility,WritePhase1StagedManifestAsync),cancellationToken);
+                Phase1ExecutionOutcome? repairOutcome=null;ProductionPhaseResult? repairResult=null;var repair=await _phase1PublicationTransactionCoordinator.RepairCompatibilityAsync(new(context.OutputRoot,existing.AuthoritySet!,compatibility,WritePhase1StagedManifestAsync,async (staging,token)=>{repairOutcome=new(Phase1ExecutionKind.CompatibilityRepaired,"P1_COMPATIBILITY_REPAIRED","Phase 1 compatibility repaired.",files,[],existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Repaired",recovery){ManifestStatus="Repaired",ValidationStatus="Valid",PublicationTransactionId=staging.TransactionId};repairResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,[],[],repairOutcome.Reason,false,token,started,phase1Outcome:repairOutcome,outputPath:staging.OutputPath);}),cancellationToken);
                 if(!repair.Succeeded)throw new InvalidOperationException(repair.ReasonCode+": "+string.Join(';',repair.Errors));
-                outcome=new(Phase1ExecutionKind.CompatibilityRepaired,"P1_COMPATIBILITY_REPAIRED","The compatibility projection and manifest were atomically repaired without changing canonical authority or downstream outputs.",files,repair.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Repaired",recovery){ManifestStatus="Repaired",ValidationStatus="Valid",RollbackPerformed=repair.RollbackPerformed,RollbackSucceeded=repair.RollbackSucceeded};
+                outcome=new(Phase1ExecutionKind.CompatibilityRepaired,"P1_COMPATIBILITY_REPAIRED","The compatibility projection and manifest were atomically repaired without changing canonical authority or downstream outputs.",files,repair.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Repaired",recovery){ManifestStatus="Repaired",ValidationStatus="Valid",RollbackPerformed=repair.RollbackPerformed,RollbackSucceeded=repair.RollbackSucceeded};return repairResult!;
+            }
+            else if(!context.OverwriteExisting&&existing.IsValid&&existing.IsCompatible&&publicationValidation.IsRequestCompatible&&compatibilityValidation.IsValid&&manifestValidation.IsValid&&successValidation.IsRepairable)
+            {
+                var files=Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).ToArray();Phase1ExecutionOutcome? repairOutcome=null;ProductionPhaseResult? repairResult=null;
+                var repair=await _phase1PublicationTransactionCoordinator.RepairValidationAsync(new(context.OutputRoot,existing.AuthoritySet!,compatibility,async (staging,token)=>{repairOutcome=new(Phase1ExecutionKind.ValidationRepaired,"P1_VALIDATION_REPAIRED","Committed Phase 1 success validation was atomically repaired.",files,[],existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Valid",ValidationStatus="Valid",PublicationTransactionId=staging.TransactionId};repairResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,[],[],repairOutcome.Reason,false,token,started,phase1Outcome:repairOutcome,outputPath:staging.OutputPath);}),cancellationToken);
+                if(!repair.Succeeded){var failedOutcome=(repairOutcome??new(Phase1ExecutionKind.Failed,repair.ReasonCode,"Validation repair failed.",[],repair.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,false,false,false,"Failed",recovery)) with{Kind=Phase1ExecutionKind.Failed,ReasonCode=repair.ReasonCode,Errors=repair.Errors,RollbackPerformed=repair.RollbackPerformed,RollbackSucceeded=repair.RollbackSucceeded};return await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Failed,[],[],repair.Warnings,repair.Errors,failedOutcome.Reason,true,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:failedOutcome);}
+                return repairResult!;
             }
             else
             {
@@ -714,8 +724,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 outcome=new(kind,reasonCode,resume.Reason,files,recovery.Warnings,authority.ExecutionContext.AuthorityChecksum,authority.ExecutionContext.RequestIdentityChecksum,false,hadExisting,false,"Publishing",recovery){ManifestStatus="Publishing",ValidationStatus="Publishing"};
                 ProductionPhaseResult? publishedResult=null;
                 var transaction=await _phase1PublicationTransactionCoordinator.PublishAsync(new(context.OutputRoot,context,authority,compatibility,hadExisting,invalidationRequired,
-                    async (path,token)=>publishedResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Publishing,[],files,recovery.Warnings,[],outcome.Reason,false,token,started,phase1Outcome:outcome,outputPath:path),
-                    async (path,invalidated,token)=>{var committedOutcome=outcome with{DownstreamInvalidated=invalidated,ManifestStatus="Valid",ValidationStatus="Valid",CompatibilityProjectionStatus="Valid"};publishedResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,recovery.Warnings,[],committedOutcome.Reason,false,token,started,phase1Outcome:committedOutcome,outputPath:path);},
+                    async (staging,token)=>{outcome=outcome with{PublicationTransactionId=staging.TransactionId};publishedResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Publishing,[],files,recovery.Warnings,[],outcome.Reason,false,token,started,phase1Outcome:outcome,outputPath:staging.OutputPath);},
+                    async (staging,token)=>{var committedOutcome=outcome with{PublicationTransactionId=staging.TransactionId,DownstreamInvalidated=staging.DownstreamInvalidated,ManifestStatus="Valid",ValidationStatus="Valid",CompatibilityProjectionStatus="Valid"};publishedResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,recovery.Warnings,[],committedOutcome.Reason,false,token,started,phase1Outcome:committedOutcome,outputPath:staging.OutputPath);},
                     WritePhase1StagedManifestAsync,_phase1DownstreamInvalidationTransaction),cancellationToken);
                 if(!transaction.Succeeded){var failedOutcome=outcome with{Kind=Phase1ExecutionKind.Failed,ReasonCode=transaction.ReasonCode,Reason="Phase 1 publication failed.",OutputFiles=[],Warnings=transaction.Warnings,DownstreamInvalidated=false,CompatibilityProjectionStatus="Failed",Errors=transaction.Errors,ManifestStatus="Failed",ValidationStatus="Failed",RollbackPerformed=transaction.RollbackPerformed,RollbackSucceeded=transaction.RollbackSucceeded};return await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Failed,[],[],transaction.Warnings,transaction.Errors,failedOutcome.Reason,true,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:failedOutcome);}
                 outcome=outcome with{DownstreamInvalidated=transaction.DownstreamInvalidated,RollbackPerformed=transaction.RollbackPerformed,RollbackSucceeded=transaction.RollbackSucceeded,ManifestStatus="Valid",ValidationStatus="Valid",CompatibilityProjectionStatus="Valid"};
@@ -14382,8 +14392,8 @@ public sealed partial class ProductionPipelineExecutionService(
             downstreamInvalidated = phase1Outcome?.DownstreamInvalidated,
             rollbackPerformed = phase1Outcome?.RollbackPerformed ?? false,
             rollbackSucceeded = phase1Outcome?.RollbackSucceeded ?? false,
-            transactionId = phaseNo == 1 && phase1Outcome is not null ? phase1Outcome.RecoveryStatus.TransactionId : null,
-            publicationCommitted = phaseNo == 1 && status == ProductionPhaseStatus.Succeeded && phase1Outcome?.ValidationStatus == "Valid",
+            transactionId = phaseNo == 1 ? phase1Outcome?.PublicationTransactionId : null,
+            publicationCommitted = phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid",
             validationStatus = phase1Outcome?.ValidationStatus,
             canRetry,
             validationFileCreated = phase12ValidationPersistence?.ValidationFileCreated,
