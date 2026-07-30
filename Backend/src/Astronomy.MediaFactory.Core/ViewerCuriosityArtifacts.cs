@@ -38,12 +38,12 @@ public sealed class ViewerCuriosityArtifactProjector : IViewerCuriosityArtifactP
         if (string.IsNullOrWhiteSpace(source.Language)) throw new ArgumentException("Phase 3 source language must be non-empty.", nameof(source));
         if (source.AstronomyEventIntelligenceId == Guid.Empty) throw new ArgumentException("Phase 3 AstronomyEventIntelligenceId must not be Guid.Empty.", nameof(source));
         if (source.Answers is null) throw new ArgumentException("Phase 3 source Answers collection must not be null.", nameof(source));
-        var variants = applicableVariants.Select(NormalizeVariant).ToArray();
+        var variants = applicableVariants.Select(NormalizeVariant).Order(StringComparer.Ordinal).ToArray();
         if (variants.Length == 0 || variants.Any(string.IsNullOrEmpty) || variants.Distinct(StringComparer.Ordinal).Count() != variants.Length)
             throw new ArgumentException("Phase 3 applicableVariants must contain unique supported values Long and/or Short.", nameof(applicableVariants));
 
         var warnings = new List<string>(); var seen = new HashSet<string>(StringComparer.Ordinal); var projected = new List<ViewerQuestion>();
-        foreach (var answer in source.Answers.OrderBy(x => x?.DisplayOrder ?? int.MaxValue))
+        foreach (var answer in source.Answers.OrderBy(x => x?.DisplayOrder ?? int.MaxValue).ThenBy(x => Normalize(x?.QuestionText), StringComparer.Ordinal))
         {
             if (answer is null) throw new ArgumentException("Phase 3 source Answers contains a null question.", nameof(source));
             var normalized = Normalize(answer.QuestionText);
@@ -85,7 +85,7 @@ public sealed class ViewerCuriosityArtifactProjector : IViewerCuriosityArtifactP
             "PracticalViewingAdvice" => i.ViewerInstructions.Count > 0 ? ["viewerInstructions"] : Array.Empty<string>(),
             _ => Array.Empty<string>()
         };
-        return fields.Select(field => new ViewerKnowledgeReference($"production-event-intelligence#/{field}", "ProductionIntelligenceField", "plan-input/production-event-intelligence.json", "Resolved")).ToArray();
+        return fields.Select(field => new ViewerKnowledgeReference($"production-event-intelligence#/{field}", "ProductionIntelligenceField", "02-intelligence/production-event-intelligence.json", "Resolved")).ToArray();
     }
     private static string MapCategory(string? type) => (type ?? "").Trim().ToLowerInvariant() switch { "what" => "Recognition", "why" => "ScientificExplanation", "where" => "LocationGuidance", "when" => "TimingGuidance", "action" => "PracticalViewingAdvice", "how" => "ObservationGuidance", _ => "Other" };
     private static string Priority(string category, int order) => category is "ScientificExplanation" or "Recognition" ? "High" : order <= 4 ? "Medium" : "Normal";
@@ -115,7 +115,7 @@ public static class ViewerCuriosityArtifactValidator
 {
     private static readonly HashSet<string> Priorities = new(["High", "Medium", "Normal"], StringComparer.Ordinal);
     private static readonly HashSet<string> Categories = new(["Recognition", "ScientificExplanation", "ObservationGuidance", "PracticalViewingAdvice", "EventSignificance", "ViewerComparison", "CulturalHistoricalContext", "Safety", "EquipmentGuidance", "TimingGuidance", "LocationGuidance", "Other"], StringComparer.Ordinal);
-    public static IReadOnlyList<string> Validate(ViewerCuriosityProjection p, string executionId, string language, string profile, IReadOnlyList<string>? expectedVariants = null)
+    public static IReadOnlyList<string> Validate(ViewerCuriosityProjection p, string executionId, string language, string profile, IReadOnlyList<string>? expectedVariants = null, ProductionEventIntelligence? intelligence = null)
     {
         var e = new List<string>(); ValidateMetadata(p.ViewerQuestionBank.Metadata, executionId, language, profile, ViewerCuriosityChecksum.For(p.ViewerQuestionBank.Questions), "Viewer Question Bank", e);
         var q = p.ViewerQuestionBank.Questions;
@@ -133,7 +133,7 @@ public static class ViewerCuriosityArtifactValidator
             if (x.ApplicableVariants.Count == 0 || x.ApplicableVariants.Any(v => v is not ("Long" or "Short")) || x.ApplicableVariants.Distinct().Count() != x.ApplicableVariants.Count) e.Add($"Viewer Question Bank question '{x.QuestionId}' has invalid ApplicableVariants.");
             if (expectedVariants is not null && !x.ApplicableVariants.Order().SequenceEqual(expectedVariants.Order(), StringComparer.OrdinalIgnoreCase)) e.Add($"Viewer Question Bank question '{x.QuestionId}' variant scope does not match execution scope.");
             foreach (var r in x.KnowledgeReferences)
-                if (string.IsNullOrWhiteSpace(r.ReferenceId) || r.ReferenceId.EndsWith(Guid.Empty.ToString("D"), StringComparison.OrdinalIgnoreCase) || r.ReferenceType != "ProductionIntelligenceField" || r.SourceArtifact != "plan-input/production-event-intelligence.json" || r.ResolutionStatus != "Resolved") e.Add($"Viewer Question Bank question '{x.QuestionId}' knowledge reference '{r.ReferenceId}' is invalid or unresolved.");
+                if (string.IsNullOrWhiteSpace(r.ReferenceId) || r.ReferenceId.EndsWith(Guid.Empty.ToString("D"), StringComparison.OrdinalIgnoreCase) || r.ReferenceType != "ProductionIntelligenceField" || r.SourceArtifact != "02-intelligence/production-event-intelligence.json" || r.ResolutionStatus != "Resolved" || (intelligence is not null && !ReferenceResolves(r.ReferenceId, intelligence))) e.Add($"Viewer Question Bank question '{x.QuestionId}' knowledge reference '{r.ReferenceId}' is invalid or unresolved.");
             if (x.Category is "ScientificExplanation" or "CulturalHistoricalContext" && x.KnowledgeReferences.Count == 0) e.Add($"Viewer Question Bank question '{x.QuestionId}' category '{x.Category}' requires a resolved certified knowledge reference.");
         }
         ValidateMetadata(p.LearningObjectives.Metadata, executionId, language, profile, ViewerCuriosityChecksum.For(p.LearningObjectives.Objectives), "Learning Objectives", e);
@@ -147,6 +147,21 @@ public static class ViewerCuriosityArtifactValidator
         return e;
     }
     private static bool DictionaryEqual(IReadOnlyDictionary<string,int> a, IReadOnlyDictionary<string,int> b) => a.Count == b.Count && a.All(x => b.TryGetValue(x.Key, out var v) && v == x.Value);
+    private static bool ReferenceResolves(string referenceId, ProductionEventIntelligence intelligence)
+    {
+        var field = referenceId.Split("#/", StringSplitOptions.None).LastOrDefault();
+        return field switch
+        {
+            "primaryObjects" => intelligence.PrimaryObjects.Count > 0,
+            "title" => !string.IsNullOrWhiteSpace(intelligence.Title),
+            "scientificContext" => !string.IsNullOrWhiteSpace(intelligence.ScientificContext),
+            "bestViewingWindowLocal" => !string.IsNullOrWhiteSpace(intelligence.BestViewingWindowLocal),
+            "localPeakTime" => !string.IsNullOrWhiteSpace(intelligence.LocalPeakTime),
+            "skyDirectionHint" => !string.IsNullOrWhiteSpace(intelligence.SkyDirectionHint),
+            "viewerInstructions" => intelligence.ViewerInstructions.Count > 0,
+            _ => false
+        };
+    }
     private static string Normalize(string? s) => string.Join(' ', (s ?? "").Trim().ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).TrimEnd('?', '.', '!');
     private static void ValidateMetadata(ViewerCuriosityArtifactMetadata m, string id, string language, string profile, string checksum, string artifact, List<string> e)
     { if (m.Version != ViewerCuriosityArtifactProjector.Version || m.ExecutionId != id || !string.Equals(m.Language, language, StringComparison.OrdinalIgnoreCase) || m.Profile != profile || m.CreatedUtc == default) e.Add($"{artifact} metadata does not match the current execution."); if (m.Checksum != checksum) e.Add($"{artifact} checksum mismatch."); }
