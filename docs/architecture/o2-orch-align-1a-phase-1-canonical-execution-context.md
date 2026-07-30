@@ -6,17 +6,23 @@ This is the sole current Phase 1 architecture declaration. The historical 1C–1
 
 ## Certified architecture
 
-Phase 1 owns one lifecycle-locked decision sequence: validate input, project canonical and compatibility publications, perform pair-aware recovery, read and aggregate active validation, then select reuse, manifest repair, compatibility repair, or full combined publication. Independent canonical and compatibility commit APIs are blocked with `P1_TRANSACTION_COORDINATOR_REQUIRED`.
+Phase 1 owns one lifecycle-locked decision sequence: validate input, project canonical and compatibility publications, perform pair-aware recovery, read canonical, compatibility, the six-entry manifest, and committed success metadata, then select reuse, manifest repair, compatibility repair, validation repair, or full combined publication. Reuse requires every component, matching authority/request checksums, and `publicationCommitted=true`; `Publishing`, failed, missing, corrupt, and stale success metadata cannot be reused. Independent canonical and compatibility commit APIs are blocked with `P1_TRANSACTION_COORDINATOR_REQUIRED`.
 
 Downstream invalidation is reversible: Phase 2–20 paths move to a transaction-specific `.phase1-downstream-backup-{id}` quarantine, partial staging exposes its move ledger for reverse-order rollback, and quarantine deletion occurs only after coherent final metadata publication.
 
-Provisional validation is explicitly `Publishing` and uncommitted; only the coordinator publishes the final `Succeeded` document after manifest validation and downstream staging. `PreviousPhaseSucceeded` rejects Phase 1 success documents without committed validation metadata.
+Provisional validation is explicitly `Publishing` and uncommitted; only the coordinator publishes the final `Succeeded` document after manifest validation and downstream staging. The coordinator supplies the current publication transaction ID to both validation staging callbacks; recovery IDs are never used as publication IDs. `PreviousPhaseSucceeded` rejects Phase 1 success documents without committed validation metadata.
 
 The combined coordinator uses one transaction ID for canonical authority, compatibility projection, validation, and manifest staging/backups/failed evidence. Manifest staging reads its six checksums exclusively from the canonical and compatibility staging roots while recording only their final active workspace paths and expected authority lineage. The mutation boundary is non-interruptible and every ordinary exception after it enters rollback, which restores manifest and validation before compatibility and canonical authority.
 
 Manifest rollback treats a previously absent manifest as a valid restored state; when one existed it must be restored and semantically validated. Compatibility-repair rollback validates canonical authority, canonical-owned compatibility lineage, and any restored manifest.
 
-Manifest-only repair stages and validates a replacement, backs up the active manifest, atomically promotes the replacement, validates it against the unchanged active publication, and retains failed evidence while restoring the backup on failure. Compatibility-only repair similarly stages both projections and a manifest sourced from those staged projections, then promotes and validates the pair without rewriting canonical authority or invalidating downstream outputs.
+Manifest-only repair atomically owns both manifest replacement and final committed validation. Compatibility-only repair atomically owns compatibility, manifest, and final committed validation. Validation-only repair verifies the unchanged canonical, compatibility, and manifest, then replaces only success metadata. All three use their own coordinator transaction IDs, preserve canonical timestamps and downstream outputs, and restore validation plus every other repair target on failure.
+
+Recovery treats canonical, compatibility, manifest, and validation as four rollback components. Metadata is eligible only under the authority pair's backup transaction identity, and recovered flags derive from semantic manifest and committed-success validators rather than successful moves. Missing, mismatched, `Publishing`, uncommitted, or stale metadata sets its repair-required flag without preventing recovery of a coherent authority pair.
+
+Once all required active-state semantic checks establish coherence, backup, staging, failed-provisional-validation, and downstream-quarantine cleanup is warning-only; warnings retain the evidence path. Cleanup failure cannot turn a coherent publication into a failed result.
+
+Downstream invalidation consumes the side-effect-free Phase 2–20 output target resolver. It deduplicates exact workspace-contained targets and preserves relative quarantine paths; it does not scan the workspace root, touch Phase 1 authority/metadata, archives, logs, or unrelated content. The invalidation transaction is a mandatory DI dependency and uses the registered Phase 1 filesystem and resolver.
 
 The final execution outcome is assembled from the completed transaction result; provisional validation cannot claim downstream invalidation or a successful manifest. Rollback compatibility acceptance is semantic: restored file checksums must match the compatibility lineage recorded by the restored canonical execution context, rather than merely containing parseable JSON.
 
@@ -31,7 +37,7 @@ Recovery considers only canonical/compatibility backup pairs with the same trans
 - **1E:** combined canonical and compatibility staging under one coordinator and one non-interruptible transaction boundary.
 - **1F:** broadened post-swap rollback coverage, transactionally protected validation/manifest metadata, made recovery pair-aware, blocked independent commits, hardened manifest path handling, and added manifest-only repair reuse semantics.
 
-## Certification evidence (2026-07-29)
+## Certification evidence (2026-07-30)
 
 Actual failed checks (the .NET SDK is unavailable, so no test process or totals existed):
 
