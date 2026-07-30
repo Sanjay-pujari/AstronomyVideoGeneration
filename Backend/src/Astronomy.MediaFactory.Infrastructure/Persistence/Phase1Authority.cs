@@ -143,7 +143,19 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
         }
         Add(2,Path.Combine(root,"02-intelligence"));Add(3,Path.Combine(root,"03-questions"));Add(3,context.ExecutionContext.QuestionRoot);Add(4,Path.Combine(root,"04-blueprint"));Add(5,Path.Combine(root,"05-blueprint-certification"));Add(6,Path.Combine(root,"06-story-frames"));Add(7,context.ExecutionContext.NarrationRoot);Add(8,context.ExecutionContext.SceneRoot);Add(11,context.ExecutionContext.HeroRoot);Add(12,context.ExecutionContext.ThumbnailRoot);Add(13,Path.Combine(root,"gallery"));Add(14,Path.Combine(root,"sync"));Add(15,context.ExecutionContext.TtsRoot);Add(18,context.ExecutionContext.VideoAssemblyRoot);
         for(var phase=Math.Max(2,start);phase<=Math.Min(20,end);phase++)Add(phase,Path.Combine(context.ExecutionContext.ValidationRoot!,$"phase-{phase:00}-validation.json"),false,validation:true);
-        return targets.GroupBy(x=>x.Path,OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal).Select(g=>g.OrderBy(x=>x.PhaseNo).First()).OrderBy(x=>x.PhaseNo).ThenBy(x=>x.Path,StringComparer.Ordinal).ToArray();
+        var comparer=OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal;
+        var deduplicated=targets.GroupBy(x=>x.Path,comparer).Select(g=>g.OrderBy(x=>x.PhaseNo).First()).ToArray();
+        return deduplicated.Where(candidate=>!deduplicated.Any(parent=>parent.IsDirectory&&!comparer.Equals(parent.Path,candidate.Path)&&IsContainedByDirectory(candidate.Path,parent.Path,comparison)))
+            .OrderBy(x=>x.PhaseNo).ThenBy(x=>x.Path,comparer).ToArray();
+    }
+
+    internal static bool IsContainedByDirectory(string candidatePath,string parentDirectory,StringComparison comparison)
+    {
+        var parent=Path.TrimEndingDirectorySeparator(Path.GetFullPath(parentDirectory));
+        var candidate=Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath));
+        if(candidate.Length<=parent.Length)return false;
+        if(candidate.StartsWith(parent+Path.DirectorySeparatorChar,comparison))return true;
+        return Path.AltDirectorySeparatorChar!=Path.DirectorySeparatorChar&&candidate.StartsWith(parent+Path.AltDirectorySeparatorChar,comparison);
     }
 }
 public static class UpstreamPhaseMutationGuard
@@ -181,7 +193,12 @@ public sealed record Phase1CompatibilityRepairRequest(string WorkspaceRoot,Phase
 public sealed record Phase1ValidationRepairRequest(string WorkspaceRoot,Phase1AuthoritySet ActiveCanonicalAuthority,Phase1CompatibilityPublication ActiveCompatibilityPublication,Func<Phase1ValidationStagingContext,CancellationToken,Task> StageFinalValidationAsync);
 
 public sealed record Phase1PublicationTransactionResult(bool Succeeded,string TransactionId,string ReasonCode,
-    IReadOnlyList<string> Files,IReadOnlyList<string> Warnings,IReadOnlyList<string> Errors,bool RollbackPerformed,bool RollbackSucceeded,bool DownstreamInvalidated);
+    IReadOnlyList<string> Files,IReadOnlyList<string> Warnings,IReadOnlyList<string> Errors,bool RollbackPerformed,bool RollbackSucceeded,bool DownstreamInvalidated)
+{
+    public bool PreviousGenerationRestored { get; init; }
+    public bool PreviousGenerationWasValid { get; init; }
+    public string? FailureDiagnosticsPath { get; init; }
+}
 
 public interface IPhase1PublicationTransactionCoordinator
 {
@@ -365,19 +382,28 @@ public sealed class Phase1DownstreamInvalidationTransaction(IPhase1FileSystem fi
         try
         {
             token.ThrowIfCancellationRequested();
-            var resolved=targetResolver.Resolve(context,2,20);
+            var resolved=targetResolver.Resolve(context,2,20);var comparison=OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal;var comparer=OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal;
             foreach(var target in resolved)UpstreamPhaseMutationGuard.AssertAllowed(2,target,"phase1-downstream-invalidation");
-            var candidates=resolved.Where(x=>x.IsDirectory?fileSystem.DirectoryExists(x.Path):fileSystem.FileExists(x.Path)).Select(x=>(Path:x.Path,Directory:x.IsDirectory)).ToList();
-            foreach(var candidate in candidates.OrderBy(x=>x.Path,StringComparer.Ordinal))
+            var normalized=resolved.Select(x=>x with{Path=Path.TrimEndingDirectorySeparator(fileSystem.GetFullPath(x.Path))}).GroupBy(x=>x.Path,comparer).Select(g=>g.OrderBy(x=>x.PhaseNo).First()).ToArray();
+            foreach(var target in normalized)if(!PhaseOutputTargetResolver.IsContainedByDirectory(target.Path,root,comparison))throw new IOException($"Downstream target is outside workspace: {target.Path}");
+            var plan=normalized.Where(candidate=>!normalized.Any(parent=>parent.IsDirectory&&!comparer.Equals(parent.Path,candidate.Path)&&PhaseOutputTargetResolver.IsContainedByDirectory(candidate.Path,parent.Path,comparison)))
+                .OrderBy(x=>x.IsDirectory?0:1).ThenBy(x=>x.Path,comparer).ToArray();
+            var candidates=plan.Where(x=>x.IsDirectory?fileSystem.DirectoryExists(x.Path):fileSystem.FileExists(x.Path)).ToArray();
+            foreach(var candidate in candidates)
             {
                 token.ThrowIfCancellationRequested();var relative=Path.GetRelativePath(root,candidate.Path);var destination=Path.Combine(quarantine,relative);fileSystem.CreateDirectory(fileSystem.GetDirectoryName(destination)!);
-                if(candidate.Directory)fileSystem.MoveDirectory(candidate.Path,destination);else fileSystem.MoveFile(candidate.Path,destination);
-                moves.Add(new(candidate.Path,destination,candidate.Directory));
+                // Existence is checked again so concurrently removed targets remain an idempotent no-op.
+                try
+                {
+                    if(candidate.IsDirectory){if(!fileSystem.DirectoryExists(candidate.Path))continue;fileSystem.MoveDirectory(candidate.Path,destination);}else{if(!fileSystem.FileExists(candidate.Path))continue;fileSystem.MoveFile(candidate.Path,destination);}
+                }
+                catch(Exception ex){ex.Data["targetPath"]=candidate.Path;ex.Data["targetPhaseNo"]=candidate.PhaseNo;ex.Data["targetType"]=candidate.IsDirectory?"directory":"file";throw;}
+                moves.Add(new(candidate.Path,destination,candidate.IsDirectory));
             }
-            if(candidates.Any(x=>x.Directory?fileSystem.DirectoryExists(x.Path):fileSystem.FileExists(x.Path)))throw new IOException("A downstream path remained active after staging.");
+            if(candidates.Any(x=>x.IsDirectory?fileSystem.DirectoryExists(x.Path):fileSystem.FileExists(x.Path)))throw new IOException("A downstream path remained active after staging.");
             return Task.FromResult(State(true));
         }
-        catch(Exception ex){throw new Phase1DownstreamStagingException("P1_DOWNSTREAM_INVALIDATION_FAILED",State(false),ex);}
+        catch(Exception ex){throw new Phase1DownstreamStagingException($"P1_DOWNSTREAM_INVALIDATION_FAILED: transactionId={transactionId}; operation=stage; targetPath={ex.Data["targetPath"]??"unknown"}; targetPhaseNo={ex.Data["targetPhaseNo"]??"unknown"}; targetType={ex.Data["targetType"]??"unknown"}; parentTargetPath={ex.Data["parentTargetPath"]??"none"}",State(false),ex);}
     }
     public Task RollbackAsync(Phase1DownstreamInvalidationState state,CancellationToken token)
     {
@@ -405,6 +431,9 @@ public sealed class Phase1PublicationTransactionCoordinator(IPhase1FileSystem fi
         var validation=Path.Combine(root,"validation","phase-01-validation.json");var validationStage=Path.Combine(root,"validation",$".phase-01-validation.staging-{id}.json");var finalValidationStage=Path.Combine(root,"validation",$".phase-01-validation.final-{id}.json");var validationBackup=Path.Combine(root,"validation",$".phase-01-validation.backup-{id}.json");var validationFailed=Path.Combine(root,"validation",$".phase-01-validation.failed-{id}.json");
         var manifest=Path.Combine(root,"phase-manifest.json");var manifestStage=Path.Combine(root,$".phase-manifest.staging-{id}.json");var manifestBackup=Path.Combine(root,$".phase-manifest.backup-{id}.json");var manifestFailed=Path.Combine(root,$".phase-manifest.failed-{id}.json");
         var warnings=new List<string>();var mutated=false;var coherent=false;var phase="P1_CANONICAL_COMMIT_FAILED";Phase1DownstreamInvalidationState? downstream=null;var previousCanonical=fileSystem.DirectoryExists(canonical)?await authorityValidator.ValidateAsync(root,canonical,false,cancellationToken):null;
+        var previousValidationExisted=fileSystem.FileExists(validation);var previousValidationChecksum=previousValidationExisted?ChecksumFile(validation):null;
+        var previousValidationValidity=previousValidationExisted&&previousCanonical?.IsValid==true&&previousCanonical.AuthoritySet is not null?await successValidationValidator.ValidateAsync(root,previousCanonical.AuthoritySet,cancellationToken):null;
+        var previousValidationWasValid=previousValidationValidity?.IsValid==true;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();fileSystem.CreateDirectory(canonicalStage);await Write(canonicalStage,"selected-plan.json",request.ExpectedCanonicalAuthority.SelectedPlan,cancellationToken);await Write(canonicalStage,"production-request.json",request.ExpectedCanonicalAuthority.ProductionRequest,cancellationToken);await Write(canonicalStage,"pipeline-state.json",request.ExpectedCanonicalAuthority.PipelineState,cancellationToken);await Write(canonicalStage,"execution-context.json",request.ExpectedCanonicalAuthority.ExecutionContext,cancellationToken);
@@ -423,7 +452,9 @@ public sealed class Phase1PublicationTransactionCoordinator(IPhase1FileSystem fi
         {
             var errors=new List<string>();var token=Phase1PublicationCancellation.NonInterruptible;if(downstream?.HasMutatedActiveState==true)try{await request.DownstreamTransaction.RollbackAsync(downstream,token);}catch(Exception e){errors.Add("downstream: "+e.Message);}RestoreFile(manifest,manifestBackup,manifestFailed,errors);RestoreFile(validation,validationBackup,validationFailed,errors);
             try{if(fileSystem.DirectoryExists(compatibility))fileSystem.MoveDirectory(compatibility,compatibilityFailed);if(fileSystem.DirectoryExists(compatibilityBackup))fileSystem.MoveDirectory(compatibilityBackup,compatibility);}catch(Exception e){errors.Add("compatibility: "+e.Message);}try{if(fileSystem.DirectoryExists(canonical))fileSystem.MoveDirectory(canonical,canonicalFailed);if(fileSystem.DirectoryExists(canonicalBackup))fileSystem.MoveDirectory(canonicalBackup,canonical);}catch(Exception e){errors.Add("canonical: "+e.Message);}
-            try{if(request.ExistingCanonicalPublicationExists){var restored=await authorityValidator.ValidateAsync(root,canonical,false,token);if(!restored.IsValid||restored.AuthoritySet is null)errors.Add("restored canonical authority is incoherent");else{var lineage=await compatibilityPublisher.ReadDirectoryAsync(compatibility,token);if(!ChecksumsMatch(lineage.Checksums,restored.AuthoritySet.ExecutionContext.CompatibilityArtifactChecksums)||!(await compatibilityPublisher.ValidateDirectoryAsync(compatibility,lineage,token)).IsValid)errors.Add("restored compatibility lineage is incoherent");if(fileSystem.FileExists(manifest)&&!(await manifestValidator.ValidateAsync(root,restored.AuthoritySet,lineage,token)).IsValid)errors.Add("restored manifest is incoherent");if(fileSystem.FileExists(validation)&&!(await successValidationValidator.ValidateAsync(root,restored.AuthoritySet,token)).IsValid)errors.Add("restored validation is incoherent");}}}catch(Exception e){errors.Add("rollback validation: "+e.Message);}var ok=errors.Count==0;return new(false,id,ok?phase:"P1_ROLLBACK_FAILED",[],warnings,[ex.Message,..errors],true,ok,false);
+            var validationPhysicallyRestored=previousValidationExisted?fileSystem.FileExists(validation)&&ChecksumFile(validation)==previousValidationChecksum:!fileSystem.FileExists(validation);
+            if(!validationPhysicallyRestored)errors.Add("restored validation does not match captured original state");
+            try{if(request.ExistingCanonicalPublicationExists){var restored=await authorityValidator.ValidateAsync(root,canonical,false,token);if(!restored.IsValid||restored.AuthoritySet is null)errors.Add("restored canonical authority is incoherent");else{var lineage=await compatibilityPublisher.ReadDirectoryAsync(compatibility,token);if(!ChecksumsMatch(lineage.Checksums,restored.AuthoritySet.ExecutionContext.CompatibilityArtifactChecksums)||!(await compatibilityPublisher.ValidateDirectoryAsync(compatibility,lineage,token)).IsValid)errors.Add("restored compatibility lineage is incoherent");if(fileSystem.FileExists(manifest)&&!(await manifestValidator.ValidateAsync(root,restored.AuthoritySet,lineage,token)).IsValid)errors.Add("restored manifest is incoherent");if(previousValidationWasValid&&fileSystem.FileExists(validation)&&!(await successValidationValidator.ValidateAsync(root,restored.AuthoritySet,token)).IsValid)errors.Add("restored validation is incoherent");else if(previousValidationExisted&&!previousValidationWasValid&&validationPhysicallyRestored)warnings.Add("P1_ROLLBACK_RESTORED_PREEXISTING_INVALID_VALIDATION");}}}catch(Exception e){errors.Add("rollback validation: "+e.Message);}var ok=errors.Count==0;return new(false,id,ok?phase:"P1_ROLLBACK_FAILED",[],warnings,[ex.Message,..errors],true,ok,false){PreviousGenerationRestored=ok&&request.ExistingCanonicalPublicationExists,PreviousGenerationWasValid=previousValidationWasValid,FailureDiagnosticsPath=Path.Combine(root,"validation",$".phase-01-failed-attempt-{id}.json")};
         }
         catch(Exception ex){return new(false,id,phase,[],warnings,[ex.Message],false,false,false);}
         finally{foreach(var d in new[]{canonicalStage,compatibilityStage})if(fileSystem.DirectoryExists(d))try{fileSystem.DeleteDirectory(d,true);}catch(Exception e){warnings.Add("P1_STAGING_CLEANUP_WARNING: "+e.Message);}foreach(var f in new[]{validationStage,finalValidationStage,manifestStage})if(fileSystem.FileExists(f))try{fileSystem.DeleteFile(f);}catch(Exception e){warnings.Add("P1_STAGING_CLEANUP_WARNING: "+e.Message);}}
