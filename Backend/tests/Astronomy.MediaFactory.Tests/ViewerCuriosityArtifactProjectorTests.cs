@@ -101,7 +101,27 @@ public sealed class ViewerCuriosityArtifactProjectorTests
 
     [Fact]
     public void ViewerCuriosityArtifactProjector_maps_knowledge_references() =>
-        Assert.All(Project().ViewerQuestionBank.Questions, x => Assert.All(x.KnowledgeReferences, r => Assert.Equal("plan-input/production-event-intelligence.json", r.SourceArtifact)));
+        Assert.All(Project().ViewerQuestionBank.Questions, x => Assert.All(x.KnowledgeReferences, r => Assert.Equal("02-intelligence/production-event-intelligence.json", r.SourceArtifact)));
+
+    [Theory]
+    [InlineData("ShortVideo", "Short")]
+    [InlineData("short", "Short")]
+    [InlineData("LongVideo", "Long")]
+    [InlineData("long", "Long")]
+    public void ViewerCuriosityArtifactProjector_uses_only_explicit_requested_variant(string requested, string expected)
+    {
+        var result = projector.Project(Source(), Intelligence(), ExecutionId, "short-and-long-profile-name", [requested], CreatedUtc);
+        Assert.All(result.ViewerQuestionBank.Questions, question => Assert.Equal([expected], question.ApplicableVariants));
+    }
+
+    [Fact]
+    public void ViewerQuestionBankValidator_rejects_nonexistent_phase2_field()
+    {
+        var value = Project();
+        var question = value.ViewerQuestionBank.Questions[0] with { KnowledgeReferences = [new("production-event-intelligence#/doesNotExist", "ProductionIntelligenceField", "02-intelligence/production-event-intelligence.json", "Resolved")] };
+        value = Rechecksum(value with { ViewerQuestionBank = value.ViewerQuestionBank with { Questions = [question, value.ViewerQuestionBank.Questions[1]] } });
+        Assert.Contains(ViewerCuriosityArtifactValidator.Validate(value, ExecutionId, "en", "Gold", intelligence: Intelligence()), error => error.Contains("invalid or unresolved"));
+    }
 
     [Fact]
     public void ViewerCuriosityArtifactProjector_derives_learning_objectives()

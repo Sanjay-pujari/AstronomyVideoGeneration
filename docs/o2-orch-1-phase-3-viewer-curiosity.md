@@ -44,8 +44,8 @@ records each path and role.
 
 ## Grounding, identity, and variant scope
 
-Each typed `ViewerKnowledgeReference` identifies a concrete JSON field in the Phase 2
-`plan-input/production-event-intelligence.json` artifact. Its reference type is
+Each typed `ViewerKnowledgeReference` identifies a concrete JSON field in the certified Phase 2
+`02-intelligence/production-event-intelligence.json` authority. Its reference type is
 `ProductionIntelligenceField`, its source artifact is explicit, and accepted references
 have `Resolved` status. Recognition, timing/location, observing, and scientific questions
 select only corresponding non-empty Phase 2 fields. Scientific and cultural/historical
@@ -126,8 +126,8 @@ does not migrate Phase 7.
 
 ## Inspection checklist
 
-Confirm Phase 1 `plan-input/content-plan-production-request.json`, Phase 2
-`plan-input/production-event-intelligence.json`, all four Phase 3 files, the phase
+Confirm Phase 1 `plan-input/content-plan-production-request.json`, certified Phase 2
+`02-intelligence/production-event-intelligence.json`, all four Phase 3 files, the phase
 manifest, and `validation/phase-03-validation.json`. Verify one language/profile,
 resolved Phase 2 field knowledge references, nonduplicate questions, objective references,
 reconciled plan counts, and checksums. With `endPhaseNo=3`, no blueprint, narration,

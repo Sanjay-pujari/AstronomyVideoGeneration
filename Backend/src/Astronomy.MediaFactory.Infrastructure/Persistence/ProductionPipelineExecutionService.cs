@@ -256,7 +256,7 @@ public sealed partial class ProductionPipelineExecutionService(
     [
         (1, "Load Plan", static (_,_) => throw new InvalidOperationException("P1_DEDICATED_LIFECYCLE_REQUIRED")),
         (2, "Build ProductionEventIntelligence", PhaseBuildProductionIntelligenceAsync),
-        (3, "Generate QuestionAnswerSet", PhaseGenerateQuestionsAsync),
+        (3, "Viewer Curiosity Framework", PhaseGenerateQuestionsAsync),
         (4, "Story Intelligence", PhaseChronicleStoryIntelligenceAsync),
         (5, "Blueprint Certification", PhaseCertifyDocumentaryBlueprintAsync),
         (6, "Story Frames Authority", PhaseChronicleDocumentaryArchitectAsync),
@@ -586,10 +586,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 || source.Answers.Count != plan.TotalGeneratedQuestions) return false;
             var projection = new ViewerCuriosityProjection(bank, objectives, plan);
             var profile = context.Request.PlannedFormat ?? context.Request.Category;
-            return ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile, ResolveViewerVariants(context.Request.RequestedOutputs)).Count == 0
+            var authority = ReadCertifiedPhase2Intelligence(context);
+            return ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile, ResolveViewerVariants(context.Request.RequestedOutputs), authority).Count == 0
                 && Phase3ManifestIsValid(context, bankPath, compatibilityPath, objectivesPath, planPath);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or ArgumentException)
         {
             return false;
         }
@@ -610,11 +611,11 @@ public sealed partial class ProductionPipelineExecutionService(
                 [NormalizePath(expectedPaths[0])] = "Authoritative", [NormalizePath(expectedPaths[1])] = "Compatibility",
                 [NormalizePath(expectedPaths[2])] = "Supporting", [NormalizePath(expectedPaths[3])] = "Supporting"
             };
-            var actual = entries.EnumerateArray().Select(x => (Path: NormalizePath(x.GetProperty("path").GetString() ?? ""), Role: x.GetProperty("role").GetString() ?? "")).ToArray();
+            var actual = entries.EnumerateArray().Select(x => (Path: NormalizePath(x.GetProperty("path").GetString() ?? ""), Role: x.GetProperty("role").GetString() ?? "", Checksum: x.TryGetProperty("checksum", out var checksum) ? checksum.GetString() ?? "" : "")).ToArray();
             if (actual.Count(x => x.Role == "Authoritative") != 1 || actual.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != actual.Length) return false;
             var workspace = Path.GetFullPath(context.OutputRoot) + Path.DirectorySeparatorChar;
             return actual.All(x => Path.GetFullPath(x.Path).StartsWith(workspace, StringComparison.OrdinalIgnoreCase))
-                && expectedRoles.All(x => actual.Any(a => string.Equals(a.Path, x.Key, StringComparison.OrdinalIgnoreCase) && a.Role == x.Value));
+                && expectedRoles.All(x => actual.Any(a => string.Equals(a.Path, x.Key, StringComparison.OrdinalIgnoreCase) && a.Role == x.Value && a.Checksum == PhysicalChecksum(a.Path)));
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or IOException or ArgumentException) { return false; }
     }
@@ -894,13 +895,16 @@ public sealed partial class ProductionPipelineExecutionService(
         if (!string.Equals(source.Language, context.Request.Language, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Phase 3 Question Engine language mismatch: expected '{context.Request.Language}', actual '{source.Language}'.");
         var variants = ResolveViewerVariants(context.Request.RequestedOutputs);
-        var projection = viewerCuriosityProjector.Project(source, context.ProductionEventIntelligence, context.Request.PlanId.ToString("D"), profile, variants, DateTimeOffset.UtcNow);
-        var validationErrors = ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile, variants);
+        var certifiedIntelligence = ReadCertifiedPhase2Intelligence(context);
+        var projection = viewerCuriosityProjector.Project(source, certifiedIntelligence, context.Request.PlanId.ToString("D"), profile, variants, DateTimeOffset.UtcNow);
+        var validationErrors = ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile, variants, certifiedIntelligence);
         if (validationErrors.Count > 0) throw new InvalidOperationException($"Phase 3 Viewer Curiosity validation failed: {string.Join("; ", validationErrors)}");
 
         var root = Path.Combine(context.OutputRoot, "03-questions");
-        var stagingRoot = Path.Combine(context.OutputRoot, $".03-questions-staging-{Guid.NewGuid():N}");
-        var backupRoot = Path.Combine(context.OutputRoot, $".03-questions-backup-{Guid.NewGuid():N}");
+        var transactionId = Guid.NewGuid().ToString("N");
+        var stagingRoot = Path.Combine(context.OutputRoot, $".03-questions-staging-{transactionId}");
+        var backupRoot = Path.Combine(context.OutputRoot, $".03-questions-backup-{transactionId}");
+        var failedRoot = Path.Combine(context.OutputRoot, $".03-questions-failed-{transactionId}");
         Directory.CreateDirectory(stagingRoot);
         var compatibilityPath = Path.Combine(root, "question-answer-set.json");
         var bankPath = Path.Combine(root, "viewer-question-bank.json");
@@ -912,21 +916,59 @@ public sealed partial class ProductionPipelineExecutionService(
             await WriteJsonArtifactAsync(Path.Combine(stagingRoot, "viewer-question-bank.json"), projection.ViewerQuestionBank, cancellationToken);
             await WriteJsonArtifactAsync(Path.Combine(stagingRoot, "learning-objectives.json"), projection.LearningObjectives, cancellationToken);
             await WriteJsonArtifactAsync(Path.Combine(stagingRoot, "question-plan.json"), projection.QuestionPlan, cancellationToken);
-            // The complete staged set is validated above in-memory. A directory rename makes it
-            // impossible for resume to observe only a subset as the current authority.
+            ValidatePhysicalViewerCuriositySet(stagingRoot, source, context, profile, variants, certifiedIntelligence);
             if (Directory.Exists(root)) Directory.Move(root, backupRoot);
             Directory.Move(stagingRoot, root);
+            ValidatePhysicalViewerCuriositySet(root, source, context, profile, variants, certifiedIntelligence);
             if (Directory.Exists(backupRoot)) Directory.Delete(backupRoot, recursive: true);
         }
         catch
         {
-            if (Directory.Exists(stagingRoot)) Directory.Delete(stagingRoot, recursive: true);
+            if (Directory.Exists(stagingRoot)) Directory.Move(stagingRoot, failedRoot);
+            if (Directory.Exists(root) && Directory.Exists(backupRoot))
+            {
+                if (Directory.Exists(failedRoot)) Directory.Delete(failedRoot, recursive: true);
+                Directory.Move(root, failedRoot);
+            }
+            else if (Directory.Exists(root) && !Directory.Exists(backupRoot))
+            {
+                if (Directory.Exists(failedRoot)) Directory.Delete(failedRoot, recursive: true);
+                Directory.Move(root, failedRoot);
+            }
             if (!Directory.Exists(root) && Directory.Exists(backupRoot)) Directory.Move(backupRoot, root);
             throw;
         }
         logger.LogInformation("Phase 3 Viewer Curiosity generation completed. ExecutionId={ExecutionId}; SourceQuestionCount={SourceCount}; ViewerQuestionCount={QuestionCount}; LearningObjectiveCount={ObjectiveCount}; WarningCount={WarningCount}; ViewerQuestionBankPath={BankPath}", context.Request.PlanId, source.Answers.Count, projection.ViewerQuestionBank.Questions.Count, projection.LearningObjectives.Objectives.Count, projection.QuestionPlan.ProjectionWarnings.Count, NormalizePath(bankPath));
         return response.GeneratedFiles.Concat([compatibilityPath, bankPath, objectivesPath, planPath]).ToArray();
     }
+
+    private static ProductionEventIntelligence ReadCertifiedPhase2Intelligence(ProductionPhaseContext context)
+    {
+        var path = Path.Combine(context.OutputRoot, "02-intelligence", "production-event-intelligence.json");
+        if (!File.Exists(path)) throw new InvalidOperationException("Phase 3 requires certified Phase 2 authority at 02-intelligence/production-event-intelligence.json.");
+        var authority = JsonSerializer.Deserialize<ProductionEventIntelligenceAuthority>(File.ReadAllText(path), JsonOptions)
+            ?? throw new InvalidOperationException("Phase 3 could not deserialize certified Phase 2 authority.");
+        if (!authority.ValidationSummary.SemanticValidationPassed || !authority.ValidationSummary.CertificationPassed)
+            throw new InvalidOperationException("Phase 3 rejected uncertified Phase 2 authority.");
+        if (!Guid.TryParse(authority.Metadata.PlanId, out var planId) || planId != context.Request.PlanId || !string.Equals(authority.Metadata.Language, context.Request.Language, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Phase 3 certified Phase 2 lineage does not match the current execution.");
+        return authority.Intelligence;
+    }
+
+    private static void ValidatePhysicalViewerCuriositySet(string root, QuestionAnswerSetDto source, ProductionPhaseContext context, string profile, IReadOnlyList<string> variants, ProductionEventIntelligence intelligence)
+    {
+        var names = new[] { "viewer-question-bank.json", "question-answer-set.json", "learning-objectives.json", "question-plan.json" };
+        if (names.Any(name => !File.Exists(Path.Combine(root, name)) || new FileInfo(Path.Combine(root, name)).Length == 0)) throw new InvalidOperationException("Phase 3 physical publication set is incomplete or empty.");
+        var compatibility = JsonSerializer.Deserialize<QuestionAnswerSetDto>(File.ReadAllText(Path.Combine(root, names[1])), JsonOptions);
+        var bank = JsonSerializer.Deserialize<ViewerQuestionBank>(File.ReadAllText(Path.Combine(root, names[0])), JsonOptions);
+        var objectives = JsonSerializer.Deserialize<ViewerLearningObjectives>(File.ReadAllText(Path.Combine(root, names[2])), JsonOptions);
+        var plan = JsonSerializer.Deserialize<ViewerQuestionPlan>(File.ReadAllText(Path.Combine(root, names[3])), JsonOptions);
+        if (compatibility is null || bank is null || objectives is null || plan is null || JsonSerializer.Serialize(compatibility, JsonOptions) != JsonSerializer.Serialize(source, JsonOptions)) throw new InvalidOperationException("Phase 3 compatibility artifact is not equivalent to the Question Engine result.");
+        var errors = ViewerCuriosityArtifactValidator.Validate(new(bank, objectives, plan), context.Request.PlanId.ToString("D"), context.Request.Language, profile, variants, intelligence);
+        if (errors.Count > 0) throw new InvalidOperationException("Phase 3 physical validation failed: " + string.Join("; ", errors));
+    }
+
+    private static string PhysicalChecksum(string path) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 
     private static IReadOnlyList<string> ResolveViewerVariants(IReadOnlyList<string> requestedOutputs)
     {
@@ -15935,7 +15977,7 @@ public sealed partial class ProductionPipelineExecutionService(
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "03-questions", "question-answer-set.json")), role = "Compatibility" },
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "03-questions", "learning-objectives.json")), role = "Supporting" },
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "03-questions", "question-plan.json")), role = "Supporting" }
-        }.Where(x => File.Exists(x.path)).ToArray();
+        }.Where(x => File.Exists(x.path)).Select(x => new { x.path, x.role, checksum = PhysicalChecksum(x.path) }).ToArray();
         var phase4Artifacts = new[]
         {
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "04-blueprint", "documentary-blueprint.json")), role = "Authoritative" },
