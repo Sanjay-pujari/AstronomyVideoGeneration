@@ -3,16 +3,16 @@ using System.Text.Json;
 namespace Astronomy.MediaFactory.Core;
 
 public sealed record EventFamilyResolutionRequest(string RequestedEventType, string? Title = null, string? Category = null);
-public sealed record EventFamilyResolution(string RequestedEventType, string NormalizedEventType, string EventFamily, IReadOnlyList<string> AliasesMatched, IReadOnlyList<string> ResolutionEvidence, bool IsKnownFamily);
-public interface IProductionEventFamilyResolver { EventFamilyResolution Resolve(EventFamilyResolutionRequest request); }
+public sealed record ProductionEventFamilyResolution(string RequestedEventType, string NormalizedEventType, string EventFamily, IReadOnlyList<string> AliasesMatched, IReadOnlyList<string> ResolutionEvidence, bool IsKnownFamily);
+public interface IProductionEventFamilyResolver { ProductionEventFamilyResolution Resolve(EventFamilyResolutionRequest request); }
 
 public sealed record EventIntelligenceCapabilityResolution(string RequestedEventType, string NormalizedFamily, string CapabilityId, string CapabilityVersion, bool FallbackUsed, string? FallbackReason, bool KnownFamilyWithoutCapability, IReadOnlyList<string> ResolutionEvidence);
-public interface IProductionEventIntelligenceCapabilityResolver { EventIntelligenceCapabilityResolution Resolve(EventFamilyResolution family); IProductionEventIntelligenceCapability GetCapability(EventIntelligenceCapabilityResolution resolution); }
+public interface IProductionEventIntelligenceCapabilityResolver { EventIntelligenceCapabilityResolution Resolve(ProductionEventFamilyResolution family); IProductionEventIntelligenceCapability GetCapability(EventIntelligenceCapabilityResolution resolution); }
 
 public enum RequirementLevel { Required, Recommended, Optional, ConditionallyRequired, NotApplicable }
 public sealed record FieldRequirement(string FieldPath, RequirementLevel RequirementLevel, string? Condition, string ValidationRule, string FailureCode, string Description);
 public sealed record EventFamilyValidationPolicy(string PolicyId, string Version, string EventFamily, IReadOnlyList<FieldRequirement> Requirements, decimal MinimumRequiredCoverage, decimal MinimumRecommendedCoverage);
-public sealed record EventIntelligenceBuildContext(ProductionPipelineRequest PipelineRequest, ProductionEventIntelligence BaseIntelligence, EventFamilyResolution Family, IMediaEventStrategy MediaStrategy, string ExecutionId, string TransactionId);
+public sealed record EventIntelligenceBuildContext(ProductionPipelineRequest PipelineRequest, ProductionEventIntelligence BaseIntelligence, ProductionEventFamilyResolution Family, IMediaEventStrategy MediaStrategy, string ExecutionId, string TransactionId);
 public sealed record EventFamilyIntelligenceResult(object FamilySpecificPayload, IReadOnlyList<CertifiedKnowledgeClaim> KnowledgeClaims, IReadOnlyList<ProductionIntelligenceSource> SourceReferences, IReadOnlyList<string> ProductionGuidance, IReadOnlyList<string> RequiredVisualObjects, IReadOnlyList<string> RequiredNarrationFacts, IReadOnlyList<string> SafetyRules, IReadOnlyList<string> ValidationEvidence, IReadOnlyList<string> Warnings, IReadOnlyList<string> Diagnostics);
 public interface IProductionEventIntelligenceCapability
 {
@@ -20,7 +20,7 @@ public interface IProductionEventIntelligenceCapability
     string Version { get; }
     IReadOnlyCollection<string> SupportedEventFamilies { get; }
     int Priority { get; }
-    bool CanHandle(EventFamilyResolution family);
+    bool CanHandle(ProductionEventFamilyResolution family);
     Task<EventFamilyIntelligenceResult> BuildAsync(EventIntelligenceBuildContext context, CancellationToken cancellationToken);
     EventFamilyValidationPolicy GetValidationPolicy(EventIntelligenceBuildContext context);
 }
@@ -57,7 +57,7 @@ public sealed record Phase2ArtifactReferences(string CertifiedKnowledgeContext, 
 public sealed record Phase2ValidationSummary(decimal RequiredCoverage, decimal RecommendedCoverage, int NotApplicableCount, bool SemanticValidationPassed, bool CertificationPassed, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
 public sealed record Phase2Lineage(string PlanId, string ExecutionId, string TransactionId, string SourcePhase1AuthorityChecksum, string? SourcePhase1TransactionId, string RequestIdentityChecksum);
 public sealed record ProductionEventIntelligenceAuthority(Phase2AuthorityMetadata Metadata, ProductionEventIdentity EventIdentity, EventIntelligenceCapabilityResolution CapabilityResolution, ProductionEventIntelligence Intelligence, object FamilySpecificPayload, Phase2ArtifactReferences ArtifactReferences, Phase2ValidationSummary ValidationSummary, Phase2Lineage Lineage);
-public sealed record Phase2ValidationRequest(EventFamilyResolution Family, EventIntelligenceCapabilityResolution Capability, EventFamilyValidationPolicy Policy, ProductionEventIntelligence Intelligence, EventFamilyIntelligenceResult Result, ProductionObservationContext Observation, ProductionIntelligenceSourceRegistry Sources);
+public sealed record Phase2ValidationRequest(ProductionEventFamilyResolution Family, EventIntelligenceCapabilityResolution Capability, EventFamilyValidationPolicy Policy, ProductionEventIntelligence Intelligence, EventFamilyIntelligenceResult Result, ProductionObservationContext Observation, ProductionIntelligenceSourceRegistry Sources);
 public sealed record Phase2SemanticValidationResult(bool Passed, decimal RequiredCoverage, decimal RecommendedCoverage, int NotApplicableCount, IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors);
 public interface IProductionEventIntelligenceValidator { Phase2SemanticValidationResult Validate(Phase2ValidationRequest request); }
 public sealed record Phase2CertificationRequest(Phase2SemanticValidationResult Validation, CertifiedKnowledgeContext Knowledge);

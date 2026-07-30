@@ -18,7 +18,7 @@ public sealed class ProductionEventFamilyResolver : IProductionEventFamilyResolv
         ["SOLARECLIPSE"]="SOLAR_ECLIPSE", ["SOLAR_ECLIPSE"]="SOLAR_ECLIPSE", ["COMET"]="COMET",
         ["DEEPSKYOBJECT"]="DEEP_SKY_OBJECT", ["DEEP_SKY_OBJECT"]="DEEP_SKY_OBJECT", ["DSO"]="DEEP_SKY_OBJECT"
     };
-    public EventFamilyResolution Resolve(EventFamilyResolutionRequest request)
+    public ProductionEventFamilyResolution Resolve(EventFamilyResolutionRequest request)
     {
         var key = Normalize(request.RequestedEventType);
         if (!Aliases.TryGetValue(key, out var family) && !string.IsNullOrWhiteSpace(request.Category)) Aliases.TryGetValue(Normalize(request.Category), out family);
@@ -32,7 +32,7 @@ public sealed class ProductionEventFamilyResolver : IProductionEventFamilyResolv
 public sealed class ProductionEventIntelligenceCapabilityResolver(IEnumerable<IProductionEventIntelligenceCapability> capabilities) : IProductionEventIntelligenceCapabilityResolver
 {
     private readonly IReadOnlyList<IProductionEventIntelligenceCapability> _capabilities = capabilities.ToArray();
-    public EventIntelligenceCapabilityResolution Resolve(EventFamilyResolution family)
+    public EventIntelligenceCapabilityResolution Resolve(ProductionEventFamilyResolution family)
     {
         var matches = _capabilities.Where(x => x.CanHandle(family) && !x.SupportedEventFamilies.Contains("UNKNOWN", StringComparer.OrdinalIgnoreCase)).OrderByDescending(x=>x.Priority).ThenBy(x=>x.CapabilityId, StringComparer.Ordinal).ToArray();
         if (matches.Length > 1 && matches[0].Priority == matches[1].Priority) throw new InvalidOperationException($"P2_CAPABILITY_PRIORITY_CONFLICT: {family.EventFamily}");
@@ -48,7 +48,7 @@ public sealed class ProductionEventIntelligenceCapabilityResolver(IEnumerable<IP
 public abstract class EventIntelligenceCapabilityBase(string id, params string[] families) : IProductionEventIntelligenceCapability
 {
     public string CapabilityId { get; }=id; public string Version => "2.0"; public IReadOnlyCollection<string> SupportedEventFamilies { get; }=families; public virtual int Priority=>100;
-    public bool CanHandle(EventFamilyResolution family)=>SupportedEventFamilies.Contains(family.EventFamily,StringComparer.OrdinalIgnoreCase);
+    public bool CanHandle(ProductionEventFamilyResolution family)=>SupportedEventFamilies.Contains(family.EventFamily,StringComparer.OrdinalIgnoreCase);
     public abstract object BuildPayload(EventIntelligenceBuildContext c);
     public virtual Task<EventFamilyIntelligenceResult> BuildAsync(EventIntelligenceBuildContext c, CancellationToken token)
     {
