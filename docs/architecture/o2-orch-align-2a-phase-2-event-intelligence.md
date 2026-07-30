@@ -2,7 +2,7 @@
 
 ## Ownership and contracts
 
-Phase 2 owns normalization, family/capability selection, strategy enrichment, semantic validation, certification, and publication. Its canonical authority is `02-intelligence/production-event-intelligence.json`; `plan-input/production-event-intelligence.json` is a legacy projection of the committed authority's inner `ProductionEventIntelligence` only. Phase 1 may create bootstrap compatibility data for old consumers, but its manifest does not claim the Phase 2 projection.
+Phase 2 owns normalization, family/capability selection, strategy enrichment, semantic validation, certification, and publication. Its canonical authority is `02-intelligence/production-event-intelligence.json`; `plan-input/production-event-intelligence.json` is a legacy projection of the committed authority's inner `ProductionEventIntelligence` only. Phase 1 creates the bootstrap compatibility artifact and inventories that required publication in its six-entry manifest. When Phase 2 replaces the projection, the shared phase manifest is refreshed after the Phase 2 commit so the Phase 1 entry continues to checksum the active physical compatibility artifact while the Phase 2 entry records its derivation from Phase 2 authority.
 
 The versioned authority envelope retains `ProductionEventIntelligence` as the downstream compatibility model while adding event identity, capability resolution, typed family payload, artifact references, validation, certification, and Phase 1/request lineage. Plan, execution, and publication transaction identities are distinct. The semantic checksum excludes its own checksum field.
 

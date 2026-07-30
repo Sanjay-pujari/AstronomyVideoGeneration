@@ -23,6 +23,32 @@ public static class Phase1AuthorityContract
     public const string DirectoryName = "01-plan";
 }
 
+public sealed record Phase1ArtifactDefinition(
+    string RelativePath,
+    string Role,
+    string ContractVersion,
+    string PublicationKind,
+    bool Required,
+    Func<Phase1ManifestStagingContext, string> StagingSourceResolver)
+{
+    public string ResolveFinalPath(string workspaceRoot) =>
+        Path.Combine(workspaceRoot, RelativePath.Replace('/', Path.DirectorySeparatorChar));
+}
+
+/// <summary>The single inventory used to publish and validate Phase 1.</summary>
+public static class Phase1ArtifactCatalog
+{
+    public static IReadOnlyList<Phase1ArtifactDefinition> Required { get; } =
+    [
+        new("01-plan/execution-context.json", "Authoritative", Phase1AuthorityContract.ContractVersion, "Canonical", true, x => Path.Combine(x.CanonicalStagingRoot, "execution-context.json")),
+        new("01-plan/selected-plan.json", "Supporting", Phase1AuthorityContract.SelectedPlanContract, "Canonical", true, x => Path.Combine(x.CanonicalStagingRoot, "selected-plan.json")),
+        new("01-plan/production-request.json", "Supporting", Phase1AuthorityContract.ProductionRequestContract, "Canonical", true, x => Path.Combine(x.CanonicalStagingRoot, "production-request.json")),
+        new("01-plan/pipeline-state.json", "Supporting", Phase1AuthorityContract.PipelineStateContract, "Canonical", true, x => Path.Combine(x.CanonicalStagingRoot, "pipeline-state.json")),
+        new("plan-input/content-plan-production-request.json", "Compatibility", "legacy", "Compatibility", true, x => Path.Combine(x.CompatibilityStagingRoot, "content-plan-production-request.json")),
+        new("plan-input/production-event-intelligence.json", "Compatibility", "legacy", "Compatibility", true, x => Path.Combine(x.CompatibilityStagingRoot, "production-event-intelligence.json"))
+    ];
+}
+
 public sealed record Phase1SelectedPlan(string ContractVersion, Guid PlanId, string SourcePlanIdentity, string Title, string ShortTitle, string EventType, string CanonicalEventIdentity, IReadOnlyList<string> PrimaryObjects, IReadOnlyList<string> SecondaryObjects, DateTimeOffset? ScheduledUtc, DateTimeOffset? ObservationStartUtc, DateTimeOffset? ObservationPeakUtc, DateTimeOffset? ObservationEndUtc, string RegionId, string RequestedLanguage, string Category, IReadOnlyList<string> RequestedVariants, IReadOnlyList<string> RequestedOutputs, string SourcePayloadChecksum, string SelectedPlanChecksum);
 public sealed record Phase1ProductionRequest(string ContractVersion, Guid ExecutionId, Guid PlanId, string RequestedLanguage, string ResolvedLanguage, IReadOnlyList<string> RequestedVariants, IReadOnlyList<string> RequestedOutputs, int RequestedStartPhaseNo, int RequestedEndPhaseNo, int EffectiveStartPhaseNo, int EffectiveEndPhaseNo, bool DryRun, bool OverwriteExisting, bool RetryFailedOnly, string ExecutionMode, string RequestChecksum);
 public sealed record Phase1PipelineState(string ContractVersion, Guid ExecutionId, Guid PlanId, DateTimeOffset InitializedUtc, int RequestedStartPhaseNo, int RequestedEndPhaseNo, int EffectiveStartPhaseNo, int EffectiveEndPhaseNo, string Phase1Status, IReadOnlyList<int> PlannedPhases, int InvalidationBoundary, bool DryRun, string ExecutionContextPath, string SelectedPlanChecksum, string ProductionRequestChecksum, IReadOnlyDictionary<int, string> DownstreamPhaseStates);
@@ -466,16 +492,6 @@ public sealed class Phase1SuccessValidationValidator(IPhase1FileSystem fileSyste
 
 public sealed class Phase1ManifestValidator(IPhase1FileSystem fileSystem) : IPhase1ManifestValidator
 {
-    private static readonly (string Path,string Role,string Contract)[] Expected =
-    [
-        ("01-plan/execution-context.json","Authoritative",Phase1AuthorityContract.ContractVersion),
-        ("01-plan/selected-plan.json","Supporting",Phase1AuthorityContract.SelectedPlanContract),
-        ("01-plan/production-request.json","Supporting",Phase1AuthorityContract.ProductionRequestContract),
-        ("01-plan/pipeline-state.json","Supporting",Phase1AuthorityContract.PipelineStateContract),
-        ("plan-input/content-plan-production-request.json","Compatibility","legacy"),
-        ("plan-input/production-event-intelligence.json","Compatibility","legacy")
-    ];
-
     public async Task<Phase1ManifestValidationResult> ValidateAsync(string root,Phase1AuthoritySet authority,Phase1CompatibilityPublication compatibility,CancellationToken token)
     {
         var manifestPath=Path.Combine(root,"phase-manifest.json");
@@ -487,7 +503,7 @@ public sealed class Phase1ManifestValidator(IPhase1FileSystem fileSystem) : IPha
             if(!manifest.TryGetProperty("planId",out var plan)||!Guid.TryParse(plan.ToString(),out var id)||id!=authority.ExecutionContext.PlanId)errors.Add(new("P1_MANIFEST_PLAN_ID_MISMATCH","Manifest plan ID does not match authority.",manifestPath));
             if(!manifest.TryGetProperty("phase1Artifacts",out var artifacts)||artifacts.ValueKind!=JsonValueKind.Array)return new(true,false,false,[..errors,new("P1_MANIFEST_ENTRIES_MISSING","Phase 1 entries are missing.",manifestPath)],[],[]);
             var items=artifacts.EnumerateArray().ToArray();
-            if(items.Length!=6)errors.Add(new("P1_MANIFEST_ENTRY_COUNT","Exactly six Phase 1 entries are required.",manifestPath));
+            if(items.Length!=Phase1ArtifactCatalog.Required.Count)errors.Add(new("P1_MANIFEST_ENTRY_COUNT","Exactly six Phase 1 entries are required.",manifestPath));
             var workspace=Path.TrimEndingDirectorySeparator(fileSystem.GetFullPath(root));var comparison=OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal;
             var resolved=new List<(JsonElement Item,string Path)>();
             foreach(var item in items)
@@ -497,13 +513,13 @@ public sealed class Phase1ManifestValidator(IPhase1FileSystem fileSystem) : IPha
                 catch(Exception ex)when(ex is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException){errors.Add(new("P1_MANIFEST_PATH_MALFORMED",ex.Message,manifestPath));}
             }
             if(paths.Distinct(OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal).Count()!=paths.Count)errors.Add(new("P1_MANIFEST_DUPLICATE_PATH","Duplicate Phase 1 paths are forbidden.",manifestPath));
-            foreach(var expected in Expected)
+            foreach(var expected in Phase1ArtifactCatalog.Required)
             {
-                var full=fileSystem.GetFullPath(Path.Combine(root,expected.Path.Replace('/',Path.DirectorySeparatorChar)));var matches=resolved.Where(i=>string.Equals(i.Path,full,comparison)).Select(i=>i.Item).ToArray();
-                if(matches.Length!=1){errors.Add(new("P1_MANIFEST_EXPECTED_PATH","An exact expected Phase 1 path is absent or duplicated.",full));continue;}
+                var full=fileSystem.GetFullPath(expected.ResolveFinalPath(root));var matches=resolved.Where(i=>string.Equals(i.Path,full,comparison)).Select(i=>i.Item).ToArray();
+                if(matches.Length!=1){errors.Add(new("P1_MANIFEST_REQUIRED_ENTRY_MISSING","An exact required Phase 1 path is absent or duplicated.",full));continue;}
                 var item=matches[0];if(!full.StartsWith(workspace+Path.DirectorySeparatorChar,comparison)||full.Contains(".staging-",comparison)||full.Contains(".backup-",comparison)||full.Contains(".failed-",comparison))errors.Add(new("P1_MANIFEST_PATH_UNSAFE","Only contained active publication paths are allowed.",full));
                 if(!item.TryGetProperty("role",out var role)||role.GetString()!=expected.Role)errors.Add(new("P1_MANIFEST_ROLE_INVALID","Artifact role is invalid.",full));
-                if(!item.TryGetProperty("contractVersion",out var contract)||contract.GetString()!=expected.Contract)errors.Add(new("P1_MANIFEST_CONTRACT_INVALID","Artifact contract is invalid.",full));
+                if(!item.TryGetProperty("contractVersion",out var contract)||contract.GetString()!=expected.ContractVersion)errors.Add(new("P1_MANIFEST_CONTRACT_INVALID","Artifact contract is invalid.",full));
                 if(!item.TryGetProperty("phaseNo",out var phaseNo)||phaseNo.ValueKind!=JsonValueKind.Number||!phaseNo.TryGetInt32(out var number)||number!=1)errors.Add(new("P1_MANIFEST_PHASE_INVALID","Artifact phase is invalid.",full));
                 if(!item.TryGetProperty("executionId",out var executionId)||executionId.GetString()!=authority.ExecutionContext.ExecutionId.ToString("D"))errors.Add(new("P1_MANIFEST_EXECUTION_ID_MISMATCH","Artifact execution ID is stale or foreign.",full));
                 if(!item.TryGetProperty("planId",out var artifactPlan)||artifactPlan.GetString()!=authority.ExecutionContext.PlanId.ToString("D"))errors.Add(new("P1_MANIFEST_PLAN_ID_MISMATCH","Artifact plan ID is stale.",full));
@@ -511,8 +527,10 @@ public sealed class Phase1ManifestValidator(IPhase1FileSystem fileSystem) : IPha
                 if(!item.TryGetProperty("requestIdentityChecksum",out var requestChecksum)||requestChecksum.GetString()!=authority.ExecutionContext.RequestIdentityChecksum)errors.Add(new("P1_MANIFEST_REQUEST_IDENTITY_MISMATCH","Artifact request identity is stale.",full));
                 if(!item.TryGetProperty("publicationState",out var publication)||publication.GetString()!="Committed"||!item.TryGetProperty("validationStatus",out var validation)||validation.GetString()!="Valid")errors.Add(new("P1_MANIFEST_PUBLICATION_STATE_INVALID","Artifact is not a validated committed publication.",full));
                 if(!fileSystem.FileExists(full))errors.Add(new("P1_MANIFEST_ARTIFACT_MISSING","Declared artifact is missing.",full));
-                else {await using var artifactStream=fileSystem.OpenRead(full);var actual=Convert.ToHexString(await SHA256.HashDataAsync(artifactStream,token)).ToLowerInvariant();if(!item.TryGetProperty("checksum",out var checksum)||checksum.GetString()!=actual)errors.Add(new("P1_MANIFEST_CHECKSUM_MISMATCH","Artifact checksum differs from the committed file.",full));}
+                else {await using var artifactStream=fileSystem.OpenRead(full);if(artifactStream.Length==0)errors.Add(new("P1_MANIFEST_ARTIFACT_EMPTY","Declared artifact is empty.",full));var actual=Convert.ToHexString(await SHA256.HashDataAsync(artifactStream,token)).ToLowerInvariant();if(!item.TryGetProperty("checksum",out var checksum)||checksum.GetString()!=actual)errors.Add(new("P1_MANIFEST_CHECKSUM_MISMATCH","Artifact checksum differs from the committed file.",full));}
             }
+            var expectedPaths=Phase1ArtifactCatalog.Required.Select(x=>fileSystem.GetFullPath(x.ResolveFinalPath(root))).ToHashSet(OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal);
+            foreach(var unexpected in resolved.Where(x=>!expectedPaths.Contains(x.Path)))errors.Add(new("P1_MANIFEST_UNEXPECTED_ENTRY","Unexpected Phase 1 artifact entry.",unexpected.Path));
             string? Role(JsonElement i)=>i.ValueKind==JsonValueKind.Object&&i.TryGetProperty("role",out var role)&&role.ValueKind==JsonValueKind.String?role.GetString():null;
             if(items.Count(i=>Role(i)=="Authoritative")!=1||items.Count(i=>Role(i)=="Supporting")!=3||items.Count(i=>Role(i)=="Compatibility")!=2)errors.Add(new("P1_MANIFEST_ROLE_CARDINALITY","Role cardinality must be 1/3/2.",manifestPath));
         }
@@ -628,7 +646,8 @@ public sealed class Phase1AuthorityPersistence(IPhase1AuthorityValidator validat
                 return Finalize(new("Invalid",false,null,removedStaging,removedBackups,warnings,["P1_RECOVERY_FAILED: "+ex.Message,..restoreErrors]){CanonicalBackupPath=pair.Path,CompatibilityBackupPath=compatibilityBackup,TransactionId=id,IsolatedInvalidPaths=isolated.Where(p=>Exists(p,DirectoryLike(p))).ToArray(),OriginalActiveRestoredOnRecoveryFailure=restored});
             }
         }
-        warnings.Add("P1_RECOVERY_NO_MATCHING_BACKUP_PAIR");return Finalize(new(canonicalValidation.AuthoritySet is null?"Missing":"Invalid",false,null,removedStaging,removedBackups,warnings,[]){IsolatedInvalidPaths=isolated});
+        if(canonicalBackups.Length>0||compatibilityBackups.Count>0)warnings.Add("P1_RECOVERY_NO_MATCHING_BACKUP_PAIR");
+        return Finalize(new(canonicalValidation.AuthoritySet is null?"Missing":"Invalid",false,null,removedStaging,removedBackups,warnings,[]){IsolatedInvalidPaths=isolated});
 
         bool DirectoryLike(string p)=>!p.EndsWith(".json",StringComparison.OrdinalIgnoreCase);bool Exists(string p,bool directory)=>directory?fileSystem.DirectoryExists(p):fileSystem.FileExists(p);
         void EnsureDestinationAbsent(string path,bool directory){if(Exists(path,directory))throw new IOException($"recovery evidence destination already exists: {path}");}

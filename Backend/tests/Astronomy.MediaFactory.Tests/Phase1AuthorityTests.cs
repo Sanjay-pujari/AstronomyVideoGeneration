@@ -10,6 +10,25 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Phase1AuthorityTests
 {
     [Fact]
+    public void Phase1_manifest_catalog_contains_exactly_six_unique_required_paths()
+    {
+        var paths = Phase1ArtifactCatalog.Required.Select(definition => definition.RelativePath).ToArray();
+
+        Assert.Equal(6, paths.Length);
+        Assert.Equal(6, paths.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(Phase1ArtifactCatalog.Required, definition => Assert.True(definition.Required));
+        Assert.Equal(new[]
+        {
+            "01-plan/execution-context.json",
+            "01-plan/selected-plan.json",
+            "01-plan/production-request.json",
+            "01-plan/pipeline-state.json",
+            "plan-input/content-plan-production-request.json",
+            "plan-input/production-event-intelligence.json"
+        }, paths);
+    }
+
+    [Fact]
     public void Canonical_checksum_ignores_generated_time_and_dictionary_order()
     {
         var first = new { generatedUtc = DateTimeOffset.Parse("2026-01-01T00:00:00Z"), values = new Dictionary<string, string> { ["b"] = "2", ["a"] = "1" } };
@@ -67,7 +86,16 @@ public sealed class Phase1AuthorityTests
             using var document = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "phase-manifest.json")));
             var entries = document.RootElement.GetProperty("phase1Artifacts").EnumerateArray().ToArray();
             Assert.Equal(6, entries.Length);
+            Assert.Equal(6, entries.Select(entry => entry.GetProperty("path").GetString()).Distinct(StringComparer.Ordinal).Count());
             Assert.Contains(entries, entry => entry.GetProperty("path").GetString()!.EndsWith("plan-input/production-event-intelligence.json", StringComparison.Ordinal));
+            Assert.All(entries, entry =>
+            {
+                Assert.Equal(1, entry.GetProperty("phaseNo").GetInt32());
+                Assert.Equal(authority.ExecutionContext.PlanId, entry.GetProperty("planId").GetGuid());
+                Assert.Equal(authority.ExecutionContext.ExecutionId, entry.GetProperty("executionId").GetGuid());
+                Assert.Equal("Committed", entry.GetProperty("publicationState").GetString());
+                Assert.Equal("Valid", entry.GetProperty("validationStatus").GetString());
+            });
             Assert.True((await new Phase1ManifestValidator(new Phase1FileSystem()).ValidateAsync(root, authority, context.ExpectedCompatibilityPublication, CancellationToken.None)).IsValid);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
