@@ -49,6 +49,30 @@ namespace Astronomy.MediaFactory.Infrastructure.Extensions;
 
 public static class ServiceCollectionExtensions
 {
+    /// <summary>
+    /// Registers the production-owned Phase 2 event-intelligence lifecycle and
+    /// every capability consumed by the capability resolver.
+    /// </summary>
+    public static IServiceCollection AddPhase2ProductionEventIntelligence(this IServiceCollection services)
+    {
+        services.AddScoped<IProductionEventFamilyResolver, ProductionEventFamilyResolver>();
+        services.AddScoped<IProductionEventIntelligenceCapabilityResolver, ProductionEventIntelligenceCapabilityResolver>();
+        services.AddScoped<IProductionEventIntelligenceValidator, ProductionEventIntelligenceValidator>();
+        services.AddScoped<IProductionEventIntelligenceCertifier, ProductionEventIntelligenceCertifier>();
+        services.AddScoped<IProductionEventIntelligencePhaseService, ProductionEventIntelligencePhaseService>();
+        services.AddScoped<IProductionEventIntelligenceCapability, ConstellationIntelligenceCapability>();
+        services.AddScoped<IProductionEventIntelligenceCapability, MeteorShowerIntelligenceCapability>();
+        services.AddScoped<IProductionEventIntelligenceCapability, PlanetaryAlignmentIntelligenceCapability>();
+        services.AddScoped<IProductionEventIntelligenceCapability, PlanetGroupingIntelligenceCapability>();
+        services.AddScoped<IProductionEventIntelligenceCapability, LunarEventIntelligenceCapability>();
+        services.AddScoped<IProductionEventIntelligenceCapability, EclipseIntelligenceCapability>();
+        services.AddScoped<IProductionEventIntelligenceCapability, CometIntelligenceCapability>();
+        services.AddScoped<IProductionEventIntelligenceCapability, DeepSkyObjectIntelligenceCapability>();
+        services.AddScoped<IProductionEventIntelligenceCapability, GenericAstronomyIntelligenceCapability>();
+
+        return services;
+    }
+
     public static IServiceCollection AddSemanticRuntime(this IServiceCollection services)
     {
         services.AddSingleton<ICanonicalAstronomyEventIdentityResolverV1, CanonicalAstronomyEventIdentityResolverV1>();
@@ -118,6 +142,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddDocumentaryProductionBridge(configuration);
         services.AddSemanticRuntime();
+        services.AddPhase2ProductionEventIntelligence();
 
         services.AddOptions<VisualIntelligenceOptions>()
             .Bind(configuration.GetSection(VisualIntelligenceOptions.SectionName));
@@ -681,20 +706,6 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAstronomyVideoPlanningService, AstronomyVideoPlanningService>();
         services.AddScoped<IAstronomyAssetPlanningService, AstronomyAssetPlanningService>();
         services.AddScoped<IEventProductionIntelligenceAdapter, AstronomyEventProductionIntelligenceAdapter>();
-        services.AddScoped<IProductionEventFamilyResolver, ProductionEventFamilyResolver>();
-        services.AddScoped<IProductionEventIntelligenceCapabilityResolver, ProductionEventIntelligenceCapabilityResolver>();
-        services.AddScoped<IProductionEventIntelligenceValidator, ProductionEventIntelligenceValidator>();
-        services.AddScoped<IProductionEventIntelligenceCertifier, ProductionEventIntelligenceCertifier>();
-        services.AddScoped<IProductionEventIntelligencePhaseService, ProductionEventIntelligencePhaseService>();
-        services.AddScoped<IProductionEventIntelligenceCapability, MeteorShowerIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, PlanetaryAlignmentIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, PlanetGroupingIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, LunarEventIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, EclipseIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, ConstellationIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, CometIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, DeepSkyObjectIntelligenceCapability>();
-        services.AddScoped<IProductionEventIntelligenceCapability, GenericAstronomyIntelligenceCapability>();
         services.AddScoped<IMediaEventStrategyResolver, MediaEventStrategyResolver>();
         services.AddScoped<IVisualSourceResolver, DefaultVisualSourceResolver>();
         services.AddScoped<IMediaEventStrategy, MeteorShowerStrategy>();
