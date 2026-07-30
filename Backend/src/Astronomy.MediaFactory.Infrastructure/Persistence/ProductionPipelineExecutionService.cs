@@ -686,7 +686,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var phase10TitleDiagnostics = phaseNo == 10 ? ReadPhase10TitleDiagnostics(outputs) : null;
             var warnings = phaseNo == 18 ? ReadPhase18Warnings(context) : [];
             var reason = missing.Length == 0
-                ? "Validation passed."
+                ? phaseNo == 3 ? (context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED") : "Validation passed."
                 : BuildPhase7RequiredOutputFailureReason(requiredOutputDiagnostics, missing);
             return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, [], outputs, warnings, missing, reason, missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics);
         }
@@ -14401,7 +14401,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var declaredOutputFiles = resultOutputFiles.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var verifiedOutputFiles = resultOutputFiles.Where(p => File.Exists(p) || Directory.Exists(p)).Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var missingOutputFiles = resultOutputFiles.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason) { ReasonCode = phase1Outcome?.ReasonCode };
+        var reasonCode = phase1Outcome?.ReasonCode ?? (phaseNo == 3
+            ? status == ProductionPhaseStatus.Succeeded ? reason : "P3_COMMITTED_VALIDATION_FAILED"
+            : null);
+        var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason) { ReasonCode = reasonCode };
         if (phaseNo == 14 && File.Exists(validationPath))
             return result;
         var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
@@ -14485,7 +14488,7 @@ public sealed partial class ProductionPipelineExecutionService(
             errors,
             reason,
             executionKind = phase1Outcome?.Kind.ToString(),
-            reasonCode = phase1Outcome?.ReasonCode,
+            reasonCode,
             generated = phase1Outcome is not null && !phase1Outcome.Reused,
             reused = phase1Outcome?.Reused,
             regenerated = phase1Outcome?.Kind.ToString().StartsWith("Regenerated",StringComparison.Ordinal) == true,

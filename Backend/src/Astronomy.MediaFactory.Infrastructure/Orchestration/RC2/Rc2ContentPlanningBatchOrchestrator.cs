@@ -400,25 +400,12 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
     {
         if (string.IsNullOrWhiteSpace(response.OutputRoot)) return response;
 
-        // Phases 1 and 2 publish their stable validation reports inside their
+        // Phases 1, 2, and 3 publish their stable validation reports inside their
         // authoritative transactions. RC2 only reads those reports and reconciles
         // API state; it must never become a second writer for either stable file.
-        foreach (var phaseNo in requestedPhases.Where(phase => phase is 1 or 2))
+        // Phase 3 authoritative validation owner: Viewer Curiosity Framework publication lifecycle.
+        foreach (var phaseNo in requestedPhases.Where(phase => phase is 1 or 2 or 3))
             response = await ReconcileAuthoritativeValidationAsync(response, phaseNo, cancellationToken);
-
-        // Generic validation owns only early phases without an authoritative writer.
-        var map = new Dictionary<int, (string Name, string[] Inputs, string[] Outputs)>
-        {
-            [3] = ("Question / Story Planning", [Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json")], [Combine(response.OutputRoot, "question-engine", "question-answer-set.json"), Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.json"), Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.enriched.json")])
-        };
-        foreach (var phaseNo in requestedPhases.Where(map.ContainsKey))
-        {
-            var spec = map[phaseNo];
-            var started = DateTimeOffset.UtcNow;
-            var outputs = spec.Outputs.Where(path => File.Exists(path)).ToArray();
-            var errors = spec.Outputs.Except(outputs, StringComparer.OrdinalIgnoreCase).Select(path => $"Expected RC2 output was not created in this run: {NormalizePath(path)}").ToArray();
-            await WriteRc2PhaseValidationAsync(response.OutputRoot, phaseNo, spec.Name, errors.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, spec.Inputs, outputs, string.Empty, [], errors, errors.Length == 0 ? "Validation passed." : string.Join("; ", errors), errors.Length > 0, null, cancellationToken);
-        }
         return response;
     }
 
