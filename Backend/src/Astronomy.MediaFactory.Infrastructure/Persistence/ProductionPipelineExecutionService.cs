@@ -80,6 +80,10 @@ public sealed partial class ProductionPipelineExecutionService(
     IStoryFrameRuntimeIdentityProvider? storyFrameRuntimeIdentityProvider = null,
     IStoryFrameFileSystem? storyFrameFileSystem = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
+    // The action delegate and the generic phase-result writer are deliberately separate.
+    // Preserve the publication transaction selected by the Phase 3 action so the stable
+    // post-commit report records that transaction rather than manufacturing another id.
+    private readonly ConcurrentDictionary<string, string> phase3PublicationTransactions = new(StringComparer.OrdinalIgnoreCase);
     private readonly IPhase1AuthorityProjector _phase1AuthorityProjector = phase1AuthorityProjector;
     private readonly IPhase1AuthorityPersistence _phase1AuthorityPersistence = phase1AuthorityPersistence;
     private readonly IPhase1AuthorityReader _phase1AuthorityReader = phase1AuthorityReader;
@@ -631,7 +635,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 [NormalizePath(expectedPaths[2])] = "Supporting", [NormalizePath(expectedPaths[3])] = "Supporting"
             };
             var actual = entries.EnumerateArray().Select(x => (Path: NormalizePath(x.GetProperty("path").GetString() ?? ""), Role: x.GetProperty("role").GetString() ?? "", Checksum: x.TryGetProperty("checksum", out var checksum) ? checksum.GetString() ?? "" : "")).ToArray();
-            if (actual.Count(x => x.Role == "Authoritative") != 1 || actual.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != actual.Length) return false;
+            if (actual.Length != 4 || actual.Count(x => x.Role == "Authoritative") != 1 || actual.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != actual.Length) return false;
             var workspace = Path.GetFullPath(context.OutputRoot) + Path.DirectorySeparatorChar;
             return actual.All(x => Path.GetFullPath(x.Path).StartsWith(workspace, StringComparison.OrdinalIgnoreCase))
                 && expectedRoles.All(x => actual.Any(a => string.Equals(a.Path, x.Key, StringComparison.OrdinalIgnoreCase) && a.Role == x.Value && a.Checksum == PhysicalChecksum(a.Path)));
@@ -939,10 +943,18 @@ public sealed partial class ProductionPipelineExecutionService(
             if (Directory.Exists(root)) Directory.Move(root, backupRoot);
             Directory.Move(stagingRoot, root);
             ValidatePhysicalViewerCuriositySet(root, source, context, profile, variants, certifiedIntelligence);
+            phase3PublicationTransactions[context.OutputRoot] = transactionId;
+            // The stable validation is written by ExecutePhaseAsync immediately after this
+            // action returns. Install and verify the merged manifest first so that report is
+            // certification of committed physical state, not merely projector state.
+            await WritePhaseManifestAsync(context, [], cancellationToken);
+            if (!Phase3ManifestIsValid(context, bankPath, compatibilityPath, objectivesPath, planPath))
+                throw new InvalidOperationException("Phase 3 committed manifest verification failed.");
             if (Directory.Exists(backupRoot)) Directory.Delete(backupRoot, recursive: true);
         }
         catch
         {
+            phase3PublicationTransactions.TryRemove(context.OutputRoot, out _);
             if (Directory.Exists(stagingRoot)) Directory.Move(stagingRoot, failedRoot);
             if (Directory.Exists(root) && Directory.Exists(backupRoot))
             {
@@ -14351,6 +14363,93 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
+    private Phase3CertificationEvidence BuildPhase3CertificationEvidence(ProductionPhaseContext context)
+    {
+        var root = Path.Combine(context.OutputRoot, "03-questions");
+        var canonical = new[] { "viewer-question-bank.json", "question-answer-set.json", "learning-objectives.json", "question-plan.json" }
+            .Select(name => Path.Combine(root, name)).ToArray();
+        var phase2Path = Path.Combine(context.OutputRoot, "02-intelligence", "production-event-intelligence.json");
+        var legacyPath = Path.Combine(context.OutputRoot, "question-engine", "question-answer-set.json");
+        var missing = canonical.Append(phase2Path).Append(legacyPath).Where(path => !File.Exists(path)).Select(NormalizePath).ToArray();
+        var empty = canonical.Append(phase2Path).Append(legacyPath).Where(File.Exists).Where(path => new FileInfo(path).Length == 0).Select(NormalizePath).ToArray();
+        var invalid = new List<string>();
+        var certificationErrors = new List<string>();
+        ViewerQuestionBank? bank = null; ViewerLearningObjectives? objectives = null; ViewerQuestionPlan? plan = null;
+        var semanticPassed = false; var compatibilityPassed = false; var lineagePassed = false; var manifestPassed = false;
+        try
+        {
+            if (missing.Length == 0 && empty.Length == 0)
+            {
+                bank = JsonSerializer.Deserialize<ViewerQuestionBank>(File.ReadAllText(canonical[0]), JsonOptions);
+                var compatibility = JsonSerializer.Deserialize<QuestionAnswerSetDto>(File.ReadAllText(canonical[1]), JsonOptions);
+                objectives = JsonSerializer.Deserialize<ViewerLearningObjectives>(File.ReadAllText(canonical[2]), JsonOptions);
+                plan = JsonSerializer.Deserialize<ViewerQuestionPlan>(File.ReadAllText(canonical[3]), JsonOptions);
+                var legacy = JsonSerializer.Deserialize<QuestionAnswerSetDto>(File.ReadAllText(legacyPath), JsonOptions);
+                var authority = JsonSerializer.Deserialize<ProductionEventIntelligenceAuthority>(File.ReadAllText(phase2Path), JsonOptions);
+                if (bank is null || compatibility is null || objectives is null || plan is null || legacy is null || authority is null)
+                    throw new JsonException("A required Phase 3 certification artifact deserialized to null.");
+                lineagePassed = authority.ValidationSummary.SemanticValidationPassed && authority.ValidationSummary.CertificationPassed
+                    && authority.Metadata.PlanId == context.Request.PlanId.ToString("D")
+                    && bank.Questions.SelectMany(question => question.KnowledgeReferences).All(reference => reference.SourceArtifact == "02-intelligence/production-event-intelligence.json");
+                compatibilityPassed = JsonSerializer.Serialize(compatibility, JsonOptions) == JsonSerializer.Serialize(legacy, JsonOptions);
+                semanticPassed = ViewerCuriosityArtifactValidator.Validate(new(bank, objectives, plan), context.Request.PlanId.ToString("D"), context.Request.Language,
+                    context.Request.PlannedFormat ?? context.Request.Category, ResolveViewerVariants(context.Request.RequestedOutputs), authority.Intelligence).Count == 0;
+                manifestPassed = Phase3ManifestIsValid(context, canonical);
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or ArgumentException or NotSupportedException)
+        {
+            certificationErrors.Add(ex.Message);
+            invalid.AddRange(canonical.Where(File.Exists).Select(NormalizePath));
+        }
+        if (!semanticPassed) certificationErrors.Add("Phase 3 committed semantic validation failed.");
+        if (!manifestPassed) certificationErrors.Add("Phase 3 committed manifest validation failed.");
+        if (!compatibilityPassed) certificationErrors.Add("Phase 3 compatibility equivalence validation failed.");
+        if (!lineagePassed) certificationErrors.Add("Phase 3 Phase 2 lineage validation failed.");
+        if (missing.Length > 0) certificationErrors.Add("Phase 3 required physical files are missing.");
+        if (empty.Length > 0) certificationErrors.Add("Phase 3 required physical files are empty.");
+
+        var questions = bank?.Questions ?? [];
+        var questionIds = questions.Select(question => question.QuestionId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var duplicateIds = questions.Count - questionIds.Count;
+        var duplicateNormalized = questions.Count - questions.Select(question => NormalizeQuestion(question.QuestionText)).Distinct(StringComparer.Ordinal).Count();
+        var invalidObjectiveReferences = objectives?.Objectives.Sum(objective => objective.ViewerQuestionIds.Count(id => !questionIds.Contains(id))) ?? 0;
+        var resolvedQuestions = questions.Count(question => question.AnswerResolutionStatus == "Resolved");
+        var unresolvedQuestions = questions.Count(question => question.AnswerResolutionStatus == "Unresolved");
+        var unsupportedReferences = questions.SelectMany(question => question.KnowledgeReferences).Count(reference => reference.ResolutionStatus == "Unsupported");
+        var planReconciled = bank is not null && objectives is not null && plan is not null && plan.TotalGeneratedQuestions == questions.Count
+            && plan.AcceptedQuestions == questions.Count && objectives.Objectives.Count == questions.Count
+            && plan.CategoryCoverage.Values.Sum() == questions.Count && plan.PriorityDistribution.Values.Sum() == questions.Count
+            && plan.VariantCoverage.Values.Sum() == questions.Sum(question => question.ApplicableVariants.Count)
+            && invalidObjectiveReferences == 0;
+        if (!planReconciled) certificationErrors.Add("Phase 3 question plan reconciliation failed.");
+        var passed = semanticPassed && manifestPassed && compatibilityPassed && lineagePassed && planReconciled && missing.Length == 0 && empty.Length == 0 && invalid.Count == 0;
+        var hasPublicationTransaction = phase3PublicationTransactions.TryRemove(context.OutputRoot, out var transactionId);
+        var reused = !context.OverwriteExisting && !hasPublicationTransaction;
+        var recovered = false;
+        return new(passed, passed, transactionId, passed ? "Valid" : "Invalid", manifestPassed ? "Valid" : "Invalid", compatibilityPassed ? "Valid" : "Invalid",
+            semanticPassed, manifestPassed, manifestPassed, compatibilityPassed, lineagePassed, planReconciled, passed,
+            !context.OverwriteExisting && !reused && !recovered, context.OverwriteExisting && !reused && !recovered, reused, recovered,
+            questions.Count, objectives?.Objectives.Count ?? 0, plan?.TotalGeneratedQuestions ?? 0, resolvedQuestions, unresolvedQuestions, unsupportedReferences,
+            plan?.QuestionsRequiringEditorialAttention.Count ?? 0, duplicateIds, duplicateNormalized, invalidObjectiveReferences,
+            plan?.CategoryCoverage, plan?.PriorityDistribution, plan?.VariantCoverage, manifestPassed ? 4 : 0, manifestPassed,
+            [NormalizePath(phase2Path)], canonical.Select(NormalizePath).ToArray(), missing, empty, invalid.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            NormalizePath(phase2Path), File.Exists(phase2Path) ? PhysicalChecksum(phase2Path) : null, certificationErrors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static string NormalizeQuestion(string value) => string.Join(' ', value.Trim().ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).TrimEnd('?', '.', '!');
+
+    private sealed record Phase3CertificationEvidence(bool Passed, bool PublicationCommitted, string? TransactionId, string ValidationStatus,
+        string ManifestValidationStatus, string CompatibilityValidationStatus, bool SemanticValidationPassed, bool ChecksumValidationPassed,
+        bool ManifestValidationPassed, bool CompatibilityEquivalencePassed, bool Phase2LineageValidationPassed, bool QuestionPlanReconciliationPassed,
+        bool DownstreamReady, bool Generated, bool Regenerated, bool Reused, bool Recovered, int QuestionCount, int LearningObjectiveCount,
+        int QuestionPlanTotalCount, int ResolvedReferenceCount, int UnresolvedReferenceCount, int UnsupportedReferenceCount,
+        int QuestionsRequiringEditorialAttentionCount, int DuplicateQuestionIdCount, int DuplicateNormalizedQuestionCount,
+        int InvalidObjectiveReferenceCount, IReadOnlyDictionary<string, int>? CategoryCounts, IReadOnlyDictionary<string, int>? PriorityCounts,
+        IReadOnlyDictionary<string, int>? VariantCounts, int Phase3ManifestEntryCount, bool AllPhysicalChecksumsMatched,
+        IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles, IReadOnlyList<string> MissingFiles, IReadOnlyList<string> EmptyFiles,
+        IReadOnlyList<string> InvalidFiles, string Phase2AuthorityPath, string? Phase2AuthorityChecksum, IReadOnlyList<string> Errors);
+
     private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, Phase10ValidationDiagnostics? phase10TitleDiagnostics = null, Phase1ExecutionOutcome? phase1Outcome = null, string? outputPath = null)
     {
         var started = startedUtc ?? DateTimeOffset.UtcNow;
@@ -14401,8 +14500,18 @@ public sealed partial class ProductionPipelineExecutionService(
         var declaredOutputFiles = resultOutputFiles.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var verifiedOutputFiles = resultOutputFiles.Where(p => File.Exists(p) || Directory.Exists(p)).Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var missingOutputFiles = resultOutputFiles.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var phase3Certification = phaseNo == 3 ? BuildPhase3CertificationEvidence(context) : null;
+        if (phase3Certification is { Passed: false })
+        {
+            status = ProductionPhaseStatus.Failed;
+            errors = errors.Concat(phase3Certification.Errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            reason = phase3Certification.Errors.FirstOrDefault() ?? "Phase 3 committed physical validation failed.";
+            canRetry = true;
+        }
         var reasonCode = phase1Outcome?.ReasonCode ?? (phaseNo == 3
-            ? status == ProductionPhaseStatus.Succeeded ? reason : "P3_COMMITTED_VALIDATION_FAILED"
+            ? status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped
+                ? phase3Certification?.Recovered == true ? "P3_RECOVERED" : phase3Certification?.Reused == true ? "P3_REUSED" : context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED"
+                : "P3_COMMITTED_VALIDATION_FAILED"
             : null);
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason) { ReasonCode = reasonCode };
         if (phaseNo == 14 && File.Exists(validationPath))
@@ -14476,35 +14585,62 @@ public sealed partial class ProductionPipelineExecutionService(
             executedPhaseNumbers = sceneAssetsV3Diagnostics?.ExecutedPhaseNumbers ?? (status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo } : Array.Empty<int>()),
             filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             filesGeneratedThisRun = resultOutputFiles,
-            inputFiles,
+            inputFiles = phase3Certification?.InputFiles ?? inputFiles,
             outputFiles = declaredOutputFiles,
             outputFilesSemantics = "Declared output files for backward compatibility. Use verifiedOutputFiles for files confirmed on disk.",
             declaredOutputFiles,
             verifiedOutputFiles,
             missingOutputFiles,
+            missingFiles = phase3Certification?.MissingFiles ?? Array.Empty<string>(),
             emptyOutputFiles = Array.Empty<string>(),
+            emptyFiles = phase3Certification?.EmptyFiles ?? Array.Empty<string>(),
             invalidOutputFiles = Array.Empty<string>(),
+            invalidFiles = phase3Certification?.InvalidFiles ?? Array.Empty<string>(),
             warnings,
             errors,
             reason,
             executionKind = phase1Outcome?.Kind.ToString(),
             reasonCode,
-            generated = phase1Outcome is not null && !phase1Outcome.Reused,
-            reused = phase1Outcome?.Reused,
-            regenerated = phase1Outcome?.Kind.ToString().StartsWith("Regenerated",StringComparison.Ordinal) == true,
-            recovered = phase1Outcome?.RecoveryStatus.Recovered,
+            generated = phaseNo == 3 ? phase3Certification?.Generated : phase1Outcome is not null && !phase1Outcome.Reused,
+            reused = phaseNo == 3 ? phase3Certification?.Reused : phase1Outcome?.Reused,
+            regenerated = phaseNo == 3 ? phase3Certification?.Regenerated : phase1Outcome?.Kind.ToString().StartsWith("Regenerated",StringComparison.Ordinal) == true,
+            recovered = phaseNo == 3 ? phase3Certification?.Recovered : phase1Outcome?.RecoveryStatus.Recovered,
             recoveryStatus = phase1Outcome?.RecoveryStatus,
             authorityChecksum = phase1Outcome?.AuthorityChecksum,
             requestIdentityChecksum = phase1Outcome?.RequestIdentityChecksum,
-            compatibilityValidationStatus = phase1Outcome?.CompatibilityProjectionStatus,
-            manifestValidationStatus = phase1Outcome?.ManifestStatus,
+            compatibilityValidationStatus = phase3Certification?.CompatibilityValidationStatus ?? phase1Outcome?.CompatibilityProjectionStatus,
+            manifestValidationStatus = phase3Certification?.ManifestValidationStatus ?? phase1Outcome?.ManifestStatus,
             replacedExistingAuthority = phase1Outcome?.ReplacedExistingAuthority,
             downstreamInvalidated = phase1Outcome?.DownstreamInvalidated,
             rollbackPerformed = phase1Outcome?.RollbackPerformed ?? false,
             rollbackSucceeded = phase1Outcome?.RollbackSucceeded ?? false,
-            transactionId = phaseNo == 1 ? phase1Outcome?.PublicationTransactionId : null,
-            publicationCommitted = phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid",
-            validationStatus = phase1Outcome?.ValidationStatus,
+            transactionId = phaseNo == 1 ? phase1Outcome?.PublicationTransactionId : phase3Certification?.TransactionId,
+            publicationCommitted = phaseNo == 3 ? phase3Certification?.PublicationCommitted == true : phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid",
+            validationStatus = phase3Certification?.ValidationStatus ?? phase1Outcome?.ValidationStatus,
+            semanticValidationPassed = phase3Certification?.SemanticValidationPassed,
+            checksumValidationPassed = phase3Certification?.ChecksumValidationPassed,
+            manifestValidationPassed = phase3Certification?.ManifestValidationPassed,
+            compatibilityEquivalencePassed = phase3Certification?.CompatibilityEquivalencePassed,
+            phase2LineageValidationPassed = phase3Certification?.Phase2LineageValidationPassed,
+            questionPlanReconciliationPassed = phase3Certification?.QuestionPlanReconciliationPassed,
+            downstreamReady = phase3Certification?.DownstreamReady,
+            questionCount = phase3Certification?.QuestionCount,
+            learningObjectiveCount = phase3Certification?.LearningObjectiveCount,
+            questionPlanTotalCount = phase3Certification?.QuestionPlanTotalCount,
+            resolvedReferenceCount = phase3Certification?.ResolvedReferenceCount,
+            unresolvedReferenceCount = phase3Certification?.UnresolvedReferenceCount,
+            unsupportedReferenceCount = phase3Certification?.UnsupportedReferenceCount,
+            questionsRequiringEditorialAttentionCount = phase3Certification?.QuestionsRequiringEditorialAttentionCount,
+            duplicateQuestionIdCount = phase3Certification?.DuplicateQuestionIdCount,
+            duplicateNormalizedQuestionCount = phase3Certification?.DuplicateNormalizedQuestionCount,
+            invalidObjectiveReferenceCount = phase3Certification?.InvalidObjectiveReferenceCount,
+            categoryCounts = phase3Certification?.CategoryCounts,
+            priorityCounts = phase3Certification?.PriorityCounts,
+            variantCounts = phase3Certification?.VariantCounts,
+            phase3ManifestEntryCount = phase3Certification?.Phase3ManifestEntryCount,
+            allPhysicalChecksumsMatched = phase3Certification?.AllPhysicalChecksumsMatched,
+            phase2AuthorityPath = phase3Certification?.Phase2AuthorityPath,
+            phase2AuthorityChecksum = phase3Certification?.Phase2AuthorityChecksum,
             canRetry,
             validationFileCreated = phase12ValidationPersistence?.ValidationFileCreated,
             validationFileSourcePath = phase12ValidationPersistence?.ValidationFileSourcePath,

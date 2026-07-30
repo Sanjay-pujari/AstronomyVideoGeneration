@@ -435,6 +435,16 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
                 var physicalStatus = ReadString(root, "status");
                 if (!IsSuccessfulPhysicalStatus(physicalStatus))
                     errors.Add($"Authoritative Phase {phaseNo} physical validation status is '{physicalStatus ?? "missing"}'.");
+                if (phaseNo == 3)
+                {
+                    foreach (var field in new[] { "publicationCommitted", "semanticValidationPassed", "checksumValidationPassed", "manifestValidationPassed", "compatibilityEquivalencePassed", "phase2LineageValidationPassed", "questionPlanReconciliationPassed", "downstreamReady" })
+                        if (!TryReadBool(root, field, out var passed) || !passed) errors.Add($"Authoritative Phase 3 validation field '{field}' is not true.");
+                    foreach (var field in new[] { "validationStatus", "manifestValidationStatus", "compatibilityValidationStatus" })
+                        if (!string.Equals(ReadString(root, field), "Valid", StringComparison.OrdinalIgnoreCase)) errors.Add($"Authoritative Phase 3 validation field '{field}' is not Valid.");
+                    var reasonCode = ReadString(root, "reasonCode");
+                    if (reasonCode is not ("P3_GENERATED" or "P3_REGENERATED" or "P3_REUSED" or "P3_RECOVERED"))
+                        errors.Add("Authoritative Phase 3 validation reasonCode is missing or invalid.");
+                }
             }
         }
 
@@ -448,6 +458,15 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         value = 0;
         foreach (var property in root.EnumerateObject())
             if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) && property.Value.TryGetInt32(out value)) return true;
+        return false;
+    }
+
+    private static bool TryReadBool(JsonElement root, string name, out bool value)
+    {
+        value = false;
+        foreach (var property in root.EnumerateObject())
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) && property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            { value = property.Value.GetBoolean(); return true; }
         return false;
     }
 
