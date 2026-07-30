@@ -1,0 +1,140 @@
+using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Extensions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Astronomy.MediaFactory.Tests;
+
+public sealed class Phase2DependencyInjectionTests
+{
+    private static ServiceProvider CreateProvider()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddMediaFactory(configuration);
+
+        return services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+    }
+
+    [Fact]
+    public void Phase2_services_resolve_from_production_composition_root()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionEventIntelligencePhaseService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionEventFamilyResolver>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionEventIntelligenceCapabilityResolver>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionEventIntelligenceValidator>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionEventIntelligenceCertifier>());
+    }
+
+    [Fact]
+    public void All_required_phase2_capabilities_are_registered_once()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var capabilities = scope.ServiceProvider.GetServices<IProductionEventIntelligenceCapability>().ToArray();
+
+        Assert.Equal(
+            ["Comet", "Constellation", "DeepSkyObject", "Eclipse", "GenericAstronomy", "LunarEvent", "MeteorShower", "PlanetaryAlignment", "PlanetGrouping"],
+            capabilities.Select(capability => capability.CapabilityId).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            capabilities.Length,
+            capabilities.Select(capability => $"{capability.CapabilityId}:{capability.Version}")
+                .Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void Production_pipeline_resolves_with_phase2_dependencies()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionPipelineExecutionService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<IProductionPhaseRunner>());
+    }
+
+    [Fact]
+    public void Production_pipeline_interfaces_resolve_to_same_scoped_instance()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+
+        var pipeline = scope.ServiceProvider.GetRequiredService<IProductionPipelineExecutionService>();
+        var runner = scope.ServiceProvider.GetRequiredService<IProductionPhaseRunner>();
+
+        Assert.Same(pipeline, runner);
+    }
+
+    [Theory]
+    [InlineData("CONSTELLATION", "Constellation")]
+    [InlineData("METEOR_SHOWER", "MeteorShower")]
+    [InlineData("PLANET_CONJUNCTION", "PlanetaryAlignment")]
+    [InlineData("PLANET_GROUPING", "PlanetGrouping")]
+    [InlineData("SOLAR_ECLIPSE", "Eclipse")]
+    public void Capability_resolution_uses_registered_production_capabilities(string eventType, string expectedCapabilityId)
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var familyResolver = scope.ServiceProvider.GetRequiredService<IProductionEventFamilyResolver>();
+        var capabilityResolver = scope.ServiceProvider.GetRequiredService<IProductionEventIntelligenceCapabilityResolver>();
+
+        var family = familyResolver.Resolve(new(eventType));
+        var resolution = capabilityResolver.Resolve(family);
+
+        Assert.Equal(expectedCapabilityId, resolution.CapabilityId);
+        Assert.False(resolution.FallbackUsed);
+    }
+
+    [Theory]
+    [InlineData("CONSTELLATION")]
+    [InlineData("METEOR_SHOWER")]
+    [InlineData("PLANET_CONJUNCTION")]
+    [InlineData("PLANET_PAIRING")]
+    [InlineData("PLANET_GROUPING")]
+    [InlineData("NAMED_FULL_MOON")]
+    [InlineData("NEW_MOON")]
+    [InlineData("LUNAR_ECLIPSE")]
+    [InlineData("SOLAR_ECLIPSE")]
+    [InlineData("COMET")]
+    [InlineData("DEEP_SKY_OBJECT")]
+    public void Known_families_do_not_use_generic_fallback(string eventType)
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var familyResolver = scope.ServiceProvider.GetRequiredService<IProductionEventFamilyResolver>();
+        var capabilityResolver = scope.ServiceProvider.GetRequiredService<IProductionEventIntelligenceCapabilityResolver>();
+
+        var family = familyResolver.Resolve(new(eventType));
+        var resolution = capabilityResolver.Resolve(family);
+
+        Assert.True(family.IsKnownFamily);
+        Assert.False(resolution.FallbackUsed);
+    }
+
+    [Fact]
+    public void Unknown_family_uses_explicit_generic_fallback()
+    {
+        using var provider = CreateProvider();
+        using var scope = provider.CreateScope();
+        var familyResolver = scope.ServiceProvider.GetRequiredService<IProductionEventFamilyResolver>();
+        var capabilityResolver = scope.ServiceProvider.GetRequiredService<IProductionEventIntelligenceCapabilityResolver>();
+
+        var family = familyResolver.Resolve(new("UNREGISTERED_ASTRONOMY_EVENT"));
+        var resolution = capabilityResolver.Resolve(family);
+
+        Assert.False(family.IsKnownFamily);
+        Assert.True(resolution.FallbackUsed);
+        Assert.Equal("GenericAstronomy", resolution.CapabilityId);
+        Assert.False(string.IsNullOrWhiteSpace(resolution.FallbackReason));
+    }
+}
