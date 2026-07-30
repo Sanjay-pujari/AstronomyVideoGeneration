@@ -39,9 +39,22 @@ Recovery considers only canonical/compatibility backup pairs with the same trans
 
 ## Certification evidence (2026-07-30)
 
-Actual failed checks (the .NET SDK is unavailable, so no test process or totals existed):
+The .NET 10.0.302 SDK was installed for certification. Source compilation succeeds, but the freeze gate remains blocked because the required focused test names are absent and both Phase 1-filtered and full solution tests fail. No frozen claim is made.
 
-- Required focused tests, solution build, and full solution tests: `/bin/bash: dotnet: command not found` (exit 127).
+| Command | Exit | Passed | Failed | Skipped | Duration | Result |
+|---|---:|---:|---:|---:|---:|---|
+| `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter FullyQualifiedName~Phase1Recovery` | 0 | 0 | 0 | 0 | 90s | No matching tests |
+| `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter FullyQualifiedName~PhaseOutputTargetResolver` | 0 | 0 | 0 | 0 | 17s | No matching tests |
+| `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter FullyQualifiedName~Phase1PublicationTransactionCoordinator` | 0 | 0 | 0 | 0 | 10s | No matching tests |
+| `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter FullyQualifiedName~Phase1ManifestRepair` | 0 | 0 | 0 | 0 | 10s | No matching tests |
+| `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter FullyQualifiedName~Phase1CompatibilityRepair` | 0 | 0 | 0 | 0 | 11s | No matching tests |
+| `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter FullyQualifiedName~Phase1ValidationRepair` | 0 | 0 | 0 | 0 | 11s | No matching tests |
+| `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter FullyQualifiedName~Phase1Downstream` | 0 | 0 | 0 | 0 | 11s | No matching tests |
+| `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter FullyQualifiedName~Phase1` | 1 | 95 | 30 | 0 | 14s | Failed |
+| `dotnet build Backend/Astronomy.MediaFactory.slnx` | 0 | n/a | 0 compiler errors | n/a | 12s | Passed with NU1510 and NU1903 warnings |
+| `dotnet test Backend/Astronomy.MediaFactory.slnx` | 1 | 4263 | 459 | 11 | 227s | Failed |
+
+The exact failing test names are retained in the certification logs generated during this pass (`/tmp/test-Phase1.log` and `/tmp/final-test.log`); these transient logs are not architecture source. The acceptance failures are the absent seven focused test suites, 30 failures under the broad `Phase1` substring filter, and 459 full-suite failures.
 
 **O2.ORCH.ALIGN.1F**
 

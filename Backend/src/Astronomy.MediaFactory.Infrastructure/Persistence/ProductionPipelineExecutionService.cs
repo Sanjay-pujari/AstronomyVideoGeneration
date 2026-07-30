@@ -697,14 +697,14 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 var files=Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).ToArray();
                 Phase1ExecutionOutcome? repairOutcome=null;ProductionPhaseResult? repairResult=null;var repair=await _phase1PublicationTransactionCoordinator.RepairManifestAsync(new(context.OutputRoot,existing.AuthoritySet!,compatibility,WritePhase1StagedManifestAsync,async (staging,token)=>{repairOutcome=new(Phase1ExecutionKind.ManifestRepaired,"P1_MANIFEST_REPAIRED","Phase 1 manifest repaired.",files,[],existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Repaired",ValidationStatus="Valid",PublicationTransactionId=staging.TransactionId};repairResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,[],[],repairOutcome.Reason,false,token,started,phase1Outcome:repairOutcome,outputPath:staging.OutputPath);}),cancellationToken);
-                if(!repair.Succeeded)throw new InvalidOperationException(repair.ReasonCode+": "+string.Join(';',repair.Errors));
-                outcome=new(Phase1ExecutionKind.Reused,"P1_MANIFEST_REPAIRED","The safely repairable Phase 1 manifest was rebuilt without changing authority or downstream outputs.",files,manifestValidation.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Repaired",ValidationStatus="Valid"};return repairResult!;
+                if(!repair.Succeeded){var failedOutcome=(repairOutcome??new(Phase1ExecutionKind.Failed,repair.ReasonCode,"Manifest repair failed.",[],repair.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,false,false,false,"Failed",recovery)) with{Kind=Phase1ExecutionKind.Failed,ReasonCode=repair.ReasonCode,Errors=repair.Errors,Warnings=repair.Warnings,RollbackPerformed=repair.RollbackPerformed,RollbackSucceeded=repair.RollbackSucceeded};return await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Failed,[],[],repair.Warnings,repair.Errors,failedOutcome.Reason,true,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:failedOutcome);}
+                outcome=new(Phase1ExecutionKind.Reused,"P1_MANIFEST_REPAIRED","The safely repairable Phase 1 manifest was rebuilt without changing authority or downstream outputs.",files,manifestValidation.Warnings.Select(x=>x.Message).ToArray(),existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Valid",recovery){ManifestStatus="Repaired",ValidationStatus="Valid"};return repairResult!;
             }
             else if(!context.OverwriteExisting&&existing.IsValid&&existing.IsCompatible&&publicationValidation.IsRequestCompatible&&existing.IsDownstreamReady&&!compatibilityValidation.IsValid)
             {
                 var files=Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).ToArray();
                 Phase1ExecutionOutcome? repairOutcome=null;ProductionPhaseResult? repairResult=null;var repair=await _phase1PublicationTransactionCoordinator.RepairCompatibilityAsync(new(context.OutputRoot,existing.AuthoritySet!,compatibility,WritePhase1StagedManifestAsync,async (staging,token)=>{repairOutcome=new(Phase1ExecutionKind.CompatibilityRepaired,"P1_COMPATIBILITY_REPAIRED","Phase 1 compatibility repaired.",files,[],existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Repaired",recovery){ManifestStatus="Repaired",ValidationStatus="Valid",PublicationTransactionId=staging.TransactionId};repairResult=await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Succeeded,[],files,[],[],repairOutcome.Reason,false,token,started,phase1Outcome:repairOutcome,outputPath:staging.OutputPath);}),cancellationToken);
-                if(!repair.Succeeded)throw new InvalidOperationException(repair.ReasonCode+": "+string.Join(';',repair.Errors));
+                if(!repair.Succeeded){var failedOutcome=(repairOutcome??new(Phase1ExecutionKind.Failed,repair.ReasonCode,"Compatibility repair failed.",[],repair.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,false,false,false,"Failed",recovery)) with{Kind=Phase1ExecutionKind.Failed,ReasonCode=repair.ReasonCode,Errors=repair.Errors,Warnings=repair.Warnings,RollbackPerformed=repair.RollbackPerformed,RollbackSucceeded=repair.RollbackSucceeded};return await WritePhaseValidationAsync(context,1,phaseName,ProductionPhaseStatus.Failed,[],[],repair.Warnings,repair.Errors,failedOutcome.Reason,true,Phase1PublicationCancellation.NonInterruptible,started,phase1Outcome:failedOutcome);}
                 outcome=new(Phase1ExecutionKind.CompatibilityRepaired,"P1_COMPATIBILITY_REPAIRED","The compatibility projection and manifest were atomically repaired without changing canonical authority or downstream outputs.",files,repair.Warnings,existing.AuthorityChecksum,existing.RequestIdentityChecksum,true,false,false,"Repaired",recovery){ManifestStatus="Repaired",ValidationStatus="Valid",RollbackPerformed=repair.RollbackPerformed,RollbackSucceeded=repair.RollbackSucceeded};return repairResult!;
             }
             else if(!context.OverwriteExisting&&existing.IsValid&&existing.IsCompatible&&publicationValidation.IsRequestCompatible&&compatibilityValidation.IsValid&&manifestValidation.IsValid&&successValidation.IsRepairable)
@@ -15873,7 +15873,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase1AuthorityPath=Path.Combine(context.OutputRoot,"01-plan","execution-context.json");
         Phase1ExecutionContext? phase1Authority=null;
         if(File.Exists(phase1AuthorityPath))phase1Authority=JsonSerializer.Deserialize<Phase1ExecutionContext>(await File.ReadAllTextAsync(phase1AuthorityPath,cancellationToken),JsonOptions);
-        var phase1ArtifactDefinitions = new[]
+        (string path,string role,string contractVersion)[] phase1ArtifactDefinitions =
         {
             (path:NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "execution-context.json")), role:"Authoritative", contractVersion:Phase1AuthorityContract.ContractVersion),
             (NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "selected-plan.json")), "Supporting", Phase1AuthorityContract.SelectedPlanContract),
@@ -15917,7 +15917,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static async Task WritePhase1StagedManifestAsync(Phase1ManifestStagingContext staging,CancellationToken cancellationToken)
     {
-        var definitions=new[]
+        (string Source,string Final,string Role,string Contract)[] definitions=
         {
             (Source:Path.Combine(staging.CanonicalStagingRoot,"execution-context.json"),Final:Path.Combine(staging.WorkspaceRoot,"01-plan","execution-context.json"),Role:"Authoritative",Contract:Phase1AuthorityContract.ContractVersion),
             (Path.Combine(staging.CanonicalStagingRoot,"selected-plan.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","selected-plan.json"),"Supporting",Phase1AuthorityContract.SelectedPlanContract),
@@ -15933,7 +15933,7 @@ public sealed partial class ProductionPipelineExecutionService(
             await using var stream=File.OpenRead(definition.Source);var checksum=Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream,cancellationToken)).ToLowerInvariant();
             artifacts.Add(new{phaseNo=1,path=NormalizePath(definition.Final),role=definition.Role,contractVersion=definition.Contract,checksum,planId=authority.PlanId,executionId=authority.ExecutionId,authorityChecksum=authority.AuthorityChecksum,requestIdentityChecksum=authority.RequestIdentityChecksum,publicationState="Committed",validationStatus="Valid"});
         }
-        await File.WriteAllTextAsync(staging.ManifestStagingPath,JsonSerializer.Serialize(new{planId=authority.PlanId,phase1Artifacts=artifacts},JsonOptions),cancellationToken);
+        await File.WriteAllTextAsync(staging.ManifestStagingPath,JsonSerializer.Serialize(new{planId=authority.PlanId,transactionId=staging.TransactionId,phase1Artifacts=artifacts},JsonOptions),cancellationToken);
     }
 
 
