@@ -3,7 +3,29 @@ using System.Text.Json;
 namespace Astronomy.MediaFactory.Core;
 
 public sealed record EventFamilyResolutionRequest(string RequestedEventType, string? Title = null, string? Category = null);
-public sealed record ProductionEventFamilyResolution(string RequestedEventType, string NormalizedEventType, string EventFamily, IReadOnlyList<string> AliasesMatched, IReadOnlyList<string> ResolutionEvidence, bool IsKnownFamily);
+public sealed record ProductionEventFamilyResolution(string RequestedEventType, string NormalizedEventType, string EventFamily, IReadOnlyList<string> AliasesMatched, IReadOnlyList<string> ResolutionEvidence, bool IsKnownFamily)
+{
+    public bool Equals(ProductionEventFamilyResolution? other)
+        => other is not null
+           && RequestedEventType == other.RequestedEventType
+           && NormalizedEventType == other.NormalizedEventType
+           && EventFamily == other.EventFamily
+           && AliasesMatched.SequenceEqual(other.AliasesMatched, StringComparer.Ordinal)
+           && ResolutionEvidence.SequenceEqual(other.ResolutionEvidence, StringComparer.Ordinal)
+           && IsKnownFamily == other.IsKnownFamily;
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(RequestedEventType, StringComparer.Ordinal);
+        hash.Add(NormalizedEventType, StringComparer.Ordinal);
+        hash.Add(EventFamily, StringComparer.Ordinal);
+        foreach (var alias in AliasesMatched) hash.Add(alias, StringComparer.Ordinal);
+        foreach (var evidence in ResolutionEvidence) hash.Add(evidence, StringComparer.Ordinal);
+        hash.Add(IsKnownFamily);
+        return hash.ToHashCode();
+    }
+}
 public interface IProductionEventFamilyResolver { ProductionEventFamilyResolution Resolve(EventFamilyResolutionRequest request); }
 
 public sealed record EventIntelligenceCapabilityResolution(string RequestedEventType, string NormalizedFamily, string CapabilityId, string CapabilityVersion, bool FallbackUsed, string? FallbackReason, bool KnownFamilyWithoutCapability, IReadOnlyList<string> ResolutionEvidence);
