@@ -57,6 +57,7 @@ public sealed partial class ProductionPipelineExecutionService(
     IPhase1PublicationTransactionCoordinator phase1PublicationTransactionCoordinator,
     IPhase1SuccessValidationValidator phase1SuccessValidationValidator,
     IPhase1DownstreamInvalidationTransaction phase1DownstreamInvalidationTransaction,
+    IProductionEventIntelligencePhaseService phase2IntelligenceService,
     IOptions<AzureSpeechOptions>? azureSpeechOptions = null,
     IAzureSpeechClient? azureSpeechClient = null,
     IOptions<VideoAssemblyOptions>? videoAssemblyOptions = null,
@@ -207,10 +208,24 @@ public sealed partial class ProductionPipelineExecutionService(
             var result = phase.No switch
             {
                 1 => await ExecutePhase1Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
+                2 => await ExecutePhase2Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
                 6 => await ExecutePhase6Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
                 _ => await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken)
             };
             phaseResults.Add(result);
+            if (phase.No == 2 && result.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped)
+            {
+                var authorityPath = Path.Combine(context.OutputRoot, "02-intelligence", "production-event-intelligence.json");
+                var authority = JsonSerializer.Deserialize<ProductionEventIntelligenceAuthority>(await File.ReadAllTextAsync(authorityPath, cancellationToken), JsonOptions)
+                    ?? throw new InvalidOperationException("P2_COMMITTED_AUTHORITY_UNREADABLE");
+                var committedStrategy = strategyResolver.Resolve(authority.Intelligence.EventType, authority.Intelligence.Title);
+                context = context with
+                {
+                    ProductionEventIntelligence = authority.Intelligence,
+                    MediaEventStrategy = committedStrategy,
+                    ExecutionContext = context.ExecutionContext with { ProductionEventIntelligence = authority.Intelligence, MediaEventStrategy = committedStrategy }
+                };
+            }
             generatedFiles.AddRange(result.OutputFiles.Where(File.Exists));
             warnings.AddRange(result.Warnings);
             errors.AddRange(result.Errors);
@@ -837,6 +852,35 @@ public sealed partial class ProductionPipelineExecutionService(
         var diagnosticsPath = await WriteProductionIntelligenceDiagnosticsAsync(context.OutputRoot, context.ProductionEventIntelligence, cancellationToken);
         ValidatePlanetConjunctionPhase2(context.ProductionEventIntelligence);
         return [intelligencePath, diagnosticsPath];
+    }
+
+    private async Task<ProductionPhaseResult> ExecutePhase2Async(ProductionPhaseContext context, string phaseName, CancellationToken cancellationToken)
+    {
+        var started = DateTimeOffset.UtcNow;
+        try
+        {
+            var outcome = await phase2IntelligenceService.ExecuteAsync(new(context.PipelineRequest, context.OutputRoot, context.OverwriteExisting), cancellationToken);
+            var validationPath = Path.Combine(context.OutputRoot, "validation", "phase-02-validation.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
+            var a = outcome.Authority;
+            await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+            {
+                phaseNo = 2, phaseName = "Production Event Intelligence", status = outcome.Reused ? "Skipped" : "Succeeded", outcome.ReasonCode,
+                planId = a.Metadata.PlanId, executionId = a.Metadata.ExecutionId, transactionId = a.Metadata.TransactionId, authorityId = a.Metadata.AuthorityId,
+                normalizedEventFamily = a.EventIdentity.EventFamily, capabilityId = a.CapabilityResolution.CapabilityId, capabilityVersion = a.CapabilityResolution.CapabilityVersion,
+                a.CapabilityResolution.FallbackUsed, a.CapabilityResolution.FallbackReason, a.ValidationSummary.RequiredCoverage, a.ValidationSummary.RecommendedCoverage,
+                a.ValidationSummary.SemanticValidationPassed, a.ValidationSummary.CertificationPassed, publicationCommitted = true, manifestStatus = "PendingManifestProjection",
+                compatibilityProjectionStatus = "Equivalent", downstreamReady = true, outcome.DownstreamInvalidated, outcome.Reused, outcome.Recovered,
+                rollbackPerformed = false, rollbackSucceeded = false, inputFiles = new[] { "01-plan/execution-context.json" }, outputFiles = outcome.OutputFiles.Select(NormalizePath),
+                warnings = outcome.Warnings, errors = Array.Empty<string>(), startedUtc = started, completedUtc = DateTimeOffset.UtcNow
+            }, JsonOptions), cancellationToken);
+            var status = outcome.Reused ? ProductionPhaseStatus.Skipped : ProductionPhaseStatus.Succeeded;
+            return new(2, phaseName, status, started, DateTimeOffset.UtcNow, (long)(DateTimeOffset.UtcNow-started).TotalMilliseconds, [Path.Combine(context.OutputRoot,"01-plan","execution-context.json")], outcome.OutputFiles.Append(validationPath).ToArray(), validationPath, outcome.Warnings, [], false, outcome.ReasonCode) { ReasonCode = outcome.ReasonCode };
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
+        {
+            return await WritePhaseValidationAsync(context, 2, phaseName, ProductionPhaseStatus.Failed, [], [], [], [ex.Message], ex.Message, true, cancellationToken, started);
+        }
     }
 
     private async Task<IReadOnlyList<string>> PhaseGenerateQuestionsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -15879,10 +15923,18 @@ public sealed partial class ProductionPipelineExecutionService(
             (NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "selected-plan.json")), "Supporting", Phase1AuthorityContract.SelectedPlanContract),
             (NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "production-request.json")), "Supporting", Phase1AuthorityContract.ProductionRequestContract),
             (NormalizePath(Path.Combine(context.OutputRoot, "01-plan", "pipeline-state.json")), "Supporting", Phase1AuthorityContract.PipelineStateContract),
-            (NormalizePath(Path.Combine(context.OutputRoot, "plan-input", "content-plan-production-request.json")), "Compatibility", "legacy"),
-            (NormalizePath(Path.Combine(context.OutputRoot, "plan-input", "production-event-intelligence.json")), "Compatibility", "legacy")
+            (NormalizePath(Path.Combine(context.OutputRoot, "plan-input", "content-plan-production-request.json")), "Compatibility", "legacy")
         };
         var phase1Artifacts = phase1ArtifactDefinitions.Where(x => !context.DryRun && phaseResults.Any(p=>p.PhaseNo==1&&p.OutputFiles.Count>0) && File.Exists(x.path)).Select(x=>new { phaseNo=1,x.path,x.role,x.contractVersion,checksum=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(x.path))).ToLowerInvariant(),planId=phase1Authority?.PlanId,executionId=phase1Authority?.ExecutionId,authorityChecksum=phase1Authority?.AuthorityChecksum,requestIdentityChecksum=phase1Authority?.RequestIdentityChecksum,publicationState="Committed",validationStatus="Valid" }).ToArray();
+        var phase2Artifacts = new[]
+        {
+            new { path=NormalizePath(Path.Combine(context.OutputRoot,"02-intelligence","production-event-intelligence.json")), role="Authoritative" },
+            new { path=NormalizePath(Path.Combine(context.OutputRoot,"02-intelligence","certified-knowledge-context.json")), role="DownstreamKnowledgeContract" },
+            new { path=NormalizePath(Path.Combine(context.OutputRoot,"02-intelligence","observation-context.json")), role="ObservationContract" },
+            new { path=NormalizePath(Path.Combine(context.OutputRoot,"02-intelligence","source-registry.json")), role="SourceRegistry" },
+            new { path=NormalizePath(Path.Combine(context.OutputRoot,"02-intelligence","production-intelligence-diagnostics.json")), role="Supporting" },
+            new { path=NormalizePath(Path.Combine(context.OutputRoot,"plan-input","production-event-intelligence.json")), role="Compatibility" }
+        }.Where(x=>File.Exists(x.path)).Select(x=>new{x.path,x.role,checksum=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(x.path))).ToLowerInvariant()}).ToArray();
         var phase3Artifacts = new[]
         {
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "03-questions", "viewer-question-bank.json")), role = "Authoritative" },
@@ -15909,7 +15961,7 @@ public sealed partial class ProductionPipelineExecutionService(
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-index.json")), role = "DownstreamContract" },
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-diagnostics.json")), role = "Supporting" }
         }.Where(x => File.Exists(x.path)).ToArray();
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, phase1Artifacts, currentRunArtifacts=filesGeneratedThisRun, existingDependencies=context.DryRun?Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).Where(File.Exists).Select(NormalizePath).ToArray():Array.Empty<string>(), phasesGenerated=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Succeeded).Select(x=>x.PhaseNo).ToArray(), phasesReused=phaseResults.Where(x=>!context.DryRun&&x.Status==ProductionPhaseStatus.Skipped&&x.OutputFiles.Count>0).Select(x=>x.PhaseNo).ToArray(), phasesFailed=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Failed).Select(x=>x.PhaseNo).ToArray(), phasesDryRunSkipped=context.DryRun?phaseResults.Select(x=>x.PhaseNo).ToArray():Array.Empty<int>(), phasesNotRequested=PhaseDefinitionsStatic().Where(x=>x<context.StartPhaseNo||x>context.EndPhaseNo).ToArray(), executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, phase1Artifacts, phase2Artifacts, currentRunArtifacts=filesGeneratedThisRun, existingDependencies=context.DryRun?Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).Where(File.Exists).Select(NormalizePath).ToArray():Array.Empty<string>(), phasesGenerated=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Succeeded).Select(x=>x.PhaseNo).ToArray(), phasesReused=phaseResults.Where(x=>!context.DryRun&&x.Status==ProductionPhaseStatus.Skipped&&x.OutputFiles.Count>0).Select(x=>x.PhaseNo).ToArray(), phasesFailed=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Failed).Select(x=>x.PhaseNo).ToArray(), phasesDryRunSkipped=context.DryRun?phaseResults.Select(x=>x.PhaseNo).ToArray():Array.Empty<int>(), phasesNotRequested=PhaseDefinitionsStatic().Where(x=>x<context.StartPhaseNo||x>context.EndPhaseNo).ToArray(), executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
             cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
             cleanupSkippedDirectories = context.SkippedDirectoriesDueToOverwrite ?? Array.Empty<string>(), readOnlyDependencyRoots = BuildReadOnlyDependencyRootsDiagnostics(context), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun, executedPhaseNumbers = phasesActuallyExecuted, skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
@@ -15923,8 +15975,7 @@ public sealed partial class ProductionPipelineExecutionService(
             (Path.Combine(staging.CanonicalStagingRoot,"selected-plan.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","selected-plan.json"),"Supporting",Phase1AuthorityContract.SelectedPlanContract),
             (Path.Combine(staging.CanonicalStagingRoot,"production-request.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","production-request.json"),"Supporting",Phase1AuthorityContract.ProductionRequestContract),
             (Path.Combine(staging.CanonicalStagingRoot,"pipeline-state.json"),Path.Combine(staging.WorkspaceRoot,"01-plan","pipeline-state.json"),"Supporting",Phase1AuthorityContract.PipelineStateContract),
-            (Path.Combine(staging.CompatibilityStagingRoot,"content-plan-production-request.json"),Path.Combine(staging.WorkspaceRoot,"plan-input","content-plan-production-request.json"),"Compatibility","legacy"),
-            (Path.Combine(staging.CompatibilityStagingRoot,"production-event-intelligence.json"),Path.Combine(staging.WorkspaceRoot,"plan-input","production-event-intelligence.json"),"Compatibility","legacy")
+            (Path.Combine(staging.CompatibilityStagingRoot,"content-plan-production-request.json"),Path.Combine(staging.WorkspaceRoot,"plan-input","content-plan-production-request.json"),"Compatibility","legacy")
         };
         var artifacts=new List<object>(6);var authority=staging.ExpectedCanonicalAuthority.ExecutionContext;
         foreach(var definition in definitions)

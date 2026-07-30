@@ -200,7 +200,7 @@ public sealed class AstronomyEventProductionIntelligenceAdapter(IMediaEventStrat
     }
 
     private static string? ResolveViewingQuality(ContentPlanProductionPipelineRequest source)
-        => source.VisibilityScore.HasValue ? $"Visibility score {source.VisibilityScore:0.##}/10" : null;
+        => source.VisibilityScore.HasValue ? $"Visibility score {NormalizedScore.Create(source.VisibilityScore.Value, source.VisibilityScore.Value > 10 ? 100 : 10).DisplayText}" : null;
 
     private static string? ResolveScientificContext(ContentPlanProductionPipelineRequest source)
     {
