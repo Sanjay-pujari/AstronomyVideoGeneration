@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using Blueprint = Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprint;
 using BlueprintViewerQuestion = Astronomy.MediaFactory.Core.DocumentaryBlueprint.ViewerQuestion;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -78,9 +79,9 @@ public sealed class DocumentaryBlueprintIntegrationService(DocumentaryBlueprintB
     private static IReadOnlyList<DocumentarySceneBlueprint> SelectShortArc(IReadOnlyList<DocumentarySceneBlueprint> scenes)
         => scenes.GroupBy(s => s.SceneRole is DocumentarySceneRole.PracticalObservation ? "observe" : s.SceneRole is DocumentarySceneRole.ScientificExplanation ? "explain" : s.SceneNumber == 1 ? "hook" : "close")
             .Select(g => g.First()).Take(4).Select((s, i) => new DocumentarySceneBlueprint(s.SceneId, i + 1, s.Title, s.NarrativeStage, s.SceneRole, s.ViewerQuestion, s.SceneObjective, s.EditorialOutcome, s.EditorialPriority, s.KnowledgeReferences, s.VisualOpportunities, s.Transition, s.EstimatedDurationSeconds)).ToArray();
-    private static DocumentaryBlueprint Project(DocumentaryBlueprint b, BlueprintPublicationFormat format, IReadOnlyList<DocumentarySceneBlueprint> scenes)
+    private static Blueprint Project(Blueprint b, BlueprintPublicationFormat format, IReadOnlyList<DocumentarySceneBlueprint> scenes)
         => new(Id("bp", b.BlueprintId, format.ToString()), b.KnowledgeId, b.SubjectId, b.SubjectName, format, b.PrimaryLanguage, b.Version, b.Metadata, scenes);
-    private static DocumentaryBlueprintArtifact Artifact(string variant, DocumentaryBlueprint blueprint, BlueprintCoverage coverage, DocumentaryBlueprintIntegrationRequest r, string intelligenceChecksum)
+    private static DocumentaryBlueprintArtifact Artifact(string variant, Blueprint blueprint, BlueprintCoverage coverage, DocumentaryBlueprintIntegrationRequest r, string intelligenceChecksum)
     {
         var checksum = DocumentaryBlueprintChecksum.Calculate(variant, blueprint, coverage);
         return new(new(r.ExecutionId, r.EventId, r.Language, r.Profile, variant, Version, checksum, DateTimeOffset.UtcNow, r.QuestionBank.Metadata.Checksum, intelligenceChecksum), blueprint, coverage, []);

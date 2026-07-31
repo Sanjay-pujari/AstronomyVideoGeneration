@@ -78,15 +78,18 @@ public sealed class DocumentaryBlueprintProjector(
         DocumentaryBlueprintProjectionResult Failed(IReadOnlyList<DocumentaryBlueprintProjectionDiagnostic> issues,
             DocumentaryBlueprintVariantArtifact? longValue = null, DocumentaryBlueprintVariantArtifact? shortValue = null,
             DocumentaryBlueprintVariantProjectionValidationResult? longValidation = null,
-            DocumentaryBlueprintVariantProjectionValidationResult? shortValidation = null) =>
-            new(false, null, longValue, shortValue, issues, [], longValue?.ActualSceneCount ?? 0,
+            DocumentaryBlueprintVariantProjectionValidationResult? shortValidation = null)
+        {
+            bool Both(Func<DocumentaryBlueprintVariantProjectionValidationResult, bool> predicate) =>
+                longValidation is not null && shortValidation is not null &&
+                predicate(longValidation) && predicate(shortValidation);
+
+            return new(false, null, longValue, shortValue, issues, [], longValue?.ActualSceneCount ?? 0,
                 shortValue?.ActualSceneCount ?? 0, longValue?.TotalAllocatedDurationSeconds ?? 0,
                 shortValue?.TotalAllocatedDurationSeconds ?? 0,
                 Both(x => x.QuestionPassed), Both(x => x.ObjectivePassed), Both(x => x.KnowledgePassed),
                 Both(x => x.SafetyPassed), Both(x => x.DurationPassed), Both(x => x.TransitionPassed), false, false, []);
-
-        bool Both(Func<DocumentaryBlueprintVariantProjectionValidationResult, bool> predicate) =>
-            longValidation is not null && shortValidation is not null && predicate(longValidation) && predicate(shortValidation);
+        }
     }
 
     private DocumentaryBlueprintVariantArtifact ProjectVariant(DocumentaryIntent intent,
