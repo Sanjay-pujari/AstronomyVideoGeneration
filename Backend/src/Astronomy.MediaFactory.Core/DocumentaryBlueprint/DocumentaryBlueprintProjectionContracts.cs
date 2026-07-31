@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 public sealed record DocumentarySceneBlueprintTraceability(
@@ -43,10 +45,10 @@ public sealed record DocumentaryBlueprintAggregate(
     string DeterministicChecksum)
 {
     // Compatibility views. They are projections of the embedded authorities and carry no state.
-    public DocumentaryBlueprint LongBlueprint => LongVariant.Blueprint;
-    public DocumentaryBlueprint ShortBlueprint => ShortVariant.Blueprint;
-    public string LongProjectionChecksum => LongVariant.DeterministicChecksum;
-    public string ShortProjectionChecksum => ShortVariant.DeterministicChecksum;
+    [JsonIgnore] public DocumentaryBlueprint LongBlueprint => LongVariant.Blueprint;
+    [JsonIgnore] public DocumentaryBlueprint ShortBlueprint => ShortVariant.Blueprint;
+    [JsonIgnore] public string LongProjectionChecksum => LongVariant.DeterministicChecksum;
+    [JsonIgnore] public string ShortProjectionChecksum => ShortVariant.DeterministicChecksum;
 }
 
 public sealed record DocumentaryBlueprintProjectionRequest(DocumentaryIntent Intent, DocumentaryBlueprintProfile Profile);

@@ -29,10 +29,11 @@ public sealed class DocumentaryBlueprintVariantProjectionValidator
         void Fail(string code, string message) => errors.Add(new(code, $"{source.Variant}: {message}"));
         if (source.SceneOpportunities.Count != expected.Count || actual.Scenes.Count != expected.Count || traceability.Count != expected.Count)
         { sceneOk = false; Fail("P4P_SCENE_RECONCILIATION_FAILED", "A scene is missing or additional."); }
-        var count = Math.Min(Math.Min(source.SceneOpportunities.Count, expected.Count), Math.Min(actual.Scenes.Count, traceability.Count));
+        var opportunities = source.SceneOpportunities.OrderBy(x => x.Order).ThenBy(x => x.OpportunityId, StringComparer.Ordinal).ToArray();
+        var count = Math.Min(Math.Min(opportunities.Length, expected.Count), Math.Min(actual.Scenes.Count, traceability.Count));
         for (var i = 0; i < count; i++)
         {
-            var opportunity = source.SceneOpportunities[i]; var input = expected[i]; var output = actual.Scenes[i]; var trace = traceability[i];
+            var opportunity = opportunities[i]; var input = expected[i]; var output = actual.Scenes[i]; var trace = traceability[i];
             if (opportunity.Order != i + 1 || input.SceneNumber != opportunity.Order || output.SceneNumber != input.SceneNumber ||
                 output.SceneId != input.SceneId || trace.SceneId != output.SceneId || output.NarrativeStage != input.NarrativeStage ||
                 output.SceneRole != input.SceneRole || output.Title != input.Title)
