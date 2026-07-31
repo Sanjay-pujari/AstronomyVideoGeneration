@@ -16,8 +16,20 @@ public sealed class Phase4DocumentaryBlueprintPublicationService(IPhase4Artifact
         if(errors.Count>0)return Result(false,false,false,false,false,false,errors,[],request,tx,paths,[]);
         try
         {
+            bool recovered;
+            try
+            {
+                recovered=request.PublicationPolicy.RemoveStaleTransactions&&
+                    await recovery.RecoverAsync(request.ExecutionRoot,request.ExecutionId,
+                        request.PublicationPolicy.StaleTransactionAge??TimeSpan.FromHours(1),token);
+            }
+            catch(Exception ex)
+            {
+                return Result(false,false,false,false,false,false,
+                    [new(Phase4PublicationReasonCodes.RecoveryFailed,ex.Message)],[],request,tx,paths,[]);
+            }
+
             await using var held=await executionLock.AcquireAsync(request.ExecutionRoot,request.ExecutionId,token);
-            bool recovered;try{recovered=request.PublicationPolicy.RemoveStaleTransactions&&await recovery.RecoverAsync(request.ExecutionRoot,request.ExecutionId,request.PublicationPolicy.StaleTransactionAge??TimeSpan.FromHours(1),token);}catch(Exception ex){return Result(false,false,false,false,false,false,[new(Phase4PublicationReasonCodes.RecoveryFailed,ex.Message)],[],request,tx,paths,[]);}
             if(!VerifyUpstream(request,out var changed))return Result(false,false,false,false,false,recovered,[new(Phase4PublicationReasonCodes.UpstreamChanged,"Frozen upstream checksum changed.",changed)],[],request,tx,paths,[]);
             var aggregate=request.ProjectionResult.Aggregate!;
             if(await IsAlreadyPublished(paths,aggregate,token))return Result(true,true,false,true,false,recovered,[],[new("P4PUB_ALREADY_PUBLISHED","The identical Phase 4 authority is already valid.")],request,tx,paths,ReadEntries(paths.Manifest),aggregate);
@@ -45,6 +57,8 @@ public sealed class Phase4DocumentaryBlueprintPublicationService(IPhase4Artifact
                 if(!evidence.IsComplete)throw new Phase4CommitException(Phase4PublicationReasonCodes.PostCommitValidationFailed,"Publication validation evidence is incomplete.");
                 try{await fileSystem.WriteAsync(paths.TempValidation,serializer.Serialize(CreateValidation(request,tx,entries,started,evidence)),CancellationToken.None);}catch(Exception ex){throw new Phase4CommitException(Phase4PublicationReasonCodes.SerializationFailed,ex.Message);}
                 try{Directory.CreateDirectory(Path.GetDirectoryName(paths.Validation)!);File.Move(paths.TempValidation,paths.Validation,true);faultInjector.Checkpoint(Phase4PublicationCheckpoint.SuccessValidationCommitted);}catch(Exception ex){throw new Phase4CommitException(Phase4PublicationReasonCodes.ValidationCommitFailed,ex.Message);}
+                var markerErrors=await committedValidator.ValidateCommitMarkerAsync(request.ExecutionRoot,aggregate,CancellationToken.None);
+                if(markerErrors.Count>0)throw new Phase4CommitException(Phase4PublicationReasonCodes.ValidationCommitFailed,string.Join("; ",markerErrors.Select(x=>x.Message)));
                 Cleanup(paths);return Result(true,true,true,true,false,recovered,[],[],request,tx,paths,entries,aggregate);
             }
             catch(Exception ex)

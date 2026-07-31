@@ -1,20 +1,26 @@
-# O2.ORCH.4 Task 5B — Final Atomic Publication Certification
+# O2.ORCH.4 Task 5B — Final Atomic Publication Hardening
 
-## Implemented certification controls
+## Corrections applied
 
-Recovery is execution-scoped and policy-driven. Transaction metadata is accepted only when its schema can be deserialized, its deterministic checksum is valid, its state is explicitly recoverable, its execution owner matches the requested execution, and its age exceeds the configured stale interval. Backups are restored only when the `BackingUp` record and a physically moved Phase 4 authority jointly prove an interrupted mutation; a present candidate authority prevents automatic restoration.
+Recovery now owns the same execution-scoped lock as publication. The publication service invokes recovery before taking its publication lock, preventing recursive lock acquisition while ensuring stale staging or backup state cannot be deleted or restored concurrently with an active publication for the same execution.
 
-Committed validation is split into authority/manifest certification and success-marker certification. Authority and manifest are certified before the success record is created and moved. The success record is populated from `Phase4PublicationValidationEvidence`, and an incomplete evidence set cannot be committed. Backup and rollback use `Phase4BackupMutationState` so only mutations actually made by the transaction are reversed.
+The physical validator now performs complete typed reconciliation for all seven Phase 4 artifacts. Knowledge-selection validation compares every lineage and authority field, recomputes unique-reference and reuse summaries, verifies evidence-status totals, rejects compatibility-only sources, and enforces the editorial-only no-knowledge rule.
 
-## Test matrix evidence
+Scene-index validation reconstructs every index row from the embedded blueprint plus scene traceability and compares the complete deterministic projection, including opportunity, slot, question, objective, evidence, duration range, knowledge, editorial safety, scene checksum, and source-opportunity checksum fields.
 
-| Matrix | Pass | Fail | Skip |
-|---|---:|---:|---:|
-| Task 5 / 5A / 5B fault injection, recovery, concurrency, idempotency, Orion 12/4, frozen-upstream | 0 | 0 | 1 |
-| Static patch and whitespace validation | 1 | 0 | 0 |
-| **Total** | **1** | **0** | **1** |
+Build-report validation now reconciles all publication identity, source intent, aggregate and variant identity/checksum, scene and duration totals, reconciliation flags, artifact inventory, compatibility decision, and deterministic `Prepared` publication status.
 
-The executable .NET matrix is skipped because this container has no `dotnet` executable. This is an environment limitation, not a passing certification result. Consequently this audit does not claim final Task 6 readiness.
+Authority and manifest validation occurs before the success record is created. The validation record is moved as the final mutation, after which it is re-read and checksum/commit-marker validated without any further successful-state mutation.
+
+## Remaining repository-dependent certification items
+
+The uploaded subset does not include the canonical Phase 1–3 shared-manifest contract or the authoritative list of mandatory frozen upstream paths. Therefore this patch intentionally does not claim that the current `phase4Artifacts` manifest member is the repository-owned canonical schema, and it cannot prove that non-empty caller snapshots contain every mandatory Phase 1–3 authority and validation file.
+
+Before Task 6 certification, wire the Phase 4 updater to the existing repository manifest abstraction and replace caller-defined completeness with the repository-owned frozen-upstream snapshot builder/validator.
+
+## Test evidence
+
+No .NET test execution was performed in this environment. Run the complete Task 5/5A/5B fault-injection, recovery, concurrency, idempotency, Orion 12/4, manifest, frozen-upstream, and full regression suites in the repository SDK environment.
 
 ## Verdict
 
