@@ -469,15 +469,6 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             || status.Equals("Valid", StringComparison.OrdinalIgnoreCase)
             || status.Equals("Passed", StringComparison.OrdinalIgnoreCase));
 
-    private static BatchGenerateFromPlansResponse ApplyRc2Phase4Response(BatchGenerateFromPlansResponse response, StoryGraphBuilderResult storyGraphResult)
-    {
-        var generatedFiles = storyGraphResult.GeneratedFiles;
-        var phase4 = new ProductionPhaseResult(4, "Story Intelligence", ProductionPhaseStatus.Succeeded, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, [Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.enriched.json"), Combine(response.OutputRoot, "question-engine", "question-answer-set.json")], generatedFiles, Combine(response.OutputRoot, "validation", "phase-04-validation.json"), [], [], false);
-        var steps = UpsertPhaseResult(response.Steps.OfType<ProductionPhaseResult>().ToArray(), phase4)!.Cast<object>().ToArray();
-        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution ? execution with { GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), PhaseResults = UpsertPhaseResult(execution.PhaseResults, phase4) } : result).ToArray();
-        return response with { Steps = steps, Results = results };
-    }
-
     private static BatchGenerateFromPlansResponse ApplyRc2Phase5Response(BatchGenerateFromPlansResponse response, SceneIntentBuilderResult sceneIntentResult)
     {
         var generatedFiles = sceneIntentResult.GeneratedFiles;

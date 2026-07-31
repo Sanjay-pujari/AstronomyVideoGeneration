@@ -17,9 +17,13 @@ public sealed class Rc2CertifiedExecutionStatusReader(IPhase4CommittedAuthorityE
     {
         if (string.IsNullOrWhiteSpace(response.OutputRoot)) return null;
         var executionId = response.SelectedPlanId?.ToString("D") ?? response.PlanId?.ToString("D") ?? string.Empty;
+        var eventId = response.ProductionPipelineRequest is ProductionPipelineRequest pipelineRequest &&
+            pipelineRequest.AstronomyEventIntelligenceId != Guid.Empty
+                ? pipelineRequest.AstronomyEventIntelligenceId.ToString("D")
+                : string.Empty;
         var phase4 = response.Steps.OfType<ProductionPhaseResult>().LastOrDefault(x => x.PhaseNo == 4);
         var evaluation = await evaluator.EvaluateAsync(response.OutputRoot, executionId, executionId,
-            string.Empty, response.RequestedLanguage ?? string.Empty, token);
+            eventId, response.RequestedLanguage ?? string.Empty, token);
         var authority = evaluation.PublishedAuthority;
         var phases = response.Steps.OfType<ProductionPhaseResult>().Where(x => x.PhaseNo is >= 1 and <= 4)
             .GroupBy(x => x.PhaseNo).Select(x => x.Last()).OrderBy(x => x.PhaseNo)
