@@ -212,11 +212,25 @@ public sealed partial class ProductionPipelineExecutionService(
                 {
                     context = context with { ExecutionContext = context.ExecutionContext with
                         { PublishedDocumentaryBlueprintAggregate = evaluation.PublishedAuthority } };
-                    var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name),
-                        ProductionPhaseStatus.Skipped, [], evaluation.ArtifactPaths.Select(x => Path.Combine(context.OutputRoot, x)).ToArray(),
-                        [], [], "Valid certified Phase 4 committed authority was reused; overwriteExisting=false.", false, cancellationToken);
-                    phaseResults.Add(skipped with { ReasonCode = "P4PUB_ALREADY_PUBLISHED" });
-                    await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+                    // Reuse is a successful execution outcome, not a skipped requested phase. More
+                    // importantly, do not rewrite either committed validation artifact here: both
+                    // participate in the authority's checksum-validated committed state.
+                    var now = DateTimeOffset.UtcNow;
+                    phaseResults.Add(new ProductionPhaseResult(
+                        phase.No,
+                        ResolvePhaseName(context, phase.No, phase.Name),
+                        ProductionPhaseStatus.Succeeded,
+                        now,
+                        now,
+                        0,
+                        [],
+                        evaluation.ArtifactPaths.Select(x => Path.Combine(context.OutputRoot, x)).ToArray(),
+                        Path.Combine(context.ExecutionContext.ValidationRoot!, "phase-04-validation.json"),
+                        [],
+                        [],
+                        false,
+                        "Valid certified Phase 4 committed authority was reused; overwriteExisting=false.")
+                    { ReasonCode = "P4PUB_ALREADY_PUBLISHED" });
                     continue;
                 }
             }
