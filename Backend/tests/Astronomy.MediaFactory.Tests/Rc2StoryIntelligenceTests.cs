@@ -247,6 +247,7 @@ public sealed class Rc2NarrationV5OrchestrationTests
             new Rc2PipelinePhaseRegistry(),
             new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance),
             new CreativeStoryboardBuilder(NullLogger<CreativeStoryboardBuilder>.Instance),
+            new StubCertifiedExecutionStatusReader(),
             NullLogger<Rc2ContentPlanningBatchOrchestrator>.Instance)
             .GenerateFromPlansAsync(request, CancellationToken.None);
 
@@ -374,6 +375,7 @@ public sealed class Rc2NarrationV5OrchestrationTests
             new Rc2PipelinePhaseRegistry(),
             new SceneIntentBuilder(NullLogger<SceneIntentBuilder>.Instance),
             new CreativeStoryboardBuilder(NullLogger<CreativeStoryboardBuilder>.Instance),
+            new StubCertifiedExecutionStatusReader(),
             NullLogger<Rc2ContentPlanningBatchOrchestrator>.Instance)
             .GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(2026, "US", UseProductionPipeline: true, PlanId: planId, StartPhaseNo: 6, EndPhaseNo: 8), CancellationToken.None);
 
@@ -384,6 +386,13 @@ public sealed class Rc2NarrationV5OrchestrationTests
         Assert.Equal(6, response.LastFailedPhaseNo);
         Assert.Contains(response.Warnings, warning => warning.Reason == "Manual planId was provided but no executable plan was selected.");
         Assert.Contains("Manual planId was provided but no executable plan was selected.", response.Errors);
+    }
+
+    private sealed class StubCertifiedExecutionStatusReader : IRc2CertifiedExecutionStatusReader
+    {
+        public Task<Rc2CertifiedExecutionStatus?> ReadAsync(
+            BatchGenerateFromPlansResponse response,
+            CancellationToken cancellationToken = default) => Task.FromResult<Rc2CertifiedExecutionStatus?>(null);
     }
 
     private static BatchGenerateFromPlansResponse BuildBaseResponse(string root)
