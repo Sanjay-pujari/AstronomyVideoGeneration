@@ -749,6 +749,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4DocumentaryBlueprintPublicationService>();
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4DocumentaryBlueprintPublicationService>(sp => sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4DocumentaryBlueprintPublicationService>());
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4PublicationTransactionCoordinator>(sp => sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4DocumentaryBlueprintPublicationService>());
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IDocumentaryBlueprintPhase4IntegrationService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DocumentaryBlueprintPhase4IntegrationService>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4DocumentaryBlueprintAuthorityReader, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4DocumentaryBlueprintAuthorityReader>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintIntegrationService, DocumentaryBlueprintIntegrationService>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryProductionCertifier>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintCertificationIntegrationService, DocumentaryBlueprintCertificationIntegrationService>();
