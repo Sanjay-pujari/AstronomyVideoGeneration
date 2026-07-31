@@ -10,14 +10,16 @@ public static class Phase4PublicationReasonCodes
         UpstreamChanged="P4PUB_UPSTREAM_CHANGED", LockFailed="P4PUB_LOCK_FAILED", RecoveryFailed="P4PUB_RECOVERY_FAILED",
         TemporaryDirectoryFailed="P4PUB_TEMP_DIRECTORY_FAILED", SerializationFailed="P4PUB_SERIALIZATION_FAILED",
         TemporaryValidationFailed="P4PUB_TEMP_VALIDATION_FAILED", ChecksumFailed="P4PUB_CHECKSUM_FAILED",
-        ManifestPrepareFailed="P4PUB_MANIFEST_PREPARE_FAILED", CommitFailed="P4PUB_COMMIT_FAILED",
+        ManifestPrepareFailed="P4PUB_MANIFEST_PREPARE_FAILED", BackupFailed="P4PUB_BACKUP_FAILED",
+        AuthorityCommitFailed="P4PUB_AUTHORITY_COMMIT_FAILED", CommitFailed="P4PUB_COMMIT_FAILED",
         ManifestCommitFailed="P4PUB_MANIFEST_COMMIT_FAILED", ValidationCommitFailed="P4PUB_VALIDATION_COMMIT_FAILED",
         PostCommitValidationFailed="P4PUB_POST_COMMIT_VALIDATION_FAILED", RollbackFailed="P4PUB_ROLLBACK_FAILED",
         CompatibilityFailed="P4PUB_COMPATIBILITY_FAILED";
 }
 
 public sealed record Phase4ChecksumSnapshot(IReadOnlyDictionary<string,string> Files);
-public sealed record Phase4PublicationPolicy(bool ReplaceExisting=true, bool RemoveStaleTransactions=true);
+public sealed record Phase4PublicationPolicy(bool ReplaceExisting=true, bool RemoveStaleTransactions=true,
+    TimeSpan? StaleTransactionAge=null);
 public sealed record Phase4DocumentaryBlueprintPublicationRequest(string ExecutionRoot,string ExecutionId,string PlanId,
     string EventId,string Language,DocumentaryBlueprintProjectionResult ProjectionResult,
     Phase4ChecksumSnapshot ExpectedPhase1ChecksumSnapshot,Phase4ChecksumSnapshot ExpectedPhase2ChecksumSnapshot,
@@ -62,10 +64,28 @@ public sealed record Phase4BlueprintBuildReport(string SchemaVersion,string Cont
     bool TransitionReconciliationPassed,bool VariantIndependencePassed,bool ChecksumValidationPassed,
     IReadOnlyList<string> ArtifactInventory,bool CompatibilityProjectionGenerated,string PublicationStatus,string DeterministicChecksum);
 
+public enum Phase4PublicationCheckpoint { TempDirectoryCreated,FirstArtifactWritten,AllArtifactsWritten,TemporaryValidationPassed,
+    BackupPhaseMoved,BackupManifestCreated,BackupValidationCreated,PhaseDirectoryCommitted,ManifestCommitted,
+    PostCommitValidated,SuccessValidationCommitted }
+public interface IPhase4PublicationFaultInjector { void Checkpoint(Phase4PublicationCheckpoint checkpoint); }
+public sealed class Phase4PublicationFaultInjector:IPhase4PublicationFaultInjector { public void Checkpoint(Phase4PublicationCheckpoint checkpoint) { } }
+public sealed record Phase4TransactionRecord(string SchemaVersion,string ExecutionId,string TransactionId,string AggregateChecksum,
+    DateTimeOffset CreatedUtc,string State,string DeterministicChecksum);
+public sealed record Phase4ValidationRecord(string SchemaVersion,string ContractVersion,int PhaseNo,string PhaseName,string ExecutionId,
+    string PlanId,string EventId,string Language,string ProfileId,string ProfileVersion,string TransactionId,DateTimeOffset StartedUtc,
+    DateTimeOffset CompletedUtc,string Status,string ValidationStatus,bool PublicationCommitted,string AggregateId,string AggregateChecksum,
+    string LongVariantChecksum,string ShortVariantChecksum,bool SemanticValidationPassed,bool ChecksumValidationPassed,
+    bool ManifestValidationPassed,bool ProjectionValidationPassed,bool KnowledgeSelectionValidationPassed,bool SceneIndexValidationPassed,
+    bool BuildReportValidationPassed,bool FrozenUpstreamValidationPassed,int LongSceneCount,int ShortSceneCount,int LongDurationSeconds,
+    int ShortDurationSeconds,int ArtifactCount,int AuthoritativeArtifactCount,int DerivedArtifactCount,IReadOnlyList<Phase4PublicationDiagnostic> Errors,
+    IReadOnlyList<Phase4PublicationDiagnostic> Warnings,string DeterministicChecksum);
+public sealed record Phase4BackupMutationState(bool PhaseMoved,bool ManifestCopied,bool ValidationCopied,bool CompatibilityCopied);
+
 public interface IPhase4DocumentaryBlueprintPublicationService { Task<Phase4DocumentaryBlueprintPublicationResult> PublishAsync(Phase4DocumentaryBlueprintPublicationRequest request,CancellationToken cancellationToken=default); }
 public interface IPhase4PublicationTransactionCoordinator:IPhase4DocumentaryBlueprintPublicationService { }
 public interface IPhase4ArtifactSerializer { byte[] Serialize<T>(T value); T Deserialize<T>(byte[] bytes); string SemanticChecksum<T>(T value,Func<T,T> clearChecksum); }
 public interface IPhase4PublishedAuthorityValidator { Task<IReadOnlyList<Phase4PublicationDiagnostic>> ValidateAsync(string phaseDirectory,DocumentaryBlueprintAggregate expected,CancellationToken token); }
+public interface IPhase4CommittedStateValidator { Task<IReadOnlyList<Phase4PublicationDiagnostic>> ValidateAsync(string executionRoot,DocumentaryBlueprintAggregate expected,CancellationToken token); }
 public interface IPhase4ManifestUpdater { byte[] Merge(byte[]? existing,IReadOnlyList<Phase4ArtifactEntry> entries); }
 public interface IPhase4RecoveryService { Task<bool> RecoverAsync(string executionRoot,CancellationToken token); }
 public interface IPhase4ExecutionLock { ValueTask<IAsyncDisposable> AcquireAsync(string executionRoot,string executionId,CancellationToken token); }
