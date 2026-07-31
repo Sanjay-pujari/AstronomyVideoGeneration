@@ -97,6 +97,12 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
                 selected.Evidence.Status == QuestionEvidenceStatus.ResolvedGrounded ? [] : ["SpecificViewingTime", "SpecificHorizon", "EquipmentRequirement"],
                 slot.ClosingBehavior.Equals("Terminal", StringComparison.OrdinalIgnoreCase) ? "Close" : slot.TransitionIntentCode,
                 durationBySlot[slot.SlotId], p.MinimumSceneDurationSeconds, p.MaximumSceneDurationSeconds, slot.VisualOpportunityIntent, "");
+            scene = scene with {
+                EditorialPriority = slot.EditorialPriority, ObjectiveCuriosityGoal = slot.ObjectiveCuriosityGoal,
+                ObjectiveEmotionalGoal = slot.ObjectiveEmotionalGoal, VisualOpportunityType = slot.VisualOpportunityType,
+                VisualIsScientificallyRequired = slot.VisualIsScientificallyRequired,
+                TransitionNextQuestionSeed = slot.TransitionNextQuestionSeed,
+                TransitionEditorialDirection = slot.TransitionEditorialDirection };
             scene = scene with { DeterministicChecksum = DocumentaryIntentChecksum.Hash(scene with { DeterministicChecksum = "" }) };
             scenes.Add(scene);
         }

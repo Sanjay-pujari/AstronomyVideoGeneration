@@ -9,9 +9,27 @@ public sealed class DocumentaryBlueprintProfileResolver(IEnumerable<DocumentaryB
 {
     private readonly IReadOnlyList<DocumentaryBlueprintProfile> profiles = profiles.ToArray();
 
-    public DocumentaryBlueprintProfile? Resolve(string profileId, string familyCode, string audienceCode) =>
-        profiles.SingleOrDefault(x =>
+    public DocumentaryBlueprintProfile? Resolve(string profileId, string familyCode, string audienceCode)
+    {
+        var matches = profiles.Where(x =>
             string.Equals(x.ProfileId, profileId, StringComparison.Ordinal) &&
             string.Equals(x.FamilyCode, familyCode, StringComparison.Ordinal) &&
-            string.Equals(x.AudienceCode, audienceCode, StringComparison.Ordinal));
+            string.Equals(x.AudienceCode, audienceCode, StringComparison.Ordinal)).ToArray();
+        return matches.Length switch
+        {
+            0 => null,
+            1 => matches[0],
+            _ => throw new DocumentaryBlueprintProfileConfigurationException(profileId, familyCode, audienceCode, matches.Length)
+        };
+    }
+}
+
+public sealed class DocumentaryBlueprintProfileConfigurationException(string profileId, string familyCode,
+    string audienceCode, int matchCount) : InvalidOperationException(
+        $"Profile registration is ambiguous for '{profileId}/{familyCode}/{audienceCode}': {matchCount} matches.")
+{
+    public string ProfileId { get; } = profileId;
+    public string FamilyCode { get; } = familyCode;
+    public string AudienceCode { get; } = audienceCode;
+    public int MatchCount { get; } = matchCount;
 }
