@@ -110,6 +110,16 @@ public sealed class Phase4DownstreamAuthorityArchitectureTests
         Assert.Contains("CoveredObjectives(variant)", source);
     }
 
+    [Fact]
+    public void real_rc2_certification_test_has_no_synthetic_pipeline_substitution()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryTestPaths.Root(), "Backend", "tests", "Astronomy.MediaFactory.Tests", "Rc2RealPipelineCertificationTests.cs"));
+        Assert.DoesNotContain("Certified" + "Endpoint", source);
+        Assert.DoesNotContain("AddSingleton<" + "IRc2ContentPlanningBatchOrchestrator>", source);
+        Assert.DoesNotContain("new " + "Rc2CertifiedExecutionStatus", source);
+        Assert.DoesNotContain("new('a', " + "64)", source);
+    }
+
     private static string AdapterSource() => File.ReadAllText(
         RepositoryTestPaths.InfrastructureSource("DocumentaryBlueprint", "DocumentaryBlueprintPhase5CompatibilityAdapter.cs"));
 }

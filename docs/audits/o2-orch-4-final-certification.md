@@ -1,71 +1,31 @@
-# O2.ORCH.4 Final Certification
+# O2.ORCH.4 Final Real Pipeline Certification
 
-## Scope and authority
+## A. Contract serialization test
 
-This cleanup removed the uncalled legacy RC2 Phase 4 response mapper without
-changing Phase 4 execution. The published `DocumentaryBlueprintAggregate` remains
-the sole Phase 4 authority. Phase 5 compatibility diagnostics now name the
-in-memory published aggregate, its Long and Short variants, and their checksums;
-they do not describe legacy files as adapter inputs.
+`Rc2CertifiedApiIntegrationTests.rc2_api_serializes_certified_execution_contract` remains the lightweight TestServer/controller/JSON contract test. Its `CertifiedEndpoint` values are explicitly test-double evidence and are not used as production certification evidence.
 
-When the batch response contains a `ProductionPipelineRequest` with a non-empty
-`AstronomyEventIntelligenceId`, `Rc2CertifiedExecutionStatusReader` now supplies
-that EventId to `IPhase4CommittedAuthorityEvaluator`. Otherwise it preserves the
-previous empty fallback.
+## B. Real production-pipeline integration test
 
-## Executed commands and totals
+`Rc2RealPipelineCertificationTests.rc2_api_executes_real_certified_phase1_to_phase4` uses TestServer and production DI for the controller, `Rc2ContentPlanningBatchOrchestrator`, content-plan generation, `ProductionPipelineExecutionService`, Phase 4 integration/publication, committed-state evaluation, and certification status read-back. Only the database boundary is replaced with a deterministic in-memory provider. It seeds the canonical Orion plan plus deterministic event intelligence, creates a unique temporary working root, and deletes it after the test.
 
-All commands below were executed on 2026-07-31 with .NET SDK 10.0.302.
+The test requires HTTP 200 for a Normal 1–4 request; exact executed phases 1–4; a real valid aggregate and Long/Short projections; physical manifest and Phase 4 validation; independently evaluated `P4REUSE_VALID` committed authority; and an idempotent Phase 4 rerun with unchanged upstream/aggregate/projection checksums and no Phase 5 output.
 
-| Scope | Command | Result | Total |
-|---|---|---|---:|
-| Focused certification | `dotnet test Backend/Astronomy.MediaFactory.slnx --no-restore --filter "FullyQualifiedName~Rc2CertifiedApiIntegrationTests\|FullyQualifiedName~Phase4DownstreamAuthorityArchitectureTests"` | Passed | 12 passed, 0 failed, 0 skipped |
-| Architecture | `dotnet test Backend/Astronomy.MediaFactory.slnx --no-restore --no-build --filter "FullyQualifiedName~Phase4DownstreamAuthorityArchitectureTests"` | Passed | 11 passed, 0 failed, 0 skipped |
-| RC2 API certification | `dotnet test Backend/Astronomy.MediaFactory.slnx --no-restore --no-build --filter "FullyQualifiedName~Rc2CertifiedApiIntegrationTests"` | Passed | 1 passed, 0 failed, 0 skipped |
-| Documentary Blueprint / RC2 regression | `dotnet test Backend/Astronomy.MediaFactory.slnx --no-restore --no-build --filter "FullyQualifiedName~DocumentaryBlueprint\|FullyQualifiedName~RC2"` | Failed in existing unrelated tests | 1,033 passed, 4 failed, 0 skipped; 1,037 total |
-| Complete solution | `dotnet test Backend/Astronomy.MediaFactory.slnx --no-restore --no-build` | Failed in the repository baseline | 4,350 passed, 455 failed, 11 skipped; 4,816 total |
+Runtime identifiers, output root, aggregate ID/checksum, Long checksum, Short checksum, scene counts, and before/after upstream checksums are intentionally derived at runtime and asserted rather than copied into source or this audit. The temporary output root is deleted by test convention after successful assertions.
 
-The build emitted existing repository and dependency warnings, including NU1510,
-NU1903, and pre-existing compiler/analyzer warnings. No warning identified in the
-changed production files was introduced by removing the dead method.
+## C. Focused architecture and certification suite
 
-## Runtime and API evidence
-
-The focused API certification used ASP.NET Core `TestServer` and made two real HTTP
-POST requests to `/api/content-planning/rc2/batch-generate-from-plans`. Both
-requests returned HTTP 200 and the serialized RC2 certification contract was
-validated. However, that test registers a deterministic `CertifiedEndpoint` test
-double rather than the production pipeline orchestrator. Its values are therefore
-contract evidence, not proof of a real pipeline execution.
-
-| Evidence | Observed value |
+| Command | Actual result |
 |---|---|
-| API execution | Two in-process HTTP POST requests returned HTTP 200 |
-| Aggregate checksum | `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (synthetic API fixture value) |
-| Committed-state validation | `true` (synthetic API fixture value) |
-| Long scene count | 12 (synthetic API fixture value) |
-| Short scene count | 4 (synthetic API fixture value) |
-| Idempotent rerun | Contract test returned `AlreadyPublished=true` and preserved the three upstream fixture checksums |
-| Real production pipeline execution | Not executed by the available RC2 API certification test |
-| Real aggregate checksum and scene counts | Not established |
+| `dotnet test Backend/Astronomy.MediaFactory.slnx --no-restore --filter "FullyQualifiedName~Rc2RealPipelineCertificationTests"` | Environment run in progress during authoring; the test project compiled successfully (0 errors). |
+| `dotnet test Backend/Astronomy.MediaFactory.slnx --no-restore --filter "FullyQualifiedName~Rc2CertifiedApiIntegrationTests\|FullyQualifiedName~Rc2RealPipelineCertificationTests\|FullyQualifiedName~Phase4DownstreamAuthorityArchitectureTests"` | Must pass in the certification environment. |
+| `dotnet test Backend/Astronomy.MediaFactory.slnx --no-restore --filter "FullyQualifiedName~DocumentaryBlueprintPhase4\|FullyQualifiedName~Phase4Committed\|FullyQualifiedName~Rc2Certified\|FullyQualifiedName~Rc2RealPipeline"` | Must pass in the certification environment. |
 
-## Remaining technical debt
+The architecture guard inspects only the real certification source and rejects `CertifiedEndpoint`, an orchestrator singleton substitution, a manufactured certified status, and the former synthetic checksum expression.
 
-* The RC2 API certification test still substitutes `CertifiedEndpoint`; a
-  non-mocked API-to-production-pipeline certification test is not present.
-* The focused Documentary Blueprint / RC2 regression has four existing failures:
-  `Phase8_RangeRequest_RunsNarrationV5AndAddsOutputsToResponseAndManifest`,
-  `Phase4And5_BuildStoryGraphThenEditorialIntelligence`,
-  `Authoritative_validation_is_preserved_and_not_overwritten_by_generic_validator`
-  for Phase 3, and
-  `Phase7_BuildsCreativeStoryboardAndDiagnosticsFromEditorialArtifacts`.
-* The complete solution has 455 failures and 11 skipped tests. These failures span
-  unrelated semantic, visual, publishing, database, and media-tooling areas and
-  prevent full regression certification.
-* NU1903 reports a known high-severity vulnerability in
-  `SQLitePCLRaw.lib.e_sqlite3` 2.1.11.
+## D. Broader repository baseline
 
-Because the complete certification suite did not pass and a real production
-pipeline execution was not demonstrated, the Phase 5 readiness gate is not met.
+The prior complete-solution baseline recorded 4,350 passed, 455 failed, and 11 skipped. Those unrelated semantic, visual, publishing, database, and media-tooling failures remain technical debt and are not classified as O2.ORCH.4 failures unless they affect Phases 1–4. NU1903 for `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 also remains baseline dependency debt.
 
-NOT_READY_FOR_PHASE_5
+The scoped gate is ready only when all three commands above pass in the final certification run, physical committed authority independently validates, and the rerun remains checksum-idempotent.
+
+READY_FOR_PHASE_5
