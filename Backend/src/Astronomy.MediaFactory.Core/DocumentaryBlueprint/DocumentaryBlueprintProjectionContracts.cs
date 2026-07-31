@@ -35,12 +35,19 @@ public sealed record DocumentaryBlueprintAggregate(
     string SchemaVersion, string ContractVersion, string ProjectionVersion, string AggregateId,
     string ExecutionId, string PlanId, string EventId, string Language,
     string ProfileId, string ProfileVersion, string SourceIntentId, string SourceIntentChecksum,
-    DocumentarySourceLineage SourceLineage, DocumentaryBlueprint LongBlueprint,
-    DocumentaryBlueprint ShortBlueprint, string LongProjectionChecksum, string ShortProjectionChecksum,
+    DocumentarySourceLineage SourceLineage, DocumentaryBlueprintVariantArtifact LongVariant,
+    DocumentaryBlueprintVariantArtifact ShortVariant,
     DocumentaryBlueprintAggregateCoverage AggregateCoverage,
     DocumentaryBlueprintAggregateDurationSummary AggregateDurationSummary,
     IReadOnlyList<DocumentaryBlueprintProjectionDiagnostic> ProjectionDiagnostics,
-    string DeterministicChecksum);
+    string DeterministicChecksum)
+{
+    // Compatibility views. They are projections of the embedded authorities and carry no state.
+    public DocumentaryBlueprint LongBlueprint => LongVariant.Blueprint;
+    public DocumentaryBlueprint ShortBlueprint => ShortVariant.Blueprint;
+    public string LongProjectionChecksum => LongVariant.DeterministicChecksum;
+    public string ShortProjectionChecksum => ShortVariant.DeterministicChecksum;
+}
 
 public sealed record DocumentaryBlueprintProjectionRequest(DocumentaryIntent Intent, DocumentaryBlueprintProfile Profile);
 

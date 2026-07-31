@@ -3,7 +3,8 @@ namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 /// <summary>Pure projection from a certified intent; it validates but never reallocates planner decisions.</summary>
 public sealed class DocumentaryBlueprintProjector(
     DocumentaryBlueprintBuilder builder,
-    DocumentaryBlueprintAggregateValidator aggregateValidator) : IDocumentaryBlueprintProjector
+    DocumentaryBlueprintAggregateValidator aggregateValidator,
+    DocumentaryBlueprintVariantProjectionValidator? variantValidator = null) : IDocumentaryBlueprintProjector
 {
     public const string ProjectionVersion = "1.0";
 
@@ -41,29 +42,51 @@ public sealed class DocumentaryBlueprintProjector(
         var duration = new DocumentaryBlueprintAggregateDurationSummary(
             longArtifact.TotalAllocatedDurationSeconds, shortArtifact.TotalAllocatedDurationSeconds,
             checked(longArtifact.TotalAllocatedDurationSeconds + shortArtifact.TotalAllocatedDurationSeconds));
+        var reconciler = variantValidator ?? new DocumentaryBlueprintVariantProjectionValidator();
+        var longReconciliation = reconciler.Validate(intent.LongVariantIntent,
+            intent.LongVariantIntent.SceneOpportunities.OrderBy(x => x.Order).Select(x => MapScene(intent, intent.LongVariantIntent, x)).ToArray(),
+            longArtifact.Blueprint, longArtifact.SceneTraceability);
+        var shortReconciliation = reconciler.Validate(intent.ShortVariantIntent,
+            intent.ShortVariantIntent.SceneOpportunities.OrderBy(x => x.Order).Select(x => MapScene(intent, intent.ShortVariantIntent, x)).ToArray(),
+            shortArtifact.Blueprint, shortArtifact.SceneTraceability);
+        var reconciliationErrors = longReconciliation.Errors.Concat(shortReconciliation.Errors).ToArray();
+        if (reconciliationErrors.Length != 0)
+            return Failed(reconciliationErrors, longArtifact, shortArtifact, longReconciliation, shortReconciliation);
+
         var aggregate = new DocumentaryBlueprintAggregate(
             "1.0", "1.0", ProjectionVersion,
             DocumentaryBlueprintProjectionChecksum.Id("dba-", ProjectionVersion, intent.IntentId, intent.ProfileId, intent.ProfileVersion),
             intent.ExecutionId, intent.PlanId, intent.EventId, intent.Language, intent.ProfileId, intent.ProfileVersion,
             intent.IntentId, intent.DeterministicChecksum, intent.SourceLineage,
-            longArtifact.Blueprint, shortArtifact.Blueprint, longArtifact.DeterministicChecksum,
-            shortArtifact.DeterministicChecksum, coverage, duration, [], string.Empty);
+            longArtifact, shortArtifact, coverage, duration, [], string.Empty);
         aggregate = aggregate with { DeterministicChecksum = DocumentaryBlueprintProjectionChecksum.CalculateAggregate(aggregate) };
         var aggregateErrors = aggregateValidator.Validate(aggregate, longArtifact, shortArtifact);
-        if (aggregateErrors.Count != 0) return Failed(aggregateErrors, longArtifact, shortArtifact);
+        if (aggregateErrors.Count != 0) return Failed(aggregateErrors, longArtifact, shortArtifact, longReconciliation, shortReconciliation);
 
         return new(true, aggregate, longArtifact, shortArtifact, [], [],
             longArtifact.ActualSceneCount, shortArtifact.ActualSceneCount,
             longArtifact.TotalAllocatedDurationSeconds, shortArtifact.TotalAllocatedDurationSeconds,
-            true, true, true, true, true, true, true, true,
+            longReconciliation.QuestionPassed && shortReconciliation.QuestionPassed,
+            longReconciliation.ObjectivePassed && shortReconciliation.ObjectivePassed,
+            longReconciliation.KnowledgePassed && shortReconciliation.KnowledgePassed,
+            longReconciliation.SafetyPassed && shortReconciliation.SafetyPassed,
+            longReconciliation.DurationPassed && shortReconciliation.DurationPassed,
+            longReconciliation.TransitionPassed && shortReconciliation.TransitionPassed, true, true,
             ["IntentChecksumValidated", "ExistingBuilderInvokedOncePerVariant", "SourceOpportunityValuesReconciled",
              "LongShortSceneIdsDisjoint", "VariantAndAggregateChecksumsValidated"]);
 
         DocumentaryBlueprintProjectionResult Failed(IReadOnlyList<DocumentaryBlueprintProjectionDiagnostic> issues,
-            DocumentaryBlueprintVariantArtifact? longValue = null, DocumentaryBlueprintVariantArtifact? shortValue = null) =>
+            DocumentaryBlueprintVariantArtifact? longValue = null, DocumentaryBlueprintVariantArtifact? shortValue = null,
+            DocumentaryBlueprintVariantProjectionValidationResult? longValidation = null,
+            DocumentaryBlueprintVariantProjectionValidationResult? shortValidation = null) =>
             new(false, null, longValue, shortValue, issues, [], longValue?.ActualSceneCount ?? 0,
                 shortValue?.ActualSceneCount ?? 0, longValue?.TotalAllocatedDurationSeconds ?? 0,
-                shortValue?.TotalAllocatedDurationSeconds ?? 0, false, false, false, false, false, false, false, false, []);
+                shortValue?.TotalAllocatedDurationSeconds ?? 0,
+                Both(x => x.QuestionPassed), Both(x => x.ObjectivePassed), Both(x => x.KnowledgePassed),
+                Both(x => x.SafetyPassed), Both(x => x.DurationPassed), Both(x => x.TransitionPassed), false, false, []);
+
+        bool Both(Func<DocumentaryBlueprintVariantProjectionValidationResult, bool> predicate) =>
+            longValidation is not null && shortValidation is not null && predicate(longValidation) && predicate(shortValidation);
     }
 
     private DocumentaryBlueprintVariantArtifact ProjectVariant(DocumentaryIntent intent,
@@ -98,7 +121,7 @@ public sealed class DocumentaryBlueprintProjector(
         return artifact with { DeterministicChecksum = DocumentaryBlueprintProjectionChecksum.CalculateVariant(artifact) };
     }
 
-    private static DocumentarySceneBlueprintInput MapScene(DocumentaryIntent intent,
+    internal static DocumentarySceneBlueprintInput MapScene(DocumentaryIntent intent,
         DocumentaryVariantIntent variant, DocumentarySceneOpportunity scene)
     {
         if (!Enum.TryParse<DocumentaryNarrativeStage>(scene.NarrativeStage, true, out var stage) ||
@@ -109,13 +132,13 @@ public sealed class DocumentaryBlueprintProjector(
             scene.Order, scene.ProfileSlotId);
         return new(sceneId, scene.Order, scene.PrimaryViewerQuestionText, stage, role,
             new(scene.PrimaryViewerQuestionText),
-            new(scene.LearningObjectiveText, scene.LearningObjectiveText, scene.LearningObjectiveText, scene.LearningObjectiveText),
+            new(scene.LearningObjectiveText, scene.LearningObjectiveText, scene.ObjectiveCuriosityGoal, scene.ObjectiveEmotionalGoal),
             new(scene.EditorialOutcome, scene.EditorialOutcomeCode, false, false, false, false, false),
-            EditorialPriority.Medium,
+            scene.EditorialPriority,
             scene.SelectedKnowledgeReferences.Select(x => new KnowledgeReference(
                 x.KnowledgeReferenceId, x.SourcePointer, x.PurposeCode, x.IsPrimary)).ToArray(),
-            [new(scene.VisualOpportunityIntent, "HighLevelVisualOpportunity", null, null, false)],
-            new(scene.TransitionIntent, scene.TransitionIntent, scene.TransitionIntent), scene.TargetDurationSeconds);
+            [new(scene.VisualOpportunityIntent, scene.VisualOpportunityType, null, null, scene.VisualIsScientificallyRequired)],
+            new(scene.TransitionIntent, scene.TransitionNextQuestionSeed, scene.TransitionEditorialDirection), scene.TargetDurationSeconds);
     }
 
     private static void ValidateVariant(DocumentaryVariantIntent variant, DocumentaryVariantProfile profile,

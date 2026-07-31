@@ -23,6 +23,13 @@ public sealed record DocumentaryNarrativeSlot(string SlotId, int Order, string N
     public string VisualOpportunityIntent { get; init; } = "ProfileDefined";
     public string EditorialOutcome { get; init; } = "Editorial outcome to be resolved from the profile.";
     public bool CanConsolidateSupportingQuestions { get; init; }
+    public EditorialPriority EditorialPriority { get; init; } = EditorialPriority.Medium;
+    public string VisualOpportunityType { get; init; } = "HighLevelVisualOpportunity";
+    public bool VisualIsScientificallyRequired { get; init; }
+    public string ObjectiveCuriosityGoal { get; init; } = "Sustain the profile-defined viewer question.";
+    public string ObjectiveEmotionalGoal { get; init; } = "Deliver the profile-defined editorial outcome.";
+    public string TransitionNextQuestionSeed { get; init; } = "Continue the profile-defined learning journey.";
+    public string TransitionEditorialDirection { get; init; } = "Follow the profile-defined transition intent.";
 }
 public sealed record DocumentaryVariantProfile(string Variant, bool Required, int ExpectedSceneCount,
     int MinimumSceneCount, int MaximumSceneCount, int DurationBudgetSeconds, int MinimumSceneDurationSeconds,
@@ -55,7 +62,16 @@ public sealed record DocumentarySceneOpportunity(string OpportunityId, string Va
     IReadOnlyList<DocumentaryQuestionCoverageRecord> QuestionCoverageRecords,
     IReadOnlyList<DocumentaryEditorialConstraint> EditorialConstraints, IReadOnlyList<string> MustNotClaim,
     string TransitionIntent, int TargetDurationSeconds, int MinimumDurationSeconds, int MaximumDurationSeconds,
-    string VisualOpportunityIntent, string DeterministicChecksum);
+    string VisualOpportunityIntent, string DeterministicChecksum)
+{
+    public EditorialPriority EditorialPriority { get; init; } = EditorialPriority.Medium;
+    public string ObjectiveCuriosityGoal { get; init; } = "Sustain the profile-defined viewer question.";
+    public string ObjectiveEmotionalGoal { get; init; } = "Deliver the profile-defined editorial outcome.";
+    public string VisualOpportunityType { get; init; } = "HighLevelVisualOpportunity";
+    public bool VisualIsScientificallyRequired { get; init; }
+    public string TransitionNextQuestionSeed { get; init; } = "Continue the profile-defined learning journey.";
+    public string TransitionEditorialDirection { get; init; } = "Follow the profile-defined transition intent.";
+}
 public sealed record DocumentaryCoverageSummary(IReadOnlyList<string> CoveredQuestions,
     IReadOnlyList<string> EditorialQuestions, IReadOnlyList<string> DeferredQuestions,
     IReadOnlyList<string> ReusedQuestions, IReadOnlyList<string> ConsolidatedQuestions,

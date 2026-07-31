@@ -730,9 +730,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IQuestionEngine, AstronomyQuestionEngine>();
         services.TryAddSingleton<IViewerCuriosityArtifactProjector, ViewerCuriosityArtifactProjector>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintBuilder>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.CanonicalDocumentaryBlueprintProfileAdapter>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintProfile>(sp =>
+            sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.CanonicalDocumentaryBlueprintProfileAdapter>().ProjectOrionGold());
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryIntentPlanner, Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryIntentPlanner>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintProfileResolver, Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintProfileResolver>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintAggregateValidator>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintVariantProjectionValidator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintProjector, Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintProjector>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintIntegrationService, DocumentaryBlueprintIntegrationService>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryProductionCertifier>();

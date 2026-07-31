@@ -35,9 +35,10 @@ there is no second blueprint construction engine.
 ## 5. Canonical aggregate contract
 
 `DocumentaryBlueprintAggregate` carries stable schema/contract/projection versions, deterministic
-identity, execution authority, profile authority, source intent and lineage, exactly one Long and
-one Short `DocumentaryBlueprint`, both projection checksums, deterministic union coverage, duration
-summary, diagnostics, and its checksum. It exposes no collection into which a Master variant could
+identity, execution authority, profile authority, source intent and lineage, exactly one complete Long
+and one complete Short `DocumentaryBlueprintVariantArtifact`, deterministic union coverage, duration
+summary, diagnostics, and its checksum. Blueprints and projection checksums are compatibility views of
+the embedded authorities, so future external files can add no information. It exposes no collection into which a Master variant could
 be inserted.
 
 ## 6. Long variant projection
@@ -52,6 +53,20 @@ It does not enumerate Long scenes, truncate Long, or inherit Long ordering. Its 
 `ShortDocumentary`.
 
 ## 8. Scene mapping
+
+| Builder field | Authoritative source | Mapping rule | Validation rule |
+|---|---|---|---|
+| Scene ID / number | opportunity identity + order | deterministic variant-qualified ID; exact order | exact positional equality |
+| Title / viewer question | primary viewer question | preserve text | exact equality and trace question ID |
+| Stage / role | profile slot via opportunity | enum conversion only | exact equality |
+| Objective summary / learning goal | certified objective | preserve objective text | exact value and objective ID |
+| Objective curiosity / emotional goals | profile slot authorities | preserve distinct values | exact equality |
+| Editorial outcome / priority | profile slot authorities | preserve outcome/code/priority | exact equality plus safety trace |
+| Knowledge references | certified selections | narrow builder view; full lineage in trace | exact ordered equality |
+| Visual opportunity | profile slot authority | preserve description/type/required flag | exact equality |
+| Transition intent / next seed / direction | three distinct profile slot authorities | preserve each independently | exact equality |
+| Duration | planner allocation and profile range | preserve target | target equality and trace min/max |
+
 
 Opportunity order, stage, role, primary question text, objective text, editorial outcome, selected
 knowledge, high-level visual opportunity, transition intent, and target duration are supplied to the
@@ -87,24 +102,24 @@ rejects intersecting scene IDs and identical variant artifact IDs.
 
 ## 13. Checksum design
 
-Variant and aggregate checksums use non-indented `JsonSerializerDefaults.Web` JSON and SHA-256, with
-the object's own checksum replaced by an empty string. IDs use the same stable invariant-culture
+Variant and aggregate checksums recursively sort JSON object and dictionary keys ordinally before SHA-256, with
+the object's own checksum replaced by an empty string. Ordered scene arrays remain semantic. IDs use the same stable invariant-culture
 hashing inputs. The only builder timestamp is the constant Unix epoch; no clock, GUID, path, elapsed
 time, or dictionary enumeration is introduced.
 
 ## 14. Profile resolver ownership and DI
 
-Repository search found the interface but no implementation and no registered Orion Gold
-`DocumentaryBlueprintProfile` catalog data. The added resolver is therefore a deliberately data-free
-adapter over `IEnumerable<DocumentaryBlueprintProfile>` supplied by the eventual owning catalog; it
-does not create a parallel dictionary. Resolver, intent planner, projector, validator, and existing
-builder are registered without wiring the projector into pipeline execution.
+The canonical owner is Core `IFamilyCertificationProfileRegistry` / `ConstellationCertificationProfile`.
+`CanonicalDocumentaryBlueprintProfileAdapter` first resolves that owner and projects its Orion Gold
+planning policy (12 Long, 4 Short); it contains no lookup dictionary. DI registers that projection as
+the resolver input. The resolver detects zero, one, and ambiguous matches explicitly, with ambiguity
+reported as `DocumentaryBlueprintProfileConfigurationException`. Nothing is wired into pipeline execution.
 
 ## 15. Orion Gold results
 
-The repository does not contain canonical Orion Gold `DocumentaryBlueprintProfile` registration or
-a runnable .NET 10 SDK in this container. Consequently the required real 12/4 projection could not be
-executed and is not claimed as passing.
+Production DI now contains the canonical Orion Gold projection with Long expected scene count 12 and
+Short expected scene count 4. Execution could not be certified in this container because the `dotnet`
+executable is absent; no passing runtime result is fabricated.
 
 ## 16. Focused test results
 
@@ -125,7 +140,7 @@ are written by this change.
 
 ## 19. Final verdict
 
-The projection architecture is implemented, but certification cannot be declared until the canonical
-catalog supplies Orion Gold and the requested focused/full test suites run successfully.
+The projection architecture and canonical Orion Gold registration are implemented, but runtime
+certification cannot be declared until the requested focused/full test suites run successfully.
 
 NOT_READY_FOR_PHASE_4_TASK_5
