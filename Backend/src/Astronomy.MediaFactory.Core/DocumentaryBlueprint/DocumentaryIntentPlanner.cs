@@ -13,6 +13,9 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
         var errors = DocumentaryIntentInputValidator.Validate(request);
         if (errors.Count != 0) return Failed(request, errors);
 
+        var availability = ValidateVariantAvailability(request);
+        if (availability.Count != 0) return Failed(request, availability);
+
         var questions = request.QuestionBank.Questions.OrderBy(q => Priority(q.Priority)).ThenBy(q => q.Order)
             .ThenBy(q => q.QuestionId, StringComparer.Ordinal).ToArray();
         try
@@ -41,7 +44,7 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
                 AggregateCoverage = aggregate
             };
         }
-        catch (PlanningException ex) { return Failed(request, [new(ex.Code, ex.Message)]); }
+        catch (PlanningException ex) { return Failed(request, [new(ex.Code, ex.Message)]) with { CandidateDiagnostics = ex.Diagnostics }; }
         catch (KeyNotFoundException ex) { return Failed(request, [new("DI_INPUT_REFERENCE_INVALID", ex.Message)]); }
         catch (ArgumentException ex) { return Failed(request, [new("DI_INPUT_INVALID", ex.Message)]); }
     }
@@ -58,17 +61,22 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
 
         foreach (var slot in slots)
         {
+            var diagnostics = questions.Select(q => Diagnose(q, p, slot, uses, objectives, certified)).ToArray();
             var candidates = questions.Where(q => IsSlotEligible(q, p, slot))
                 .Where(q => uses.GetValueOrDefault(q.QuestionId) == 0 || slot.CanReusePrimaryQuestion)
                 .Select(q => new { Question = q, Evidence = Evidence(q, certified) })
                 .Where(x => x.Evidence.Status != QuestionEvidenceStatus.Rejected &&
                     (x.Evidence.Status is not (QuestionEvidenceStatus.EditorialOnly or QuestionEvidenceStatus.Mixed) || slot.CanUseEditorialOnlyQuestion))
                 .Where(x => !slot.RequiredKnowledge || x.Evidence.References.Count != 0)
-                .OrderByDescending(x => slot.PreferredQuestionCategories.Contains(x.Question.Category, StringComparer.Ordinal))
+                .OrderByDescending(x => slot.PreferredQuestionCategories.Contains(x.Question.Category, StringComparer.OrdinalIgnoreCase))
                 .ThenBy(x => uses.GetValueOrDefault(x.Question.QuestionId)).ThenBy(x => Priority(x.Question.Priority))
                 .ThenBy(x => x.Question.Order).ThenBy(x => x.Question.QuestionId, StringComparer.Ordinal).ToArray();
             var selected = candidates.FirstOrDefault();
-            if (selected is null) throw new PlanningException("DI_SLOT_ALLOCATION_FAILED", $"Slot '{slot.SlotId}' has no question satisfying its variant, category, editorial, reuse, and knowledge contract.");
+            if (selected is null)
+            {
+                var summary = $"Slot={slot.SlotId}; TotalQuestions={diagnostics.Length}; VariantEligible={diagnostics.Count(x => x.VariantEligible)}; CategoryEligible={diagnostics.Count(x => x.CategoryEligible)}; KnowledgeEligible={diagnostics.Count(x => x.KnowledgeEligible)}";
+                throw new PlanningException("DI_SLOT_ALLOCATION_FAILED", $"Slot '{slot.SlotId}' has no question satisfying its variant, category, editorial, reuse, and knowledge contract. {summary}", diagnostics);
+            }
             var q = selected.Question;
             if (!objectives.TryGetValue(q.QuestionId, out var objective)) throw new PlanningException("DI_OBJECTIVE_REFERENCE_INVALID", $"Question '{q.QuestionId}' has no objective.");
             uses[q.QuestionId] = uses.GetValueOrDefault(q.QuestionId) + 1;
@@ -122,8 +130,59 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
 
     private static bool IsSlotEligible(CuriosityViewerQuestion q, DocumentaryVariantProfile p, DocumentaryNarrativeSlot slot) =>
         !string.IsNullOrWhiteSpace(q.QuestionId) && q.ApplicableVariants.Contains(p.Variant, StringComparer.OrdinalIgnoreCase) &&
-        (slot.AllowedQuestionCategories.Count == 0 || slot.AllowedQuestionCategories.Contains(q.Category, StringComparer.Ordinal)) &&
+        (slot.AllowedQuestionCategories.Count == 0 || slot.AllowedQuestionCategories.Contains(q.Category, StringComparer.OrdinalIgnoreCase)) &&
         (!q.RequiresEditorialAttention || slot.CanUseEditorialOnlyQuestion);
+
+    private static DocumentarySlotCandidateDiagnostic Diagnose(CuriosityViewerQuestion q, DocumentaryVariantProfile p,
+        DocumentaryNarrativeSlot slot, IReadOnlyDictionary<string, int> uses,
+        IReadOnlyDictionary<string, LearningObjective> objectives,
+        IReadOnlyDictionary<string, CertifiedDocumentaryKnowledgeReference> certified)
+    {
+        var variant = q.ApplicableVariants.Contains(p.Variant, StringComparer.OrdinalIgnoreCase);
+        var category = slot.AllowedQuestionCategories.Count == 0 || slot.AllowedQuestionCategories.Contains(q.Category, StringComparer.OrdinalIgnoreCase);
+        var editorial = !q.RequiresEditorialAttention || slot.CanUseEditorialOnlyQuestion;
+        var reuse = uses.GetValueOrDefault(q.QuestionId) == 0 || slot.CanReusePrimaryQuestion;
+        QuestionEvidenceStatus status;
+        IReadOnlyList<CertifiedDocumentaryKnowledgeReference> references;
+        try { (status, references) = Evidence(q, certified); }
+        catch (PlanningException) { status = QuestionEvidenceStatus.Rejected; references = []; }
+        var knowledge = status != QuestionEvidenceStatus.Rejected && (!slot.RequiredKnowledge || references.Count != 0);
+        var objective = objectives.ContainsKey(q.QuestionId);
+        var reasons = new List<string>();
+        if (!variant) reasons.Add("VariantMismatch");
+        if (!category) reasons.Add("CategoryMismatch");
+        if (!editorial) reasons.Add("EditorialNotPermitted");
+        if (!reuse) reasons.Add("ReuseNotPermitted");
+        if (!knowledge) reasons.Add("KnowledgeNotEligible");
+        if (!objective) reasons.Add("ObjectiveMissing");
+        return new(slot.SlotId, p.Variant, q.QuestionId, variant, category, editorial, reuse, status, knowledge, objective, reasons);
+    }
+
+    private static IReadOnlyList<DocumentaryPlanningIssue> ValidateVariantAvailability(DocumentaryIntentPlanningRequest request)
+    {
+        var issues = new List<DocumentaryPlanningIssue>();
+        var objectiveQuestions = request.LearningObjectives.Objectives.SelectMany(x => x.ViewerQuestionIds).ToHashSet(StringComparer.Ordinal);
+        foreach (var profile in new[] { request.Profile.LongProfile, request.Profile.ShortProfile })
+        {
+            var variantQuestions = request.QuestionBank.Questions.Where(q => q.ApplicableVariants.Contains(profile.Variant, StringComparer.OrdinalIgnoreCase)).ToArray();
+            if (variantQuestions.Length == 0)
+            {
+                issues.Add(new("DI_VARIANT_SCOPE_INCOMPATIBLE", $"Phase 3 authority has no question applicable to required {profile.Variant} profile."));
+                continue;
+            }
+            foreach (var slot in profile.NarrativeSlots)
+            {
+                var categoryCandidates = variantQuestions.Where(q => slot.AllowedQuestionCategories.Count == 0 || slot.AllowedQuestionCategories.Contains(q.Category, StringComparer.OrdinalIgnoreCase)).ToArray();
+                if (categoryCandidates.Length == 0)
+                    issues.Add(new("DI_VARIANT_SCOPE_INCOMPATIBLE", $"Slot '{slot.SlotId}' has no {profile.Variant}-compatible question in its allowed categories."));
+                if (categoryCandidates.All(q => !objectiveQuestions.Contains(q.QuestionId)))
+                    issues.Add(new("DI_VARIANT_SCOPE_INCOMPATIBLE", $"Slot '{slot.SlotId}' has no {profile.Variant}-compatible question linked to a learning objective."));
+                if (slot.RequiredKnowledge && categoryCandidates.All(q => q.KnowledgeReferences.Count == 0))
+                    issues.Add(new("DI_VARIANT_SCOPE_INCOMPATIBLE", $"Required-knowledge slot '{slot.SlotId}' has no grounded {profile.Variant}-compatible candidate."));
+            }
+        }
+        return issues;
+    }
 
     private static (QuestionEvidenceStatus Status, IReadOnlyList<CertifiedDocumentaryKnowledgeReference> References) Evidence(
         CuriosityViewerQuestion q, IReadOnlyDictionary<string, CertifiedDocumentaryKnowledgeReference> certified)
@@ -193,5 +252,9 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
     private static int Priority(string value) => value switch { "High" => 0, "Medium" => 1, "Normal" => 2, _ => 3 };
     private static DocumentaryIntentPlanningResult Failed(DocumentaryIntentPlanningRequest r, IReadOnlyList<DocumentaryPlanningIssue> errors) =>
         new(false, null, errors, [], "Unresolved:" + (r.Profile?.ProfileId ?? "unknown"), null, null, null, []);
-    internal sealed class PlanningException(string code, string message) : Exception(message) { public string Code { get; } = code; }
+    internal sealed class PlanningException(string code, string message, IReadOnlyList<DocumentarySlotCandidateDiagnostic>? diagnostics = null) : Exception(message)
+    {
+        public string Code { get; } = code;
+        public IReadOnlyList<DocumentarySlotCandidateDiagnostic> Diagnostics { get; } = diagnostics ?? [];
+    }
 }
