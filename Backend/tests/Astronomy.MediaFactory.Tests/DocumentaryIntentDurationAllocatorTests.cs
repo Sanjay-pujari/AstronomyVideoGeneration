@@ -36,7 +36,7 @@ public sealed class DocumentaryIntentDurationAllocatorTests
     {
         var slots = Slots(100, 1, 1);
         var result = DocumentaryIntentPlanner.AllocateDurations(Profile(slots, 20, 5, 8), slots);
-        result.Values.Should().OnlyContain(x => x is >= 5 and <= 8);
+        result.Values.Should().OnlyContain(x => x >= 5 && x <= 8);
         result.Values.Sum().Should().Be(20);
     }
 
