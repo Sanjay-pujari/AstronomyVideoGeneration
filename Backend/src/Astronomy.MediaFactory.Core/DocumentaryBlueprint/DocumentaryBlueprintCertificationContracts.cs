@@ -44,7 +44,10 @@ public sealed record DocumentaryBlueprintCertificationDiagnostics(
 
 public sealed record DocumentaryBlueprintCertificationIntegrationResult(
     DocumentaryBlueprintCertification Certification, DocumentaryBlueprintEditorialContract EditorialContract,
-    DocumentaryBlueprintCertificationDiagnostics Diagnostics);
+    DocumentaryBlueprintCertificationDiagnostics Diagnostics,
+    BlueprintValidationReport Validation, BlueprintSceneIntentProjection SceneIntents,
+    BlueprintCoverageReport Coverage, BlueprintTransitionReport Transitions,
+    BlueprintPauseTestReport PauseTest);
 
 public interface IDocumentaryBlueprintCertificationIntegrationService
 {

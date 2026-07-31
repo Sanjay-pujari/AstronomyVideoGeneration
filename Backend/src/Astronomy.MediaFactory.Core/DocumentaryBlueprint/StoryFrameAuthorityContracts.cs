@@ -267,7 +267,7 @@ public static class StoryFrameArtifactValidator
     }
     private static void ReconcileDiagnostics(StoryFramesAuthority a,DocumentaryBlueprintEditorialContract e,StoryFrameDiagnostics d,StoryFrameValidationCompatibilityContext? compatibility,Action<string,string,string,string,object?,string,string?,string?,string?> add)
     {
-        var paths=new[]{"05-blueprint-certification/blueprint-certification.json","05-blueprint-certification/editorial-contract.json","05-blueprint-certification/certification-diagnostics.json"};
+        var paths=new[]{"05-editorial/blueprint-certification.json","05-editorial/editorial-contract.json","05-editorial/certification-diagnostics.json"};
         var checksums=new Dictionary<string,string>{{"certification",a.SourceCertificationChecksum},{"editorialContract",a.SourceEditorialContractChecksum},{"phase4",a.SourcePhase4Checksum}};
         var perVariant=a.Frames.GroupBy(f=>f.Variant,StringComparer.OrdinalIgnoreCase).ToDictionary(g=>g.Key,g=>g.Count(),StringComparer.OrdinalIgnoreCase); var perScene=a.Frames.GroupBy(f=>$"{f.Variant}:{f.SceneId}",StringComparer.OrdinalIgnoreCase).ToDictionary(g=>g.Key,g=>g.Count(),StringComparer.OrdinalIgnoreCase);
         bool dictionaries=DictionaryEqual(d.InputArtifactChecksums,checksums)&&DictionaryEqual(d.FramesPerVariant,perVariant)&&DictionaryEqual(d.FramesPerScene,perScene);

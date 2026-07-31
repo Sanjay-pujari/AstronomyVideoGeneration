@@ -26,7 +26,7 @@ public sealed class StoryFrameIntegrationService(ICertifiedStoryFrameBuilder bui
         authority=authority with { SemanticChecksum=StoryFrameAuthorityChecksum.Authority(authority) };
         var index=StoryFrameIndexProjector.Project(authority, request.EditorialContract.Checksum);
         var diagnostics=new StoryFrameDiagnostics(request.ExecutionId,builder.BuilderType,builder.BuilderVersion,
-            nameof(StoryFrameIntegrationService),Version,["05-blueprint-certification/blueprint-certification.json","05-blueprint-certification/editorial-contract.json","05-blueprint-certification/certification-diagnostics.json"],
+            nameof(StoryFrameIntegrationService),Version,["05-editorial/blueprint-certification.json","05-editorial/editorial-contract.json","05-editorial/certification-diagnostics.json"],
             new Dictionary<string,string>{{"certification",request.Certification.SemanticChecksum},{"editorialContract",request.EditorialContract.Checksum},{"phase4",request.EditorialContract.SourcePhase4Checksum}},
             request.Certification.SemanticChecksum,request.EditorialContract.Checksum,request.EditorialContract.SourcePhase4Checksum,request.RequestedVariants,
             request.EditorialContract.SceneOrder.Count,frames.Select(x=>x.SceneId).Distinct().Count(),frames.Count,
