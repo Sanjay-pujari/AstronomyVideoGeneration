@@ -555,7 +555,7 @@ public sealed partial class ProductionPipelineExecutionService(
             && expectedPaths.Select((p, i) => actual.Any(x => x.Path == NormalizePath(p) && x.Role == roles[i])).All(x => x);
     }
 
-    private static bool ExistingStoryFrameArtifactsAreValid(ProductionPhaseContext context)
+    private bool ExistingStoryFrameArtifactsAreValid(ProductionPhaseContext context)
     {
         var root=Path.Combine(context.OutputRoot,"06-story-frames");
         var paths=new[]{Path.Combine(root,"story-frames.json"),Path.Combine(root,"story-frame-index.json"),Path.Combine(root,"story-frame-diagnostics.json")};

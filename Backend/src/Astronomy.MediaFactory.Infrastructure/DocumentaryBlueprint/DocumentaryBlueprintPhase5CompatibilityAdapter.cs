@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
