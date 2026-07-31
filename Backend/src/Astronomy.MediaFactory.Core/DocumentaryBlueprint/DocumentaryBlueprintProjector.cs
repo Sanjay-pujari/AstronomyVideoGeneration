@@ -96,7 +96,9 @@ public sealed class DocumentaryBlueprintProjector(
         DocumentaryVariantIntent variant, DocumentaryVariantProfile profile)
     {
         // This method receives one variant only: Short can neither enumerate nor derive from Long (and vice versa).
-        var sceneInputs = variant.SceneOpportunities.OrderBy(x => x.Order).Select(scene => MapScene(intent, variant, scene)).ToArray();
+        var orderedOpportunities = variant.SceneOpportunities.OrderBy(x => x.Order)
+            .ThenBy(x => x.OpportunityId, StringComparer.Ordinal).ToArray();
+        var sceneInputs = orderedOpportunities.Select(scene => MapScene(intent, variant, scene)).ToArray();
         var artifactId = DocumentaryBlueprintProjectionChecksum.Id($"dbv-{variant.Variant.ToLowerInvariant()}-",
             ProjectionVersion, intent.IntentId, variant.VariantIntentId, variant.Variant);
         var request = new DocumentaryBlueprintBuildRequest(
@@ -106,7 +108,7 @@ public sealed class DocumentaryBlueprintProjector(
             new(DateTimeOffset.UnixEpoch, nameof(DocumentaryBlueprintProjector), ProjectionVersion,
                 intent.GeneratedFromPhase2Checksum, "1.0", artifactId), sceneInputs);
         var blueprint = builder.Build(request); // The certified mapper is the sole blueprint constructor.
-        var traceability = variant.SceneOpportunities.OrderBy(x => x.Order).Zip(blueprint.Scenes).Select(pair =>
+        var traceability = orderedOpportunities.Zip(blueprint.Scenes).Select(pair =>
             new DocumentarySceneBlueprintTraceability(pair.Second.SceneId, pair.First.OpportunityId,
                 pair.First.DeterministicChecksum, pair.First.PrimaryViewerQuestionId,
                 pair.First.SupportingViewerQuestionIds, pair.First.LearningObjectiveId,
@@ -155,7 +157,8 @@ public sealed class DocumentaryBlueprintProjector(
             Add("P4P_INTENT_INVALID", "Variant or opportunity checksum is invalid.");
         if (variant.SceneOpportunities.Count != profile.ExpectedSceneCount || variant.ExpectedSceneCount != profile.ExpectedSceneCount)
             Add("P4P_DURATION_RECONCILIATION_FAILED", "Expected scene count differs from the profile.");
-        if (variant.SceneOpportunities.Select(x => x.Order).SequenceEqual(Enumerable.Range(1, variant.SceneOpportunities.Count)) is false)
+        if (variant.SceneOpportunities.OrderBy(x => x.Order).ThenBy(x => x.OpportunityId, StringComparer.Ordinal)
+            .Select(x => x.Order).SequenceEqual(Enumerable.Range(1, variant.SceneOpportunities.Count)) is false)
             Add("P4P_VARIANT_RECONCILIATION_FAILED", "Scene order is not contiguous.");
         foreach (var scene in variant.SceneOpportunities)
         {

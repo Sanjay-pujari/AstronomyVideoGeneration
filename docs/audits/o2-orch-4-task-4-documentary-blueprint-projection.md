@@ -144,3 +144,41 @@ The projection architecture and canonical Orion Gold registration are implemente
 certification cannot be declared until the requested focused/full test suites run successfully.
 
 NOT_READY_FOR_PHASE_4_TASK_5
+
+## Task 4B final projection certification corrections (2026-07-31)
+
+The four aggregate compatibility getters are now explicitly excluded with `JsonIgnore`; canonical
+aggregate JSON and therefore aggregate checksum input contains only the authoritative embedded Long
+and Short variant artifacts. A serialization certification test verifies one `longVariant`, one
+`shortVariant`, and exactly one blueprint within each artifact, with no compatibility aliases.
+
+Source scene opportunities are normalized by `(Order, OpportunityId)` before mapping, trace creation,
+contiguous-order validation, and positional reconciliation. A shuffled-insertion test preserves
+explicit scene order and passes reconciliation. The `OpportunityId` tie-break makes malformed duplicate
+orders deterministic while the contiguous-order rule continues to reject them.
+
+`CanonicalDocumentaryBlueprintProfileAdapter` remains a thin adapter over
+`IFamilyCertificationProfileRegistry`: a recording-registry test proves it resolves the existing
+`CONSTELLATION` owner, and reflection proves the adapter holds only that registry rather than a catalog.
+A production `AddMediaFactory` DI test resolves the canonical owner and Orion Gold projection and
+asserts expected scene counts of Long = 12 and Short = 4.
+
+### Requested execution matrix and actual counts
+
+The execution image has no `dotnet` executable. Consequently every requested .NET invocation stops
+before test discovery; the actual discovered/executed counts are **passed 0, failed 0, skipped 0** for
+each row (the command itself is environment-blocked, not a passing test run).
+
+| Requested scope | Passed | Failed | Skipped | Result |
+|---|---:|---:|---:|---|
+| Task 3 / 3A | 0 | 0 | 0 | Not run: .NET SDK unavailable |
+| Task 4 / 4A / 4B | 0 | 0 | 0 | Not run: .NET SDK unavailable |
+| Orion Gold 12/4 projection | 0 | 0 | 0 | Not run: .NET SDK unavailable |
+| Existing `DocumentaryBlueprintBuilder` tests | 0 | 0 | 0 | Not run: .NET SDK unavailable |
+| Relevant Phase 1–3 non-regression tests | 0 | 0 | 0 | Not run: .NET SDK unavailable |
+| Full solution suite | 0 | 0 | 0 | Not run: .NET SDK unavailable |
+
+The implementation and static certification corrections are complete, but Phase 4 Task 5 remains
+blocked until the requested runtime suites execute in an SDK-equipped environment.
+
+NOT_READY_FOR_PHASE_4_TASK_5
