@@ -20,6 +20,13 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
 {
     public async Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
     {
+        // An exact Phase 4 rerun without overwrite is a read-only publication probe: the
+        // production pipeline validates and reuses the committed authority rather than
+        // rebuilding a completed plan.  Treat that narrowly-scoped request as an allowed
+        // completed-plan rerun so callers do not have to opt into destructive rebuilds.
+        if (IsPhase4CommittedAuthorityReuse(request))
+            request = request with { AllowCompletedPlanRerun = true };
+
         var context = Rc2PipelineExecutionContext.Create(request);
         var requestedPhases = phaseRegistry.ResolveRequestedPhaseNumbers(request);
 
@@ -103,6 +110,13 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
 
         return response with { Rc2CertifiedExecution = await certifiedExecutionStatusReader.ReadAsync(response, cancellationToken) };
     }
+
+    private static bool IsPhase4CommittedAuthorityReuse(BatchGenerateFromPlansRequest request)
+        => request.UseProductionPipeline
+            && request.ExecutionMode == ContentPlanExecutionMode.RerunPhase
+            && request.StartPhaseNo == 4
+            && request.EndPhaseNo == 4
+            && !request.OverwriteExisting;
 
     private static BatchGenerateFromPlansResponse ValidateManualPlanExecutionResponse(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, IReadOnlyList<int> requestedPhases)
     {

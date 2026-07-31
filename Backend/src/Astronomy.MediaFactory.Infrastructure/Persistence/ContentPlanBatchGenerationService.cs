@@ -1356,7 +1356,8 @@ public sealed class ContentPlanBatchGenerationService(
             if (!request.PlanId.HasValue && !hasPlanTitle) throw new ArgumentException("Completed plan reruns require an exact planTitle or planId.");
             if (!request.PlanId.HasValue && request.PlanTitles!.Count(title => !string.IsNullOrWhiteSpace(title)) != 1) throw new ArgumentException("Completed plan reruns require exactly one exact planTitle or planId.");
             if (request.MaxPlans != 1) throw new ArgumentException("Completed plan reruns are locked to maxPlans=1.");
-            if (!request.OverwriteExisting) throw new ArgumentException("Completed plan reruns require overwriteExisting=true before output folders can be rebuilt.");
+            if (!request.OverwriteExisting && !IsPhase4CommittedAuthorityReuse(request))
+                throw new ArgumentException("Completed plan reruns require overwriteExisting=true before output folders can be rebuilt.");
         }
         if (executionMode == ContentPlanExecutionMode.RetryFailed && request.AllowCompletedPlanRerun) throw new ArgumentException("RetryFailed mode cannot rerun ProductionCompleted plans.");
         if (executionMode == ContentPlanExecutionMode.RecoverRunning && !request.AllowRunningPlanRecovery) throw new ArgumentException("RecoverRunning requires allowRunningPlanRecovery=true.");
@@ -1367,6 +1368,12 @@ public sealed class ContentPlanBatchGenerationService(
             if (!IsExplicitRunningRecoveryRequest(request)) throw new ArgumentException("allowRunningPlanRecovery requires retryFailedOnly=true, allowFailedPlanRetry=true, startPhaseNo, endPhaseNo, and exactly one exact planTitle or planId.");
         }
     }
+
+    private static bool IsPhase4CommittedAuthorityReuse(BatchGenerateFromPlansRequest request)
+        => request.ExecutionMode == ContentPlanExecutionMode.RerunPhase
+            && request.StartPhaseNo == 4
+            && request.EndPhaseNo == 4
+            && !request.OverwriteExisting;
 
     private sealed record SelectionResult(IReadOnlyList<ContentGenerationPlan> SelectedPlans, IReadOnlyList<BatchGenerateFromPlansWarning> Warnings);
 
