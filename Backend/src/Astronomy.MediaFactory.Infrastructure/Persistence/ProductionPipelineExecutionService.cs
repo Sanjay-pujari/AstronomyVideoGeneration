@@ -86,6 +86,10 @@ public sealed partial class ProductionPipelineExecutionService(
     // Preserve the publication transaction selected by the Phase 3 action so the stable
     // post-commit report records that transaction rather than manufacturing another id.
     private readonly ConcurrentDictionary<string, string> phase3PublicationTransactions = new(StringComparer.OrdinalIgnoreCase);
+    // Carries the exact, validated read-back returned by Phase 4 across the in-process
+    // phase boundary. Disk is intentionally not consulted by downstream phases in the
+    // same run; the authority reader remains the resume/recovery boundary.
+    private readonly ConcurrentDictionary<string, DocumentaryBlueprintAggregate> publishedPhase4Authorities = new(StringComparer.OrdinalIgnoreCase);
     private readonly IPhase1AuthorityProjector _phase1AuthorityProjector = phase1AuthorityProjector;
     private readonly IPhase1AuthorityPersistence _phase1AuthorityPersistence = phase1AuthorityPersistence;
     private readonly IPhase1AuthorityReader _phase1AuthorityReader = phase1AuthorityReader;
@@ -180,6 +184,22 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var phase in PhaseDefinitions())
         {
             if (phase.No < startPhaseNo || phase.No > endPhaseNo) continue;
+            if (phase.No >= 5 && context.ExecutionContext.PublishedDocumentaryBlueprintAggregate is null)
+            {
+                // A run beginning downstream of Phase 4 is resume/recovery. Only that path
+                // rehydrates authority from the committed publication on disk.
+                var authorityPath = Path.Combine(context.OutputRoot, Phase4AuthorityPaths.DirectoryName, Phase4AuthorityPaths.CanonicalFileName);
+                var recovered = await ReadRequiredJsonAsync<DocumentaryBlueprintAggregate>(authorityPath, cancellationToken);
+                if (!DocumentaryBlueprintProjectionChecksum.HasValidAggregateChecksum(recovered))
+                    throw new InvalidDataException("Recovered published Phase 4 aggregate checksum is invalid.");
+                context = context with
+                {
+                    ExecutionContext = context.ExecutionContext with
+                    {
+                        PublishedDocumentaryBlueprintAggregate = recovered
+                    }
+                };
+            }
             if (!IsPhaseRequiredForRequestedOutputs(context, phase.No))
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], OutputTypeNotRequestedReason, false, cancellationToken);
@@ -219,6 +239,18 @@ public sealed partial class ProductionPipelineExecutionService(
                 _ => await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken)
             };
             phaseResults.Add(result);
+            if (phase.No == 4 && result.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped)
+            {
+                var executionKey = context.Request.PlanId.ToString("D");
+                if (publishedPhase4Authorities.TryRemove(executionKey, out var publishedAuthority))
+                    context = context with
+                    {
+                        ExecutionContext = context.ExecutionContext with
+                        {
+                            PublishedDocumentaryBlueprintAggregate = publishedAuthority
+                        }
+                    };
+            }
             if (phase.No == 2 && result.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped)
             {
                 var authorityPath = Path.Combine(context.OutputRoot, "02-intelligence", "production-event-intelligence.json");
@@ -491,7 +523,14 @@ public sealed partial class ProductionPipelineExecutionService(
     private static DocumentaryBlueprintCertificationRequest ReadPhase5Request(ProductionPhaseContext context)
     {
         if (!PreviousPhaseSucceeded(context, 4) || !ExistingBlueprintArtifactsAreValid(context)) throw new InvalidOperationException("Phase 5 rejected missing or invalid Phase 4 validation, authority, manifest, identity, or checksum.");
+        var published = context.ExecutionContext.PublishedDocumentaryBlueprintAggregate
+            ?? throw new InvalidOperationException("Phase 5 requires the published DocumentaryBlueprintAggregate in the execution context.");
+        if (published.ExecutionId != context.Request.PlanId.ToString("D") ||
+            !DocumentaryBlueprintProjectionChecksum.HasValidAggregateChecksum(published))
+            throw new InvalidOperationException("Phase 5 rejected a stale or invalid published DocumentaryBlueprintAggregate.");
         var root = Path.Combine(context.OutputRoot, "04-blueprint");
+        // These legacy-shaped values are a compatibility adapter for the existing Phase 5
+        // certification contract. The published aggregate above remains the authority.
         return new DocumentaryBlueprintCertificationRequest(context.Request.PlanId.ToString("D"), context.Request.PlanId.ToString("D"), context.EventId,
             context.Request.Language, context.Request.PlannedFormat ?? context.Request.Category,
             JsonSerializer.Deserialize<DocumentaryBlueprintArtifact>(File.ReadAllText(Path.Combine(root, "documentary-blueprint.json")), JsonOptions)!,
@@ -1066,6 +1105,8 @@ public sealed partial class ProductionPipelineExecutionService(
             CanonicalDocumentaryBlueprintProfileAdapter.OrionGoldProfileId, "CONSTELLATION", "Gold", context.ProductionEventIntelligence, bank, objectives, plan, knowledge, lineage, phase1, phase2, phase3, manifest, false,
             new Phase4PublicationPolicy(ReplaceExisting: true), context.Request.Category, context.Request.Title), cancellationToken);
         var finished = DateTimeOffset.UtcNow;
+        if (result.Success && result.PublishedAuthority is not null)
+            publishedPhase4Authorities[executionId] = result.PublishedAuthority;
         var outputFiles = result.PublicationResult?.ArtifactEntries.Select(x => Path.Combine(context.OutputRoot, x.RelativePath.Replace('/', Path.DirectorySeparatorChar))).ToArray() ?? [];
         return new ProductionPhaseResult(4, "Documentary Blueprint", result.Success ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, finished, (long)(finished-started).TotalMilliseconds, phase3Files, outputFiles,
             result.PublicationResult?.ValidationPath, result.Warnings.Select(x => $"{x.Code}: {x.Message}").ToArray(), result.Errors.Select(x => $"{x.Code}: {x.Message}").ToArray(), !result.Success,

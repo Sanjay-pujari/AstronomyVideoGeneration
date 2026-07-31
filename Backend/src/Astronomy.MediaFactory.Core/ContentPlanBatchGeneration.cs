@@ -137,7 +137,11 @@ public sealed record Rc2CertifiedExecutionStatus(
     string ValidationStatus,
     bool PublicationCommitted,
     bool AlreadyPublished,
-    IReadOnlyList<string> ArtifactPaths);
+    IReadOnlyList<string> ArtifactPaths,
+    bool CommittedStateValidationPassed = false,
+    bool LegacyAuthorityProduced = false,
+    string PipelineIntegrationService = "DocumentaryBlueprintPhase4IntegrationService",
+    string DownstreamAuthorityType = "PublishedDocumentaryBlueprintAggregate");
 
 public sealed record Rc2CertifiedPhaseStatus(int PhaseNo, string PhaseName, string Status, string? ReasonCode);
 
@@ -335,7 +339,8 @@ public sealed record ProductionPipelineExecutionContext(
     ProductionEventIntelligence? ProductionEventIntelligence = null,
     IMediaEventStrategy? MediaEventStrategy = null,
     bool EnableSubtitles = false,
-    ProductionExecutionContext? ProductionExecutionContext = null);
+    ProductionExecutionContext? ProductionExecutionContext = null,
+    DocumentaryBlueprint.DocumentaryBlueprintAggregate? PublishedDocumentaryBlueprintAggregate = null);
 
 public sealed record ProductionPipelineRequest(
     ContentPlanProductionPipelineRequest Request,
