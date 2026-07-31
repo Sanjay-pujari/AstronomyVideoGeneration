@@ -738,6 +738,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintAggregateValidator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintVariantProjectionValidator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintProjector, Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintProjector>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4ArtifactSerializer, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4ArtifactSerializer>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4FileSystem, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4FileSystem>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4ExecutionLock, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4ExecutionLock>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4RecoveryService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4RecoveryService>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4ManifestUpdater, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4ManifestUpdater>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4PublishedAuthorityValidator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4PublishedAuthorityValidator>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4DocumentaryBlueprintPublicationService>();
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4DocumentaryBlueprintPublicationService>(sp => sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4DocumentaryBlueprintPublicationService>());
+        services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4PublicationTransactionCoordinator>(sp => sp.GetRequiredService<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4DocumentaryBlueprintPublicationService>());
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintIntegrationService, DocumentaryBlueprintIntegrationService>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryProductionCertifier>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintCertificationIntegrationService, DocumentaryBlueprintCertificationIntegrationService>();
