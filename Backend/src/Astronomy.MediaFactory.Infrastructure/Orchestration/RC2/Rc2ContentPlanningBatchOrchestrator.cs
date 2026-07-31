@@ -5,12 +5,17 @@ using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
+public interface IRc2ContentPlanningBatchOrchestrator
+{
+    Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken);
+}
+
 public sealed class Rc2ContentPlanningBatchOrchestrator(
     IContentPlanBatchGenerationService v4BatchGeneration,
     Rc2PipelinePhaseRegistry phaseRegistry,
     SceneIntentBuilder sceneIntentBuilder,
     CreativeStoryboardBuilder creativeStoryboardBuilder,
-    ILogger<Rc2ContentPlanningBatchOrchestrator> logger)
+    ILogger<Rc2ContentPlanningBatchOrchestrator> logger) : IRc2ContentPlanningBatchOrchestrator
 {
     public async Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
     {
@@ -38,25 +43,8 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         var response = await v4BatchGeneration.GenerateFromPlansAsync(ExpandProductionRangeForRc2PhaseContract(request, requestedPhases), cancellationToken);
         response = ValidateManualPlanExecutionResponse(request, response, requestedPhases);
         response = await ReconcileEarlyPhaseValidationsAsync(response, requestedPhases, cancellationToken);
-        if (requestedPhases.Contains(4) && CanRunRc2Overlay(response, 4))
-        {
-            response = await ExecuteRc2OverlayPhaseAsync(
-                response,
-                4,
-                "Story Intelligence",
-                [
-                    Combine(response.OutputRoot, "question-engine", "question-driven-scene-plan.enriched.json"),
-                    Combine(response.OutputRoot, "question-engine", "question-answer-set.json")
-                ],
-                string.Empty,
-                async () =>
-                {
-                    var storyGraphResult = await sceneIntentBuilder.BuildAndWriteStoryGraphAsync(request, response, cancellationToken);
-                    response = ApplyRc2Phase4Response(response, storyGraphResult);
-                    return storyGraphResult.GeneratedFiles;
-                },
-                cancellationToken);
-        }
+        // Phase 4 is exclusively owned by DocumentaryBlueprintPhase4IntegrationService in the
+        // production pipeline.  Do not create the former editorial/story-graph authority here.
         if (requestedPhases.Contains(5) && CanRunRc2Overlay(response, 5))
         {
             response = await ExecuteRc2OverlayPhaseAsync(
@@ -110,7 +98,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             response.LastFailedPhaseNo,
             response.OutputRoot);
 
-        return response;
+        return response with { Rc2CertifiedExecution = Rc2CertifiedExecutionStatusReader.Read(response) };
     }
 
     private static BatchGenerateFromPlansResponse ValidateManualPlanExecutionResponse(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, IReadOnlyList<int> requestedPhases)

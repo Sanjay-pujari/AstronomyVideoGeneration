@@ -120,7 +120,33 @@ public sealed record BatchGenerateFromPlansResponse(
     bool LanguageMismatchDetected = false,
     bool SiblingPlanFound = false,
     bool SiblingPlanCreated = false,
-    SuccessAggregationDiagnostics? SuccessDiagnostics = null);
+    SuccessAggregationDiagnostics? SuccessDiagnostics = null,
+    Rc2CertifiedExecutionStatus? Rc2CertifiedExecution = null);
+
+/// <summary>The API-safe, terminal summary of the certified RC2 Phase 1-4 authority.</summary>
+public sealed record Rc2CertifiedExecutionStatus(
+    string ExecutionId,
+    IReadOnlyList<Rc2CertifiedPhaseStatus> Phases,
+    Rc2Phase4PublicationStatus Phase4Publication,
+    string? AggregateId,
+    string? AggregateChecksum,
+    int LongSceneCount,
+    int ShortSceneCount,
+    int LongDurationSeconds,
+    int ShortDurationSeconds,
+    string ValidationStatus,
+    bool PublicationCommitted,
+    bool AlreadyPublished,
+    IReadOnlyList<string> ArtifactPaths);
+
+public sealed record Rc2CertifiedPhaseStatus(int PhaseNo, string PhaseName, string Status, string? ReasonCode);
+
+public sealed record Rc2Phase4PublicationStatus(
+    string IntegrationService,
+    string Status,
+    bool PhysicalAuthorityExists,
+    bool CommittedStateValidationPassed,
+    bool LegacyAuthorityProduced);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,

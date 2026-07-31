@@ -9,7 +9,7 @@ namespace Astronomy.MediaFactory.Api.Controllers;
 [Produces(MediaTypeNames.Application.Json)]
 [Route("api/content-planning/rc2")]
 public sealed class ContentPlanningRc2Controller(
-    Rc2ContentPlanningBatchOrchestrator orchestrator,
+    IRc2ContentPlanningBatchOrchestrator orchestrator,
     ILogger<ContentPlanningRc2Controller> logger) : ControllerBase
 {
     [HttpPost("batch-generate-from-plans")]
