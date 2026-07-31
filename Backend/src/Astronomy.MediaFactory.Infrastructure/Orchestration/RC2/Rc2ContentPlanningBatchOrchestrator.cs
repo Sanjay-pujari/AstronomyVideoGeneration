@@ -41,7 +41,9 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             request.EndPhaseNo,
             requestedPhases.Count == 0 ? "none" : string.Join(',', requestedPhases));
 
-        var response = await v4BatchGeneration.GenerateFromPlansAsync(ExpandProductionRangeForRc2PhaseContract(request, requestedPhases), cancellationToken);
+        // The caller's range is authoritative. In particular, certification through
+        // Phase 4 must not implicitly execute any Phase 5+ compatibility processing.
+        var response = await v4BatchGeneration.GenerateFromPlansAsync(request, cancellationToken);
         response = ValidateManualPlanExecutionResponse(request, response, requestedPhases);
         response = await ReconcileEarlyPhaseValidationsAsync(response, requestedPhases, cancellationToken);
         // Phase 4 is exclusively owned by DocumentaryBlueprintPhase4IntegrationService in the
@@ -379,11 +381,6 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             LastCompletedPhaseNo = response.LastCompletedPhaseNo is null ? null : Math.Min(response.LastCompletedPhaseNo.Value, phaseNo - 1),
             Errors = response.Errors.Concat(errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
         };
-
-    private static BatchGenerateFromPlansRequest ExpandProductionRangeForRc2PhaseContract(BatchGenerateFromPlansRequest request, IReadOnlyList<int> requestedPhases)
-        => requestedPhases.Any(phase => phase is 4 or 5) && (request.EndPhaseNo ?? 21) <= 5
-            ? request with { EndPhaseNo = 6 }
-            : request;
 
     private static async Task<BatchGenerateFromPlansResponse> ReconcileEarlyPhaseValidationsAsync(BatchGenerateFromPlansResponse response, IReadOnlyList<int> requestedPhases, CancellationToken cancellationToken)
     {

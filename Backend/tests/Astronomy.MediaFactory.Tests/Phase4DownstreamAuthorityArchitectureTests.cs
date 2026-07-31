@@ -75,4 +75,41 @@ public sealed class Phase4DownstreamAuthorityArchitectureTests
         Assert.DoesNotContain("Publish", source);
         Assert.Contains("aggregate.ShortVariant", source);
     }
+
+    [Fact]
+    public void rc2_phase_range_is_never_expanded_past_the_explicit_end_phase()
+    {
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "Rc2ContentPlanningBatchOrchestrator.cs"));
+        Assert.DoesNotContain("ExpandProductionRangeForRc2PhaseContract", source);
+        Assert.Contains("GenerateFromPlansAsync(request, cancellationToken)", source);
+    }
+
+    [Fact]
+    public void phase5_adapter_preserves_scene_knowledge_lineage()
+    {
+        var source = AdapterSource();
+        Assert.Contains("trace.KnowledgeSelections.Select", source);
+        Assert.Contains("selection.KnowledgeReferenceId", source);
+        Assert.Contains("selection.SourceArtifact", source);
+        Assert.DoesNotContain("(IReadOnlyList<ViewerKnowledgeReference>)[]", source);
+    }
+
+    [Fact]
+    public void phase5_adapter_preserves_scene_traceability()
+    {
+        var source = AdapterSource();
+        Assert.Contains("variant.SceneTraceability.ToDictionary", source);
+        Assert.Contains("traceability.TryGetValue(x.SceneId", source);
+    }
+
+    [Fact]
+    public void phase5_adapter_preserves_learning_objectives()
+    {
+        var source = AdapterSource();
+        Assert.Contains("variant.SceneTraceability.Select(x => x.LearningObjectiveId)", source);
+        Assert.Contains("CoveredObjectives(variant)", source);
+    }
+
+    private static string AdapterSource() => File.ReadAllText(
+        RepositoryTestPaths.InfrastructureSource("DocumentaryBlueprint", "DocumentaryBlueprintPhase5CompatibilityAdapter.cs"));
 }

@@ -14,7 +14,10 @@ public interface IDocumentaryBlueprintPhase5CompatibilityAdapter
 /// <summary>
 /// Pure, in-memory bridge for the retained Phase 5 contract.  The Master value is a
 /// non-authoritative compatibility view of the aggregate's Long projection; it is
-/// never a Phase 4 authority or manifest entry.
+/// never a Phase 4 authority or manifest entry. Certification is exclusively rooted
+/// in the published aggregate checksum and its embedded Long and Short checksums;
+/// the computed Master checksum is compatibility metadata and cannot compete with
+/// the committed Phase 4 authority.
 /// </summary>
 public sealed class DocumentaryBlueprintPhase5CompatibilityAdapter : IDocumentaryBlueprintPhase5CompatibilityAdapter
 {
@@ -57,8 +60,15 @@ public sealed class DocumentaryBlueprintPhase5CompatibilityAdapter : IDocumentar
         var deferred = variant.DeferredQuestions.Select(x => x.QuestionId).ToArray();
         var sections = variant.Blueprint.Scenes.ToDictionary(x => x.SceneId,
             x => (IReadOnlyList<string>)[x.ViewerQuestion.Text], StringComparer.Ordinal);
-        var knowledge = variant.Blueprint.Scenes.ToDictionary(x => x.SceneId,
-            x => (IReadOnlyList<ViewerKnowledgeReference>)[], StringComparer.Ordinal);
+        var traceability = variant.SceneTraceability.ToDictionary(x => x.SceneId, StringComparer.Ordinal);
+        var knowledge = variant.Blueprint.Scenes.ToDictionary(x => x.SceneId, x =>
+            (IReadOnlyList<ViewerKnowledgeReference>)(traceability.TryGetValue(x.SceneId, out var trace)
+                ? trace.KnowledgeSelections.Select(selection => new ViewerKnowledgeReference(
+                    selection.KnowledgeReferenceId,
+                    selection.PurposeCode,
+                    selection.SourceArtifact,
+                    selection.EvidenceStatus.ToString())).ToArray()
+                : []), StringComparer.Ordinal);
         var coverage = new BlueprintCoverage(coveredQuestions, deferred, [], CoveredObjectives(variant), [], sections, knowledge,
             variant.DeferredQuestions.ToDictionary(x => x.QuestionId, x => x.ReasonCode, StringComparer.Ordinal));
         var metadata = new BlueprintArtifactMetadata(variant.ExecutionId, variant.EventId, variant.Language, variant.ProfileId,
