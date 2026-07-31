@@ -53,6 +53,24 @@ public sealed class DocumentaryBlueprintProjectionCertificationCorrectionTests
     }
 
     [Fact]
+    public void projector_transition_validation_uses_explicit_scene_order_not_insertion_order()
+    {
+        var source = Variant([
+            Opportunity("op-2", 2, "Question two"),
+            Opportunity("op-1", 1, "Question one")
+        ]);
+        var profile = new DocumentaryVariantProfile("Long", true, 2, 2, 2, 2, 1, 1, [], [], [], "terminal-close");
+        var errors = new List<DocumentaryBlueprintProjectionDiagnostic>();
+        var validateVariant = typeof(DocumentaryBlueprintProjector).GetMethod("ValidateVariant",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+
+        validateVariant.Should().NotBeNull();
+        validateVariant!.Invoke(null, [source, profile, "Long", errors]);
+
+        errors.Should().NotContain(x => x.Code == "P4P_TRANSITION_RECONCILIATION_FAILED");
+    }
+
+    [Fact]
     public void Canonical_adapter_projects_the_owning_certification_registry_without_parallel_catalog()
     {
         var owner = new ConstellationCertificationProfile();
