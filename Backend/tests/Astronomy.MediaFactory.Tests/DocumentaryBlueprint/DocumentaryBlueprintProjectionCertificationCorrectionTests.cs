@@ -71,7 +71,12 @@ public sealed class DocumentaryBlueprintProjectionCertificationCorrectionTests
     [Fact]
     public void Production_di_resolves_orion_gold_from_canonical_source_with_twelve_and_four_scenes()
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:Postgres"] = "Host=documentary-blueprint-di-test.invalid;Port=5432;Database=astronomy_mediafactory_test;Username=test_user;Password=test_password;Pooling=false"
+            })
+            .Build();
         using var provider = new ServiceCollection().AddMediaFactory(configuration).BuildServiceProvider();
 
         var owner = provider.GetRequiredService<IFamilyCertificationProfileRegistry>().Resolve("CONSTELLATION");
@@ -124,7 +129,7 @@ public sealed class DocumentaryBlueprintProjectionCertificationCorrectionTests
     private static global::Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprint Blueprint(
         string id, IReadOnlyList<DocumentarySceneBlueprint> scenes) => new(id, "knowledge", "event", "Goal",
             BlueprintPublicationFormat.LongDocumentary, "en", "1",
-            new(DateTimeOffset.UnixEpoch, "test", "test", "source", "1", "correlation"), scenes);
+            new(DateTimeOffset.UnixEpoch, "test", "test", "source", "1.0", "correlation"), scenes);
 
     private static DocumentarySceneBlueprintTraceability Trace(DocumentarySceneOpportunity value, DocumentarySceneBlueprint scene) =>
         new(scene.SceneId, value.OpportunityId, value.DeterministicChecksum, value.PrimaryViewerQuestionId,
