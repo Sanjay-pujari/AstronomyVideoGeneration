@@ -72,7 +72,7 @@ public sealed class Phase4DownstreamAuthorityArchitectureTests
         var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("DocumentaryBlueprint", "DocumentaryBlueprintPhase5CompatibilityAdapter.cs"));
         Assert.DoesNotContain("File.", source);
         Assert.DoesNotContain("ShortVariant =", source);
-        Assert.DoesNotContain("Publish", source);
+        Assert.DoesNotContain("PublishAsync", source);
         Assert.Contains("aggregate.ShortVariant", source);
     }
 

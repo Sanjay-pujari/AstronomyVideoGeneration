@@ -41,9 +41,9 @@ public sealed class DocumentaryBlueprintPhase5CompatibilityAdapter : IDocumentar
         var masterValue = longArtifact with { Metadata = longArtifact.Metadata with { Variant = "Master", Checksum = string.Empty } };
         var master = masterValue with { Metadata = masterValue.Metadata with { Checksum = DocumentaryBlueprintChecksum.Calculate(masterValue) } };
         var diagnostics = new BlueprintBuildDiagnostics(nameof(DocumentaryBlueprintPhase5CompatibilityAdapter), "1.0",
-            "CanonicalDocumentaryBlueprintAggregate", ["04-blueprint/documentary-blueprint.json",
-                "04-blueprint/documentary-blueprint.long.json", "04-blueprint/documentary-blueprint.short.json",
-                "04-blueprint/blueprint-build-diagnostics.json"],
+            "PublishedDocumentaryBlueprintAggregate", ["PublishedDocumentaryBlueprintAggregate",
+                "PublishedDocumentaryBlueprintAggregate.LongVariant", "PublishedDocumentaryBlueprintAggregate.ShortVariant",
+                "AggregateChecksum", "LongChecksum", "ShortChecksum"],
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["aggregate"] = aggregate.DeterministicChecksum,
                 ["master"] = master.Metadata.Checksum, ["long"] = longArtifact.Metadata.Checksum, ["short"] = shortArtifact.Metadata.Checksum },
             aggregate.AggregateCoverage.CoveredQuestions.Count, CoveredObjectives(aggregate).Count,
