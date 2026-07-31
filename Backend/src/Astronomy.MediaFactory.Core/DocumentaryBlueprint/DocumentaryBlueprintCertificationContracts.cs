@@ -5,7 +5,8 @@ public enum DocumentaryBlueprintCertificationStatus { Certified, CertifiedWithWa
 public sealed record DocumentaryBlueprintCertificationRequest(
     string ExecutionId, string PlanId, string EventId, string Language, string Profile,
     DocumentaryBlueprintArtifact Master, DocumentaryBlueprintArtifact Long, DocumentaryBlueprintArtifact Short,
-    BlueprintBuildDiagnostics Phase4Diagnostics, IReadOnlyList<string> RequestedVariants);
+    BlueprintBuildDiagnostics Phase4Diagnostics, IReadOnlyList<string> RequestedVariants,
+    DocumentaryBlueprintAggregate? PublishedAggregate = null);
 
 public sealed record DocumentaryBlueprintSceneOutcome(string SceneId, string Variant, int Sequence,
     DocumentaryNarrativeStage NarrativeStage, DocumentarySceneRole SceneRole, bool Certified,

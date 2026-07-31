@@ -48,6 +48,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IViewerCuriosityArtifactProjector viewerCuriosityProjector,
     IDocumentaryBlueprintPhase4IntegrationService documentaryBlueprintPhase4IntegrationService,
     IDocumentaryBlueprintCertificationIntegrationService documentaryBlueprintCertificationIntegrationService,
+    IDocumentaryBlueprintPhase5CompatibilityAdapter documentaryBlueprintPhase5CompatibilityAdapter,
+    IPhase4CommittedAuthorityEvaluator phase4CommittedAuthorityEvaluator,
     IStoryFrameIntegrationService storyFrameIntegrationService,
     IPhase1AuthorityProjector phase1AuthorityProjector,
     IPhase1AuthorityPersistence phase1AuthorityPersistence,
@@ -188,10 +190,11 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 // A run beginning downstream of Phase 4 is resume/recovery. Only that path
                 // rehydrates authority from the committed publication on disk.
-                var authorityPath = Path.Combine(context.OutputRoot, Phase4AuthorityPaths.DirectoryName, Phase4AuthorityPaths.CanonicalFileName);
-                var recovered = await ReadRequiredJsonAsync<DocumentaryBlueprintAggregate>(authorityPath, cancellationToken);
-                if (!DocumentaryBlueprintProjectionChecksum.HasValidAggregateChecksum(recovered))
-                    throw new InvalidDataException("Recovered published Phase 4 aggregate checksum is invalid.");
+                var evaluation = await phase4CommittedAuthorityEvaluator.EvaluateAsync(context.OutputRoot,
+                    context.Request.PlanId.ToString("D"), context.Request.PlanId.ToString("D"), context.EventId,
+                    context.Request.Language, cancellationToken);
+                var recovered = evaluation.PublishedAuthority ?? throw new InvalidDataException(
+                    $"Recovered Phase 4 committed authority is invalid ({evaluation.ReasonCode}).");
                 context = context with
                 {
                     ExecutionContext = context.ExecutionContext with
@@ -199,6 +202,23 @@ public sealed partial class ProductionPipelineExecutionService(
                         PublishedDocumentaryBlueprintAggregate = recovered
                     }
                 };
+            }
+            if (!request.OverwriteExisting && phase.No == 4)
+            {
+                var evaluation = await phase4CommittedAuthorityEvaluator.EvaluateAsync(context.OutputRoot,
+                    context.Request.PlanId.ToString("D"), context.Request.PlanId.ToString("D"), context.EventId,
+                    context.Request.Language, cancellationToken);
+                if (evaluation.IsValid && evaluation.PublishedAuthority is not null)
+                {
+                    context = context with { ExecutionContext = context.ExecutionContext with
+                        { PublishedDocumentaryBlueprintAggregate = evaluation.PublishedAuthority } };
+                    var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name),
+                        ProductionPhaseStatus.Skipped, [], evaluation.ArtifactPaths.Select(x => Path.Combine(context.OutputRoot, x)).ToArray(),
+                        [], [], "Valid certified Phase 4 committed authority was reused; overwriteExisting=false.", false, cancellationToken);
+                    phaseResults.Add(skipped with { ReasonCode = "P4PUB_ALREADY_PUBLISHED" });
+                    await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+                    continue;
+                }
             }
             if (!IsPhaseRequiredForRequestedOutputs(context, phase.No))
             {
@@ -482,65 +502,27 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
-    private static bool PreviousPhaseRequiredOutputsExist(ProductionPhaseContext context, int phaseNo)
+    private bool PreviousPhaseRequiredOutputsExist(ProductionPhaseContext context, int phaseNo)
         => phaseNo switch
         {
             3 => ExistingViewerCuriosityArtifactsAreValid(context),
-            4 => ExistingBlueprintArtifactsAreValid(context),
+            4 => false, // Phase 4 reuse is asynchronous and exclusively evaluated by IPhase4CommittedAuthorityEvaluator.
             5 => ExistingBlueprintCertificationArtifactsAreValid(context),
             6 => ExistingStoryFrameArtifactsAreValid(context),
             7 => File.Exists(BuildNarrationV5Path(context)),
             _ => true
         };
 
-    private static bool ExistingBlueprintArtifactsAreValid(ProductionPhaseContext context)
+    private DocumentaryBlueprintCertificationRequest ReadPhase5Request(ProductionPhaseContext context)
     {
-        var root = Path.Combine(context.OutputRoot, "04-blueprint");
-        var names = new[] { "documentary-blueprint.json", "documentary-blueprint.long.json", "documentary-blueprint.short.json" };
-        if (names.Any(n => !File.Exists(Path.Combine(root, n))) || !File.Exists(Path.Combine(root, "blueprint-build-diagnostics.json"))) return false;
-        try
-        {
-            var artifacts = names.Select(n => JsonSerializer.Deserialize<DocumentaryBlueprintArtifact>(File.ReadAllText(Path.Combine(root, n)), JsonOptions)).ToArray();
-            var bank = JsonSerializer.Deserialize<ViewerQuestionBank>(File.ReadAllText(Path.Combine(context.OutputRoot, "03-questions", "viewer-question-bank.json")), JsonOptions);
-            var objectives = JsonSerializer.Deserialize<ViewerLearningObjectives>(File.ReadAllText(Path.Combine(context.OutputRoot, "03-questions", "learning-objectives.json")), JsonOptions);
-            var diagnostics = JsonSerializer.Deserialize<BlueprintBuildDiagnostics>(File.ReadAllText(Path.Combine(root, "blueprint-build-diagnostics.json")), JsonOptions);
-            if (bank is null || objectives is null || diagnostics is null || !Phase4ManifestIsValid(context, names.Select(n => Path.Combine(root, n)).Append(Path.Combine(root, "blueprint-build-diagnostics.json")).ToArray())) return false;
-            if (diagnostics.BuilderType.Length == 0 || diagnostics.IntegrationServiceType.Length == 0 || diagnostics.SourceChecksums.GetValueOrDefault("viewerQuestionBank") != bank.Metadata.Checksum
-                || diagnostics.QuestionCount != bank.Questions.Count || diagnostics.LearningObjectiveCount != objectives.Objectives.Count) return false;
-            var variants = new[] { "Master", "Long", "Short" };
-            var questionIds = bank.Questions.Select(q => q.QuestionId).ToHashSet(StringComparer.Ordinal);
-            var high = bank.Questions.Where(q => q.Priority == "High").Select(q => q.QuestionId).ToHashSet(StringComparer.Ordinal);
-            var objectiveIds = objectives.Objectives.Select(o => o.ObjectiveId).ToHashSet(StringComparer.Ordinal);
-            var references = bank.Questions.SelectMany(q => q.KnowledgeReferences).Select(r => r.ReferenceId).ToHashSet(StringComparer.Ordinal);
-            var requested = new HashSet<string>(["Long", "Short"], StringComparer.OrdinalIgnoreCase);
-            return artifacts.Select((a, i) => a is not null && DocumentaryBlueprintArtifactValidator.Validate(a,
-                new(context.Request.PlanId.ToString("D"), context.EventId, context.Request.Language, context.Request.PlannedFormat ?? context.Request.Category,
-                    variants[i], bank.Metadata.Checksum, questionIds, high, objectiveIds, references, requested)).IsValid).All(x => x);
-        }
-        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException) { return false; }
-    }
-
-    private static DocumentaryBlueprintCertificationRequest ReadPhase5Request(ProductionPhaseContext context)
-    {
-        if (!PreviousPhaseSucceeded(context, 4) || !ExistingBlueprintArtifactsAreValid(context)) throw new InvalidOperationException("Phase 5 rejected missing or invalid Phase 4 validation, authority, manifest, identity, or checksum.");
         var published = context.ExecutionContext.PublishedDocumentaryBlueprintAggregate
             ?? throw new InvalidOperationException("Phase 5 requires the published DocumentaryBlueprintAggregate in the execution context.");
-        if (published.ExecutionId != context.Request.PlanId.ToString("D") ||
-            !DocumentaryBlueprintProjectionChecksum.HasValidAggregateChecksum(published))
-            throw new InvalidOperationException("Phase 5 rejected a stale or invalid published DocumentaryBlueprintAggregate.");
-        var root = Path.Combine(context.OutputRoot, "04-blueprint");
-        // These legacy-shaped values are a compatibility adapter for the existing Phase 5
-        // certification contract. The published aggregate above remains the authority.
-        return new DocumentaryBlueprintCertificationRequest(context.Request.PlanId.ToString("D"), context.Request.PlanId.ToString("D"), context.EventId,
-            context.Request.Language, context.Request.PlannedFormat ?? context.Request.Category,
-            JsonSerializer.Deserialize<DocumentaryBlueprintArtifact>(File.ReadAllText(Path.Combine(root, "documentary-blueprint.json")), JsonOptions)!,
-            JsonSerializer.Deserialize<DocumentaryBlueprintArtifact>(File.ReadAllText(Path.Combine(root, "documentary-blueprint.long.json")), JsonOptions)!,
-            JsonSerializer.Deserialize<DocumentaryBlueprintArtifact>(File.ReadAllText(Path.Combine(root, "documentary-blueprint.short.json")), JsonOptions)!,
-            JsonSerializer.Deserialize<BlueprintBuildDiagnostics>(File.ReadAllText(Path.Combine(root, "blueprint-build-diagnostics.json")), JsonOptions)!,
-            ["Long", "Short"]);
+        return documentaryBlueprintPhase5CompatibilityAdapter.Adapt(published,
+            new(context.Request.PlanId.ToString("D"), context.Request.PlanId.ToString("D"), context.EventId,
+                context.Request.Language, published.ProfileId, ["Long", "Short"]));
     }
 
-    private static bool ExistingBlueprintCertificationArtifactsAreValid(ProductionPhaseContext context)
+    private bool ExistingBlueprintCertificationArtifactsAreValid(ProductionPhaseContext context)
     {
         var root = Path.Combine(context.OutputRoot, "05-blueprint-certification");
         var paths = new[] { Path.Combine(root, "blueprint-certification.json"), Path.Combine(root, "editorial-contract.json"), Path.Combine(root, "certification-diagnostics.json") };
@@ -607,21 +589,6 @@ public sealed partial class ProductionPipelineExecutionService(
                 &&expectedPaths.Select((p,i)=>actual.Any(x=>x.Path==NormalizePath(p)&&x.Role==roles[i])).All(x=>x);
         }
         catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or ArgumentException or NotSupportedException) { return false; }
-    }
-
-    private static bool Phase4ManifestIsValid(ProductionPhaseContext context, params string[] expectedPaths)
-    {
-        var path = Path.Combine(context.OutputRoot, "phase-manifest.json");
-        if (!File.Exists(path)) return false;
-        using var document = JsonDocument.Parse(File.ReadAllText(path));
-        var root = document.RootElement;
-        if (!root.TryGetProperty("planId", out var plan) || !Guid.TryParse(plan.GetString(), out var id) || id != context.Request.PlanId
-            || !root.TryGetProperty("phase4Artifacts", out var entries) || entries.ValueKind != JsonValueKind.Array) return false;
-        var actual = entries.EnumerateArray().Select(e => (Path: NormalizePath(e.GetProperty("path").GetString() ?? ""), Role: e.GetProperty("role").GetString() ?? "")).ToArray();
-        var roles = new[] { "Authoritative", "VariantAuthority", "VariantAuthority", "Supporting" };
-        return actual.Length == expectedPaths.Length && actual.Select(x => x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() == actual.Length
-            && actual.Count(x => x.Role == "Authoritative") == 1
-            && expectedPaths.Select((p, i) => actual.Any(x => x.Path == NormalizePath(p) && x.Role == roles[i])).All(x => x);
     }
 
     private static bool ExistingViewerCuriosityArtifactsAreValid(ProductionPhaseContext context)

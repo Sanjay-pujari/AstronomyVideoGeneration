@@ -34,7 +34,8 @@ public static class DocumentaryBlueprintCertificationChecksum
         Requirements = value.DownstreamRequirements.Order(StringComparer.Ordinal), value.NarrationEligible, value.StoryFrameEligible
     });
 
-    public static string SourcePhase4(DocumentaryBlueprintCertificationRequest request) => Hash(new
+    public static string SourcePhase4(DocumentaryBlueprintCertificationRequest request) =>
+        request.PublishedAggregate?.DeterministicChecksum ?? Hash(new
     {
         Master = request.Master.Metadata.Checksum, Long = request.Long.Metadata.Checksum, Short = request.Short.Metadata.Checksum,
         request.Phase4Diagnostics.BuilderVersion, Variants = request.RequestedVariants.Order(StringComparer.Ordinal)

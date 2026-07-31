@@ -141,7 +141,10 @@ public sealed record Rc2CertifiedExecutionStatus(
     bool CommittedStateValidationPassed = false,
     bool LegacyAuthorityProduced = false,
     string PipelineIntegrationService = "DocumentaryBlueprintPhase4IntegrationService",
-    string DownstreamAuthorityType = "PublishedDocumentaryBlueprintAggregate");
+    string DownstreamAuthorityType = "PublishedDocumentaryBlueprintAggregate",
+    bool LegacyCompatibilityArtifactExists = false,
+    bool LegacyPhase4AuthorityUsed = false,
+    string? CommittedStateReasonCode = null);
 
 public sealed record Rc2CertifiedPhaseStatus(int PhaseNo, string PhaseName, string Status, string? ReasonCode);
 

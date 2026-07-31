@@ -38,4 +38,41 @@ public sealed class Phase4DownstreamAuthorityArchitectureTests
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
             method => method.Name.Contains("DocumentaryBlueprintBuilder", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void production_pipeline_phase5_uses_typed_aggregate_adapter()
+    {
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs"));
+        Assert.Contains("IDocumentaryBlueprintPhase5CompatibilityAdapter", source);
+        Assert.Contains("PublishedDocumentaryBlueprintAggregate", source);
+    }
+
+    [Fact]
+    public void production_pipeline_does_not_cross_deserialize_aggregate_as_legacy_artifact()
+    {
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs"));
+        Assert.DoesNotContain("Deserialize<DocumentaryBlueprintArtifact>", source);
+        Assert.DoesNotContain("ExistingBlueprintArtifactsAreValid", source);
+        Assert.DoesNotContain("Phase4ManifestIsValid", source);
+    }
+
+    [Fact]
+    public void phase4_resume_and_rc2_status_use_committed_state_evaluator()
+    {
+        var pipeline = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs"));
+        var status = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "Rc2CertifiedExecutionStatusReader.cs"));
+        Assert.Contains("phase4CommittedAuthorityEvaluator.EvaluateAsync", pipeline);
+        Assert.Contains("IPhase4CommittedAuthorityEvaluator", status);
+        Assert.DoesNotContain("story-graph.json\"));\n        var committed", status);
+    }
+
+    [Fact]
+    public void phase5_adapter_does_not_read_files_derive_short_or_publish_master()
+    {
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("DocumentaryBlueprint", "DocumentaryBlueprintPhase5CompatibilityAdapter.cs"));
+        Assert.DoesNotContain("File.", source);
+        Assert.DoesNotContain("ShortVariant =", source);
+        Assert.DoesNotContain("Publish", source);
+        Assert.Contains("aggregate.ShortVariant", source);
+    }
 }

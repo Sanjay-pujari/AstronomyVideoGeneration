@@ -14,7 +14,7 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Rc2CertifiedApiIntegrationTests
 {
     [Fact]
-    public async Task rc2_api_executes_certified_phase1_to_phase4()
+    public async Task rc2_api_serializes_certified_execution_contract()
     {
         var executionId = Guid.NewGuid();
         var endpoint = new CertifiedEndpoint(executionId);
@@ -49,6 +49,7 @@ public sealed class Rc2CertifiedApiIntegrationTests
         Assert.False(status.Phase4Publication.LegacyAuthorityProduced);
         Assert.True(status.CommittedStateValidationPassed);
         Assert.False(status.LegacyAuthorityProduced);
+        Assert.False(status.LegacyPhase4AuthorityUsed);
         Assert.Equal("DocumentaryBlueprintPhase4IntegrationService", status.PipelineIntegrationService);
         Assert.Equal("PublishedDocumentaryBlueprintAggregate", status.DownstreamAuthorityType);
 
