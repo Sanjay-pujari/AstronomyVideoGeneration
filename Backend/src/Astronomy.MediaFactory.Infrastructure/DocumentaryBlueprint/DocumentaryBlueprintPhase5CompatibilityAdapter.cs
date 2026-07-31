@@ -14,7 +14,7 @@ public interface IDocumentaryBlueprintPhase5CompatibilityAdapter
 /// <summary>
 /// Pure, in-memory bridge for the retained Phase 5 contract.  The Master value is a
 /// non-authoritative compatibility view of the aggregate's Long projection; it is
-/// never a Phase 4 publication or manifest entry.
+/// never a Phase 4 authority or manifest entry.
 /// </summary>
 public sealed class DocumentaryBlueprintPhase5CompatibilityAdapter : IDocumentaryBlueprintPhase5CompatibilityAdapter
 {
@@ -25,11 +25,11 @@ public sealed class DocumentaryBlueprintPhase5CompatibilityAdapter : IDocumentar
         if (!DocumentaryBlueprintProjectionChecksum.HasValidAggregateChecksum(aggregate) ||
             !DocumentaryBlueprintProjectionChecksum.HasValidVariantChecksum(aggregate.LongVariant) ||
             !DocumentaryBlueprintProjectionChecksum.HasValidVariantChecksum(aggregate.ShortVariant))
-            throw new InvalidDataException("Published DocumentaryBlueprintAggregate checksum is invalid.");
+            throw new InvalidDataException("Canonical DocumentaryBlueprintAggregate checksum is invalid.");
         if (aggregate.ExecutionId != context.ExecutionId || aggregate.PlanId != context.PlanId ||
             aggregate.EventId != context.EventId || !string.Equals(aggregate.Language, context.Language, StringComparison.OrdinalIgnoreCase) ||
             aggregate.ProfileId != context.Profile)
-            throw new InvalidDataException("Published DocumentaryBlueprintAggregate identity does not match the Phase 5 request.");
+            throw new InvalidDataException("Canonical DocumentaryBlueprintAggregate identity does not match the Phase 5 request.");
 
         var longArtifact = Project(aggregate.LongVariant);
         var shortArtifact = Project(aggregate.ShortVariant);
@@ -38,7 +38,7 @@ public sealed class DocumentaryBlueprintPhase5CompatibilityAdapter : IDocumentar
         var masterValue = longArtifact with { Metadata = longArtifact.Metadata with { Variant = "Master", Checksum = string.Empty } };
         var master = masterValue with { Metadata = masterValue.Metadata with { Checksum = DocumentaryBlueprintChecksum.Calculate(masterValue) } };
         var diagnostics = new BlueprintBuildDiagnostics(nameof(DocumentaryBlueprintPhase5CompatibilityAdapter), "1.0",
-            "PublishedDocumentaryBlueprintAggregate", ["04-blueprint/documentary-blueprint.json",
+            "CanonicalDocumentaryBlueprintAggregate", ["04-blueprint/documentary-blueprint.json",
                 "04-blueprint/documentary-blueprint.long.json", "04-blueprint/documentary-blueprint.short.json",
                 "04-blueprint/blueprint-build-diagnostics.json"],
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["aggregate"] = aggregate.DeterministicChecksum,
