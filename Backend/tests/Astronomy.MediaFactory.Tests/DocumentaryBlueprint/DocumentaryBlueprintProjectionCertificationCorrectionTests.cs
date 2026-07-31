@@ -105,6 +105,8 @@ public sealed class DocumentaryBlueprintProjectionCertificationCorrectionTests
         profile.FamilyCode.Should().Be(owner.FamilyId);
         profile.LongProfile.ExpectedSceneCount.Should().Be(12);
         profile.ShortProfile.ExpectedSceneCount.Should().Be(4);
+        profile.LongProfile.NarrativeSlots.Should().OnlyContain(slot => slot.CanReusePrimaryQuestion);
+        profile.ShortProfile.NarrativeSlots.Should().OnlyContain(slot => slot.CanReusePrimaryQuestion);
     }
 
     private static DocumentaryBlueprintAggregate Aggregate()
