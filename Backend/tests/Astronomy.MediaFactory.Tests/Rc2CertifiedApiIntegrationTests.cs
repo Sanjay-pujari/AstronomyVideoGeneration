@@ -14,7 +14,7 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Rc2CertifiedApiIntegrationTests
 {
     [Fact]
-    public async Task rc2_api_executes_certified_phases_1_through_4()
+    public async Task rc2_api_executes_certified_phase1_to_phase4()
     {
         var executionId = Guid.NewGuid();
         var endpoint = new CertifiedEndpoint(executionId);
@@ -47,6 +47,10 @@ public sealed class Rc2CertifiedApiIntegrationTests
         Assert.Equal(4, status.ShortSceneCount);
         Assert.Equal(endpoint.AggregateChecksum, status.AggregateChecksum);
         Assert.False(status.Phase4Publication.LegacyAuthorityProduced);
+        Assert.True(status.CommittedStateValidationPassed);
+        Assert.False(status.LegacyAuthorityProduced);
+        Assert.Equal("DocumentaryBlueprintPhase4IntegrationService", status.PipelineIntegrationService);
+        Assert.Equal("PublishedDocumentaryBlueprintAggregate", status.DownstreamAuthorityType);
 
         var before = endpoint.UpstreamChecksums.ToArray();
         var rerun = request with { StartPhaseNo = 4, ExecutionMode = ContentPlanExecutionMode.RerunPhase };
@@ -71,7 +75,11 @@ public sealed class Rc2CertifiedApiIntegrationTests
             var certified = new Rc2CertifiedExecutionStatus(executionId.ToString("D"), phases,
                 new("DocumentaryBlueprintPhase4IntegrationService", "Succeeded", true, true, false),
                 "orion-gold-aggregate", AggregateChecksum, 12, 4, 720, 120, "Valid", true, calls > 1,
-                ["04-blueprint/documentary-blueprint.json", "phase-manifest.json", "phase-04-validation.json"]);
+                ["04-blueprint/documentary-blueprint.json", "phase-manifest.json", "phase-04-validation.json"],
+                CommittedStateValidationPassed: true,
+                LegacyAuthorityProduced: false,
+                PipelineIntegrationService: "DocumentaryBlueprintPhase4IntegrationService",
+                DownstreamAuthorityType: "PublishedDocumentaryBlueprintAggregate");
             return Task.FromResult(new BatchGenerateFromPlansResponse(true, false, 0, 1, 1, [], [], [], [],
                 PlanId: executionId, SelectedPlanId: executionId, OutputRoot: "/executions/" + executionId.ToString("D"),
                 LastCompletedPhaseNo: 4, UseProductionPipeline: true, Rc2CertifiedExecution: certified));

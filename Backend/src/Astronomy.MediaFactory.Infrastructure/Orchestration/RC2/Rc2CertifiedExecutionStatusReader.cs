@@ -47,6 +47,7 @@ internal static class Rc2CertifiedExecutionStatusReader
             authority?.AggregateId, authority?.DeterministicChecksum,
             authority?.LongVariant.ActualSceneCount ?? 0, authority?.ShortVariant.ActualSceneCount ?? 0,
             authority?.AggregateDurationSummary.LongDurationSeconds ?? 0, authority?.AggregateDurationSummary.ShortDurationSeconds ?? 0,
-            committed && checksumValid ? "Valid" : "Invalid", committed, phase4?.ReasonCode == "P4PUB_ALREADY_PUBLISHED", artifacts);
+            committed && checksumValid ? "Valid" : "Invalid", committed, phase4?.ReasonCode == "P4PUB_ALREADY_PUBLISHED", artifacts,
+            committed && checksumValid, legacy, IntegrationService, "PublishedDocumentaryBlueprintAggregate");
     }
 }
