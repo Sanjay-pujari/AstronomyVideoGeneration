@@ -24,6 +24,10 @@ public sealed class Rc2CertifiedExecutionStatusReader(IPhase4CommittedAuthorityE
         var phases = response.Steps.OfType<ProductionPhaseResult>().Where(x => x.PhaseNo is >= 1 and <= 4)
             .GroupBy(x => x.PhaseNo).Select(x => x.Last()).OrderBy(x => x.PhaseNo)
             .Select(x => new Rc2CertifiedPhaseStatus(x.PhaseNo, x.PhaseName, x.Status.ToString(), x.ReasonCode)).ToArray();
+        // This check describes an optional legacy compatibility artifact only. Every
+        // certification field below (commit, validation, inventory, and reason) is
+        // sourced from IPhase4CommittedAuthorityEvaluator; file existence is never
+        // promoted into certified Phase 4 state.
         var compatibility = File.Exists(Path.Combine(response.OutputRoot, "editorial", "story-graph.json"));
         return new(executionId, phases,
             new(IntegrationService, phase4?.Status.ToString() ?? "NotRun", authority is not null, evaluation.IsValid, false),
