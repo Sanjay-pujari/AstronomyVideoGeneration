@@ -90,7 +90,10 @@ internal static class Phase5CertificationFixture
     {
         var master = Artifact("Master", warning ? ["review terminology"] : []);
         var request = new DocumentaryBlueprintCertificationRequest("execution", "plan", "orion", "en-US", "LongVideo", master, Artifact("Long"), Artifact("Short"), Diagnostics(master), ["Long", "Short"]);
-        var result = new DocumentaryBlueprintCertificationIntegrationService(new DocumentaryProductionCertifier()).CertifyAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+        var result = new DocumentaryBlueprintCertificationIntegrationService(new DocumentaryProductionCertifier(),
+            new DocumentaryBlueprintEditorialValidator(), new DocumentaryBlueprintCoverageEvaluator(),
+            new DocumentaryBlueprintTransitionEvaluator(), new DocumentaryBlueprintPauseTestEvaluator())
+            .CertifyAsync(request, CancellationToken.None).GetAwaiter().GetResult();
         return (result, request);
     }
     private static DocumentaryBlueprintArtifact Artifact(string variant, IReadOnlyList<string>? warnings = null)

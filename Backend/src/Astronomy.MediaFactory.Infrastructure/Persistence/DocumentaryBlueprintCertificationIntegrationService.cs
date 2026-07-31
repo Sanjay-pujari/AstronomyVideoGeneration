@@ -53,16 +53,18 @@ public sealed class DocumentaryBlueprintCertificationIntegrationService(Document
             certification.BlockingIssues.Count, certification.NonBlockingWarnings.Count, certification.CertifiedVariants, certification.RejectedVariants,
             ["Phase4Authority", "ProductionCertification", "EditorialContract", "CompleteSet"], timer.ElapsedMilliseconds, certification.SourcePhase4Checksum);
         const string version = "1.0";
-        var common = (aggregate.ExecutionId, aggregate.PlanId, aggregate.EventId, aggregate.Language, aggregate.ProfileId,
-            aggregate.AggregateId, aggregate.DeterministicChecksum, aggregate.LongVariant.DeterministicChecksum, aggregate.ShortVariant.DeterministicChecksum);
+        var common = (ExecutionId: aggregate.ExecutionId, PlanId: aggregate.PlanId, EventId: aggregate.EventId,
+            Language: aggregate.Language, ProfileId: aggregate.ProfileId, AggregateId: aggregate.AggregateId,
+            AggregateChecksum: aggregate.DeterministicChecksum, LongChecksum: aggregate.LongVariant.DeterministicChecksum,
+            ShortChecksum: aggregate.ShortVariant.DeterministicChecksum);
         var coverage = new BlueprintCoverageReport(common.ExecutionId, common.PlanId, common.EventId, common.Language, common.ProfileId,
-            common.AggregateId, common.DeterministicChecksum, common.Item7, common.Item8, version, coverageResults, coverageResults.All(x => x.IsValid), string.Empty);
+            common.AggregateId, common.AggregateChecksum, common.LongChecksum, common.ShortChecksum, version, coverageResults, coverageResults.All(x => x.IsValid), string.Empty);
         coverage = coverage with { SemanticChecksum = Phase5SemanticChecksum.Calculate(coverage with { SemanticChecksum = string.Empty }) };
         var transitions = new BlueprintTransitionReport(common.ExecutionId, common.PlanId, common.EventId, common.Language, common.ProfileId,
-            common.AggregateId, common.DeterministicChecksum, common.Item7, common.Item8, version, transitionResults, transitionResults.All(x => x.IsValid), string.Empty);
+            common.AggregateId, common.AggregateChecksum, common.LongChecksum, common.ShortChecksum, version, transitionResults, transitionResults.All(x => x.IsValid), string.Empty);
         transitions = transitions with { SemanticChecksum = Phase5SemanticChecksum.Calculate(transitions with { SemanticChecksum = string.Empty }) };
         var pause = new BlueprintPauseTestReport(common.ExecutionId, common.PlanId, common.EventId, common.Language, common.ProfileId,
-            common.AggregateId, common.DeterministicChecksum, common.Item7, common.Item8, version, pauseResults, pauseResults.Count(x => x.Passed), pauseResults.Count(x => !x.Passed), pauseResults.All(x => x.Passed), string.Empty);
+            common.AggregateId, common.AggregateChecksum, common.LongChecksum, common.ShortChecksum, version, pauseResults, pauseResults.Count(x => x.Passed), pauseResults.Count(x => !x.Passed), pauseResults.All(x => x.Passed), string.Empty);
         pause = pause with { SemanticChecksum = Phase5SemanticChecksum.Calculate(pause with { SemanticChecksum = string.Empty }) };
         var intents = variants.SelectMany(v => v.Blueprint.Scenes.OrderBy(x => x.SceneNumber).Select(s => {
             var trace = v.SceneTraceability.Single(t => t.SceneId == s.SceneId);
@@ -70,7 +72,7 @@ public sealed class DocumentaryBlueprintCertificationIntegrationService(Document
                 trace.LearningObjectiveId, s.EditorialOutcome, s.KnowledgeReferences.Select(k => k.KnowledgeEntryId).ToArray(), s.EstimatedDurationSeconds,
                 s.Transition, aggregate.AggregateId, aggregate.DeterministicChecksum, v.DeterministicChecksum); })).ToArray();
         var sceneIntents = new BlueprintSceneIntentProjection(common.ExecutionId, common.PlanId, common.EventId, common.Language, common.ProfileId,
-            common.AggregateId, common.DeterministicChecksum, common.Item7, common.Item8, version, intents, string.Empty);
+            common.AggregateId, common.AggregateChecksum, common.LongChecksum, common.ShortChecksum, version, intents, string.Empty);
         sceneIntents = sceneIntents with { SemanticChecksum = Phase5SemanticChecksum.Calculate(sceneIntents with { SemanticChecksum = string.Empty }) };
         var validations = variants.Select(v => { var findings = editorialValidator.Validate(v.Blueprint).Findings;
             return new BlueprintVariantValidation(v.Variant, v.Blueprint.Scenes.Count, v.TotalAllocatedDurationSeconds, findings.All(f => f.Severity != DocumentaryBlueprintValidationSeverity.Error),
@@ -79,7 +81,7 @@ public sealed class DocumentaryBlueprintCertificationIntegrationService(Document
                 v.SceneTraceability.All(t => !string.IsNullOrWhiteSpace(t.PrimaryViewerQuestionId)), v.SceneTraceability.All(t => !string.IsNullOrWhiteSpace(t.LearningObjectiveId)),
                 v.SceneTraceability.All(t => t.KnowledgeSelections.Count > 0), findings, findings.All(f => f.Severity != DocumentaryBlueprintValidationSeverity.Error)); }).ToArray();
         var validation = new BlueprintValidationReport(common.ExecutionId, common.PlanId, common.EventId, common.Language, common.ProfileId,
-            common.AggregateId, common.DeterministicChecksum, common.Item7, common.Item8, version, validations,
+            common.AggregateId, common.AggregateChecksum, common.LongChecksum, common.ShortChecksum, version, validations,
             aggregate.LongVariant.DeterministicChecksum != aggregate.ShortVariant.DeterministicChecksum, coverage.IsValid, transitions.IsValid, pause.IsValid,
             certification.BlockingIssues, certification.NonBlockingWarnings, certification.Passed && coverage.IsValid && transitions.IsValid && pause.IsValid, string.Empty);
         validation = validation with { SemanticChecksum = Phase5SemanticChecksum.Calculate(validation with { SemanticChecksum = string.Empty }) };
