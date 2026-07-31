@@ -1,5 +1,7 @@
 namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
+using CuriosityViewerQuestion = global::Astronomy.MediaFactory.Core.ViewerQuestion;
+
 /// <summary>Pure, filesystem-free Phase 4 intent planner. Both variants are independently allocated from the request.</summary>
 public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
 {
@@ -35,7 +37,7 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
         catch (PlanningException ex) { return Failed(r, [new(ex.Code, ex.Message)]); }
     }
 
-    private static DocumentaryVariantIntent Allocate(DocumentaryIntentPlanningRequest r, DocumentaryVariantProfile p, ViewerQuestion[] qs)
+    private static DocumentaryVariantIntent Allocate(DocumentaryIntentPlanningRequest r, DocumentaryVariantProfile p, CuriosityViewerQuestion[] qs)
     {
         var slots = p.NarrativeSlots.OrderBy(x=>x.Order).ThenBy(x=>x.SlotId,StringComparer.Ordinal).ToArray();
         if (slots.Length != p.ExpectedSceneCount || p.DurationBudgetSeconds < slots.Length*p.MinimumSceneDurationSeconds || p.DurationBudgetSeconds > slots.Length*p.MaximumSceneDurationSeconds)
@@ -76,7 +78,7 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
         while(remaining>0){var eligible=slots.Select((s,i)=>(s,i)).Where(x=>result[x.i]<p.MaximumSceneDurationSeconds).OrderByDescending(x=>(decimal)x.s.DurationWeight/(result[x.i]-p.MinimumSceneDurationSeconds+1)).ThenBy(x=>x.s.Order).ThenBy(x=>x.s.SlotId,StringComparer.Ordinal).FirstOrDefault(); if(eligible.s is null) throw new PlanningException("DI_DURATION_ALLOCATION_FAILED","Duration maximums cannot satisfy budget."); result[eligible.i]++;remaining--;}
         return result;
     }
-    private static DocumentaryCoverageSummary Coverage(IEnumerable<ViewerQuestion> qs,IEnumerable<DocumentarySceneOpportunity> scenes){var a=scenes.ToArray();var primary=a.Select(x=>x.PrimaryViewerQuestionId).ToArray();var supporting=a.SelectMany(x=>x.SupportingViewerQuestionIds).ToArray();var covered=primary.Concat(supporting).Distinct().Order(StringComparer.Ordinal).ToArray();return new(covered,qs.Where(x=>x.RequiresEditorialAttention).Select(x=>x.QuestionId).Where(x=>covered.Contains(x,StringComparer.Ordinal)).Order(StringComparer.Ordinal).ToArray(),qs.Select(x=>x.QuestionId).Except(covered,StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),primary.GroupBy(x=>x,StringComparer.Ordinal).Where(g=>g.Count()>1).Select(g=>g.Key).Order(StringComparer.Ordinal).ToArray(),supporting.Distinct().Order(StringComparer.Ordinal).ToArray(),a.SelectMany(x=>x.SelectedKnowledgeReferences).Select(x=>x.KnowledgeReferenceId).Distinct().Order(StringComparer.Ordinal).ToArray());}
+    private static DocumentaryCoverageSummary Coverage(IEnumerable<CuriosityViewerQuestion> qs,IEnumerable<DocumentarySceneOpportunity> scenes){var a=scenes.ToArray();var primary=a.Select(x=>x.PrimaryViewerQuestionId).ToArray();var supporting=a.SelectMany(x=>x.SupportingViewerQuestionIds).ToArray();var covered=primary.Concat(supporting).Distinct().Order(StringComparer.Ordinal).ToArray();return new(covered,qs.Where(x=>x.RequiresEditorialAttention).Select(x=>x.QuestionId).Where(x=>covered.Contains(x,StringComparer.Ordinal)).Order(StringComparer.Ordinal).ToArray(),qs.Select(x=>x.QuestionId).Except(covered,StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),primary.GroupBy(x=>x,StringComparer.Ordinal).Where(g=>g.Count()>1).Select(g=>g.Key).Order(StringComparer.Ordinal).ToArray(),supporting.Distinct().Order(StringComparer.Ordinal).ToArray(),a.SelectMany(x=>x.SelectedKnowledgeReferences).Select(x=>x.KnowledgeReferenceId).Distinct().Order(StringComparer.Ordinal).ToArray());}
     private static List<DocumentaryPlanningIssue> ValidateInput(DocumentaryIntentPlanningRequest r){var e=new List<DocumentaryPlanningIssue>();if(r.Profile.ProfileId!=r.SourceLineage.ProfileId||r.Profile.ProfileVersion!=r.SourceLineage.ProfileVersion)e.Add(new("DI_PROFILE_INVALID","Profile and lineage differ."));if(!string.Equals(r.Language,r.QuestionBank.Metadata.Language,StringComparison.OrdinalIgnoreCase)||!string.Equals(r.Language,r.SourceLineage.Language,StringComparison.OrdinalIgnoreCase))e.Add(new("DI_LANGUAGE_MISMATCH","Upstream languages differ."));if(r.QuestionBank.Questions.Select(x=>x.QuestionId).Distinct(StringComparer.Ordinal).Count()!=r.QuestionBank.Questions.Count)e.Add(new("DI_QUESTION_BANK_INVALID","Question IDs must be unique."));if(r.CertifiedKnowledge.Any(x=>x.SourceArtifact.Contains("compatibility/",StringComparison.OrdinalIgnoreCase)))e.Add(new("DI_CERTIFIED_KNOWLEDGE_REFERENCE_INVALID","Compatibility artifacts cannot be authoritative."));return e;}
     private static int Priority(string p)=>p switch{"High"=>0,"Medium"=>1,"Normal"=>2,_=>3};
     private static string Visual(DocumentaryNarrativeSlot s)=>s.NarrativeStage.Contains("Clos",StringComparison.OrdinalIgnoreCase)?"ClosingReflection":s.SceneRole.Contains("Science",StringComparison.OrdinalIgnoreCase)?"ScientificExplanation":"Orientation";
