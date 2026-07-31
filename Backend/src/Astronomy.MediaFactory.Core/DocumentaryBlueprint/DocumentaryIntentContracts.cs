@@ -17,12 +17,23 @@ public sealed record DocumentaryNarrativeSlot(string SlotId, int Order, string N
     string PurposeCode, IReadOnlyList<string> PreferredQuestionCategories, IReadOnlyList<string> AllowedQuestionCategories,
     IReadOnlyList<string> PreferredKnowledgeCategories, bool RequiredKnowledge, string ObjectiveTemplateCode,
     string OutcomeTemplateCode, string TransitionIntentCode, int DurationWeight, bool CanReusePrimaryQuestion,
-    bool CanUseEditorialOnlyQuestion, string ClosingBehavior);
+    bool CanUseEditorialOnlyQuestion, string ClosingBehavior)
+{
+    /// <summary>Profile-owned values; the planner never derives these from display labels.</summary>
+    public string VisualOpportunityIntent { get; init; } = "ProfileDefined";
+    public string EditorialOutcome { get; init; } = "Editorial outcome to be resolved from the profile.";
+    public bool CanConsolidateSupportingQuestions { get; init; }
+}
 public sealed record DocumentaryVariantProfile(string Variant, bool Required, int ExpectedSceneCount,
     int MinimumSceneCount, int MaximumSceneCount, int DurationBudgetSeconds, int MinimumSceneDurationSeconds,
     int MaximumSceneDurationSeconds, IReadOnlyList<DocumentaryNarrativeSlot> NarrativeSlots,
     IReadOnlyList<string> RequiredQuestionCoverage, IReadOnlyList<string> RequiredKnowledgeCoverage,
-    string TransitionPolicy);
+    string TransitionPolicy)
+{
+    /// <summary>Question id to stable, profile-authorized deferral reason code.</summary>
+    public IReadOnlyDictionary<string, string> AuthorizedHighQuestionDeferrals { get; init; }
+        = new Dictionary<string, string>(StringComparer.Ordinal);
+}
 public sealed record DocumentaryBlueprintProfile(string ProfileId, string ProfileVersion, string FamilyCode,
     string AudienceCode, DocumentaryVariantProfile LongProfile, DocumentaryVariantProfile ShortProfile,
     string QuestionCoveragePolicy, string KnowledgeCoveragePolicy, string EditorialSafetyPolicy);
@@ -31,11 +42,17 @@ public sealed record DocumentaryKnowledgeSelection(string KnowledgeSelectionId, 
     string SceneOpportunityId, string PrimaryViewerQuestionId, string KnowledgeReferenceId, string SourceArtifact,
     string SourcePointer, string SemanticChecksum, string PurposeCode, string SelectionReasonCode, bool IsPrimary,
     QuestionEvidenceStatus EvidenceStatus);
+public sealed record DocumentaryQuestionCoverageRecord(string QuestionId, string Variant, string CoverageType,
+    string SceneOpportunityId, string PrimaryQuestionId, string ReasonCode, string ProfilePermissionCode);
+public sealed record DocumentaryQuestionDeferral(string QuestionId, string Variant,
+    QuestionEvidenceStatus EvidenceStatus, string ReasonCode, string ProfilePermissionCode,
+    string? ConsolidatedIntoQuestionId, string NotesCode);
 public sealed record DocumentarySceneOpportunity(string OpportunityId, string Variant, int Order, string ProfileSlotId,
     string NarrativeStage, string SceneRole, string PurposeCode, string PrimaryViewerQuestionId,
     string PrimaryViewerQuestionText, IReadOnlyList<string> SupportingViewerQuestionIds,
     QuestionEvidenceStatus QuestionEvidenceStatus, string LearningObjectiveId, string LearningObjectiveText,
     string EditorialOutcomeCode, string EditorialOutcome, IReadOnlyList<DocumentaryKnowledgeSelection> SelectedKnowledgeReferences,
+    IReadOnlyList<DocumentaryQuestionCoverageRecord> QuestionCoverageRecords,
     IReadOnlyList<DocumentaryEditorialConstraint> EditorialConstraints, IReadOnlyList<string> MustNotClaim,
     string TransitionIntent, int TargetDurationSeconds, int MinimumDurationSeconds, int MaximumDurationSeconds,
     string VisualOpportunityIntent, string DeterministicChecksum);
@@ -46,7 +63,7 @@ public sealed record DocumentaryCoverageSummary(IReadOnlyList<string> CoveredQue
 public sealed record DocumentaryVariantIntent(string Variant, string VariantIntentId, string ProfileId,
     string ProfileVersion, int ExpectedSceneCount, int DurationBudgetSeconds,
     IReadOnlyList<DocumentarySceneOpportunity> SceneOpportunities, DocumentaryCoverageSummary QuestionCoverage,
-    DocumentaryCoverageSummary KnowledgeCoverage, IReadOnlyList<string> DeferredQuestions,
+    DocumentaryCoverageSummary KnowledgeCoverage, IReadOnlyList<DocumentaryQuestionDeferral> DeferredQuestions,
     IReadOnlyList<DocumentaryEditorialConstraint> EditorialConstraints, int TotalAllocatedDurationSeconds,
     string DeterministicChecksum);
 public sealed record DocumentaryIntent(string SchemaVersion, string ContractVersion, string PlannerVersion,
@@ -71,6 +88,13 @@ public sealed record DocumentaryIntentPlanningResult(bool Success, DocumentaryIn
     IReadOnlyList<DocumentaryPlanningIssue> Errors, IReadOnlyList<DocumentaryPlanningIssue> Warnings,
     string ProfileResolution, DocumentaryCoverageSummary? QuestionAllocationSummary,
     DocumentaryCoverageSummary? KnowledgeAllocationSummary, DocumentaryCoverageSummary? CoverageSummary,
-    IReadOnlyList<string> DeterminismEvidence);
+    IReadOnlyList<string> DeterminismEvidence)
+{
+    public DocumentaryCoverageSummary? LongQuestionCoverage { get; init; }
+    public DocumentaryCoverageSummary? ShortQuestionCoverage { get; init; }
+    public DocumentaryCoverageSummary? LongKnowledgeCoverage { get; init; }
+    public DocumentaryCoverageSummary? ShortKnowledgeCoverage { get; init; }
+    public DocumentaryCoverageSummary? AggregateCoverage { get; init; }
+}
 public interface IDocumentaryIntentPlanner { DocumentaryIntentPlanningResult Plan(DocumentaryIntentPlanningRequest request); }
 public interface IDocumentaryBlueprintProfileResolver { DocumentaryBlueprintProfile? Resolve(string profileId, string familyCode, string audienceCode); }

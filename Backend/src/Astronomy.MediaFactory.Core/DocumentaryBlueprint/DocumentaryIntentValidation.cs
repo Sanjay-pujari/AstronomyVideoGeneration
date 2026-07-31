@@ -29,7 +29,12 @@ public static class DocumentaryIntentValidator
             if(scenes.Where(x=>x.QuestionEvidenceStatus==QuestionEvidenceStatus.EditorialOnly).Any(x=>x.SelectedKnowledgeReferences.Count!=0 || x.EditorialConstraints.Count==0)) Add("DI_UNSUPPORTED_FACT_PROMOTION",$"{variant.Variant} editorial-only safety failed.");
             if(scenes.Sum(x=>x.TargetDurationSeconds)!=profile.DurationBudgetSeconds || scenes.Any(x=>x.TargetDurationSeconds<x.MinimumDurationSeconds||x.TargetDurationSeconds>x.MaximumDurationSeconds)) Add("DI_DURATION_ALLOCATION_FAILED",$"{variant.Variant} durations do not reconcile.");
             if(scenes.Count>0 && (scenes.Take(scenes.Count-1).Any(x=>string.IsNullOrWhiteSpace(x.TransitionIntent)) || scenes[^1].TransitionIntent!="Close")) Add("DI_SLOT_ALLOCATION_FAILED",$"{variant.Variant} transitions are incomplete.");
-            foreach(var high in profile.RequiredQuestionCoverage) if(!variant.QuestionCoverage.CoveredQuestions.Contains(high,StringComparer.Ordinal) && !variant.DeferredQuestions.Contains(high,StringComparer.Ordinal)) Add("DI_REQUIRED_HIGH_QUESTION_UNCOVERED",$"Required question '{high}' is neither covered nor deferred.");
+            foreach(var high in profile.RequiredQuestionCoverage)
+                if(!variant.QuestionCoverage.CoveredQuestions.Contains(high,StringComparer.Ordinal) &&
+                   !variant.DeferredQuestions.Any(x=>x.QuestionId==high && x.ProfilePermissionCode=="ProfileAuthorizedHighDeferral"))
+                    Add("DI_REQUIRED_HIGH_QUESTION_UNCOVERED",$"Required question '{high}' is neither covered nor authorized for deferral.");
+            if(scenes.SelectMany(x=>x.SupportingViewerQuestionIds).Except(scenes.SelectMany(x=>x.QuestionCoverageRecords).Where(x=>x.CoverageType=="Supporting").Select(x=>x.QuestionId),StringComparer.Ordinal).Any())
+                Add("DI_SLOT_ALLOCATION_FAILED",$"{variant.Variant} has supporting coverage without a structured reason.");
         }
         void Add(string code,string message)=>errors.Add(new(code,message));
     }

@@ -730,6 +730,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IQuestionEngine, AstronomyQuestionEngine>();
         services.TryAddSingleton<IViewerCuriosityArtifactProjector, ViewerCuriosityArtifactProjector>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintBuilder>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryIntentPlanner, Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryIntentPlanner>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintIntegrationService, DocumentaryBlueprintIntegrationService>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryProductionCertifier>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintCertificationIntegrationService, DocumentaryBlueprintCertificationIntegrationService>();
