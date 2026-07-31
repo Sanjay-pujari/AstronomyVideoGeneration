@@ -80,13 +80,25 @@ public sealed record Phase4ValidationRecord(string SchemaVersion,string Contract
     int ShortDurationSeconds,int ArtifactCount,int AuthoritativeArtifactCount,int DerivedArtifactCount,IReadOnlyList<Phase4PublicationDiagnostic> Errors,
     IReadOnlyList<Phase4PublicationDiagnostic> Warnings,string DeterministicChecksum);
 public sealed record Phase4BackupMutationState(bool PhaseMoved,bool ManifestCopied,bool ValidationCopied,bool CompatibilityCopied);
+public sealed record Phase4PublicationValidationEvidence(bool SemanticValidationPassed,bool ChecksumValidationPassed,
+    bool ManifestValidationPassed,bool ProjectionValidationPassed,bool KnowledgeSelectionValidationPassed,
+    bool SceneIndexValidationPassed,bool BuildReportValidationPassed,bool FrozenUpstreamValidationPassed)
+{
+    public bool IsComplete => SemanticValidationPassed&&ChecksumValidationPassed&&ManifestValidationPassed&&
+        ProjectionValidationPassed&&KnowledgeSelectionValidationPassed&&SceneIndexValidationPassed&&
+        BuildReportValidationPassed&&FrozenUpstreamValidationPassed;
+}
 
 public interface IPhase4DocumentaryBlueprintPublicationService { Task<Phase4DocumentaryBlueprintPublicationResult> PublishAsync(Phase4DocumentaryBlueprintPublicationRequest request,CancellationToken cancellationToken=default); }
 public interface IPhase4PublicationTransactionCoordinator:IPhase4DocumentaryBlueprintPublicationService { }
 public interface IPhase4ArtifactSerializer { byte[] Serialize<T>(T value); T Deserialize<T>(byte[] bytes); string SemanticChecksum<T>(T value,Func<T,T> clearChecksum); }
 public interface IPhase4PublishedAuthorityValidator { Task<IReadOnlyList<Phase4PublicationDiagnostic>> ValidateAsync(string phaseDirectory,DocumentaryBlueprintAggregate expected,CancellationToken token); }
-public interface IPhase4CommittedStateValidator { Task<IReadOnlyList<Phase4PublicationDiagnostic>> ValidateAsync(string executionRoot,DocumentaryBlueprintAggregate expected,CancellationToken token); }
+public interface IPhase4CommittedStateValidator {
+    Task<IReadOnlyList<Phase4PublicationDiagnostic>> ValidateAuthorityAndManifestAsync(string executionRoot,DocumentaryBlueprintAggregate expected,CancellationToken token);
+    Task<IReadOnlyList<Phase4PublicationDiagnostic>> ValidateCommitMarkerAsync(string executionRoot,DocumentaryBlueprintAggregate expected,CancellationToken token);
+    Task<IReadOnlyList<Phase4PublicationDiagnostic>> ValidateAsync(string executionRoot,DocumentaryBlueprintAggregate expected,CancellationToken token);
+}
 public interface IPhase4ManifestUpdater { byte[] Merge(byte[]? existing,IReadOnlyList<Phase4ArtifactEntry> entries); }
-public interface IPhase4RecoveryService { Task<bool> RecoverAsync(string executionRoot,CancellationToken token); }
+public interface IPhase4RecoveryService { Task<bool> RecoverAsync(string executionRoot,string executionId,TimeSpan staleAge,CancellationToken token); }
 public interface IPhase4ExecutionLock { ValueTask<IAsyncDisposable> AcquireAsync(string executionRoot,string executionId,CancellationToken token); }
 public interface IPhase4FileSystem { Task WriteAsync(string path,byte[] bytes,CancellationToken token); byte[] Read(string path); string Sha256(byte[] bytes); }
