@@ -701,6 +701,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAstronomyDomainKnowledgeProvider, AstronomyDomainKnowledgeProvider>();
         services.AddScoped<NarrationGeneratorV5>();
         services.AddScoped<Rc2ContentPlanningBatchOrchestrator>();
+        services.AddScoped<IRc2ContentPlanningBatchOrchestrator>(provider => provider.GetRequiredService<Rc2ContentPlanningBatchOrchestrator>());
         services.AddScoped<IManualCategoryPreparationOrchestrator, ManualCategoryPreparationOrchestrator>();
         services.AddScoped<ICategoryProductionPipelineStrategy, DailySkyGuideProductionPipelineStrategy>();
         services.AddScoped<ICategoryProductionPipelineStrategy, WeeklySkyForecastProductionPipelineStrategy>();
