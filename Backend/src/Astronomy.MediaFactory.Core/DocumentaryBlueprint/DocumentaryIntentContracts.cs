@@ -100,6 +100,10 @@ public sealed record DocumentaryIntentPlanningRequest(string ExecutionId, string
     DocumentaryBlueprintProfile Profile, IReadOnlyList<CertifiedDocumentaryKnowledgeReference> CertifiedKnowledge,
     string AudienceIntent, string DocumentaryGoal);
 public sealed record DocumentaryPlanningIssue(string Code, string Message);
+public sealed record DocumentarySlotCandidateDiagnostic(string SlotId, string Variant, string QuestionId,
+    bool VariantEligible, bool CategoryEligible, bool EditorialEligible, bool ReuseEligible,
+    QuestionEvidenceStatus EvidenceStatus, bool KnowledgeEligible, bool ObjectiveAvailable,
+    IReadOnlyList<string> RejectionReasons);
 public sealed record DocumentaryIntentPlanningResult(bool Success, DocumentaryIntent? Intent,
     IReadOnlyList<DocumentaryPlanningIssue> Errors, IReadOnlyList<DocumentaryPlanningIssue> Warnings,
     string ProfileResolution, DocumentaryCoverageSummary? QuestionAllocationSummary,
@@ -111,6 +115,7 @@ public sealed record DocumentaryIntentPlanningResult(bool Success, DocumentaryIn
     public DocumentaryCoverageSummary? LongKnowledgeCoverage { get; init; }
     public DocumentaryCoverageSummary? ShortKnowledgeCoverage { get; init; }
     public DocumentaryCoverageSummary? AggregateCoverage { get; init; }
+    public IReadOnlyList<DocumentarySlotCandidateDiagnostic> CandidateDiagnostics { get; init; } = [];
 }
 public interface IDocumentaryIntentPlanner { DocumentaryIntentPlanningResult Plan(DocumentaryIntentPlanningRequest request); }
 public interface IDocumentaryBlueprintProfileResolver { DocumentaryBlueprintProfile? Resolve(string profileId, string familyCode, string audienceCode); }

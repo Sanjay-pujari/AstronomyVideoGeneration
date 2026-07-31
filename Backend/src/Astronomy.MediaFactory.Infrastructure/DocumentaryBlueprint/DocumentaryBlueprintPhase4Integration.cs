@@ -112,7 +112,13 @@ public sealed class DocumentaryBlueprintPhase4IntegrationService(
                 request.SourceLineage, request.QuestionBank, request.LearningObjectives, request.QuestionPlan,
                 profile, request.CertifiedKnowledge, request.AudienceIntent, request.DocumentaryGoal));
             if (!planned.Success || planned.Intent is null)
-                return Failure(Phase4IntegrationReasonCodes.IntentPlanningFailed, "Certified intent planning failed.", planned.Errors.Select(x => new Phase4PublicationDiagnostic(x.Code, x.Message)).ToArray());
+                return Failure(Phase4IntegrationReasonCodes.IntentPlanningFailed, "Certified intent planning failed.",
+                    planned.Errors.Select(x => new Phase4PublicationDiagnostic(x.Code, x.Message))
+                        .Concat(planned.CandidateDiagnostics.Select(x => new Phase4PublicationDiagnostic(
+                            "DI_CANDIDATE_REJECTED",
+                            $"Variant={x.Variant}; QuestionId={x.QuestionId}; RejectionReasons={string.Join(',', x.RejectionReasons)}",
+                            x.SlotId)))
+                        .ToArray());
             logger.LogInformation("Phase4IntentPlanned ExecutionId={ExecutionId} IntentId={IntentId} IntentChecksum={IntentChecksum}", request.ExecutionId, planned.Intent.IntentId, planned.Intent.DeterministicChecksum);
 
             projected = projector.Project(new(planned.Intent, profile));

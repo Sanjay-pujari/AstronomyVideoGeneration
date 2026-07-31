@@ -580,7 +580,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var certification=JsonSerializer.Deserialize<DocumentaryBlueprintCertification>(File.ReadAllText(Path.Combine(p5,"blueprint-certification.json")),JsonOptions)!;
             var editorial=JsonSerializer.Deserialize<DocumentaryBlueprintEditorialContract>(File.ReadAllText(Path.Combine(p5,"editorial-contract.json")),JsonOptions)!;
             var diagnostics=JsonSerializer.Deserialize<DocumentaryBlueprintCertificationDiagnostics>(File.ReadAllText(Path.Combine(p5,"certification-diagnostics.json")),JsonOptions)!;
-            var request=new StoryFrameIntegrationRequest(context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),context.EventId,context.Request.Language,context.Request.PlannedFormat??context.Request.Category,certification,editorial,diagnostics,ResolveViewerVariants(context.Request.RequestedOutputs));
+            var request=new StoryFrameIntegrationRequest(context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),context.EventId,context.Request.Language,context.Request.PlannedFormat??context.Request.Category,certification,editorial,diagnostics,ResolveViewerVariants(context.EndPhaseNo, context.Request.RequestedOutputs));
             var result=new StoryFrameIntegrationResult(JsonSerializer.Deserialize<StoryFramesAuthority>(File.ReadAllText(paths[0]),JsonOptions)!,JsonSerializer.Deserialize<StoryFrameIndex>(File.ReadAllText(paths[1]),JsonOptions)!,JsonSerializer.Deserialize<StoryFrameDiagnostics>(File.ReadAllText(paths[2]),JsonOptions)!);
             return StoryFrameArtifactValidator.Validate(result,request).Count==0;
         }
@@ -626,7 +626,7 @@ public sealed partial class ProductionPipelineExecutionService(
             var projection = new ViewerCuriosityProjection(bank, objectives, plan);
             var profile = context.Request.PlannedFormat ?? context.Request.Category;
             var authority = ReadCertifiedPhase2Intelligence(context);
-            return ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile, ResolveViewerVariants(context.Request.RequestedOutputs), authority).Count == 0
+            return ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile, ResolveViewerVariants(context.EndPhaseNo, context.Request.RequestedOutputs), authority).Count == 0
                 && Phase3ManifestIsValid(context, bankPath, compatibilityPath, objectivesPath, planPath);
         }
         catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or ArgumentException)
@@ -933,7 +933,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var profile = context.Request.PlannedFormat ?? context.Request.Category;
         if (!string.Equals(source.Language, context.Request.Language, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Phase 3 Question Engine language mismatch: expected '{context.Request.Language}', actual '{source.Language}'.");
-        var variants = ResolveViewerVariants(context.Request.RequestedOutputs);
+        var variants = ResolveViewerVariants(context.EndPhaseNo, context.Request.RequestedOutputs);
         var certifiedIntelligence = ReadCertifiedPhase2Intelligence(context);
         var projection = viewerCuriosityProjector.Project(source, certifiedIntelligence, context.Request.PlanId.ToString("D"), profile, variants, DateTimeOffset.UtcNow);
         var validationErrors = ViewerCuriosityArtifactValidator.Validate(projection, context.Request.PlanId.ToString("D"), context.Request.Language, profile, variants, certifiedIntelligence);
@@ -1017,11 +1017,10 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string PhysicalChecksum(string path) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 
-    private static IReadOnlyList<string> ResolveViewerVariants(IReadOnlyList<string> requestedOutputs)
+    private static IReadOnlyList<string> ResolveViewerVariants(int endPhaseNo, IReadOnlyList<string> requestedOutputs)
     {
-        var variants = requestedOutputs.Where(x => x is not null).Select(x => x.Trim().ToLowerInvariant()).Select(x => x switch
-        { "long" or "longvideo" => "Long", "short" or "shortvideo" => "Short", _ => null }).Where(x => x is not null).Cast<string>().Distinct(StringComparer.Ordinal).ToArray();
-        if (variants.Length == 0) throw new InvalidOperationException("Phase 3 requires LongVideo and/or ShortVideo in RequestedOutputs to establish Viewer Question variant scope.");
+        var variants = ViewerCuriosityVariantScope.Resolve(endPhaseNo, requestedOutputs).ExpectedVariants;
+        if (variants.Count == 0) throw new InvalidOperationException("Phase 3 requires LongVideo and/or ShortVideo in RequestedOutputs to establish Viewer Question variant scope.");
         return variants;
     }
 
@@ -1166,7 +1165,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var diagnostics=await ReadRequiredJsonAsync<DocumentaryBlueprintCertificationDiagnostics>(Path.Combine(phase5Root,"certification-diagnostics.json"),cancellationToken);
         var request=new StoryFrameIntegrationRequest(context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),context.EventId,
             context.Request.Language,context.Request.PlannedFormat??context.Request.Category,certification,editorial,diagnostics,
-            ResolveViewerVariants(context.Request.RequestedOutputs));
+            ResolveViewerVariants(context.EndPhaseNo, context.Request.RequestedOutputs));
         if (!editorial.StoryFrameEligible) throw new InvalidOperationException("Phase 5 editorial contract has StoryFrameEligible=false.");
         cancellationToken.ThrowIfCancellationRequested();
         var root=Path.Combine(context.OutputRoot,"06-story-frames");
@@ -14389,7 +14388,7 @@ public sealed partial class ProductionPipelineExecutionService(
                     && bank.Questions.SelectMany(question => question.KnowledgeReferences).All(reference => reference.SourceArtifact == "02-intelligence/production-event-intelligence.json");
                 compatibilityPassed = JsonSerializer.Serialize(compatibility, JsonOptions) == JsonSerializer.Serialize(legacy, JsonOptions);
                 semanticPassed = ViewerCuriosityArtifactValidator.Validate(new(bank, objectives, plan), context.Request.PlanId.ToString("D"), context.Request.Language,
-                    context.Request.PlannedFormat ?? context.Request.Category, ResolveViewerVariants(context.Request.RequestedOutputs), authority.Intelligence).Count == 0;
+                    context.Request.PlannedFormat ?? context.Request.Category, ResolveViewerVariants(context.EndPhaseNo, context.Request.RequestedOutputs), authority.Intelligence).Count == 0;
                 manifestPassed = Phase3ManifestIsValid(context, canonical);
             }
         }

@@ -26,6 +26,25 @@ public sealed record ViewerQuestionPlan(ViewerCuriosityArtifactMetadata Metadata
     IReadOnlyList<string> QuestionsRequiringEditorialAttention, IReadOnlyList<string> ProjectionWarnings);
 public sealed record ViewerCuriosityProjection(ViewerQuestionBank ViewerQuestionBank, ViewerLearningObjectives LearningObjectives, ViewerQuestionPlan QuestionPlan);
 
+public sealed record ViewerCuriosityVariantScope(bool RequiresLong, bool RequiresShort)
+{
+    public IReadOnlyList<string> ExpectedVariants => (RequiresLong, RequiresShort) switch
+    {
+        (true, true) => ["Long", "Short"],
+        (true, false) => ["Long"],
+        (false, true) => ["Short"],
+        _ => []
+    };
+
+    public static ViewerCuriosityVariantScope Resolve(int endPhaseNo, IReadOnlyList<string> requestedOutputs)
+    {
+        ArgumentNullException.ThrowIfNull(requestedOutputs);
+        if (endPhaseNo >= 4) return new(true, true);
+        var normalized = requestedOutputs.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim().ToLowerInvariant()).ToArray();
+        return new(normalized.Any(x => x is "long" or "longvideo"), normalized.Any(x => x is "short" or "shortvideo"));
+    }
+}
+
 public interface IViewerCuriosityArtifactProjector
 {
     ViewerCuriosityProjection Project(QuestionAnswerSetDto source, ProductionEventIntelligence intelligence, string executionId,

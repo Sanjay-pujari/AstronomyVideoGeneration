@@ -94,6 +94,10 @@ public sealed class Rc2RealPipelineCertificationTests
             Assert.Equal(certified.AggregateChecksum, aggregate.DeterministicChecksum);
             Assert.Equal(certified.LongSceneCount, aggregate.LongVariant.ActualSceneCount);
             Assert.Equal(certified.ShortSceneCount, aggregate.ShortVariant.ActualSceneCount);
+            Assert.True(aggregate.LongVariant.ActualSceneCount > 0);
+            Assert.True(aggregate.ShortVariant.ActualSceneCount > 0);
+            var questionBank = JsonSerializer.Deserialize<ViewerQuestionBank>(await File.ReadAllBytesAsync(Path.Combine(outputRoot, "03-questions", "viewer-question-bank.json")), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            Assert.All(questionBank.Questions, question => Assert.Equal(["Long", "Short"], question.ApplicableVariants));
 
             await using var scope = app.Services.CreateAsyncScope();
             var evaluation = await scope.ServiceProvider.GetRequiredService<IPhase4CommittedAuthorityEvaluator>()
@@ -132,6 +136,8 @@ public sealed class Rc2RealPipelineCertificationTests
         await db.Database.EnsureCreatedAsync();
         await scope.ServiceProvider.GetRequiredService<IOrionContentGenerationPlanSeeder>().SeedAsync(CancellationToken.None);
         var plan = await db.ContentGenerationPlans.SingleAsync(x => x.Id == OrionContentGenerationPlanSeeder.OrionPlanId);
+        plan.PlannedFormat = "ShortVideo";
+        plan.RequestedOutputTypesJson = JsonSerializer.Serialize(new[] { "ShortVideo", "Thumbnail" });
         var intelligence = new AstronomyEventIntelligence
         {
             EventCode = "ORION-GOLD-2026", ExternalEventId = OrionContentGenerationPlanSeeder.OrionSourceExternalEventId,

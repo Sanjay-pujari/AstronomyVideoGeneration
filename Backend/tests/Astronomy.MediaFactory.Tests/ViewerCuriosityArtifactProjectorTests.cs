@@ -135,6 +135,27 @@ public sealed class ViewerCuriosityArtifactProjectorTests
         Assert.All(result.ViewerQuestionBank.Questions, question => Assert.Equal([expected], question.ApplicableVariants));
     }
 
+    [Theory]
+    [InlineData("ShortVideo")]
+    [InlineData("LongVideo")]
+    public void phase3_when_execution_includes_phase4_projects_long_and_short_variants(string requestedOutput)
+    {
+        var scope = ViewerCuriosityVariantScope.Resolve(4, [requestedOutput, "Thumbnail"]);
+        var result = projector.Project(Source(), Intelligence(), ExecutionId, requestedOutput, scope.ExpectedVariants, CreatedUtc);
+
+        Assert.Equal(["Long", "Short"], scope.ExpectedVariants);
+        Assert.All(result.ViewerQuestionBank.Questions, question => Assert.Equal(["Long", "Short"], question.ApplicableVariants));
+        Assert.Equal(result.ViewerQuestionBank.Questions.Count, result.QuestionPlan.VariantCoverage["Long"]);
+        Assert.Equal(result.ViewerQuestionBank.Questions.Count, result.QuestionPlan.VariantCoverage["Short"]);
+    }
+
+    [Fact]
+    public void phase3_when_execution_stops_before_phase4_retains_requested_output_scope()
+    {
+        Assert.Equal(["Short"], ViewerCuriosityVariantScope.Resolve(3, ["ShortVideo", "Thumbnail"]).ExpectedVariants);
+        Assert.Equal(["Long"], ViewerCuriosityVariantScope.Resolve(3, ["LongVideo", "Thumbnail"]).ExpectedVariants);
+    }
+
     [Fact]
     public void ViewerQuestionBankValidator_rejects_nonexistent_phase2_field()
     {
