@@ -182,3 +182,23 @@ The implementation and static certification corrections are complete, but Phase 
 blocked until the requested runtime suites execute in an SDK-equipped environment.
 
 NOT_READY_FOR_PHASE_4_TASK_5
+
+## Task 4C final explicit-order correction (2026-07-31)
+
+`DocumentaryBlueprintProjector.ValidateVariant` now creates one canonical scene sequence ordered by
+`(Order, OpportunityId ordinal)` and uses it for contiguous-order checks, per-scene checks, duration
+summation, non-terminal transitions, and the terminal `Close` check. The transition regression test
+supplies scenes in reverse insertion order and confirms that explicit order, rather than collection
+position, determines which scene must close.
+
+The .NET 10 SDK was provisioned in the execution environment and the requested Task 3, Task 4,
+Orion 12/4, builder, and Phase 1–3 non-regression scope was executed through the complete
+`DocumentaryBlueprint` test namespace. The focused Task 4 correction run is reported separately and
+is included in the consolidated namespace total.
+
+| Executed scope | Passed | Failed | Skipped | Result |
+|---|---:|---:|---:|---|
+| Task 4C focused certification corrections | 5 | 0 | 0 | Passed |
+| Task 3, Task 4, Orion 12/4, builder, and Phase 1–3 consolidated non-regression suite | 1010 | 0 | 0 | Passed |
+
+READY_FOR_PHASE_4_TASK_5

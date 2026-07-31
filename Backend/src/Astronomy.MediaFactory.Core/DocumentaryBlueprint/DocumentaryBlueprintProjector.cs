@@ -150,6 +150,8 @@ public sealed class DocumentaryBlueprintProjector(
         string expectedVariant, List<DocumentaryBlueprintProjectionDiagnostic> errors)
     {
         void Add(string code, string message) => errors.Add(new(code, $"{expectedVariant}: {message}"));
+        var orderedScenes = variant.SceneOpportunities.OrderBy(x => x.Order)
+            .ThenBy(x => x.OpportunityId, StringComparer.Ordinal).ToArray();
         if (variant.Variant != expectedVariant || profile.Variant != expectedVariant)
             Add("P4P_VARIANT_RECONCILIATION_FAILED", "Variant identity is invalid.");
         if (DocumentaryIntentChecksum.Hash(variant with { DeterministicChecksum = "" }) != variant.DeterministicChecksum ||
@@ -157,10 +159,9 @@ public sealed class DocumentaryBlueprintProjector(
             Add("P4P_INTENT_INVALID", "Variant or opportunity checksum is invalid.");
         if (variant.SceneOpportunities.Count != profile.ExpectedSceneCount || variant.ExpectedSceneCount != profile.ExpectedSceneCount)
             Add("P4P_DURATION_RECONCILIATION_FAILED", "Expected scene count differs from the profile.");
-        if (variant.SceneOpportunities.OrderBy(x => x.Order).ThenBy(x => x.OpportunityId, StringComparer.Ordinal)
-            .Select(x => x.Order).SequenceEqual(Enumerable.Range(1, variant.SceneOpportunities.Count)) is false)
+        if (orderedScenes.Select(x => x.Order).SequenceEqual(Enumerable.Range(1, orderedScenes.Length)) is false)
             Add("P4P_VARIANT_RECONCILIATION_FAILED", "Scene order is not contiguous.");
-        foreach (var scene in variant.SceneOpportunities)
+        foreach (var scene in orderedScenes)
         {
             var primary = scene.QuestionCoverageRecords.Where(x => x.CoverageType == "Primary").ToArray();
             if (string.IsNullOrWhiteSpace(scene.PrimaryViewerQuestionId) || primary.Length != 1 ||
@@ -181,13 +182,13 @@ public sealed class DocumentaryBlueprintProjector(
             if (scene.TargetDurationSeconds < scene.MinimumDurationSeconds || scene.TargetDurationSeconds > scene.MaximumDurationSeconds)
                 Add("P4P_DURATION_RECONCILIATION_FAILED", $"Opportunity '{scene.OpportunityId}' duration is outside its certified range.");
         }
-        if (variant.SceneOpportunities.Sum(x => x.TargetDurationSeconds) != profile.DurationBudgetSeconds ||
+        if (orderedScenes.Sum(x => x.TargetDurationSeconds) != profile.DurationBudgetSeconds ||
             variant.DurationBudgetSeconds != profile.DurationBudgetSeconds ||
             variant.TotalAllocatedDurationSeconds != profile.DurationBudgetSeconds)
             Add("P4P_DURATION_RECONCILIATION_FAILED", "Duration totals differ from the certified profile.");
-        if (variant.SceneOpportunities.Count != 0 &&
-            (variant.SceneOpportunities.Take(variant.SceneOpportunities.Count - 1).Any(x => string.IsNullOrWhiteSpace(x.TransitionIntent)) ||
-             variant.SceneOpportunities[^1].TransitionIntent != "Close"))
+        if (orderedScenes.Length != 0 &&
+            (orderedScenes.Take(orderedScenes.Length - 1).Any(x => string.IsNullOrWhiteSpace(x.TransitionIntent)) ||
+             orderedScenes[^1].TransitionIntent != "Close"))
             Add("P4P_TRANSITION_RECONCILIATION_FAILED", "Transition intent does not satisfy the profile terminal policy.");
     }
 
