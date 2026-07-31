@@ -631,6 +631,15 @@ public sealed class ContentPlanProductionExecutionService(
         if (request.ExecutionMode is not (ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase or ContentPlanExecutionMode.FullRebuild))
             return new(false, null, []);
 
+        // Phase 4 owns an idempotent committed-authority reuse path. Preserve its files so
+        // the integration service can verify the existing publication and report
+        // P4PUB_ALREADY_PUBLISHED instead of forcing a destructive rebuild.
+        if (request.ExecutionMode == ContentPlanExecutionMode.RerunPhase
+            && cleanupStartPhaseNo == 4
+            && cleanupEndPhaseNo == 4
+            && !request.OverwriteExisting)
+            return new(false, null, []);
+
         if (Directory.Exists(outputRoot) && !request.OverwriteExisting)
             throw new InvalidOperationException("Completed plan rerun output cleanup requires overwriteExisting=true.");
 
