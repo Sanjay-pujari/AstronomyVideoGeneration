@@ -15,6 +15,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
     Rc2PipelinePhaseRegistry phaseRegistry,
     SceneIntentBuilder sceneIntentBuilder,
     CreativeStoryboardBuilder creativeStoryboardBuilder,
+    IRc2CertifiedExecutionStatusReader certifiedExecutionStatusReader,
     ILogger<Rc2ContentPlanningBatchOrchestrator> logger) : IRc2ContentPlanningBatchOrchestrator
 {
     public async Task<BatchGenerateFromPlansResponse> GenerateFromPlansAsync(BatchGenerateFromPlansRequest request, CancellationToken cancellationToken)
@@ -98,7 +99,7 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             response.LastFailedPhaseNo,
             response.OutputRoot);
 
-        return response with { Rc2CertifiedExecution = Rc2CertifiedExecutionStatusReader.Read(response) };
+        return response with { Rc2CertifiedExecution = await certifiedExecutionStatusReader.ReadAsync(response, cancellationToken) };
     }
 
     private static BatchGenerateFromPlansResponse ValidateManualPlanExecutionResponse(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, IReadOnlyList<int> requestedPhases)

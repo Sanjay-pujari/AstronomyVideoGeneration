@@ -20,10 +20,11 @@ public sealed class Phase5BlueprintCertificationIntegrationTests
     public void Phase5_does_not_call_DocumentaryBlueprintBuilder() => Assert.DoesNotContain("DocumentaryBlueprintBuilder", Phase5Method(), StringComparison.Ordinal);
 
     [Fact]
-    public void Phase5_reads_all_Phase4_authority_artifacts()
+    public void Phase5_maps_the_published_Phase4_aggregate_without_cross_deserialization()
     {
-        foreach (var file in new[] { "documentary-blueprint.json", "documentary-blueprint.long.json", "documentary-blueprint.short.json", "blueprint-build-diagnostics.json" })
-            Assert.Contains(file, Pipeline);
+        Assert.Contains("PublishedDocumentaryBlueprintAggregate", Pipeline);
+        Assert.Contains("documentaryBlueprintPhase5CompatibilityAdapter.Adapt", Pipeline);
+        Assert.DoesNotContain("Deserialize<DocumentaryBlueprintArtifact>", Pipeline);
     }
 
     [Fact]
