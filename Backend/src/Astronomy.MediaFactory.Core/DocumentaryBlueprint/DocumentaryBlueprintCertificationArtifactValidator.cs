@@ -87,6 +87,31 @@ public static class DocumentaryBlueprintCertificationArtifactValidator
         if (ContainsAbsolutePath(e)) errors.Add("Editorial contract contains a machine-specific absolute path.");
 
         ValidateDiagnostics(d, c, request, errors);
+        var aggregate = request.PublishedAggregate;
+        if (aggregate is null) errors.Add("PublishedDocumentaryBlueprintAggregate is required.");
+        else
+        {
+            var reports = new (string Name, string Aggregate, string Long, string Short, string Checksum, string Expected)[]
+            {
+                ("validation", result.Validation.SourceAggregateChecksum, result.Validation.SourceLongChecksum, result.Validation.SourceShortChecksum, result.Validation.SemanticChecksum, Phase5SemanticChecksum.Calculate(result.Validation with { SemanticChecksum = string.Empty })),
+                ("scene intents", result.SceneIntents.SourceAggregateChecksum, result.SceneIntents.SourceLongChecksum, result.SceneIntents.SourceShortChecksum, result.SceneIntents.SemanticChecksum, Phase5SemanticChecksum.Calculate(result.SceneIntents with { SemanticChecksum = string.Empty })),
+                ("coverage", result.Coverage.SourceAggregateChecksum, result.Coverage.SourceLongChecksum, result.Coverage.SourceShortChecksum, result.Coverage.SemanticChecksum, Phase5SemanticChecksum.Calculate(result.Coverage with { SemanticChecksum = string.Empty })),
+                ("transitions", result.Transitions.SourceAggregateChecksum, result.Transitions.SourceLongChecksum, result.Transitions.SourceShortChecksum, result.Transitions.SemanticChecksum, Phase5SemanticChecksum.Calculate(result.Transitions with { SemanticChecksum = string.Empty })),
+                ("pause test", result.PauseTest.SourceAggregateChecksum, result.PauseTest.SourceLongChecksum, result.PauseTest.SourceShortChecksum, result.PauseTest.SemanticChecksum, Phase5SemanticChecksum.Calculate(result.PauseTest with { SemanticChecksum = string.Empty }))
+            };
+            foreach (var report in reports)
+            {
+                if (report.Aggregate != aggregate.DeterministicChecksum || report.Long != aggregate.LongVariant.DeterministicChecksum || report.Short != aggregate.ShortVariant.DeterministicChecksum)
+                    errors.Add($"Phase 5 {report.Name} lineage is stale.");
+                if (report.Checksum != report.Expected) errors.Add($"Phase 5 {report.Name} semantic checksum is invalid.");
+            }
+            if (result.SceneIntents.Scenes.Count != aggregate.LongVariant.Blueprint.Scenes.Count + aggregate.ShortVariant.Blueprint.Scenes.Count)
+                errors.Add("Scene intents must cover every Long and Short scene.");
+            if (result.PauseTest.Scenes.Count != result.SceneIntents.Scenes.Count) errors.Add("Pause Test must cover every Long and Short scene.");
+            if (!result.Coverage.IsValid) errors.Add("Phase 5 coverage is invalid.");
+            if (!result.Transitions.IsValid) errors.Add("Phase 5 transitions are invalid.");
+            if (!result.PauseTest.IsValid) errors.Add("Phase 5 Pause Test is invalid.");
+        }
         return errors;
     }
 
@@ -123,7 +148,7 @@ public static class DocumentaryBlueprintCertificationArtifactValidator
         if (d.CertifierType != c.CertifierType || d.CertifierVersion != c.CertificationVersion) errors.Add("Certification diagnostics certifier identity does not reconcile.");
         Required(d.IntegrationServiceType, "Diagnostics IntegrationServiceType", errors);
         Required(d.IntegrationServiceVersion, "Diagnostics IntegrationServiceVersion", errors);
-        var names = new[] { "documentary-blueprint.json", "documentary-blueprint.long.json", "documentary-blueprint.short.json", "blueprint-build-diagnostics.json" };
+        var names = new[] { "documentary-blueprint.json", "documentary-blueprint.long.json", "documentary-blueprint.short.json", "blueprint-build-report.json" };
         if (d.InputArtifactPaths.Count != 4 || names.Any(n => !d.InputArtifactPaths.Any(p => Path.GetFileName(p.Replace('\\', '/')) == n))) errors.Add("Certification diagnostics must identify exactly four Phase 4 input artifacts.");
         if (d.InputArtifactPaths.Any(Path.IsPathRooted)) errors.Add("Certification diagnostics input paths must be workspace-relative.");
         var artifacts = new Dictionary<string, DocumentaryBlueprintArtifact>(StringComparer.OrdinalIgnoreCase) { ["master"] = request.Master, ["long"] = request.Long, ["short"] = request.Short };

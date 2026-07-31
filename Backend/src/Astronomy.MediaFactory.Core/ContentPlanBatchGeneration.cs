@@ -343,7 +343,8 @@ public sealed record ProductionPipelineExecutionContext(
     IMediaEventStrategy? MediaEventStrategy = null,
     bool EnableSubtitles = false,
     ProductionExecutionContext? ProductionExecutionContext = null,
-    DocumentaryBlueprint.DocumentaryBlueprintAggregate? PublishedDocumentaryBlueprintAggregate = null);
+    DocumentaryBlueprint.DocumentaryBlueprintAggregate? PublishedDocumentaryBlueprintAggregate = null,
+    DocumentaryBlueprint.PublishedBlueprintCertification? PublishedBlueprintCertification = null);
 
 public sealed record ProductionPipelineRequest(
     ContentPlanProductionPipelineRequest Request,

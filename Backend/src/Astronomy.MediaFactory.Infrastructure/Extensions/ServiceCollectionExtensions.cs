@@ -757,6 +757,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.IRc2CertifiedExecutionStatusReader, Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.Rc2CertifiedExecutionStatusReader>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintIntegrationService, DocumentaryBlueprintIntegrationService>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryProductionCertifier>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintEditorialValidator>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintCoverageEvaluator>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintTransitionEvaluator>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintPauseTestEvaluator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintCertificationIntegrationService, DocumentaryBlueprintCertificationIntegrationService>();
         services.AddScoped<IHeroAssetIntelligenceEngine, HeroAssetIntelligenceEngine>();
         services.AddScoped<IHeroAssetSceneSelector, HeroAssetSceneSelector>();
