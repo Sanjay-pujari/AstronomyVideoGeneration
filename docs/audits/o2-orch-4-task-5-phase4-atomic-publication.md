@@ -1,84 +1,35 @@
-# O2.ORCH.4 Task 5 — Phase 4 Atomic Publication Audit
+# O2.ORCH.4 Task 5A — Hardened Phase 4 Atomic Publication Audit
 
-## 1. Architecture implemented
-A separately invokable publication coordinator validates a successful projection, takes an execution-scoped lock, recovers transaction debris, stages the complete candidate, validates physical JSON, merges the shared manifest, replaces the phase directory, re-reads the committed authority, and writes validation last.
+## Scope and frozen behavior
 
-## 2. Files added
-`Phase4PublicationContracts.cs`, `Phase4PublicationInfrastructure.cs`, and `Phase4DocumentaryBlueprintPublicationService.cs` provide contracts, infrastructure, and orchestration. This audit is also new.
+The change is confined to Phase 4 publication contracts, infrastructure, coordinator registration, and this audit. Documentary intent, blueprint projection, `DocumentaryBlueprintBuilder`, and Phase 1–3 production behavior were not edited.
 
-## 3. Files modified
-`ServiceCollectionExtensions.cs` registers the Phase 4 services. No Phase 1–3 contract or planner/projector/builder was modified.
+## Transaction and locking model
 
-## 4. Existing publication infrastructure reused
-The implementation follows Phase 1 transaction naming, GUID transaction identity, shared `phase-manifest.json`, backup replacement, validation ownership, and SHA-256 conventions. It reuses `DocumentaryBlueprintProjectionChecksum` as semantic authority.
+Every staging and backup directory now contains a typed `Phase4TransactionRecord` with execution ID, transaction ID, aggregate checksum, UTC creation time, state, and deterministic checksum. Recovery ignores unmarked directories and transactions younger than the stale threshold. Execution locking combines the repository's execution-keyed in-process serialization with an exclusive lock file so independent processes cannot publish the same execution concurrently.
 
-## 5. Canonical artifact-set definition
-The staged `04-blueprint` directory contains exactly the aggregate, Long projection, Short projection, knowledge selection, both scene indexes, and deterministic build report.
+Backup is treated as a mutation from its first operation. A failure after moving authority or copying manifest/validation enters the same rollback path as a commit failure. Rollback restores authority, manifest, and success validation and removes candidate transaction debris.
 
-## 6. Authority classification
-The aggregate is `CanonicalAuthority`; Long and Short are `AuthoritativeProjection`; indexes, selection, and report are `Derived`. No competing authority exists.
+## Physical and committed certification
 
-## 7. Temporary staging
-Every candidate file is written beneath `.<transaction>.phase-04.tmp/04-blueprint` before final-path mutation.
+`Phase4PublishedAuthorityValidator` now enforces the exact seven-file inventory, typed deserialization of all files, deterministic checksums, canonical and embedded variant checksums, byte-exact Long/Short projection equivalence, knowledge-selection/traceability identity, editorial-only knowledge exclusion, scene identity/order/count/duration/transition correspondence, and build-report correspondence.
 
-## 8. Pre-commit validation
-Projection success, identity, language, profile, aggregate checksum, both variant checksums, required files, JSON parsing, and projection equivalence are checked.
+`Phase4CommittedStateValidator` composes physical authority validation with the shared manifest's seven Phase 4 entries, physical SHA-256 checks, and typed success-validation checksum and commit-marker checks. It is used for idempotency and post-commit certification, so `P4PUB_ALREADY_PUBLISHED` cannot be returned for a damaged manifest or success validation.
 
-## 9. Commit ordering
-Frozen snapshots are checked, the complete directory is moved, the manifest is replaced, committed authority is physically re-read, and success validation is moved last as the commit marker.
+## Validation marker and manifest stability
 
-## 10. Manifest merge
-The existing JSON root is preserved and a deterministically ordered `phase4Artifacts` array is replaced idempotently. Entries record semantic and physical SHA-256 checksums and size.
+Success validation is a typed `Phase4ValidationRecord`; its flags are populated only after staged evidence succeeds, and its deterministic checksum follows the serializer's semantic checksum convention. It remains the last commit marker. The manifest updater parses and preserves the existing shared JSON root byte-semantically, replacing only the already-canonical `phase4Artifacts` projection; Phase 1–3 members are not reconstructed or modified.
 
-## 11. Phase 4 validation record
-Runtime validation records identity, transaction timestamps, publication state, checksums, counts, reconciliation results, compatibility status, and frozen-upstream evidence.
+## Policy, failures, and injection
 
-## 12. Physical checksum validation
-Manifest SHA-256 values are calculated from staged exact bytes. Post-commit validation reads final files rather than trusting memory.
+`ReplaceExisting` and `RemoveStaleTransactions` now affect execution. Public fault injection exposes all eleven required checkpoints. Failures are separated across recovery, staging, serialization, staged validation, manifest preparation, backup, authority commit, manifest commit, validation commit, post-commit validation, and rollback reason codes rather than being uniformly reported as lock failures.
 
-## 13. Long/Short projection equivalence
-Each projection is deserialized, checksum-validated, and compared to canonical serialization of its aggregate-embedded counterpart.
+## Test evidence
 
-## 14. Knowledge-selection validation
-The artifact is projected only from traceability selections, retains lineage identifiers without factual prose, and provides deterministic unique-reference/reuse summaries.
+Focused tests executed: **0**. Full tests executed: **0**. The container does not provide the .NET SDK (`dotnet: command not found`), so compilation and executable fault/concurrency certification could not be performed here. Static checks and repository diff checks were performed, but they are not substitutes for the mandated test matrix.
 
-## 15. Scene-index validation
-Indexes preserve scene order, traceability identity, duration, transition, knowledge, safety, and source opportunity checksum.
+## Verdict
 
-## 16. Compatibility decision
-Repository search found no current consumer requiring `compatibility/story-graph.json`. It is not generated and validation reports `NotRequired`; an explicit requirement is rejected rather than inventing a contract.
-
-## 17. Rollback design
-Before mutation, prior Phase 4, manifest, and validation are backed up. A failure removes the candidate generation and restores all prior paths.
-
-## 18. Recovery design
-Startup removes stale Phase 4 staging directories and conservatively restores an orphan backed-up authority only when active authority is absent.
-
-## 19. Idempotency
-A physically valid publication with the same aggregate checksum returns `P4PUB_ALREADY_PUBLISHED` without rewriting files or duplicating manifest entries.
-
-## 20. Frozen upstream byte-protection evidence
-Caller-provided Phase 1–3 snapshots are checked before staging and immediately before commit; the service has no write path to those files.
-
-## 21. Concurrency evidence
-A process-wide keyed semaphore serializes Phase 4 publication for the canonical execution-root/execution-id pair and releases through `IAsyncDisposable` on every path.
-
-## 22. Orion Gold publication result
-The generic publication preserves projection counts, including the certified 12 Long / 4 Short profile, in build and validation evidence. An executable result could not be produced in this container because the .NET SDK is absent.
-
-## 23. Fault-injection results
-Rollback boundaries exist around every final-path mutation. Dedicated deterministic fault-injection hooks and the requested injection matrix remain outstanding.
-
-## 24. Focused test results
-Not run: the container reports `dotnet: command not found`. The complete requested Phase 4 test matrix remains outstanding.
-
-## 25. Full test results
-Not run for the same environment limitation. No claim of suite success is made.
-
-## 26. Deferred Task 6 integration work
-The active `ProductionPipelineExecutionService` Phase 4 path was deliberately not changed. Task 6 must integrate the certified publication service only after the missing fault-injection and full-suite evidence is completed.
-
-## 27. Final verdict
-The core atomic publication implementation is present, but the mandated executable test evidence and fault-injection suite are incomplete; certification cannot honestly be declared ready.
+The implementation has been materially hardened, but without compilation and the required executable fault/recovery/concurrency suite it cannot honestly be certified for Task 6.
 
 NOT_READY_FOR_PHASE_4_TASK_6
