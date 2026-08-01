@@ -4538,7 +4538,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static int ScoreRc1DDocumentaryTone(string text)
     {
         var score = 62 + new[] { "perspective", "distance", "motion", "frame", "geometry", "sky story", "horizon" }.Count(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)) * 5;
-        if (!Regex.IsMatch(text ?? string.Empty, @"\b(metadata|scene|json|render|asset|source answer|you will see)\b", RegexOptions.IgnoreCase)) score += 8;
+        if (!ContainsPhase14AuthoringOrMetadataLeakage(text)) score += 8;
         return Math.Min(100, score);
     }
 
@@ -4628,10 +4628,12 @@ public sealed partial class ProductionPipelineExecutionService(
     }
 
     private static int ScoreMetadataLeak(string text)
-    {
-        var leaks = Regex.Matches(text ?? string.Empty, @"\b(scene|caption|metadata|asset|render|source|strategy|beat|timeline)\b", RegexOptions.IgnoreCase).Count;
-        return Math.Max(0, 100 - leaks * 20);
-    }
+        => ContainsPhase14AuthoringOrMetadataLeakage(text) ? 80 : 100;
+
+    private static bool ContainsPhase14AuthoringOrMetadataLeakage(string text)
+        => Regex.IsMatch(text ?? string.Empty,
+            @"\b(?:authoring instruction|system prompt|generation prompt|prompt text|scene (?:metadata|id|number)|source (?:answer|scene)|rendering instruction|render the asset|asset metadata|timeline metadata|strategy metadata|narration beat|starts? with|opens with|(?:this|the) scene should|you will see)\b",
+            RegexOptions.IgnoreCase);
 
     private static int ScoreClosingQuality(string text)
     {
@@ -4669,9 +4671,9 @@ public sealed partial class ProductionPipelineExecutionService(
         if (Regex.IsMatch(finalText, @"\b(Welcome to Drashyam|Hello,? astronomy lovers|Greetings,? astronomy lovers)\b", RegexOptions.IgnoreCase)
             || ScoreHostPresence(finalText) >= 90) score += 4;
 
-        if (ScoreMetadataLeak(finalText) < 100
-            || Regex.IsMatch(finalText, @"\b(author|authoring|instruction|prompt|start with)\b", RegexOptions.IgnoreCase)) score -= 15;
-        if (Regex.IsMatch(finalText, @"\b(opens with|starts with|start with|this matters because|low in the evening sky|you will see|the event is|the best view comes from)\b", RegexOptions.IgnoreCase)) score -= 15;
+        score = Math.Min(score, 100);
+        if (ScoreMetadataLeak(finalText) < 100) score -= 15;
+        if (Regex.IsMatch(finalText, @"\b(this matters because|low in the evening sky|the event is|the best view comes from)\b", RegexOptions.IgnoreCase)) score -= 15;
         if (Regex.IsMatch(finalText, @"\b(?:are|is) planets?\b", RegexOptions.IgnoreCase)
             && !Regex.IsMatch(finalText, @"\b(look|watch|observe|story|perspective|line-of-sight|horizon|dawn|sunrise|sunset)\b", RegexOptions.IgnoreCase)) score -= 10;
         if (ContainsPhase14CrossEventVocabulary(family, finalText)) score -= 10;
