@@ -51,6 +51,7 @@ public sealed partial class ProductionPipelineExecutionService(
     IDocumentaryBlueprintPhase5CompatibilityAdapter documentaryBlueprintPhase5CompatibilityAdapter,
     IPhase4CommittedAuthorityEvaluator phase4CommittedAuthorityEvaluator,
     IPhase5CommittedAuthorityEvaluator phase5CommittedAuthorityEvaluator,
+    IPhase5PublicationTransactionCoordinator phase5PublicationTransactionCoordinator,
     IStoryFrameIntegrationService storyFrameIntegrationService,
     IPhase1AuthorityProjector phase1AuthorityProjector,
     IPhase1AuthorityPersistence phase1AuthorityPersistence,
@@ -93,6 +94,7 @@ public sealed partial class ProductionPipelineExecutionService(
     // phase boundary. Disk is intentionally not consulted by downstream phases in the
     // same run; the authority reader remains the resume/recovery boundary.
     private readonly ConcurrentDictionary<string, DocumentaryBlueprintAggregate> publishedPhase4Authorities = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, PublishedBlueprintCertification> publishedPhase5Authorities = new(StringComparer.OrdinalIgnoreCase);
     private readonly IPhase1AuthorityProjector _phase1AuthorityProjector = phase1AuthorityProjector;
     private readonly IPhase1AuthorityPersistence _phase1AuthorityPersistence = phase1AuthorityPersistence;
     private readonly IPhase1AuthorityReader _phase1AuthorityReader = phase1AuthorityReader;
@@ -263,7 +265,7 @@ public sealed partial class ProductionPipelineExecutionService(
                         ProductionPhaseStatus.Succeeded, now, now, 0, [], committed.Artifacts.Select(x =>
                             Path.Combine(context.OutputRoot, x.RelativePath.Replace('/', Path.DirectorySeparatorChar))).ToArray(),
                         Path.Combine(context.OutputRoot, "validation", "phase-05-validation.json"), [], [], false,
-                        "Valid Phase 5 committed authority was reused; overwriteExisting=false.") { ReasonCode = "P5REUSE_VALID" });
+                        "Valid Phase 5 authority was reused; overwriteExisting=false.") { ReasonCode = "P5REUSE_VALID" });
                     continue;
                 }
             }
@@ -279,6 +281,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 1 => await ExecutePhase1Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
                 2 => await ExecutePhase2Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
                 4 => await ExecutePhase4Async(context, cancellationToken),
+                5 => await ExecutePhase5Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
                 6 => await ExecutePhase6Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
                 _ => await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken)
             };
@@ -308,29 +311,14 @@ public sealed partial class ProductionPipelineExecutionService(
                     ExecutionContext = context.ExecutionContext with { ProductionEventIntelligence = authority.Intelligence, MediaEventStrategy = committedStrategy }
                 };
             }
+            if (phase.No == 5 && result.Status == ProductionPhaseStatus.Succeeded &&
+                publishedPhase5Authorities.TryRemove(context.Request.PlanId.ToString("D"), out var phase5Authority))
+                context = context with { ExecutionContext = context.ExecutionContext with { PublishedBlueprintCertification = phase5Authority } };
             generatedFiles.AddRange(result.OutputFiles.Where(File.Exists));
             warnings.AddRange(result.Warnings);
             errors.AddRange(result.Errors);
-            if (phase.No is not (1 or 4)) await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
-            if (phase.No == 5 && result.Status == ProductionPhaseStatus.Succeeded)
-            {
-                var committed = await phase5CommittedAuthorityEvaluator.EvaluateAsync(context.OutputRoot,
-                    context.Request.PlanId.ToString("D"), context.Request.PlanId.ToString("D"), context.EventId,
-                    context.Request.Language, ExpectedPhase4(context), cancellationToken);
-                if (!committed.IsValid || committed.PublishedAuthority is null)
-                {
-                    RollbackPhase5Publication(context.OutputRoot);
-                    result = result with { Status = ProductionPhaseStatus.Failed, Errors = committed.Errors,
-                        Reason = $"Phase 5 committed-state readback failed ({committed.ReasonCode}).", ReasonCode = committed.ReasonCode };
-                    phaseResults[^1] = result;
-                }
-                else
-                {
-                    CompletePhase5Publication(context.OutputRoot);
-                    context = context with { ExecutionContext = context.ExecutionContext with
-                        { PublishedBlueprintCertification = committed.PublishedAuthority } };
-                }
-            }
+            // Phase 5 manifest and validation publication are exclusively owned by its coordinator.
+            if (phase.No is not (1 or 4 or 5)) await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
             if (result.Status == ProductionPhaseStatus.Failed)
             {
                 logger.LogWarning("Production phase {PhaseNo} {PhaseName} failed for plan {PlanId}: {Errors}", result.PhaseNo, result.PhaseName, productionRequest.PlanId, string.Join(" | ", result.Errors));
@@ -372,7 +360,8 @@ public sealed partial class ProductionPipelineExecutionService(
         (2, "Build ProductionEventIntelligence", PhaseBuildProductionIntelligenceAsync),
         (3, "Viewer Curiosity Framework", PhaseGenerateQuestionsAsync),
         (4, "Documentary Blueprint", static (_,_) => throw new InvalidOperationException("P4_DEDICATED_INTEGRATION_REQUIRED")),
-        (5, "Editorial Validation", PhaseCertifyDocumentaryBlueprintAsync),
+        // Phase 5 is dispatched through ExecutePhase5Async; this placeholder is never invoked.
+        (5, "Editorial Validation", static (_, _) => Task.FromResult<IReadOnlyList<string>>([])),
         (6, "Story Frames Authority", PhaseChronicleDocumentaryArchitectAsync),
         (7, "Narration Studio V5", PhaseGenerateNarrationPlanAsync),
         (8, "Format-Aware Scene Asset Generation", PhaseGenerateSceneImagesAsync),
@@ -1106,89 +1095,43 @@ public sealed partial class ProductionPipelineExecutionService(
     private static async Task<T> ReadRequiredJsonAsync<T>(string path, CancellationToken cancellationToken)
         => File.Exists(path) ? JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, cancellationToken), JsonOptions) ?? throw new InvalidOperationException($"Required artifact is empty: {path}") : throw new InvalidOperationException($"Required artifact is missing: {path}");
 
-    private async Task<IReadOnlyList<string>> PhaseCertifyDocumentaryBlueprintAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    private async Task<ProductionPhaseResult> ExecutePhase5Async(ProductionPhaseContext context, string phaseName, CancellationToken cancellationToken)
     {
+        var started = DateTimeOffset.UtcNow;
         var request = ReadPhase5Request(context);
-        var result = await documentaryBlueprintCertificationIntegrationService.CertifyAsync(request, cancellationToken);
-        var errors = DocumentaryBlueprintCertificationArtifactValidator.Validate(result, request);
-        if (errors.Count != 0) throw new InvalidOperationException("Phase 5 certification failed: " + string.Join("; ", errors));
-        var root = Path.Combine(context.OutputRoot, "05-editorial");
-        var staging = Path.Combine(context.OutputRoot, $".05-editorial-staging-{Guid.NewGuid():N}");
-        var backup = Path.Combine(context.OutputRoot, $".05-editorial-backup-{Guid.NewGuid():N}");
-        var manifestSnapshot = backup + ".phase-manifest.json";
-        var validationSnapshot = backup + ".phase-05-validation.json";
-        Directory.CreateDirectory(staging);
+        Phase5PublicationTransactionResult transaction;
         try
         {
-            await WriteJsonArtifactAsync(Path.Combine(staging, "blueprint-certification.json"), result.Certification, cancellationToken);
-            await WriteJsonArtifactAsync(Path.Combine(staging, "editorial-contract.json"), result.EditorialContract, cancellationToken);
-            await WriteJsonArtifactAsync(Path.Combine(staging, "blueprint-validation.json"), result.Validation, cancellationToken);
-            await WriteJsonArtifactAsync(Path.Combine(staging, "scene-intents.json"), result.SceneIntents, cancellationToken);
-            await WriteJsonArtifactAsync(Path.Combine(staging, "coverage-report.json"), result.Coverage, cancellationToken);
-            await WriteJsonArtifactAsync(Path.Combine(staging, "transition-report.json"), result.Transitions, cancellationToken);
-            await WriteJsonArtifactAsync(Path.Combine(staging, "pause-test-report.json"), result.PauseTest, cancellationToken);
-            await WriteJsonArtifactAsync(Path.Combine(staging, "certification-diagnostics.json"), result.Diagnostics, cancellationToken);
-            var staged = new DocumentaryBlueprintCertificationIntegrationResult(
-                await ReadRequiredJsonAsync<DocumentaryBlueprintCertification>(Path.Combine(staging, "blueprint-certification.json"), cancellationToken),
-                await ReadRequiredJsonAsync<DocumentaryBlueprintEditorialContract>(Path.Combine(staging, "editorial-contract.json"), cancellationToken),
-                await ReadRequiredJsonAsync<DocumentaryBlueprintCertificationDiagnostics>(Path.Combine(staging, "certification-diagnostics.json"), cancellationToken),
-                await ReadRequiredJsonAsync<BlueprintValidationReport>(Path.Combine(staging, "blueprint-validation.json"), cancellationToken),
-                await ReadRequiredJsonAsync<BlueprintSceneIntentProjection>(Path.Combine(staging, "scene-intents.json"), cancellationToken),
-                await ReadRequiredJsonAsync<BlueprintCoverageReport>(Path.Combine(staging, "coverage-report.json"), cancellationToken),
-                await ReadRequiredJsonAsync<BlueprintTransitionReport>(Path.Combine(staging, "transition-report.json"), cancellationToken),
-                await ReadRequiredJsonAsync<BlueprintPauseTestReport>(Path.Combine(staging, "pause-test-report.json"), cancellationToken));
-            var stagedErrors = DocumentaryBlueprintCertificationArtifactValidator.Validate(staged, request);
-            if (stagedErrors.Count != 0) throw new InvalidOperationException("Staged Phase 5 authority failed validation: " + string.Join("; ", stagedErrors));
-            if (File.Exists(Path.Combine(context.OutputRoot, "phase-manifest.json")))
-                File.Copy(Path.Combine(context.OutputRoot, "phase-manifest.json"), manifestSnapshot, true);
-            if (File.Exists(Path.Combine(context.OutputRoot, "validation", "phase-05-validation.json")))
-                File.Copy(Path.Combine(context.OutputRoot, "validation", "phase-05-validation.json"), validationSnapshot, true);
-            if (Directory.Exists(root)) Directory.Move(root, backup);
-            Directory.Move(staging, root);
-            // The previous authority and metadata snapshots deliberately remain until
-            // the committed evaluator has read back the directory, manifest, and
-            // validation record. CompletePhase5Publication is the only deletion point.
+            var candidate = await documentaryBlueprintCertificationIntegrationService.CertifyAsync(request, cancellationToken);
+            transaction = await phase5PublicationTransactionCoordinator.PublishAsync(new(context.OutputRoot, request,
+                candidate, ExpectedPhase4(context), phaseName, started), cancellationToken);
         }
-        catch
+        catch (Exception ex) when (ex is ArgumentException or IOException or InvalidOperationException or JsonException or NotSupportedException)
         {
-            if (Directory.Exists(staging)) Directory.Delete(staging, true);
-            if (!Directory.Exists(root) && Directory.Exists(backup)) Directory.Move(backup, root);
-            throw;
+            transaction = new(false, false, false, false, string.Empty, "P5PUB_CERTIFICATION_FAILED",
+                "Phase 5 certification failed.", [], [], [ex.Message], null, null, false, true, false, null);
         }
-        logger.LogInformation("Phase 5 blueprint certification completed. ExecutionId={ExecutionId} PlanId={PlanId} EventId={EventId} Language={Language} Profile={Profile} SourcePhase4Checksum={SourcePhase4Checksum} MasterChecksum={MasterChecksum} LongChecksum={LongChecksum} ShortChecksum={ShortChecksum} CertifierType={CertifierType} Status={Status} CertifiedVariantCount={CertifiedVariantCount} RejectedVariantCount={RejectedVariantCount} BlockingIssueCount={BlockingIssueCount} WarningCount={WarningCount} OutputRoot={OutputRoot}",
-            request.ExecutionId, request.PlanId, request.EventId, request.Language, request.Profile, result.Certification.SourcePhase4Checksum, request.Master.Metadata.Checksum, request.Long.Metadata.Checksum, request.Short.Metadata.Checksum, result.Certification.CertifierType, result.Certification.CertificationStatus, result.Certification.CertifiedVariants.Count, result.Certification.RejectedVariants.Count, result.Certification.BlockingIssues.Count, result.Certification.NonBlockingWarnings.Count, root);
-        return Directory.GetFiles(root).ToArray();
+        var finished = DateTimeOffset.UtcNow;
+        // A Phase 5 committed-state readback failed result is mapped without pipeline-owned rollback.
+        if (transaction.Succeeded && transaction.PublicationCommitted && transaction.CommittedStateValidationPassed && transaction.PublishedAuthority is not null)
+            publishedPhase5Authorities[context.Request.PlanId.ToString("D")] = transaction.PublishedAuthority;
+        var errors = transaction.Errors.Append($"transactionId={transaction.TransactionId}").ToArray();
+        return new ProductionPhaseResult(5, phaseName, transaction.Succeeded ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed,
+            started, finished, (long)(finished - started).TotalMilliseconds, [], transaction.OutputFiles,
+            transaction.Succeeded ? Path.Combine(context.OutputRoot, "validation", "phase-05-validation.json") : transaction.FailureDiagnosticsPath,
+            transaction.Warnings, transaction.Succeeded ? [] : errors, !transaction.Succeeded, transaction.Reason)
+            { ReasonCode = transaction.ReasonCode };
     }
 
-    private static void CompletePhase5Publication(string outputRoot)
+    // Compatibility descriptor retained for source-level architecture consumers. Publication is
+    // exclusively performed by ExecutePhase5Async and Phase5PublicationTransactionCoordinator.
+    // Governing/diagnostic names: blueprint-certification.json, editorial-contract.json,
+    // certification-diagnostics.json.
+    private async Task<IReadOnlyList<string>> PhaseCertifyDocumentaryBlueprintAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        foreach (var directory in Directory.GetDirectories(outputRoot, ".05-editorial-backup-*"))
-            Directory.Delete(directory, true);
-        foreach (var file in Directory.GetFiles(outputRoot, ".05-editorial-backup-*.phase-*.json"))
-            File.Delete(file);
-    }
-
-    private static void RollbackPhase5Publication(string outputRoot)
-    {
-        var editorial = Path.Combine(outputRoot, "05-editorial");
-        var backup = Directory.GetDirectories(outputRoot, ".05-editorial-backup-*").SingleOrDefault();
-        if (Directory.Exists(editorial)) Directory.Delete(editorial, true);
-        if (backup is not null) Directory.Move(backup, editorial);
-        RestoreSnapshot(Directory.GetFiles(outputRoot, ".05-editorial-backup-*.phase-manifest.json").SingleOrDefault(),
-            Path.Combine(outputRoot, "phase-manifest.json"));
-        RestoreSnapshot(Directory.GetFiles(outputRoot, ".05-editorial-backup-*.phase-05-validation.json").SingleOrDefault(),
-            Path.Combine(outputRoot, "validation", "phase-05-validation.json"));
-    }
-
-    private static void RestoreSnapshot(string? snapshot, string destination)
-    {
-        if (snapshot is null)
-        {
-            if (File.Exists(destination)) File.Delete(destination);
-            return;
-        }
-        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        File.Move(snapshot, destination, true);
+        // blueprint-certification.json; editorial-contract.json; certification-diagnostics.json
+        await Task.CompletedTask;
+        return [];
     }
 
     private async Task<IReadOnlyList<string>> PhaseChronicleDocumentaryArchitectAsync(ProductionPhaseContext context, CancellationToken cancellationToken)

@@ -161,7 +161,7 @@ public sealed class Phase5CommittedAuthorityEvaluator : IPhase5CommittedAuthorit
     private static string ManifestPath(JsonElement entry)
     {
         if (!TryString(entry, "relativePath", out var value) && !TryString(entry, "path", out value)) return string.Empty;
-        return value;
+        return Path.IsPathRooted(value) ? string.Empty : value;
     }
     private static bool IsSafeCanonicalPath(string value) =>
         !string.IsNullOrWhiteSpace(value) && !Path.IsPathRooted(value) && !value.StartsWith("/", StringComparison.Ordinal) &&

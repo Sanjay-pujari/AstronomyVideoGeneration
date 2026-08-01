@@ -755,6 +755,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IDocumentaryBlueprintPhase5CompatibilityAdapter, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DocumentaryBlueprintPhase5CompatibilityAdapter>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase4CommittedAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase4CommittedAuthorityEvaluator>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase5CommittedAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase5CommittedAuthorityEvaluator>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase5PublicationRecoveryService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase5PublicationRecoveryService>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase5PublicationTransactionCoordinator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase5PublicationTransactionCoordinator>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.IRc2CertifiedExecutionStatusReader, Astronomy.MediaFactory.Infrastructure.Orchestration.RC2.Rc2CertifiedExecutionStatusReader>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintIntegrationService, DocumentaryBlueprintIntegrationService>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryProductionCertifier>();
