@@ -1,42 +1,54 @@
 # O2.ORCH.5 Phase 5 hardening audit
 
-## Current Phase 4 lineage validation
-`Phase5ExpectedPhase4Authority` carries the committed aggregate ID and aggregate, Long, and Short checksums. The evaluator compares certification, all five projections, the editorial contract, every manifest entry, and the returned published authority against it.
+## Authority and lineage
 
-## Stale Phase 5 reuse prevention
-Reuse supplies lineage derived from `PublishedDocumentaryBlueprintAggregate`; aggregate ID or checksum drift returns `P5REUSE_SOURCE_PHASE4_MISMATCH` and does not install the stale authority.
+`Phase5ExpectedPhase4Authority` carries the current committed aggregate ID and aggregate, Long, and Short checksums. Every generation readback, recovery readback, reuse decision, certification, projection, editorial contract, manifest entry, and Phase 6 resume boundary is evaluated against that current authority. A differing aggregate ID or any differing checksum returns `P5REUSE_SOURCE_PHASE4_MISMATCH`; stale Phase 5 authority is never installed.
 
-## Manifest role validation
-All seven entries require their exact canonical roles.
+The committed evaluator requires the exact seven governing artifacts and their exact roles. It verifies each semantic checksum, physical SHA-256, positive physical size, and `sourcePhase4Checksum`. `certification-diagnostics.json` remains optional and is not authority.
 
-## Manifest semantic checksum validation
-Every manifest semantic checksum is required, lowercase SHA-256, and matched to the checksum validated from its deserialized artifact.
+## Transaction architecture
 
-## Manifest physical-size validation
-Positive integer sizes are required and compared to physical file lengths.
+`Phase5PublicationTransactionCoordinator` is the sole publication owner. The pipeline creates the candidate, submits a typed `Phase5PublicationTransactionRequest`, maps the typed result, and installs only the physical `PublishedBlueprintCertification` returned after successful committed readback. Reuse remains outside the transaction because `AlreadyPublished` is an execution decision, rather than a property of physical committed state.
 
-## Manifest source-lineage validation
-Every entry must name the current committed Phase 4 aggregate checksum.
+One GUID is used to derive exact staging, backup, manifest snapshot, validation snapshot, marker, failed-authority, and diagnostic paths. Marker states are `Preparing`, `StagedValidated`, `PreviousStateBackedUp`, `EditorialSwapped`, `MetadataPublished`, `Committed`, `RollingBack`, and `RollbackFailed`.
 
-## Unknown manifest property preservation
-Manifest writes merge generated owned values into the parsed existing `JsonObject`, preserving unknown top-level and nested values, then replace via a temporary file.
+The coordinator validates the in-memory candidate, writes and rereads staging, performs semantic validation, snapshots previous state, swaps authority, atomically merges only `phase5Artifacts` into the existing `JsonObject`, atomically publishes validation, and invokes committed readback before cleanup. The merge preserves unknown top-level/nested properties and the complete Phase 1–4 inventory.
 
-## Transactional backup retention
-The previous editorial authority plus manifest and validation snapshots remain until committed readback. Failed readback restores prior state; successful readback removes transaction files.
+## Rollback, diagnostics, and recovery
 
-## Post-publication committed readback
-Success and authority installation occur only after the evaluator validates the physically published files, validation record, and manifest.
+Rollback uses only typed exact transaction paths. It preserves the original readback error, removes the new authority, restores the exact prior editorial/manifest/validation snapshots (or restores their prior absence), verifies restored existence, and cleans evidence only after success. A rollback error produces controlled `P5PUB_ROLLBACK_FAILED`, retains evidence, and atomically writes a payload-free transaction diagnostic containing original and rollback errors.
 
-## Phase 6 resume lineage enforcement
-Resume first rehydrates Phase 4 through its committed evaluator, then supplies that typed lineage while rehydrating Phase 5. Diagnostics remain optional.
+Recovery orders marker files deterministically, rejects marker/path disagreement as `P5PUB_RECOVERY_AMBIGUOUS_STATE`, cleans abandoned pre-swap staging, restores interrupted swaps, evaluates metadata-published/committed authority before finalization, continues rollback, and blocks on `RollbackFailed`. Unmarked wildcard directories are never guessed as transactions.
 
-## Tests and actual totals
-The container does not provide the .NET SDK, so executable test totals could not be produced in this environment. `git diff --check` passed.
+## Files added
+
+- `Phase5PublicationTransactionContracts.cs`
+- `Phase5PublicationTransactionCoordinator.cs`
+- `Phase5PublicationRecoveryService.cs`
+
+## Files modified
+
+- `ProductionPipelineExecutionService.cs`
+- `ServiceCollectionExtensions.cs`
+- `Phase5CommittedAuthorityEvaluator.cs`
+- this audit
+
+## Dependency injection
+
+The coordinator and recovery service are registered once as scoped services. The committed evaluator retains exactly one scoped production registration.
+
+## Actual verification (2026-08-01 UTC)
+
+- `/tmp/dotnet/dotnet restore Astronomy.MediaFactory.slnx`: succeeded; 13 projects restored. Warnings: `NU1510` and the pre-existing `NU1903` SQLite advisory.
+- `/tmp/dotnet/dotnet build Astronomy.MediaFactory.slnx --no-restore -v:minimal`: succeeded; 0 errors, 200 warnings, 1 minute 56.67 seconds.
+- `/tmp/dotnet/dotnet test tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-build --filter "FullyQualifiedName~Phase5" --logger "console;verbosity=minimal"`: 24 total, 24 passed, 0 failed, 0 skipped, 1 second.
+
+The RC2 endpoint was not executed.
 
 ## Remaining technical debt
-Run the complete requested test matrix in the repository's .NET build environment and add deterministic injected rollback-fault coverage.
+
+The complete requested deterministic fault-injection, rollback-failure, recovery-state, pipeline/API, Phase 4 regression, Phase 6, documentary namespace, and RC2 in-memory test matrix has not been implemented or executed in this pass. A testable file-system fault boundary is also still required to prove rollback-operation failures rather than merely handling them. Consequently rollback correctness and RC2 readiness are not claimed.
 
 ## RC2 readiness verdict
-Build and behavioral verification are mandatory and remain outstanding due to the missing SDK.
 
 NOT_READY_FOR_RC2_PHASE_1_TO_5
