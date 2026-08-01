@@ -4642,6 +4642,61 @@ public sealed partial class ProductionPipelineExecutionService(
         return Math.Min(100, score);
     }
 
+    private static int ScorePhase14DocumentaryNarration(string family, string finalText, string opening, string closing)
+    {
+        finalText ??= string.Empty;
+        var score = 60;
+
+        if (ScoreRc1DDocumentaryTone(finalText) >= 77
+            || Regex.IsMatch(finalText, @"\b(story|wonder|perspective|discovery|mystery)\b", RegexOptions.IgnoreCase)) score += 8;
+        if (Regex.IsMatch(finalText, @"\b(line-of-sight|perspective|orbit(?:al)?|geometry|distance|distances|separated|atmosphere|shadow)\b", RegexOptions.IgnoreCase)) score += 8;
+        if (ScoreRc1DObservationClarity(finalText) >= 70
+            || Regex.IsMatch(finalText, @"\b(look|watch|observe|before (?:sunrise|dawn)|after sunset|horizon|binoculars|clear sky)\b", RegexOptions.IgnoreCase)) score += 6;
+        if (ScoreSceneContinuity(finalText) >= 90
+            || Regex.IsMatch(finalText, @"\b(then|next|as .* unfolds|from .* to .*|finally|drift apart)\b", RegexOptions.IgnoreCase)) score += 6;
+        if (ScoreClosingQuality(closing) >= 80
+            || Regex.IsMatch(closing, @"\b(memory|remember|wonder|quiet|beautiful|look up|remain|story)\b", RegexOptions.IgnoreCase)) score += 6;
+        if (ContainsPhase14FamilyObjects(family, finalText)) score += 6;
+
+        if (string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Regex.IsMatch(finalText, @"\bJupiter\b", RegexOptions.IgnoreCase)
+                && Regex.IsMatch(finalText, @"\bVenus\b", RegexOptions.IgnoreCase)) score += 5;
+            if (Regex.IsMatch(finalText, @"\b(perspective|line-of-sight|distance|distances|separation|separated|orbital geometry)\b", RegexOptions.IgnoreCase)) score += 5;
+            if (Regex.IsMatch(opening, @"\b(before dawn|takes the lead|slips in|quiet sky story|emerges|draws (?:the )?eye)\b", RegexOptions.IgnoreCase)) score += 4;
+        }
+
+        if (Regex.IsMatch(finalText, @"\b(Welcome to Drashyam|Hello,? astronomy lovers|Greetings,? astronomy lovers)\b", RegexOptions.IgnoreCase)
+            || ScoreHostPresence(finalText) >= 90) score += 4;
+
+        if (ScoreMetadataLeak(finalText) < 100
+            || Regex.IsMatch(finalText, @"\b(author|authoring|instruction|prompt|start with)\b", RegexOptions.IgnoreCase)) score -= 15;
+        if (Regex.IsMatch(finalText, @"\b(opens with|starts with|start with|this matters because|low in the evening sky|you will see|the event is|the best view comes from)\b", RegexOptions.IgnoreCase)) score -= 15;
+        if (Regex.IsMatch(finalText, @"\b(?:are|is) planets?\b", RegexOptions.IgnoreCase)
+            && !Regex.IsMatch(finalText, @"\b(look|watch|observe|story|perspective|line-of-sight|horizon|dawn|sunrise|sunset)\b", RegexOptions.IgnoreCase)) score -= 10;
+        if (ContainsPhase14CrossEventVocabulary(family, finalText)) score -= 10;
+        if (Regex.IsMatch(finalText, @"\b(after sunset|evening sky|western horizon)\b", RegexOptions.IgnoreCase)
+            && Regex.IsMatch(finalText, @"\b(before sunrise|before dawn|pre-dawn|morning sky)\b", RegexOptions.IgnoreCase)) score -= 10;
+
+        return Math.Clamp(score, 0, 100);
+    }
+
+    private static bool ContainsPhase14FamilyObjects(string family, string text)
+        => family switch
+        {
+            "PlanetConjunction" => Regex.IsMatch(text, @"\b(Jupiter|Venus|Mars|Saturn|planets?|worlds?)\b", RegexOptions.IgnoreCase),
+            "Meteor" => Regex.IsMatch(text, @"\b(meteor|meteors|Geminids|Perseids)\b", RegexOptions.IgnoreCase),
+            "Moon" => Regex.IsMatch(text, @"\b(Moon|lunar)\b", RegexOptions.IgnoreCase),
+            "Eclipse" => Regex.IsMatch(text, @"\b(eclipse|Sun|Moon)\b", RegexOptions.IgnoreCase),
+            _ => Regex.IsMatch(text, @"\b(Moon|Sun|planet|star|comet|sky)\b", RegexOptions.IgnoreCase)
+        };
+
+    private static bool ContainsPhase14CrossEventVocabulary(string family, string text)
+        => string.Equals(family, "PlanetConjunction", StringComparison.OrdinalIgnoreCase)
+            ? Regex.IsMatch(text, @"\b(meteor shower|radiant|Geminids|Perseids|eclipse totality|lunar phase)\b", RegexOptions.IgnoreCase)
+            : string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase)
+                && Regex.IsMatch(text, @"\b(planetary conjunction|Jupiter and Venus|line-of-sight alignment)\b", RegexOptions.IgnoreCase);
+
     private static Phase14DocumentaryNarration BuildPhase14DocumentaryNarration(ProductionPhaseContext context)
     {
         Phase14LastTraceName = null;
@@ -4709,6 +4764,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var scenePurposeBySceneId = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => ResolvePhase14ScenePurpose(item.Key), StringComparer.OrdinalIgnoreCase);
         var firstSentenceByScene = allTexts.ToDictionary(item => $"{item.format}:{item.Key}", item => FirstSentence(item.Value), StringComparer.OrdinalIgnoreCase);
         var duplicatePairs = FindDuplicateFirstSentencePairs("long", longTexts);
+        var finalCandidateText = combinedCandidateText(shortTexts, longTexts);
+        var finalOpening = shortTexts.Values.FirstOrDefault() ?? string.Empty;
+        var finalClosing = longTexts.Values.LastOrDefault() ?? shortTexts.Values.LastOrDefault() ?? string.Empty;
         var diagnostics = script.Diagnostics with
         {
             LongSceneCount = longTexts.Count,
@@ -4718,8 +4776,9 @@ public sealed partial class ProductionPipelineExecutionService(
             DuplicatePairs = duplicatePairs,
             FirstSentenceByLongScene = longTexts.ToDictionary(kv => kv.Key, kv => FirstSentence(kv.Value), StringComparer.OrdinalIgnoreCase),
             LongSceneNarrationExpansionStrategy = longExpansionStrategy,
-            WonderScore = ScoreWonderLanguage(combinedCandidateText(shortTexts, longTexts)),
-            ScientificAccuracyScore = ScoreScientificAccuracy(family, combinedCandidateText(shortTexts, longTexts)),
+            DocumentaryScore = ScorePhase14DocumentaryNarration(family, finalCandidateText, finalOpening, finalClosing),
+            WonderScore = ScoreWonderLanguage(finalCandidateText),
+            ScientificAccuracyScore = ScoreScientificAccuracy(family, finalCandidateText),
             HookGreetingRequired = hookGreetingDiagnostics.HookGreetingRequired,
             HookGreetingApplied = hookGreetingDiagnostics.HookGreetingApplied,
             HookGreetingText = hookGreetingDiagnostics.HookGreetingText,

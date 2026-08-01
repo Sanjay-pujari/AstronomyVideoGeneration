@@ -1999,13 +1999,73 @@ Second display cue.
         Assert.DoesNotContain("start with", allText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("you will see", allText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("fellow stargazers", allText, StringComparison.OrdinalIgnoreCase);
-        Assert.True((int)diagnosticsType.GetProperty("DocumentaryScore")!.GetValue(diagnostics)! >= 90);
-        Assert.True((int)diagnosticsType.GetProperty("WonderScore")!.GetValue(diagnostics)! >= 90);
-        Assert.True((int)diagnosticsType.GetProperty("ScientificAccuracyScore")!.GetValue(diagnostics)! >= 95);
+        var documentaryScore = (int)diagnosticsType.GetProperty("DocumentaryScore")!.GetValue(diagnostics)!;
+        var wonderScore = (int)diagnosticsType.GetProperty("WonderScore")!.GetValue(diagnostics)!;
+        var scientificAccuracyScore = (int)diagnosticsType.GetProperty("ScientificAccuracyScore")!.GetValue(diagnostics)!;
+        Assert.True(documentaryScore >= 90, $"Expected DocumentaryScore >= 90, actual={documentaryScore}");
+        Assert.True(wonderScore >= 90, $"Expected WonderScore >= 90, actual={wonderScore}");
+        Assert.True(scientificAccuracyScore >= 95, $"Expected ScientificAccuracyScore >= 95, actual={scientificAccuracyScore}");
         Assert.True((bool)diagnosticsType.GetProperty("HookGreetingRequired")!.GetValue(diagnostics)!);
         Assert.True((bool)diagnosticsType.GetProperty("HookGreetingApplied")!.GetValue(diagnostics)!);
         Assert.Equal("Welcome to Drashyam", diagnosticsType.GetProperty("HookGreetingText")!.GetValue(diagnostics));
     }
+
+    [Fact]
+    public void Phase14DocumentaryScore_FinalPlanetConjunctionNarrationScoresAtLeast90()
+    {
+        var context = CreateContext("PlanetConjunction", ["ShortVideo", "LongVideo"], "Venus Jupiter Conjunction");
+        var narration = InvokePhase14DocumentaryNarration(context);
+        var diagnostics = narration.GetType().GetProperty("Diagnostics")!.GetValue(narration)!;
+        var score = (int)diagnostics.GetType().GetProperty("DocumentaryScore")!.GetValue(diagnostics)!;
+
+        Assert.True(score >= 90, $"Expected final Planet Conjunction DocumentaryScore >= 90, actual={score}");
+    }
+
+    [Fact]
+    public void Phase14DocumentaryScore_UsesFinalRewrittenNarration()
+    {
+        const string generic = "Jupiter and Venus are planets. They appear in the sky.";
+        const string documentary = "Welcome to Drashyam. Before dawn, Jupiter takes the lead and Venus slips in beside it, beginning a quiet sky story. Look east as the pair draws closer from night to night. Their apparent meeting is perspective: a line-of-sight effect across vast distances, while the worlds remain separated in space. In the end they drift apart, but the memory of these distant worlds can remain.";
+
+        Assert.True(
+            InvokePhase14DocumentaryScore(documentary, documentary, documentary) > InvokePhase14DocumentaryScore(generic, generic, generic));
+    }
+
+    [Fact]
+    public void Phase14DocumentaryScore_WeakGenericNarrationDoesNotAutomaticallyPass()
+    {
+        const string narration = "Jupiter and Venus are planets. They appear in the sky.";
+
+        Assert.True(InvokePhase14DocumentaryScore(narration, narration, narration) < 90);
+    }
+
+    [Fact]
+    public void Phase14DocumentaryScore_PenalizesMetadataAndAuthoringLanguage()
+    {
+        const string clean = "Welcome to Drashyam. Before dawn, Jupiter takes the lead while Venus slips in beside it. Look east to follow this quiet sky story. Perspective makes the planets appear close across vast distances, although they remain separated in space. Soon they drift apart, leaving a beautiful memory.";
+        var authoring = clean + " Start with this scene metadata, then render the asset so you will see the result.";
+
+        Assert.True(InvokePhase14DocumentaryScore(authoring, authoring, authoring) < InvokePhase14DocumentaryScore(clean, clean, clean));
+    }
+
+    [Fact]
+    public void Phase14DocumentaryScore_RecognizesScientificPerspective()
+    {
+        const string unexplained = "Welcome to Drashyam. Before dawn, Jupiter and Venus make a beautiful sight. Look east and remember this quiet sky story.";
+        const string scientific = "Welcome to Drashyam. Before dawn, Jupiter and Venus make a beautiful sight. Look east as their story progresses. Perspective and line-of-sight make them appear close across vast distances, though they remain separated in space. Remember these distant worlds as they drift apart.";
+
+        Assert.True(InvokePhase14DocumentaryScore(scientific, scientific, scientific) > InvokePhase14DocumentaryScore(unexplained, unexplained, unexplained));
+    }
+
+    private static object InvokePhase14DocumentaryNarration(ProductionPhaseContext context)
+        => typeof(ProductionPipelineExecutionService)
+            .GetMethod("BuildPhase14DocumentaryNarration", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [context])!;
+
+    private static int InvokePhase14DocumentaryScore(string text, string opening, string closing)
+        => (int)typeof(ProductionPipelineExecutionService)
+            .GetMethod("ScorePhase14DocumentaryNarration", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, ["PlanetConjunction", text, opening, closing])!;
 
 
     [Theory]
