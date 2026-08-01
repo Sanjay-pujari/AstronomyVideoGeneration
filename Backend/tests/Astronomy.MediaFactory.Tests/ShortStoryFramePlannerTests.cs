@@ -79,7 +79,7 @@ public sealed class ShortStoryFramePlannerTests
         var json = await File.ReadAllTextAsync(Path.Combine(folder, "short-story-frames", "diagnostics", "ShortStoryFramePlan.json"));
         var reparsed = JsonSerializer.Deserialize<ShortStoryFramePlan>(json, VisualIntelligenceJson.CreateSerializerOptions());
         Assert.Equal(plan.PlanId, reparsed!.PlanId);
-        Assert.Equal("4.7G", reparsed.Versions["shortStoryFrames"]);
+        Assert.Equal("4.7H", reparsed.Versions["shortStoryFrames"]);
 
         var promptFiles = Directory.GetFiles(Path.Combine(folder, "short-story-frames", "diagnostics", "frame-prompts"), "*-prompt.json");
         Assert.Equal(5, promptFiles.Length);
@@ -88,9 +88,7 @@ public sealed class ShortStoryFramePlannerTests
             var package = JsonSerializer.Deserialize<StoryFramePromptPackage>(await File.ReadAllTextAsync(promptFile), VisualIntelligenceJson.CreateSerializerOptions())!;
             Assert.Equal("9:16", package.AspectRatio);
             Assert.Equal("AzureOpenAIImage", package.Provider);
-            Assert.Contains("Native 9:16 portrait", package.PositivePrompt);
-            Assert.Contains("Fast visual comprehension", package.PositivePrompt);
-            Assert.Contains("strong vertical hierarchy", package.PositivePrompt);
+            Assert.Contains("Visual Quality Framework RC1-A.1", package.PositivePrompt);
             Assert.Contains("astronomy accuracy", package.PositivePrompt);
             Assert.Contains("deterministic overlay safe space", package.PositivePrompt);
             Assert.DoesNotContain("crop", package.PositivePrompt, StringComparison.OrdinalIgnoreCase);

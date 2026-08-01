@@ -27,6 +27,8 @@ public sealed class ServiceCollectionExtensionsTests
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
+                    ["ConnectionStrings:Postgres"] = "Host=localhost;Port=5432;Database=mediafactory_test;Username=test;Password=test;Pooling=true",
+                    ["DatabaseSafety:AllowLocalhostPostgres"] = "true",
                     ["YouTube:ClientId"] = "client-id",
                     ["YouTube:ClientSecret"] = "client-secret",
                     ["YouTube:TokenFilePath"] = executableTokenFileName,
@@ -61,6 +63,8 @@ public sealed class ServiceCollectionExtensionsTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
+                ["ConnectionStrings:Postgres"] = "Host=localhost;Port=5432;Database=mediafactory_test;Username=test;Password=test;Pooling=true",
+                ["DatabaseSafety:AllowLocalhostPostgres"] = "true",
                 ["YouTube:ClientId"] = "client-id",
                 ["YouTube:ClientSecret"] = "client-secret",
                 ["YouTube:TokenFilePath"] = executableTokenFileName,

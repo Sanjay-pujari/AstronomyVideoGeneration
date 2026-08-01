@@ -79,7 +79,7 @@ public sealed class LongStoryFramePlannerTests
         var json = await File.ReadAllTextAsync(Path.Combine(folder, "long-story-frames", "diagnostics", "LongStoryFramePlan.json"));
         var reparsed = JsonSerializer.Deserialize<LongStoryFramePlan>(json, VisualIntelligenceJson.CreateSerializerOptions());
         Assert.Equal(plan.PlanId, reparsed!.PlanId);
-        Assert.Equal("4.7G", reparsed.Versions["longStoryFrames"]);
+        Assert.Equal("4.7H", reparsed.Versions["longStoryFrames"]);
 
         var promptFiles = Directory.GetFiles(Path.Combine(folder, "long-story-frames", "diagnostics", "frame-prompts"), "*-prompt.json");
         Assert.Equal(9, promptFiles.Length);
@@ -88,7 +88,7 @@ public sealed class LongStoryFramePlannerTests
             var package = JsonSerializer.Deserialize<StoryFramePromptPackage>(await File.ReadAllTextAsync(promptFile), VisualIntelligenceJson.CreateSerializerOptions())!;
             Assert.Equal("16:9", package.AspectRatio);
             Assert.Equal("AzureOpenAIImage", package.Provider);
-            Assert.Contains("Native 16:9 landscape", package.PositivePrompt);
+            Assert.Contains("Visual Quality Framework RC1-A.1", package.PositivePrompt);
             Assert.Contains("astronomy accuracy", package.PositivePrompt);
             Assert.Contains("deterministic overlay safe space", package.PositivePrompt);
             Assert.DoesNotContain("crop", package.PositivePrompt, StringComparison.OrdinalIgnoreCase);
