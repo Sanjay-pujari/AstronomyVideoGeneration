@@ -2049,6 +2049,14 @@ Second display cue.
     }
 
     [Fact]
+    public void Phase14DocumentaryScore_DoesNotTreatNaturalSceneLanguageAsMetadataLeakage()
+    {
+        const string narration = "Welcome to Drashyam. Before dawn, Jupiter takes the lead and Venus slips in beside it, beginning a quiet sky story. Look east as the scene changes from night to night. Their apparent meeting is perspective: a line-of-sight effect across vast distances, while the worlds remain separated in space. In a final visual beat, they drift apart, but the memory of these distant worlds can remain.";
+
+        Assert.True(InvokePhase14DocumentaryScore(narration, narration, narration) >= 90);
+    }
+
+    [Fact]
     public void Phase14DocumentaryScore_RecognizesScientificPerspective()
     {
         const string unexplained = "Welcome to Drashyam. Before dawn, Jupiter and Venus make a beautiful sight. Look east and remember this quiet sky story.";
