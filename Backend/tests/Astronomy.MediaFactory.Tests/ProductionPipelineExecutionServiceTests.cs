@@ -119,9 +119,7 @@ public sealed class ProductionPipelineExecutionServiceTests
             """);
 
             var renderedFitsMethod = typeof(ProductionPipelineExecutionService).GetMethod("CinematicHeroRenderedLayoutFits", BindingFlags.NonPublic | BindingFlags.Static);
-            var validationMethod = typeof(ProductionPipelineExecutionService).GetMethod("ValidateCinematicHeroOverlayTextWithRenderedLayout", BindingFlags.NonPublic | BindingFlags.Static);
             Assert.NotNull(renderedFitsMethod);
-            Assert.NotNull(validationMethod);
 
             var renderedLayoutFits = (bool)renderedFitsMethod!.Invoke(null, new object?[] { layoutPath })!;
             var diagnostics = InvokeRoleValidationWithRenderedLayout(
@@ -684,18 +682,51 @@ public sealed class ProductionPipelineExecutionServiceTests
 
     private static MethodInfo GetPrivateStaticMethod(string name, params Type[] parameterTypes)
     {
-        var method = typeof(ProductionPipelineExecutionService)
+        var methods = typeof(ProductionPipelineExecutionService)
             .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
-            .SingleOrDefault(candidate =>
-            {
-                if (candidate.Name != name) return false;
-                var parameters = candidate.GetParameters();
-                return parameters.Length == parameterTypes.Length
-                    && parameters.Select(parameter => parameter.ParameterType).SequenceEqual(parameterTypes);
-            });
+            .Where(candidate => candidate.Name == name)
+            .Where(candidate => candidate.GetParameters()
+                .Select(parameter => parameter.ParameterType)
+                .SequenceEqual(parameterTypes))
+            .ToArray();
 
-        Assert.NotNull(method);
-        return method!;
+        Assert.True(
+            methods.Length == 1,
+            $"Expected exactly one private static overload for {name}(" +
+            string.Join(", ", parameterTypes.Select(type => type.Name)) +
+            $"), but found {methods.Length}.");
+        return methods[0];
+    }
+
+    private static MethodInfo GetPrivateInstanceMethod(string name, params Type[] parameterTypes)
+    {
+        var methods = typeof(ProductionPipelineExecutionService)
+            .GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
+            .Where(candidate => candidate.Name == name)
+            .Where(candidate => candidate.GetParameters().Select(parameter => parameter.ParameterType).SequenceEqual(parameterTypes))
+            .ToArray();
+
+        Assert.True(
+            methods.Length == 1,
+            $"Expected exactly one private instance overload for {name}(" +
+            string.Join(", ", parameterTypes.Select(type => type.Name)) +
+            $"), but found {methods.Length}.");
+        return methods[0];
+    }
+
+    private static System.Collections.IEnumerable InvokeReadVideoAssemblyItems(
+        string planRoot, string language, JsonNode motionRoot, JsonNode ttsRoot, string format, int expectedCount,
+        IReadOnlyList<string> oldPaths, List<string> missingSceneImages, List<string> missingAudioFiles, List<string> oldPathUsageReasons)
+    {
+        var serviceType = typeof(ProductionPipelineExecutionService);
+        var manifestType = serviceType.GetNestedType("StoryFrameV4Manifest", BindingFlags.NonPublic)!;
+        var resolvedMappingListType = typeof(List<>).MakeGenericType(serviceType.GetNestedType("StoryFrameV4ResolvedFrameMapping", BindingFlags.NonPublic)!);
+        var unresolvedSceneListType = typeof(List<>).MakeGenericType(serviceType.GetNestedType("StoryFrameV4UnresolvedScene", BindingFlags.NonPublic)!);
+        var method = GetPrivateStaticMethod("ReadVideoAssemblyItems", typeof(string), typeof(string), typeof(JsonNode), typeof(JsonNode), typeof(string), typeof(int), typeof(IReadOnlyList<string>), typeof(List<string>), typeof(List<string>), typeof(List<string>), typeof(bool), manifestType, resolvedMappingListType, unresolvedSceneListType);
+
+        return (System.Collections.IEnumerable)method.Invoke(null,
+            [planRoot, language, motionRoot, ttsRoot, format, expectedCount, oldPaths, missingSceneImages, missingAudioFiles, oldPathUsageReasons,
+             false, null, Activator.CreateInstance(resolvedMappingListType), Activator.CreateInstance(unresolvedSceneListType)])!;
     }
 
     private static object ParseHeroOverlayRole(string roleName)
@@ -1221,9 +1252,9 @@ Fourth cue.
                 }
             }));
 
-            var method = typeof(ProductionPipelineExecutionService).GetMethod("RegenerateNarrationSubtitlesFromTtsTimeline", BindingFlags.NonPublic | BindingFlags.Static);
+            var method = GetPrivateStaticMethod("RegenerateNarrationSubtitlesFromTtsTimeline", typeof(string), typeof(string));
             Assert.NotNull(method);
-            method!.Invoke(null, [planRoot]);
+            method!.Invoke(null, [planRoot, "en"]);
 
             var shortSrt = File.ReadAllText(Path.Combine(planRoot, "narration", "subtitles", "short.srt"));
             Assert.Contains("00:00:00,000 --> 00:00:05,352", shortSrt);
@@ -1268,9 +1299,11 @@ Fourth cue.
                 }
             }))!;
             var missingDurationItems = new List<string>();
-            var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildSceneDurationPlanItemsAsync", BindingFlags.NonPublic | BindingFlags.Static);
-            Assert.NotNull(method);
-            var task = (Task)method!.Invoke(null, [ttsRoot, "short", Path.Combine(metadataRoot, "scene-timeline-metadata.json"), 2, 12.0, 0.0, 0.5, missingDurationItems, CancellationToken.None])!;
+            var cueDiagnosticsType = typeof(ProductionPipelineExecutionService).GetNestedType("CueAudioDurationResolution", BindingFlags.NonPublic)!;
+            var cueDiagnosticsListType = typeof(List<>).MakeGenericType(cueDiagnosticsType);
+            var method = GetPrivateInstanceMethod("BuildSceneDurationPlanItemsAsync", typeof(string), typeof(JsonNode), typeof(string), typeof(string), typeof(int), typeof(double), typeof(double), typeof(double), typeof(List<string>), cueDiagnosticsListType, typeof(CancellationToken));
+            var service = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ProductionPipelineExecutionService));
+            var task = (Task)method.Invoke(service, [planRoot, ttsRoot, "short", Path.Combine(metadataRoot, "scene-timeline-metadata.json"), 2, 12.0, 0.0, 0.5, missingDurationItems, null, CancellationToken.None])!;
             task.GetAwaiter().GetResult();
             var result = ((System.Collections.IEnumerable)task.GetType().GetProperty("Result")!.GetValue(task)!).Cast<object>().ToArray();
 
@@ -1418,10 +1451,7 @@ Fourth cue.
             var missingSceneImages = new List<string>();
             var missingAudioFiles = new List<string>();
             var oldPathUsageReasons = new List<string>();
-            var method = typeof(ProductionPipelineExecutionService).GetMethod("ReadVideoAssemblyItems", BindingFlags.NonPublic | BindingFlags.Static);
-            Assert.NotNull(method);
-
-            var items = ((System.Collections.IEnumerable)method!.Invoke(null, [planRoot, "en", motionRoot, ttsRoot, "short", 5, Array.Empty<string>(), missingSceneImages, missingAudioFiles, oldPathUsageReasons])!)
+            var items = InvokeReadVideoAssemblyItems(planRoot, "en", motionRoot, ttsRoot, "short", 5, Array.Empty<string>(), missingSceneImages, missingAudioFiles, oldPathUsageReasons)
                 .Cast<object>()
                 .ToArray();
 
@@ -1531,10 +1561,7 @@ Second display cue.
             var missingSceneImages = new List<string>();
             var missingAudioFiles = new List<string>();
             var oldPathUsageReasons = new List<string>();
-            var method = typeof(ProductionPipelineExecutionService).GetMethod("ReadVideoAssemblyItems", BindingFlags.NonPublic | BindingFlags.Static);
-            Assert.NotNull(method);
-
-            var items = ((System.Collections.IEnumerable)method!.Invoke(null, [planRoot, "hi", motionRoot, ttsRoot, "short", 5, Array.Empty<string>(), missingSceneImages, missingAudioFiles, oldPathUsageReasons])!)
+            var items = InvokeReadVideoAssemblyItems(planRoot, "hi", motionRoot, ttsRoot, "short", 5, Array.Empty<string>(), missingSceneImages, missingAudioFiles, oldPathUsageReasons)
                 .Cast<object>()
                 .ToArray();
 
@@ -1585,8 +1612,8 @@ Second display cue.
     {
         const string narration = "Tonight, look low in the western sky after sunset. Venus appears bright, Jupiter sits nearby, and the Moon gives you a simple landmark. Pause for a moment and let your eyes adjust before you scan again.";
 
-        var splitMethod = typeof(ProductionPipelineExecutionService).GetMethod("SplitSubtitleChunks", BindingFlags.NonPublic | BindingFlags.Static);
-        var wrapMethod = typeof(ProductionPipelineExecutionService).GetMethod("WrapSubtitleChunk", BindingFlags.NonPublic | BindingFlags.Static);
+        var splitMethod = GetPrivateStaticMethod("SplitSubtitleChunks", typeof(string));
+        var wrapMethod = GetPrivateStaticMethod("WrapSubtitleChunk", typeof(string));
 
         Assert.NotNull(splitMethod);
         Assert.NotNull(wrapMethod);
@@ -1630,10 +1657,8 @@ Second display cue.
         const string narration = "आज रात पश्चिमी क्षितिज के पास चमकते शुक्र को देखें। चंद्रमा पास में होगा और आपको दिशा पहचानने में मदद करेगा।";
 
         var normalizeMethod = typeof(ProductionPipelineExecutionService).GetMethod("NormalizePhase14SubtitleTtsOptions", BindingFlags.NonPublic | BindingFlags.Static);
-        var splitMethod = typeof(ProductionPipelineExecutionService).GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
-            .Single(method => method.Name == "SplitSubtitleChunks" && method.GetParameters().Select(parameter => parameter.ParameterType).SequenceEqual([typeof(string), typeof(SubtitleTtsOptions)]));
-        var wrapMethod = typeof(ProductionPipelineExecutionService).GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
-            .Single(method => method.Name == "WrapSubtitleChunk" && method.GetParameters().Select(parameter => parameter.ParameterType).SequenceEqual([typeof(string), typeof(SubtitleTtsOptions)]));
+        var splitMethod = GetPrivateStaticMethod("SplitSubtitleChunks", typeof(string), typeof(SubtitleTtsOptions));
+        var wrapMethod = GetPrivateStaticMethod("WrapSubtitleChunk", typeof(string), typeof(SubtitleTtsOptions));
 
         Assert.NotNull(normalizeMethod);
         Assert.NotNull(splitMethod);
@@ -1657,8 +1682,8 @@ Second display cue.
     {
         const string narration = "Tonight, turn your attention to the western horizon as a planetary conjunction gathers after sunset. Keep watching while Venus and Jupiter settle lower together.";
 
-        var splitMethod = typeof(ProductionPipelineExecutionService).GetMethod("SplitSubtitleChunks", BindingFlags.NonPublic | BindingFlags.Static);
-        var wrapMethod = typeof(ProductionPipelineExecutionService).GetMethod("WrapSubtitleChunk", BindingFlags.NonPublic | BindingFlags.Static);
+        var splitMethod = GetPrivateStaticMethod("SplitSubtitleChunks", typeof(string));
+        var wrapMethod = GetPrivateStaticMethod("WrapSubtitleChunk", typeof(string));
 
         Assert.NotNull(splitMethod);
         Assert.NotNull(wrapMethod);
@@ -1687,8 +1712,8 @@ Second display cue.
     {
         const string narration = "Tonight, turn your attention carefully toward the western horizon while the planetary conjunction keeps glowing after sunset.";
 
-        var splitMethod = typeof(ProductionPipelineExecutionService).GetMethod("SplitSubtitleChunks", BindingFlags.NonPublic | BindingFlags.Static);
-        var wrapMethod = typeof(ProductionPipelineExecutionService).GetMethod("WrapSubtitleChunk", BindingFlags.NonPublic | BindingFlags.Static);
+        var splitMethod = GetPrivateStaticMethod("SplitSubtitleChunks", typeof(string));
+        var wrapMethod = GetPrivateStaticMethod("WrapSubtitleChunk", typeof(string));
 
         Assert.NotNull(splitMethod);
         Assert.NotNull(wrapMethod);
@@ -1931,27 +1956,30 @@ Second display cue.
     [Fact]
     public void Phase14HindiCueDuplicateRewrite_UsesShortMeteorAlternateWithinWrapLimit()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("BuildHindiUniqueSubtitleCueText", BindingFlags.NonPublic | BindingFlags.Static);
+        var sceneAudioSyncType = typeof(ProductionPipelineExecutionService).GetNestedType("SceneAudioSyncItem", BindingFlags.NonPublic)!;
+        var sceneDurationType = typeof(ProductionPipelineExecutionService).GetNestedType("SceneDurationPlanItem", BindingFlags.NonPublic)!;
+        var method = GetPrivateStaticMethod("BuildHindiUniqueSubtitleCueText", typeof(string), typeof(string), sceneAudioSyncType, sceneDurationType, typeof(HashSet<string>), typeof(string), typeof(string), typeof(int), typeof(int), typeof(SubtitleTtsOptions), typeof(int).MakeByRefType(), typeof(int).MakeByRefType(), typeof(bool).MakeByRefType(), typeof(string));
         var originalCueText = "आज रात उल्का वर्षा देखने के लिए अंधेरे आसमान में रेडिएंट के पास ध्यान रखें।";
         var occupied = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "आज रात उल्का वर्षा देखने के लिए अंधेरे आसमान में रेडिएंट के पास ध्यान रखें"
         };
 
-        var rewritten = (string)method!.Invoke(null, [originalCueText, "007-what-you-will-see", null, null, occupied, "test", "long", 7, 2])!;
+        var invokeArguments = new object?[] { originalCueText, "007-what-you-will-see", null, null, occupied, "test", "long", 7, 2, new SubtitleTtsOptions(), 0, 0, false, originalCueText };
+        var rewritten = (string)method.Invoke(null, invokeArguments)!;
 
         Assert.NotEqual(originalCueText, rewritten);
         Assert.True(rewritten.Length < originalCueText.Length);
         Assert.Contains("रेडिएंट", rewritten);
 
-        var canWrap = typeof(ProductionPipelineExecutionService).GetMethod("CanWrapSubtitleChunk", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.True((bool)canWrap!.Invoke(null, [rewritten])!);
+        var canWrap = GetPrivateStaticMethod("CanWrapSubtitleChunk", typeof(string));
+        Assert.True((bool)canWrap.Invoke(null, [rewritten])!);
     }
 
     [Fact]
     public void Phase14HindiTranslation_TranslatesMeteorNarrationWithoutConjunctionLeakage()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
         var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["001-hook"] = "Tonight the Geminids meteor shower is strongest under a dark sky. Watch near the radiant and avoid moonlight."
@@ -1980,7 +2008,7 @@ Second display cue.
     [Fact]
     public void Phase14HindiTranslation_RejectsHinglishFragmentsAndUsesSentenceTranslation()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
         var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["001-hook"] = "Geminids can turn quiet dark sky into sudden streaks of light."
@@ -2008,7 +2036,7 @@ Second display cue.
     [Fact]
     public void Phase14HindiTranslation_TranslatesConjunctionNarrationWithoutMeteorLeakage()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
         var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["001-hook"] = "Tonight Jupiter and Venus form a bright conjunction after sunset."
@@ -2036,7 +2064,7 @@ Second display cue.
     [Fact]
     public void Phase14HindiTranslation_PreservesPlanetConjunctionScenePurposeDistinctly()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
         var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["001-hook"] = "Tonight Jupiter and Venus form a bright conjunction that makes you wonder why two planets can look so close.",
@@ -2079,7 +2107,7 @@ Second display cue.
     [InlineData("Eclipse")]
     public void Phase14HindiTranslation_PreservesScenePurposeDistinctlyAcrossFamilies(string family)
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
         var shortTexts = BuildScenePurposePreservationSourceScenes(family);
         var longTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -2136,7 +2164,7 @@ Second display cue.
     [Fact]
     public void Phase14HindiTranslation_RewritesGenericDuplicateConjunctionScenesFromSourceText()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
         var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["001-close-spacing"] = "Planets appear close together tonight, with the small separation making the conjunction easy to notice.",
@@ -2177,7 +2205,7 @@ Second display cue.
     [Fact]
     public void Phase14HindiTranslation_UsesMoonSpecificNarrationAndCleanupForNamedFullMoon()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>), typeof(string), typeof(IReadOnlyList<string>), typeof(IReadOnlyList<string>));
         var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["001-hook"] = "The Wolf Moon full moon rises with bright illumination over the winter horizon.",
@@ -2226,7 +2254,7 @@ Second display cue.
     [Fact]
     public void Phase14HindiTranslation_UsesEclipseSpecificNarrationWithoutMoonLeakage()
     {
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ApplyPhase14NarrationTranslationIfNeeded", BindingFlags.NonPublic | BindingFlags.Static);
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>), typeof(string), typeof(IReadOnlyList<string>), typeof(IReadOnlyList<string>));
         var shortTexts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["001-hook"] = "A total solar eclipse begins as the Moon's shadow reaches the Sun.",
@@ -2789,9 +2817,9 @@ Second display cue.
         File.WriteAllText(Path.Combine(context.ExecutionContext.TtsRoot!, "narration.mp3"), "tts");
         File.WriteAllText(Path.Combine(context.ExecutionContext.VideoAssemblyRoot!, "final-video-short.mp4"), "video");
 
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ClearPhaseRangeOutputsForOverwrite", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-        method!.Invoke(null, [context]);
+        var method = GetPrivateInstanceMethod("ClearPhaseRangeOutputsForOverwrite", typeof(ProductionPhaseContext), typeof(int?));
+        var service = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ProductionPipelineExecutionService));
+        method.Invoke(service, [context, null]);
 
         for (var phaseNo = 1; phaseNo <= 12; phaseNo++)
             Assert.True(File.Exists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json")), $"phase {phaseNo} validation should be preserved");
@@ -2841,9 +2869,9 @@ Second display cue.
         File.WriteAllText(Path.Combine(ttsEnRoot, "short.mp3"), "tts");
         File.WriteAllText(Path.Combine(ttsHiRoot, "short.mp3"), "tts");
 
-        var method = typeof(ProductionPipelineExecutionService).GetMethod("ClearPhaseRangeOutputsForOverwrite", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-        method!.Invoke(null, [context]);
+        var method = GetPrivateInstanceMethod("ClearPhaseRangeOutputsForOverwrite", typeof(ProductionPhaseContext), typeof(int?));
+        var service = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ProductionPipelineExecutionService));
+        method.Invoke(service, [context, null]);
 
         Assert.True(File.Exists(Path.Combine(subtitleRoot, "short.srt")));
         Assert.True(File.Exists(Path.Combine(subtitleRoot, "long.srt")));
@@ -2858,11 +2886,11 @@ Second display cue.
     [Fact]
     public void PlanetConjunctionNarrationV22_HumanizesBestTimeAndSkyGuideFragments()
     {
-        var naturalTime = typeof(ProductionPipelineExecutionService).GetMethod("NaturalViewingWindow", BindingFlags.NonPublic | BindingFlags.Static);
-        var naturalDirection = typeof(ProductionPipelineExecutionService).GetMethod("NaturalSkyDirection", BindingFlags.NonPublic | BindingFlags.Static);
+        var naturalTime = GetPrivateStaticMethod("NaturalViewingWindow", typeof(string), typeof(bool));
+        var naturalDirection = GetPrivateStaticMethod("NaturalSkyDirection", typeof(string), typeof(bool));
 
-        var time = (string)naturalTime!.Invoke(null, ["Jun 9, 2026 7:23 PM"])!;
-        var direction = (string)naturalDirection!.Invoke(null, ["the western sky after sunset horizon"])!;
+        var time = (string)naturalTime!.Invoke(null, ["Jun 9, 2026 7:23 PM", false])!;
+        var direction = (string)naturalDirection!.Invoke(null, ["the western sky after sunset horizon", false])!;
 
         Assert.Equal("June ninth", time);
         Assert.Equal("the western horizon", direction);
