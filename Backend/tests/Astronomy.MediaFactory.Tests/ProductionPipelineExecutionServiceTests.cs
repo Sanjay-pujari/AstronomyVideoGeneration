@@ -105,6 +105,7 @@ public sealed class ProductionPipelineExecutionServiceTests
             File.WriteAllText(layoutPath, """
             {
               "isValid": true,
+              "variants": [ { "variant": "Landscape", "fileName": "hero-final.png" } ],
               "compositionReports": [
                 { "variant": "Landscape", "status": "PASS", "issues": [], "requiresRegeneration": false }
               ],
@@ -155,6 +156,7 @@ public sealed class ProductionPipelineExecutionServiceTests
             {
               "eventFamily": "PLANET_CONJUNCTION",
               "isValid": true,
+              "variants": [ { "variant": "Landscape", "fileName": "hero-final.png" } ],
               "compositionReports": [
                 { "variant": "Landscape", "status": "PASS", "issues": [], "requiresRegeneration": false }
               ],
@@ -208,6 +210,7 @@ public sealed class ProductionPipelineExecutionServiceTests
             File.WriteAllText(layoutPath, """
             {
               "isValid": true,
+              "variants": [ { "variant": "Landscape", "fileName": "hero-final.png" } ],
               "compositionReports": [
                 { "variant": "Landscape", "status": "PASS", "issues": [], "requiresRegeneration": false }
               ],
@@ -261,6 +264,7 @@ public sealed class ProductionPipelineExecutionServiceTests
             File.WriteAllText(layoutPath, $$"""
             {
               "isValid": {{isValid.ToString().ToLowerInvariant()}},
+              "variants": [ { "variant": "Landscape", "fileName": "hero-final.png" } ],
               "compositionReports": [
                 { "variant": "Landscape", "status": "{{status}}", "issues": [], "requiresRegeneration": false }
               ],
@@ -288,6 +292,44 @@ public sealed class ProductionPipelineExecutionServiceTests
         {
             if (File.Exists(layoutPath)) File.Delete(layoutPath);
         }
+    }
+
+    [Fact]
+    public void CinematicHeroRenderedLayoutFits_ExplicitHeroTextSafeAreaFalseOverridesGenericTrue()
+        => AssertRenderedSafeAreaDecision(false, null, true, false);
+
+    [Fact]
+    public void CinematicHeroRenderedLayoutFits_ExplicitHeroTextSafeAreaTrueOverridesGenericFalse()
+        => AssertRenderedSafeAreaDecision(true, null, false, true);
+
+    [Fact]
+    public void CinematicHeroRenderedLayoutFits_UsesHeroTitleSafeAreaWhenHeroTextSignalMissing()
+        => AssertRenderedSafeAreaDecision(null, true, true, true);
+
+    [Fact]
+    public void CinematicHeroRenderedLayoutFits_ExplicitHeroTitleSafeAreaFalseOverridesGenericTrue()
+        => AssertRenderedSafeAreaDecision(null, false, true, false);
+
+    [Fact]
+    public void CinematicHeroRenderedLayoutFits_UsesGenericSafeAreaOnlyWhenCanonicalSignalsMissing()
+        => AssertRenderedSafeAreaDecision(null, null, true, true);
+
+    [Fact]
+    public void CinematicHeroRenderedLayoutFits_FailsWhenAllSafeAreaSignalsMissing()
+        => AssertRenderedSafeAreaDecision(null, null, null, false);
+
+    private static void AssertRenderedSafeAreaDecision(bool? heroText, bool? heroTitle, bool? safeArea, bool expected)
+    {
+        var diagnostics = new List<string>();
+        if (heroText.HasValue) diagnostics.Add($"\"heroTextSafeAreaPassed\": {heroText.Value.ToString().ToLowerInvariant()}");
+        if (heroTitle.HasValue) diagnostics.Add($"\"heroTitleSafeAreaPassed\": {heroTitle.Value.ToString().ToLowerInvariant()}");
+        if (safeArea.HasValue) diagnostics.Add($"\"safeArea\": {safeArea.Value.ToString().ToLowerInvariant()}");
+        var layoutPath = WritePassingHeroLayout(string.Join(",", diagnostics));
+        try
+        {
+            Assert.Equal(expected, InvokeRenderedLayoutFits(layoutPath));
+        }
+        finally { File.Delete(layoutPath); }
     }
 
 
@@ -486,6 +528,62 @@ public sealed class ProductionPipelineExecutionServiceTests
     }
 
     [Fact]
+    public void SummarizeHeroLayoutValidation_DoesNotUseFallbackToOverrideCanonicalFailure()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "hero-authority-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var layoutPath = Path.Combine(tempRoot, "hero-layout-validation.json");
+            File.WriteAllText(layoutPath, PassingLayoutJson("""
+              "heroOverlayDiagnostics": { "heroTextSafeAreaPassed": false, "safeArea": true },
+            """));
+            File.WriteAllText(Path.Combine(tempRoot, "hero-generation-diagnostics.json"),
+                "{ \"heroOverlayDiagnostics\": { \"heroTextSafeAreaPassed\": true } }");
+
+            var summary = InvokeHeroLayoutSummary(layoutPath);
+            Assert.False(ReadBool(summary, "Passed"));
+            Assert.Contains("hero-layout-validation.json", ReadString(summary, "Summary"));
+            Assert.Contains("fallbackUsed=False", ReadString(summary, "Summary"));
+        }
+        finally { Directory.Delete(tempRoot, recursive: true); }
+    }
+
+    [Fact]
+    public void CinematicAndSummaryHeroValidators_ReturnSameDecision()
+    {
+        var cases = new[]
+        {
+            "\"heroTextSafeAreaPassed\": true",
+            "\"heroTextSafeAreaPassed\": true, \"heroTitleClipped\": true",
+            "\"heroTextSafeAreaPassed\": true, \"heroTextOverlapDetected\": true",
+            "\"heroTextSafeAreaPassed\": false, \"safeArea\": true"
+        };
+
+        foreach (var diagnostics in cases)
+        {
+            var layoutPath = WritePassingHeroLayout(diagnostics);
+            try
+            {
+                Assert.Equal(InvokeRenderedLayoutFits(layoutPath), ReadBool(InvokeHeroLayoutSummary(layoutPath), "Passed"));
+            }
+            finally { File.Delete(layoutPath); }
+        }
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), "hero-consistency-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var layoutPath = Path.Combine(tempRoot, "hero-layout-validation.json");
+            File.WriteAllText(layoutPath, PassingLayoutJson(null));
+            File.WriteAllText(Path.Combine(tempRoot, "hero-generation-diagnostics.json"),
+                "{ \"heroOverlayDiagnostics\": { \"heroTextSafeAreaPassed\": true } }");
+            Assert.Equal(InvokeRenderedLayoutFits(layoutPath), ReadBool(InvokeHeroLayoutSummary(layoutPath), "Passed"));
+        }
+        finally { Directory.Delete(tempRoot, recursive: true); }
+    }
+
+    [Fact]
     public void SummarizeHeroLayoutValidation_AcceptsEquivalentSafeAreaSignalsWhenHeroTextSafeAreaIsMissing()
     {
         var layoutPath = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
@@ -660,6 +758,26 @@ public sealed class ProductionPipelineExecutionServiceTests
     {
         var method = GetPrivateStaticMethod("SummarizeHeroLayoutValidation", typeof(string));
         return method.Invoke(null, [layoutPath])!;
+    }
+
+    private static bool InvokeRenderedLayoutFits(string layoutPath)
+        => (bool)GetPrivateStaticMethod("CinematicHeroRenderedLayoutFits", typeof(string)).Invoke(null, [layoutPath])!;
+
+    private static string WritePassingHeroLayout(string safeAreaProperties)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, PassingLayoutJson($$"""
+          "heroOverlayDiagnostics": {
+            "heroTitleClipped": false,
+            "heroSubtitleClipped": false,
+            "heroTitleOverflowDetected": false,
+            "heroTextOverlapDetected": false,
+            "heroTitleSubtitleOverlap": false,
+            "heroTitleMetadataOverlap": false,
+            {{safeAreaProperties}}
+          },
+        """));
+        return path;
     }
 
     private static string PassingLayoutJson(string? heroOverlayDiagnostics, bool isValid = true)
