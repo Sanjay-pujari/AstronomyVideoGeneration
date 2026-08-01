@@ -115,7 +115,7 @@ public sealed record StoryFrameDownstreamReadiness(bool IsEligible,
 public sealed record StoryFrameIntegrationRequest(string ExecutionId, string PlanId, string EventId,
     string Language, string Profile, DocumentaryBlueprintCertification Certification,
     DocumentaryBlueprintEditorialContract EditorialContract,
-    DocumentaryBlueprintCertificationDiagnostics CertificationDiagnostics,
+    DocumentaryBlueprintCertificationDiagnostics? CertificationDiagnostics,
     IReadOnlyList<string> RequestedVariants);
 public sealed record StoryFrameIntegrationResult(StoryFramesAuthority Authority, StoryFrameIndex Index,
     StoryFrameDiagnostics Diagnostics);
