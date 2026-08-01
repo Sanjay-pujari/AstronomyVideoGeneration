@@ -24,6 +24,27 @@ public sealed class Phase5CommittedAuthorityArchitectureTests
     }
 
     [Fact]
+    public void phase5_publication_file_system_is_registered_once()
+    {
+        var composition = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Extensions", "ServiceCollectionExtensions.cs"));
+        Assert.Equal(1, Count(composition, "IPhase5PublicationFileSystem, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase5PublicationFileSystem"));
+    }
+
+    [Fact]
+    public void transaction_mutators_use_the_fault_injectable_boundary()
+    {
+        foreach (var file in new[] { "Phase5PublicationTransactionCoordinator.cs", "Phase5PublicationRecoveryService.cs" })
+        {
+            var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("DocumentaryBlueprint", file));
+            Assert.Contains("IPhase5PublicationFileSystem fileSystem", source);
+            Assert.DoesNotContain("Directory.Move(", source);
+            Assert.DoesNotContain("File.Move(", source);
+            Assert.DoesNotContain("File.Delete(", source);
+            Assert.DoesNotContain("Directory.Delete(", source);
+        }
+    }
+
+    [Fact]
     public void phase5_success_depends_on_committed_state_evaluation()
     {
         Assert.Contains("phase5CommittedAuthorityEvaluator.EvaluateAsync", Pipeline);
