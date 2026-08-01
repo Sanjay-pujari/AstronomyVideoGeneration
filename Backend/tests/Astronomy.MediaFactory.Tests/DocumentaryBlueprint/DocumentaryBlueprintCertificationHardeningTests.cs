@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 
 namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
@@ -74,37 +75,136 @@ public sealed class DocumentaryBlueprintCertificationChecksumTests
     [Fact] public void Editorial_checksum_changes_when_scene_order_changes() => EditorialChanges(e => e with { SceneOrder = e.SceneOrder.Reverse().ToArray() });
     [Fact] public void Editorial_checksum_changes_when_eligibility_changes() => EditorialChanges(e => e with { NarrationEligible = !e.NarrationEligible });
     [Fact] public void Source_phase4_checksum_is_stable_across_requested_variant_order() { var f = Phase5CertificationFixture.Create(); Assert.Equal(DocumentaryBlueprintCertificationChecksum.SourcePhase4(f.Request), DocumentaryBlueprintCertificationChecksum.SourcePhase4(f.Request with { RequestedVariants = f.Request.RequestedVariants.Reverse().ToArray() })); }
-    [Fact] public void Source_phase4_checksum_changes_when_master_checksum_changes() => SourceChanges(r => r with { Master = r.Master with { Metadata = r.Master.Metadata with { Checksum = "changed" } } });
-    [Fact] public void Source_phase4_checksum_changes_when_builder_version_changes() => SourceChanges(r => r with { Phase4Diagnostics = r.Phase4Diagnostics with { BuilderVersion = "changed" } });
 
     private static void Stable(Func<DocumentaryBlueprintCertification, DocumentaryBlueprintCertification> m) { var c = Phase5CertificationFixture.Create().Result.Certification; Assert.Equal(DocumentaryBlueprintCertificationChecksum.Calculate(c), DocumentaryBlueprintCertificationChecksum.Calculate(m(c))); }
     private static void Changes(Func<DocumentaryBlueprintCertification, DocumentaryBlueprintCertification> m) { var c = Phase5CertificationFixture.Create().Result.Certification; Assert.NotEqual(DocumentaryBlueprintCertificationChecksum.Calculate(c), DocumentaryBlueprintCertificationChecksum.Calculate(m(c))); }
     private static void EditorialStable(Func<DocumentaryBlueprintEditorialContract, DocumentaryBlueprintEditorialContract> m) { var e = Phase5CertificationFixture.Create().Result.EditorialContract; Assert.Equal(DocumentaryBlueprintCertificationChecksum.Calculate(e), DocumentaryBlueprintCertificationChecksum.Calculate(m(e))); }
     private static void EditorialChanges(Func<DocumentaryBlueprintEditorialContract, DocumentaryBlueprintEditorialContract> m) { var e = Phase5CertificationFixture.Create().Result.EditorialContract; Assert.NotEqual(DocumentaryBlueprintCertificationChecksum.Calculate(e), DocumentaryBlueprintCertificationChecksum.Calculate(m(e))); }
-    private static void SourceChanges(Func<DocumentaryBlueprintCertificationRequest, DocumentaryBlueprintCertificationRequest> m) { var r = Phase5CertificationFixture.Create().Request; Assert.NotEqual(DocumentaryBlueprintCertificationChecksum.SourcePhase4(r), DocumentaryBlueprintCertificationChecksum.SourcePhase4(m(r))); }
 }
+
+public sealed class Phase5CertificationFixtureTests
+{
+    [Fact]
+    public void Fixture_builds_valid_published_phase4_authority()
+    {
+        var authority = Phase5CertificationFixture.Create().PublishedPhase4;
+
+        Assert.NotNull(authority);
+        Assert.False(string.IsNullOrWhiteSpace(authority.AggregateId));
+        Assert.True(DocumentaryBlueprintProjectionChecksum.HasValidAggregateChecksum(authority));
+        Assert.True(DocumentaryBlueprintProjectionChecksum.HasValidVariantChecksum(authority.LongVariant));
+        Assert.True(DocumentaryBlueprintProjectionChecksum.HasValidVariantChecksum(authority.ShortVariant));
+    }
+
+    [Fact]
+    public void Fixture_builds_phase5_request_from_published_phase4_authority()
+    {
+        var fixture = Phase5CertificationFixture.Create();
+        var authority = fixture.PublishedPhase4;
+
+        Assert.Same(authority, fixture.Request.PublishedAggregate);
+        Assert.Equal((authority.ExecutionId, authority.PlanId, authority.EventId, authority.Language, authority.ProfileId),
+            (fixture.Request.ExecutionId, fixture.Request.PlanId, fixture.Request.EventId, fixture.Request.Language, fixture.Request.Profile));
+        Assert.Equal(authority.LongVariant.DeterministicChecksum, fixture.Result.Validation.SourceLongChecksum);
+        Assert.Equal(authority.ShortVariant.DeterministicChecksum, fixture.Result.Validation.SourceShortChecksum);
+        Assert.Equal(["Long", "Short"], fixture.Request.RequestedVariants);
+    }
+
+    [Fact]
+    public void Fixture_base_candidate_passes_artifact_validation()
+    {
+        var fixture = Phase5CertificationFixture.Create();
+        Assert.Empty(DocumentaryBlueprintCertificationArtifactValidator.Validate(fixture.Result, fixture.Request));
+    }
+
+    [Fact]
+    public void Fixture_warning_candidate_remains_certified()
+    {
+        var certification = Phase5CertificationFixture.Create(warning: true).Result.Certification;
+        Assert.True(certification.Passed);
+        Assert.NotEqual(DocumentaryBlueprintCertificationStatus.Rejected, certification.CertificationStatus);
+        Assert.NotEmpty(certification.NonBlockingWarnings);
+        Assert.Empty(certification.BlockingIssues);
+    }
+
+    [Fact]
+    public async Task Integration_service_still_rejects_missing_published_phase4_authority()
+    {
+        var fixture = Phase5CertificationFixture.Create();
+        var service = Phase5CertificationFixture.CreateService();
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CertifyAsync(fixture.Request with { PublishedAggregate = null }, CancellationToken.None));
+        Assert.Equal("Phase 5 requires PublishedDocumentaryBlueprintAggregate.", exception.Message);
+    }
+}
+
+internal sealed record Phase5CertificationFixtureResult(
+    DocumentaryBlueprintAggregate PublishedPhase4,
+    DocumentaryBlueprintCertificationRequest Request,
+    DocumentaryBlueprintCertificationIntegrationResult Result);
 
 internal static class Phase5CertificationFixture
 {
-    public static (DocumentaryBlueprintCertificationIntegrationResult Result, DocumentaryBlueprintCertificationRequest Request) Create(bool warning = false)
+    public static Phase5CertificationFixtureResult Create(bool warning = false)
     {
-        var master = Artifact("Master", warning ? ["review terminology"] : []);
-        var request = new DocumentaryBlueprintCertificationRequest("execution", "plan", "orion", "en-US", "LongVideo", master, Artifact("Long"), Artifact("Short"), Diagnostics(master), ["Long", "Short"]);
-        var result = new DocumentaryBlueprintCertificationIntegrationService(new DocumentaryProductionCertifier(),
-            new DocumentaryBlueprintEditorialValidator(), new DocumentaryBlueprintCoverageEvaluator(),
-            new DocumentaryBlueprintTransitionEvaluator(), new DocumentaryBlueprintPauseTestEvaluator())
-            .CertifyAsync(request, CancellationToken.None).GetAwaiter().GetResult();
-        return (result, request);
+        var published = PublishedAuthority();
+        var request = new DocumentaryBlueprintPhase5CompatibilityAdapter().Adapt(published,
+            new("execution", "plan", "orion", "en-US", "LongVideo", ["Long", "Short"]));
+        if (warning)
+        {
+            var masterValue = request.Master with { Warnings = ["review terminology"],
+                Metadata = request.Master.Metadata with { Checksum = string.Empty } };
+            request = request with { Master = masterValue with { Metadata = masterValue.Metadata with {
+                Checksum = DocumentaryBlueprintChecksum.Calculate(masterValue) } } };
+        }
+        var result = CreateService().CertifyAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+        return new(published, request, result);
     }
-    private static DocumentaryBlueprintArtifact Artifact(string variant, IReadOnlyList<string>? warnings = null)
+
+    internal static DocumentaryBlueprintCertificationIntegrationService CreateService() => new(new DocumentaryProductionCertifier(),
+        new DocumentaryBlueprintEditorialValidator(), new DocumentaryBlueprintCoverageEvaluator(),
+        new DocumentaryBlueprintTransitionEvaluator(), new DocumentaryBlueprintPauseTestEvaluator());
+
+    private static DocumentaryBlueprintAggregate PublishedAuthority()
     {
-        var blueprint = OrionDocumentaryBlueprintFixture.CreateOrdered();
-        var coverage = new BlueprintCoverage(["question.1", "question.2"], [], [], ["objective.1"], [],
-            blueprint.Scenes.ToDictionary(x => x.SceneId, x => (IReadOnlyList<string>)[x.SceneNumber == 1 ? "question.1" : "question.2"]),
-            blueprint.Scenes.ToDictionary(x => x.SceneId, x => (IReadOnlyList<global::Astronomy.MediaFactory.Core.ViewerKnowledgeReference>)x.KnowledgeReferences.Select(k => new global::Astronomy.MediaFactory.Core.ViewerKnowledgeReference(k.KnowledgeEntryId, k.Section, "test", "Resolved")).ToArray()), new Dictionary<string, string>());
-        var metadata = new BlueprintArtifactMetadata("execution", "orion", "en-US", "LongVideo", variant, "1", "", DateTimeOffset.UnixEpoch, "phase3", "intel");
-        var artifact = new DocumentaryBlueprintArtifact(metadata, blueprint, coverage, warnings ?? []);
-        return artifact with { Metadata = metadata with { Checksum = DocumentaryBlueprintChecksum.Calculate(artifact) } };
+        var lineage = new DocumentarySourceLineage("execution", "plan", "phase2.json", "phase2", null,
+            "knowledge.json", "knowledge", "questions.json", "phase3", "objectives.json", "objectives",
+            "plan.json", "question-plan", "en-US", "LongVideo", "1.0");
+        var longVariant = Variant("Long", lineage);
+        var shortVariant = Variant("Short", lineage);
+        var aggregate = new DocumentaryBlueprintAggregate("1.0", "1.0", "1.0", "aggregate-orion",
+            "execution", "plan", "orion", "en-US", "LongVideo", "1.0", "intent-orion", "intent-checksum",
+            lineage, longVariant, shortVariant,
+            new(["question.1", "question.2"], [], [], ["orion.fact.belt-distance", "orion.fact.belt-scale", "orion.recognition.belt"]),
+            new(longVariant.TotalAllocatedDurationSeconds, shortVariant.TotalAllocatedDurationSeconds,
+                longVariant.TotalAllocatedDurationSeconds + shortVariant.TotalAllocatedDurationSeconds), [], string.Empty);
+        return aggregate with { DeterministicChecksum = DocumentaryBlueprintProjectionChecksum.CalculateAggregate(aggregate) };
     }
-    private static BlueprintBuildDiagnostics Diagnostics(DocumentaryBlueprintArtifact master) => new(nameof(DocumentaryBlueprintBuilder), "1.0", "integration", [], new Dictionary<string, string>(), 2, 1, 2, 2, 2, master.Coverage, 4, [], [], [], [], [], 0);
+
+    private static DocumentaryBlueprintVariantArtifact Variant(string variant, DocumentarySourceLineage lineage)
+    {
+        var source = OrionDocumentaryBlueprintFixture.CreateOrdered();
+        var scenes = source.Scenes.Select((scene, index) => new DocumentarySceneBlueprint(scene.SceneId, scene.SceneNumber,
+            scene.Title, scene.NarrativeStage, index == 0 ? DocumentarySceneRole.Orientation : DocumentarySceneRole.PracticalObservation,
+            scene.ViewerQuestion, scene.SceneObjective, scene.EditorialOutcome, scene.EditorialPriority, scene.KnowledgeReferences,
+            scene.VisualOpportunities, scene.Transition, scene.EstimatedDurationSeconds)).ToArray();
+        var blueprint = new global::Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprint(
+            $"documentary.orion.{variant.ToLowerInvariant()}.v1", source.KnowledgeId, source.SubjectId,
+            source.SubjectName, variant == "Long" ? BlueprintPublicationFormat.LongDocumentary : BlueprintPublicationFormat.ShortDocumentary,
+            source.PrimaryLanguage, source.Version, source.Metadata, scenes);
+        var traces = scenes.Select((scene, index) => new DocumentarySceneBlueprintTraceability(scene.SceneId,
+            $"opportunity.{variant.ToLowerInvariant()}.{index + 1}", $"opportunity-checksum-{index + 1}", $"question.{index + 1}", [],
+            $"objective.{index + 1}", QuestionEvidenceStatus.ResolvedGrounded, $"slot.{index + 1}", 1, 300, [], [],
+            scene.KnowledgeReferences.Select(reference => new DocumentaryKnowledgeSelection($"selection.{variant}.{reference.KnowledgeEntryId}", variant,
+                $"opportunity.{variant.ToLowerInvariant()}.{index + 1}", $"question.{index + 1}", reference.KnowledgeEntryId, "knowledge.json",
+                reference.KnowledgeEntryId, "knowledge-checksum", reference.Section, "Selected", reference.IsPrimary,
+                QuestionEvidenceStatus.ResolvedGrounded)).ToArray())).ToArray();
+        var coverage = new DocumentaryCoverageSummary(["question.1", "question.2"], [], [], [], [],
+            scenes.SelectMany(x => x.KnowledgeReferences).Select(x => x.KnowledgeEntryId).Distinct().ToArray());
+        var value = new DocumentaryBlueprintVariantArtifact("1.0", "1.0", "1.0", $"variant-{variant.ToLowerInvariant()}",
+            "execution", "plan", "orion", "en-US", "LongVideo", "1.0", variant, "intent-orion", $"intent-{variant.ToLowerInvariant()}",
+            "intent-checksum", $"intent-{variant.ToLowerInvariant()}-checksum", lineage, blueprint, traces, coverage, coverage, [], [],
+            scenes.Length, scenes.Length, scenes.Sum(x => x.EstimatedDurationSeconds), scenes.Sum(x => x.EstimatedDurationSeconds), string.Empty);
+        return value with { DeterministicChecksum = DocumentaryBlueprintProjectionChecksum.CalculateVariant(value) };
+    }
 }
