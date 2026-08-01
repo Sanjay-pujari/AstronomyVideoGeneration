@@ -28,4 +28,15 @@ internal static class RepositoryTestPaths
 
         return path;
     }
+
+    public static string CoreSource(params string[] parts)
+    {
+        var path = Path.Combine(new[] { Root(), "Backend", "src", "Astronomy.MediaFactory.Core" }.Concat(parts).ToArray());
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException($"Requested core source file was not found: {Path.Combine(parts)}", path);
+        }
+
+        return path;
+    }
 }
