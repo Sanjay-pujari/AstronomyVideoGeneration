@@ -6,7 +6,8 @@ using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
 public sealed class Phase5PublicationTransactionCoordinator(
-    IPhase5CommittedAuthorityEvaluator evaluator, IPhase5PublicationRecoveryService recovery)
+    IPhase5CommittedAuthorityEvaluator evaluator, IPhase5PublicationRecoveryService recovery,
+    IPhase5PublicationFileSystem fileSystem)
     : IPhase5PublicationTransactionCoordinator
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -40,25 +41,25 @@ public sealed class Phase5PublicationTransactionCoordinator(
         Phase5CommittedStateEvaluation? evaluation = null;
         try
         {
-            Directory.CreateDirectory(paths.StagingRoot);
+            fileSystem.CreateDirectory(paths.StagingRoot);
             await WriteMarker(marker, token);
             foreach (var item in Required) await WriteAtomic(Path.Combine(paths.StagingRoot, item.File), item.Value(request.Candidate), token);
             await WriteAtomic(Path.Combine(paths.StagingRoot, "certification-diagnostics.json"), request.Candidate.Diagnostics, token);
             var staged = await ReadStaged(paths.StagingRoot, token);
             var stagedErrors = DocumentaryBlueprintCertificationArtifactValidator.Validate(staged, request.CertificationRequest);
-            if (stagedErrors.Count != 0 || Required.Any(x => new FileInfo(Path.Combine(paths.StagingRoot, x.File)).Length == 0))
+            if (stagedErrors.Count != 0 || Required.Any(x => fileSystem.GetFileLength(Path.Combine(paths.StagingRoot, x.File)) == 0))
                 throw new InvalidOperationException("P5PUB_STAGED_INVALID: " + string.Join("; ", stagedErrors));
             marker = marker with { Status = Phase5PublicationTransactionStatus.StagedValidated, UpdatedUtc = DateTimeOffset.UtcNow };
             await WriteMarker(marker, token);
 
-            marker = marker with { PreviousEditorialExisted = Directory.Exists(paths.EditorialRoot),
-                PreviousManifestExisted = File.Exists(paths.ManifestPath), PreviousValidationExisted = File.Exists(paths.ValidationPath) };
-            if (marker.PreviousManifestExisted) File.Copy(paths.ManifestPath, paths.ManifestBackupPath, true);
-            if (marker.PreviousValidationExisted) File.Copy(paths.ValidationPath, paths.ValidationBackupPath, true);
-            if (marker.PreviousEditorialExisted) Directory.Move(paths.EditorialRoot, paths.BackupRoot);
+            marker = marker with { PreviousEditorialExisted = fileSystem.DirectoryExists(paths.EditorialRoot),
+                PreviousManifestExisted = fileSystem.FileExists(paths.ManifestPath), PreviousValidationExisted = fileSystem.FileExists(paths.ValidationPath) };
+            if (marker.PreviousManifestExisted) fileSystem.CopyFile(paths.ManifestPath, paths.ManifestBackupPath, true);
+            if (marker.PreviousValidationExisted) fileSystem.CopyFile(paths.ValidationPath, paths.ValidationBackupPath, true);
+            if (marker.PreviousEditorialExisted) fileSystem.MoveDirectory(paths.EditorialRoot, paths.BackupRoot);
             marker = marker with { Status = Phase5PublicationTransactionStatus.PreviousStateBackedUp, UpdatedUtc = DateTimeOffset.UtcNow };
             await WriteMarker(marker, token);
-            Directory.Move(paths.StagingRoot, paths.EditorialRoot);
+            fileSystem.MoveDirectory(paths.StagingRoot, paths.EditorialRoot);
             marker = marker with { Status = Phase5PublicationTransactionStatus.EditorialSwapped, UpdatedUtc = DateTimeOffset.UtcNow };
             await WriteMarker(marker, token);
             await WriteManifest(request, paths, token);
@@ -93,25 +94,25 @@ public sealed class Phase5PublicationTransactionCoordinator(
         marker = marker with { Status = Phase5PublicationTransactionStatus.RollingBack, UpdatedUtc = DateTimeOffset.UtcNow };
         try { await WriteMarker(marker, token); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException or NotSupportedException) { errors.Add(ex.Message); }
-        await Attempt(() => { if (Directory.Exists(p.EditorialRoot)) Directory.Move(p.EditorialRoot, p.FailedRoot); });
-        await Attempt(() => { if (marker.PreviousEditorialExisted) { if (!Directory.Exists(p.BackupRoot)) throw new InvalidOperationException("Editorial backup is missing."); Directory.Move(p.BackupRoot, p.EditorialRoot); } });
+        await Attempt(() => { if (fileSystem.DirectoryExists(p.EditorialRoot)) fileSystem.MoveDirectory(p.EditorialRoot, p.FailedRoot); });
+        await Attempt(() => { if (marker.PreviousEditorialExisted) { if (!fileSystem.DirectoryExists(p.BackupRoot)) throw new InvalidOperationException("Editorial backup is missing."); fileSystem.MoveDirectory(p.BackupRoot, p.EditorialRoot); } });
         await Attempt(() => RestoreFile(p.ManifestBackupPath, p.ManifestPath, marker.PreviousManifestExisted));
         await Attempt(() => RestoreFile(p.ValidationBackupPath, p.ValidationPath, marker.PreviousValidationExisted));
-        if (marker.PreviousEditorialExisted != Directory.Exists(p.EditorialRoot)) errors.Add("Restored editorial state does not match snapshot.");
-        if (marker.PreviousManifestExisted != File.Exists(p.ManifestPath)) errors.Add("Restored manifest state does not match snapshot.");
-        if (marker.PreviousValidationExisted != File.Exists(p.ValidationPath)) errors.Add("Restored validation state does not match snapshot.");
-        var restored = marker.PreviousEditorialExisted && Directory.Exists(p.EditorialRoot);
+        if (marker.PreviousEditorialExisted != fileSystem.DirectoryExists(p.EditorialRoot)) errors.Add("Restored editorial state does not match snapshot.");
+        if (marker.PreviousManifestExisted != fileSystem.FileExists(p.ManifestPath)) errors.Add("Restored manifest state does not match snapshot.");
+        if (marker.PreviousValidationExisted != fileSystem.FileExists(p.ValidationPath)) errors.Add("Restored validation state does not match snapshot.");
+        var restored = marker.PreviousEditorialExisted && fileSystem.DirectoryExists(p.EditorialRoot);
         if (errors.Count == 0)
         {
             CleanupSuccess(p);
-            if (Directory.Exists(p.FailedRoot)) Directory.Delete(p.FailedRoot, true);
+            if (fileSystem.DirectoryExists(p.FailedRoot)) fileSystem.DeleteDirectory(p.FailedRoot, true);
             return new(false, false, false, false, p.TransactionId, originalCode, "Committed readback failed; previous state was restored.",
                 [], [], originalErrors, null, evaluation, true, true, restored, null);
         }
         marker = marker with { Status = Phase5PublicationTransactionStatus.RollbackFailed, UpdatedUtc = DateTimeOffset.UtcNow };
         try { await WriteMarker(marker, token); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException or NotSupportedException) { errors.Add(ex.Message); }
-        var remaining = AllPaths(p).Where(x => File.Exists(x) || Directory.Exists(x)).ToArray();
+        var remaining = AllPaths(p).Where(x => fileSystem.FileExists(x) || fileSystem.DirectoryExists(x)).ToArray();
         var diagnostic = new Phase5PublicationFailureDiagnostics(p.TransactionId, "P5PUB_ROLLBACK_FAILED", originalCode,
             originalErrors, errors, true, false, marker.PreviousEditorialExisted, marker.PreviousManifestExisted,
             marker.PreviousValidationExisted, restored, remaining, DateTimeOffset.UtcNow);
@@ -121,13 +122,13 @@ public sealed class Phase5PublicationTransactionCoordinator(
             [], [], originalErrors.Concat(errors).ToArray(), null, evaluation, true, false, restored, p.FailureDiagnosticsPath);
     }
 
-    private static async Task WriteManifest(Phase5PublicationTransactionRequest request, Phase5PublicationTransactionPaths p, CancellationToken token)
+    private async Task WriteManifest(Phase5PublicationTransactionRequest request, Phase5PublicationTransactionPaths p, CancellationToken token)
     {
-        var root = File.Exists(p.ManifestPath) ? JsonNode.Parse(await File.ReadAllTextAsync(p.ManifestPath, token))?.AsObject() ?? new() : new JsonObject();
+        var root = fileSystem.FileExists(p.ManifestPath) ? JsonNode.Parse(await fileSystem.ReadAllTextAsync(p.ManifestPath, token))?.AsObject() ?? new() : new JsonObject();
         var entries = new JsonArray();
         foreach (var item in Required)
         {
-            var path = Path.Combine(p.EditorialRoot, item.File); var bytes = await File.ReadAllBytesAsync(path, token);
+            var path = Path.Combine(p.EditorialRoot, item.File); var bytes = await fileSystem.ReadAllBytesAsync(path, token);
             entries.Add(JsonSerializer.SerializeToNode(new { relativePath = $"05-editorial/{item.File}", role = item.Role,
                 semanticChecksum = item.Semantic(request.Candidate), physicalSha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
                 size = bytes.LongLength, sourcePhase4Checksum = request.ExpectedPhase4.AggregateChecksum }, JsonOptions));
@@ -136,7 +137,7 @@ public sealed class Phase5PublicationTransactionCoordinator(
         await WriteAtomic(p.ManifestPath, root, token);
     }
 
-    private static Task WriteValidation(Phase5PublicationTransactionRequest request, Phase5PublicationTransactionPaths p, string[] outputs, CancellationToken token) =>
+    private Task WriteValidation(Phase5PublicationTransactionRequest request, Phase5PublicationTransactionPaths p, string[] outputs, CancellationToken token) =>
         WriteAtomic(p.ValidationPath, new { phaseNo = 5, phaseName = request.PhaseName, status = "Succeeded", publicationCommitted = true,
             validationStatus = "Valid", executionId = request.CertificationRequest.ExecutionId, planId = request.CertificationRequest.PlanId,
             eventId = request.CertificationRequest.EventId, language = request.CertificationRequest.Language,
@@ -149,16 +150,16 @@ public sealed class Phase5PublicationTransactionCoordinator(
             pauseTestFailedSceneCount = request.Candidate.PauseTest.FailedSceneCount, transactionId = p.TransactionId, outputFiles = outputs,
             startedUtc = request.StartedUtc, completedUtc = DateTimeOffset.UtcNow }, token);
 
-    private static async Task<DocumentaryBlueprintCertificationIntegrationResult> ReadStaged(string root, CancellationToken token) => new(
+    private async Task<DocumentaryBlueprintCertificationIntegrationResult> ReadStaged(string root, CancellationToken token) => new(
         await Read<DocumentaryBlueprintCertification>(root, "blueprint-certification.json", token), await Read<DocumentaryBlueprintEditorialContract>(root, "editorial-contract.json", token),
         await Read<DocumentaryBlueprintCertificationDiagnostics>(root, "certification-diagnostics.json", token), await Read<BlueprintValidationReport>(root, "blueprint-validation.json", token),
         await Read<BlueprintSceneIntentProjection>(root, "scene-intents.json", token), await Read<BlueprintCoverageReport>(root, "coverage-report.json", token),
         await Read<BlueprintTransitionReport>(root, "transition-report.json", token), await Read<BlueprintPauseTestReport>(root, "pause-test-report.json", token));
-    private static async Task<T> Read<T>(string root, string file, CancellationToken token) => JsonSerializer.Deserialize<T>(await File.ReadAllBytesAsync(Path.Combine(root, file), token), JsonOptions) ?? throw new JsonException($"Empty staged artifact: {file}");
-    private static Task WriteMarker(Phase5PublicationTransactionMarker marker, CancellationToken token) => WriteAtomic(marker.Paths.TransactionMarkerPath, marker, token);
-    private static async Task WriteAtomic(string path, object value, CancellationToken token) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); var temp = path + $".{Guid.NewGuid():N}.tmp"; await File.WriteAllTextAsync(temp, value is JsonNode n ? n.ToJsonString(JsonOptions) : JsonSerializer.Serialize(value, JsonOptions), token); File.Move(temp, path, true); }
-    private static void RestoreFile(string snapshot, string destination, bool existed) { if (existed) { if (!File.Exists(snapshot)) throw new InvalidOperationException($"Snapshot missing: {snapshot}"); File.Move(snapshot, destination, true); } else if (File.Exists(destination)) File.Delete(destination); }
-    private static void CleanupSuccess(Phase5PublicationTransactionPaths p) { if (Directory.Exists(p.BackupRoot)) Directory.Delete(p.BackupRoot, true); if (Directory.Exists(p.StagingRoot)) Directory.Delete(p.StagingRoot, true); foreach (var f in new[] { p.ManifestBackupPath, p.ValidationBackupPath, p.TransactionMarkerPath }) if (File.Exists(f)) File.Delete(f); }
+    private async Task<T> Read<T>(string root, string file, CancellationToken token) => JsonSerializer.Deserialize<T>(await fileSystem.ReadAllBytesAsync(Path.Combine(root, file), token), JsonOptions) ?? throw new JsonException($"Empty staged artifact: {file}");
+    private Task WriteMarker(Phase5PublicationTransactionMarker marker, CancellationToken token) => WriteAtomic(marker.Paths.TransactionMarkerPath, marker, token);
+    private async Task WriteAtomic(string path, object value, CancellationToken token) { fileSystem.CreateDirectory(Path.GetDirectoryName(path)!); var temp = path + $".{Guid.NewGuid():N}.tmp"; await fileSystem.WriteAllTextAsync(temp, value is JsonNode n ? n.ToJsonString(JsonOptions) : JsonSerializer.Serialize(value, JsonOptions), token); fileSystem.MoveFile(temp, path, true); }
+    private void RestoreFile(string snapshot, string destination, bool existed) { if (existed) { if (!fileSystem.FileExists(snapshot)) throw new InvalidOperationException($"Snapshot missing: {snapshot}"); fileSystem.MoveFile(snapshot, destination, true); } else if (fileSystem.FileExists(destination)) fileSystem.DeleteFile(destination); }
+    private void CleanupSuccess(Phase5PublicationTransactionPaths p) { if (fileSystem.DirectoryExists(p.BackupRoot)) fileSystem.DeleteDirectory(p.BackupRoot, true); if (fileSystem.DirectoryExists(p.StagingRoot)) fileSystem.DeleteDirectory(p.StagingRoot, true); foreach (var f in new[] { p.ManifestBackupPath, p.ValidationBackupPath, p.TransactionMarkerPath }) if (fileSystem.FileExists(f)) fileSystem.DeleteFile(f); }
     private static IEnumerable<string> AllPaths(Phase5PublicationTransactionPaths p) => [p.EditorialRoot,p.StagingRoot,p.BackupRoot,p.FailedRoot,p.ManifestBackupPath,p.ValidationBackupPath,p.TransactionMarkerPath];
     private static Phase5PublicationTransactionResult Failed(string id, string code, IReadOnlyList<string> errors) => new(false,false,false,false,id,code,"Phase 5 publication did not start.",[],[],errors,null,null,false,true,false,null);
 }

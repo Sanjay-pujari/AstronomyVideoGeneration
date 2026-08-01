@@ -2,7 +2,8 @@ using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
-public sealed class Phase5PublicationRecoveryService(IPhase5CommittedAuthorityEvaluator evaluator)
+public sealed class Phase5PublicationRecoveryService(IPhase5CommittedAuthorityEvaluator evaluator,
+    IPhase5PublicationFileSystem fileSystem)
     : IPhase5PublicationRecoveryService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -13,12 +14,12 @@ public sealed class Phase5PublicationRecoveryService(IPhase5CommittedAuthorityEv
     {
         var recovered = new List<string>();
         var errors = new List<string>();
-        foreach (var markerPath in Directory.GetFiles(root, ".phase-05-transaction-*.json").Order(StringComparer.Ordinal))
+        foreach (var markerPath in fileSystem.GetFiles(root, ".phase-05-transaction-*.json").Order(StringComparer.Ordinal))
         {
             Phase5PublicationTransactionMarker marker;
             try
             {
-                marker = JsonSerializer.Deserialize<Phase5PublicationTransactionMarker>(await File.ReadAllBytesAsync(markerPath, token), JsonOptions)
+                marker = JsonSerializer.Deserialize<Phase5PublicationTransactionMarker>(await fileSystem.ReadAllBytesAsync(markerPath, token), JsonOptions)
                     ?? throw new JsonException("Transaction marker is empty.");
                 var exact = Phase5PublicationTransactionPaths.Create(root, marker.TransactionId);
                 if (marker.Paths != exact || marker.Paths.TransactionMarkerPath != markerPath)
@@ -47,43 +48,43 @@ public sealed class Phase5PublicationRecoveryService(IPhase5CommittedAuthorityEv
             : new(false, "P5PUB_RECOVERY_FAILED", recovered, errors);
     }
 
-    private static void Restore(Phase5PublicationTransactionMarker marker)
+    private void Restore(Phase5PublicationTransactionMarker marker)
     {
         var p = marker.Paths;
-        if (Directory.Exists(p.EditorialRoot)) Directory.Move(p.EditorialRoot, p.FailedRoot);
+        if (fileSystem.DirectoryExists(p.EditorialRoot)) fileSystem.MoveDirectory(p.EditorialRoot, p.FailedRoot);
         if (marker.PreviousEditorialExisted)
         {
-            if (!Directory.Exists(p.BackupRoot)) throw new InvalidOperationException("Previous editorial backup is missing.");
-            Directory.Move(p.BackupRoot, p.EditorialRoot);
+            if (!fileSystem.DirectoryExists(p.BackupRoot)) throw new InvalidOperationException("Previous editorial backup is missing.");
+            fileSystem.MoveDirectory(p.BackupRoot, p.EditorialRoot);
         }
         RestoreFile(p.ManifestBackupPath, p.ManifestPath, marker.PreviousManifestExisted);
         RestoreFile(p.ValidationBackupPath, p.ValidationPath, marker.PreviousValidationExisted);
         CleanupUncommitted(p);
-        if (Directory.Exists(p.FailedRoot)) Directory.Delete(p.FailedRoot, true);
+        if (fileSystem.DirectoryExists(p.FailedRoot)) fileSystem.DeleteDirectory(p.FailedRoot, true);
     }
 
-    private static void RestoreFile(string snapshot, string destination, bool existed)
+    private void RestoreFile(string snapshot, string destination, bool existed)
     {
         if (existed)
         {
-            if (!File.Exists(snapshot)) throw new InvalidOperationException($"Snapshot is missing: {snapshot}");
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Move(snapshot, destination, true);
+            if (!fileSystem.FileExists(snapshot)) throw new InvalidOperationException($"Snapshot is missing: {snapshot}");
+            fileSystem.CreateDirectory(Path.GetDirectoryName(destination)!);
+            fileSystem.MoveFile(snapshot, destination, true);
         }
-        else if (File.Exists(destination)) File.Delete(destination);
+        else if (fileSystem.FileExists(destination)) fileSystem.DeleteFile(destination);
     }
 
-    private static void CleanupCommitted(Phase5PublicationTransactionPaths p)
+    private void CleanupCommitted(Phase5PublicationTransactionPaths p)
     {
-        if (Directory.Exists(p.BackupRoot)) Directory.Delete(p.BackupRoot, true);
+        if (fileSystem.DirectoryExists(p.BackupRoot)) fileSystem.DeleteDirectory(p.BackupRoot, true);
         CleanupUncommitted(p);
     }
 
-    private static void CleanupUncommitted(Phase5PublicationTransactionPaths p)
+    private void CleanupUncommitted(Phase5PublicationTransactionPaths p)
     {
-        if (Directory.Exists(p.StagingRoot)) Directory.Delete(p.StagingRoot, true);
-        if (File.Exists(p.ManifestBackupPath)) File.Delete(p.ManifestBackupPath);
-        if (File.Exists(p.ValidationBackupPath)) File.Delete(p.ValidationBackupPath);
-        if (File.Exists(p.TransactionMarkerPath)) File.Delete(p.TransactionMarkerPath);
+        if (fileSystem.DirectoryExists(p.StagingRoot)) fileSystem.DeleteDirectory(p.StagingRoot, true);
+        if (fileSystem.FileExists(p.ManifestBackupPath)) fileSystem.DeleteFile(p.ManifestBackupPath);
+        if (fileSystem.FileExists(p.ValidationBackupPath)) fileSystem.DeleteFile(p.ValidationBackupPath);
+        if (fileSystem.FileExists(p.TransactionMarkerPath)) fileSystem.DeleteFile(p.TransactionMarkerPath);
     }
 }
