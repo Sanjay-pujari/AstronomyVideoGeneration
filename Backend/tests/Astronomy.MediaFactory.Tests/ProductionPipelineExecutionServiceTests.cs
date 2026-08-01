@@ -745,6 +745,13 @@ public sealed class ProductionPipelineExecutionServiceTests
     private static string ReadString(object source, string propertyName)
         => (string)source.GetType().GetProperty(propertyName)!.GetValue(source)!;
 
+    private static string[] NormalizeNarrationTokens(string value)
+        => Regex.Split(
+                Regex.Replace(value, @"\s+", " ").Trim(),
+                @"\s+")
+            .Where(token => token.Length > 0)
+            .ToArray();
+
     [Fact]
     public void ResolvePhase15SrtPath_PrefersLanguageScopedSrtOverLegacyUnscopedPath()
     {
@@ -1256,7 +1263,12 @@ Fourth cue.
             Assert.NotNull(method);
             method!.Invoke(null, [planRoot, "en"]);
 
-            var shortSrt = File.ReadAllText(Path.Combine(planRoot, "narration", "subtitles", "short.srt"));
+            var expectedScopedSrtPath = Path.Combine(planRoot, "narration", "subtitles", "en", "short.srt");
+            var obsoleteUnscopedSrtPath = Path.Combine(planRoot, "narration", "subtitles", "short.srt");
+            Assert.True(File.Exists(expectedScopedSrtPath));
+            Assert.False(File.Exists(obsoleteUnscopedSrtPath));
+
+            var shortSrt = File.ReadAllText(expectedScopedSrtPath);
             Assert.Contains("00:00:00,000 --> 00:00:05,352", shortSrt);
             Assert.Contains("00:00:05,352 --> 00:00:06,602", shortSrt);
             Assert.Contains("First cue.", shortSrt);
@@ -1695,8 +1707,7 @@ Second display cue.
 
         Assert.Equal(narration, reconstructed);
         Assert.Equal(narration, srtText);
-        Assert.DoesNotContain("turn y", srtText);
-        Assert.DoesNotContain("our attention", srtText);
+        Assert.Equal(NormalizeNarrationTokens(narration), NormalizeNarrationTokens(srtText));
         Assert.DoesNotContain("planet ary", srtText);
         Assert.DoesNotContain("planet\nary", string.Join("\n", wrapped.SelectMany(lines => lines)));
         Assert.All(chunks, chunk => Assert.InRange(chunk.Length, 1, 84));
@@ -1724,7 +1735,7 @@ Second display cue.
 
         Assert.Equal(narration, string.Join(" ", chunks));
         Assert.Equal(narration, srtText);
-        Assert.DoesNotContain("turn y", srtText);
+        Assert.Equal(NormalizeNarrationTokens(narration), NormalizeNarrationTokens(srtText));
         Assert.DoesNotContain("planet ary", srtText);
         Assert.All(chunks, chunk => Assert.InRange(chunk.Length, 1, 84));
         Assert.All(wrapped, lines =>
