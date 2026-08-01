@@ -66,6 +66,14 @@ public sealed record PublishedBlueprintCertification(DocumentaryBlueprintCertifi
 public sealed record Phase5ArtifactInventoryEntry(string RelativePath, string ArtifactRole,
     string? SemanticChecksum, string PhysicalSha256, long Size, string SourcePhase4Checksum);
 
+/// <summary>
+/// Identifies the physically committed Phase 4 authority that a Phase 5 publication
+/// is required to certify.  Keeping this as one value prevents callers from mixing
+/// lineage copied from Phase 5 with the current upstream authority.
+/// </summary>
+public sealed record Phase5ExpectedPhase4Authority(string AggregateId, string AggregateChecksum,
+    string LongChecksum, string ShortChecksum);
+
 public sealed record Phase5CommittedStateEvaluation(bool IsValid, string ReasonCode,
     IReadOnlyList<string> Errors, IReadOnlyList<Phase5ArtifactInventoryEntry> Artifacts,
     PublishedBlueprintCertification? PublishedAuthority);

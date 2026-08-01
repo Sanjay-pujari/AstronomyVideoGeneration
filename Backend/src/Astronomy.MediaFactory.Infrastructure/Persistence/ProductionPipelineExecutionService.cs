@@ -254,7 +254,7 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 var committed = await phase5CommittedAuthorityEvaluator.EvaluateAsync(context.OutputRoot,
                     context.Request.PlanId.ToString("D"), context.Request.PlanId.ToString("D"), context.EventId,
-                    context.Request.Language, cancellationToken);
+                    context.Request.Language, ExpectedPhase4(context), cancellationToken);
                 if (committed.IsValid && committed.PublishedAuthority is not null)
                 {
                     context = context with { ExecutionContext = context.ExecutionContext with { PublishedBlueprintCertification = committed.PublishedAuthority } };
@@ -316,15 +316,20 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 var committed = await phase5CommittedAuthorityEvaluator.EvaluateAsync(context.OutputRoot,
                     context.Request.PlanId.ToString("D"), context.Request.PlanId.ToString("D"), context.EventId,
-                    context.Request.Language, cancellationToken);
+                    context.Request.Language, ExpectedPhase4(context), cancellationToken);
                 if (!committed.IsValid || committed.PublishedAuthority is null)
                 {
+                    RollbackPhase5Publication(context.OutputRoot);
                     result = result with { Status = ProductionPhaseStatus.Failed, Errors = committed.Errors,
                         Reason = $"Phase 5 committed-state readback failed ({committed.ReasonCode}).", ReasonCode = committed.ReasonCode };
                     phaseResults[^1] = result;
                 }
-                else context = context with { ExecutionContext = context.ExecutionContext with
-                    { PublishedBlueprintCertification = committed.PublishedAuthority } };
+                else
+                {
+                    CompletePhase5Publication(context.OutputRoot);
+                    context = context with { ExecutionContext = context.ExecutionContext with
+                        { PublishedBlueprintCertification = committed.PublishedAuthority } };
+                }
             }
             if (result.Status == ProductionPhaseStatus.Failed)
             {
@@ -1110,6 +1115,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var root = Path.Combine(context.OutputRoot, "05-editorial");
         var staging = Path.Combine(context.OutputRoot, $".05-editorial-staging-{Guid.NewGuid():N}");
         var backup = Path.Combine(context.OutputRoot, $".05-editorial-backup-{Guid.NewGuid():N}");
+        var manifestSnapshot = backup + ".phase-manifest.json";
+        var validationSnapshot = backup + ".phase-05-validation.json";
         Directory.CreateDirectory(staging);
         try
         {
@@ -1132,9 +1139,15 @@ public sealed partial class ProductionPipelineExecutionService(
                 await ReadRequiredJsonAsync<BlueprintPauseTestReport>(Path.Combine(staging, "pause-test-report.json"), cancellationToken));
             var stagedErrors = DocumentaryBlueprintCertificationArtifactValidator.Validate(staged, request);
             if (stagedErrors.Count != 0) throw new InvalidOperationException("Staged Phase 5 authority failed validation: " + string.Join("; ", stagedErrors));
+            if (File.Exists(Path.Combine(context.OutputRoot, "phase-manifest.json")))
+                File.Copy(Path.Combine(context.OutputRoot, "phase-manifest.json"), manifestSnapshot, true);
+            if (File.Exists(Path.Combine(context.OutputRoot, "validation", "phase-05-validation.json")))
+                File.Copy(Path.Combine(context.OutputRoot, "validation", "phase-05-validation.json"), validationSnapshot, true);
             if (Directory.Exists(root)) Directory.Move(root, backup);
             Directory.Move(staging, root);
-            if (Directory.Exists(backup)) Directory.Delete(backup, true);
+            // The previous authority and metadata snapshots deliberately remain until
+            // the committed evaluator has read back the directory, manifest, and
+            // validation record. CompletePhase5Publication is the only deletion point.
         }
         catch
         {
@@ -1145,6 +1158,37 @@ public sealed partial class ProductionPipelineExecutionService(
         logger.LogInformation("Phase 5 blueprint certification completed. ExecutionId={ExecutionId} PlanId={PlanId} EventId={EventId} Language={Language} Profile={Profile} SourcePhase4Checksum={SourcePhase4Checksum} MasterChecksum={MasterChecksum} LongChecksum={LongChecksum} ShortChecksum={ShortChecksum} CertifierType={CertifierType} Status={Status} CertifiedVariantCount={CertifiedVariantCount} RejectedVariantCount={RejectedVariantCount} BlockingIssueCount={BlockingIssueCount} WarningCount={WarningCount} OutputRoot={OutputRoot}",
             request.ExecutionId, request.PlanId, request.EventId, request.Language, request.Profile, result.Certification.SourcePhase4Checksum, request.Master.Metadata.Checksum, request.Long.Metadata.Checksum, request.Short.Metadata.Checksum, result.Certification.CertifierType, result.Certification.CertificationStatus, result.Certification.CertifiedVariants.Count, result.Certification.RejectedVariants.Count, result.Certification.BlockingIssues.Count, result.Certification.NonBlockingWarnings.Count, root);
         return Directory.GetFiles(root).ToArray();
+    }
+
+    private static void CompletePhase5Publication(string outputRoot)
+    {
+        foreach (var directory in Directory.GetDirectories(outputRoot, ".05-editorial-backup-*"))
+            Directory.Delete(directory, true);
+        foreach (var file in Directory.GetFiles(outputRoot, ".05-editorial-backup-*.phase-*.json"))
+            File.Delete(file);
+    }
+
+    private static void RollbackPhase5Publication(string outputRoot)
+    {
+        var editorial = Path.Combine(outputRoot, "05-editorial");
+        var backup = Directory.GetDirectories(outputRoot, ".05-editorial-backup-*").SingleOrDefault();
+        if (Directory.Exists(editorial)) Directory.Delete(editorial, true);
+        if (backup is not null) Directory.Move(backup, editorial);
+        RestoreSnapshot(Directory.GetFiles(outputRoot, ".05-editorial-backup-*.phase-manifest.json").SingleOrDefault(),
+            Path.Combine(outputRoot, "phase-manifest.json"));
+        RestoreSnapshot(Directory.GetFiles(outputRoot, ".05-editorial-backup-*.phase-05-validation.json").SingleOrDefault(),
+            Path.Combine(outputRoot, "validation", "phase-05-validation.json"));
+    }
+
+    private static void RestoreSnapshot(string? snapshot, string destination)
+    {
+        if (snapshot is null)
+        {
+            if (File.Exists(destination)) File.Delete(destination);
+            return;
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        File.Move(snapshot, destination, true);
     }
 
     private async Task<IReadOnlyList<string>> PhaseChronicleDocumentaryArchitectAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
@@ -1171,7 +1215,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var published=context.ExecutionContext.PublishedBlueprintCertification;
         if (published is null)
         {
-            var evaluation=await phase5CommittedAuthorityEvaluator.EvaluateAsync(context.OutputRoot,context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),context.EventId,context.Request.Language,cancellationToken);
+            var evaluation=await phase5CommittedAuthorityEvaluator.EvaluateAsync(context.OutputRoot,context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),context.EventId,context.Request.Language,ExpectedPhase4(context),cancellationToken);
             published=evaluation.PublishedAuthority??throw new InvalidOperationException($"Phase 6 rejected Phase 5 committed authority ({evaluation.ReasonCode}).");
         }
         var certification=published.Certification;
@@ -16117,6 +16161,14 @@ public sealed partial class ProductionPipelineExecutionService(
         JsonElement? TitleValidationSourceDiagnostics,
         JsonElement? Phase10VisualSourceInputDiagnostics);
 
+    private static Phase5ExpectedPhase4Authority ExpectedPhase4(ProductionPhaseContext context)
+    {
+        var authority = context.ExecutionContext.PublishedDocumentaryBlueprintAggregate
+            ?? throw new InvalidDataException("P5_UPSTREAM_PHASE4_AUTHORITY_INVALID: current committed Phase 4 authority is unavailable.");
+        return new(authority.AggregateId, authority.DeterministicChecksum,
+            authority.LongVariant.DeterministicChecksum, authority.ShortVariant.DeterministicChecksum);
+    }
+
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken, string? outputPath = null)
     {
         var path = outputPath ?? Path.Combine(context.OutputRoot, "phase-manifest.json");
@@ -16178,10 +16230,19 @@ public sealed partial class ProductionPipelineExecutionService(
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-index.json")), role = "DownstreamContract" },
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-diagnostics.json")), role = "Supporting" }
         }.Where(x => File.Exists(x.path)).ToArray();
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, phase1Artifacts, phase2Artifacts, currentRunArtifacts=filesGeneratedThisRun, existingDependencies=context.DryRun?Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).Where(File.Exists).Select(NormalizePath).ToArray():Array.Empty<string>(), phasesGenerated=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Succeeded).Select(x=>x.PhaseNo).ToArray(), phasesReused=phaseResults.Where(x=>!context.DryRun&&x.Status==ProductionPhaseStatus.Skipped&&x.OutputFiles.Count>0).Select(x=>x.PhaseNo).ToArray(), phasesFailed=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Failed).Select(x=>x.PhaseNo).ToArray(), phasesDryRunSkipped=context.DryRun?phaseResults.Select(x=>x.PhaseNo).ToArray():Array.Empty<int>(), phasesNotRequested=PhaseDefinitionsStatic().Where(x=>x<context.StartPhaseNo||x>context.EndPhaseNo).ToArray(), executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
+        var generatedManifestJson = JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, phase1Artifacts, phase2Artifacts, currentRunArtifacts=filesGeneratedThisRun, existingDependencies=context.DryRun?Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).Where(File.Exists).Select(NormalizePath).ToArray():Array.Empty<string>(), phasesGenerated=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Succeeded).Select(x=>x.PhaseNo).ToArray(), phasesReused=phaseResults.Where(x=>!context.DryRun&&x.Status==ProductionPhaseStatus.Skipped&&x.OutputFiles.Count>0).Select(x=>x.PhaseNo).ToArray(), phasesFailed=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Failed).Select(x=>x.PhaseNo).ToArray(), phasesDryRunSkipped=context.DryRun?phaseResults.Select(x=>x.PhaseNo).ToArray():Array.Empty<int>(), phasesNotRequested=PhaseDefinitionsStatic().Where(x=>x<context.StartPhaseNo||x>context.EndPhaseNo).ToArray(), executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
             cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
-            cleanupSkippedDirectories = context.SkippedDirectoriesDueToOverwrite ?? Array.Empty<string>(), readOnlyDependencyRoots = BuildReadOnlyDependencyRootsDiagnostics(context), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun, executedPhaseNumbers = phasesActuallyExecuted, skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions), cancellationToken);
+            cleanupSkippedDirectories = context.SkippedDirectoriesDueToOverwrite ?? Array.Empty<string>(), readOnlyDependencyRoots = BuildReadOnlyDependencyRootsDiagnostics(context), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun, executedPhaseNumbers = phasesActuallyExecuted, skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions);
+        var generatedManifest = JsonNode.Parse(generatedManifestJson)!.AsObject();
+        var mergedManifest = File.Exists(path)
+            ? JsonNode.Parse(await File.ReadAllTextAsync(path, cancellationToken))?.AsObject() ?? new JsonObject()
+            : new JsonObject();
+        foreach (var property in generatedManifest)
+            mergedManifest[property.Key] = property.Value?.DeepClone();
+        var temporaryPath = path + $".phase5-{Guid.NewGuid():N}.tmp";
+        await File.WriteAllTextAsync(temporaryPath, mergedManifest.ToJsonString(JsonOptions), cancellationToken);
+        File.Move(temporaryPath, path, true);
     }
 
     private static bool TryReadManifestSection(string path, string propertyName, out JsonElement section)

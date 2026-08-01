@@ -1,68 +1,42 @@
-# O2.ORCH.5 — Phase 5 hardening audit
+# O2.ORCH.5 Phase 5 hardening audit
 
-## 1. Governing Phase 5 artifact contract
+## Current Phase 4 lineage validation
+`Phase5ExpectedPhase4Authority` carries the committed aggregate ID and aggregate, Long, and Short checksums. The evaluator compares certification, all five projections, the editorial contract, every manifest entry, and the returned published authority against it.
 
-Phase 5 remains Editorial Validation / Blueprint Certification under `05-editorial/`. Its canonical authority is `blueprint-certification.json`; the complete governing set is certification, validation, editorial contract, scene intents, coverage, transition, and Pause Test reports.
+## Stale Phase 5 reuse prevention
+Reuse supplies lineage derived from `PublishedDocumentaryBlueprintAggregate`; aggregate ID or checksum drift returns `P5REUSE_SOURCE_PHASE4_MISMATCH` and does not install the stale authority.
 
-## 2. Existing implementation reused
+## Manifest role validation
+All seven entries require their exact canonical roles.
 
-The production certifier, editorial validator, artifact checksum implementation, integration service, coverage/transition/Pause Test evaluators, Phase 4 aggregate, and Phase 4 committed evaluator remain unchanged.
+## Manifest semantic checksum validation
+Every manifest semantic checksum is required, lowercase SHA-256, and matched to the checksum validated from its deserialized artifact.
 
-## 3. Committed-state evaluator
+## Manifest physical-size validation
+Positive integer sizes are required and compared to physical file lengths.
 
-`IPhase5CommittedAuthorityEvaluator` and `Phase5CommittedAuthorityEvaluator` now perform typed physical reads, identity and lineage checks, semantic checks, report-status reconciliation, validation-record checks, exact seven-item manifest inventory validation, and physical SHA-256 verification. A successful evaluation returns the physically read `PublishedBlueprintCertification`.
+## Manifest source-lineage validation
+Every entry must name the current committed Phase 4 aggregate checksum.
 
-## 4. Post-publication readback
+## Unknown manifest property preservation
+Manifest writes merge generated owned values into the parsed existing `JsonObject`, preserving unknown top-level and nested values, then replace via a temporary file.
 
-After Phase 5's existing staging validation and atomic directory move, the pipeline writes its validation and manifest projections and then requires a successful committed evaluation. A failure changes the phase result to failed and withholds downstream authority.
+## Transactional backup retention
+The previous editorial authority plus manifest and validation snapshots remain until committed readback. Failed readback restores prior state; successful readback removes transaction files.
 
-## 5. Execution-context authority handoff
+## Post-publication committed readback
+Success and authority installation occur only after the evaluator validates the physically published files, validation record, and manifest.
 
-Both successful publication and reuse install the evaluator's physical `PublishedBlueprintCertification` in `ProductionPipelineExecutionContext`. Phase 6 consumes that typed value and invokes the evaluator only for resume/recovery.
+## Phase 6 resume lineage enforcement
+Resume first rehydrates Phase 4 through its committed evaluator, then supplies that typed lineage while rehydrating Phase 5. Diagnostics remain optional.
 
-## 6. Reuse behavior
+## Tests and actual totals
+The container does not provide the .NET SDK, so executable test totals could not be produced in this environment. `git diff --check` passed.
 
-Phase 5 reuse is exclusively asynchronous through the committed evaluator. Valid reuse reports `P5REUSE_VALID`, avoids publication and metadata rewrites, and installs the physical authority. Invalid state falls through to regeneration.
+## Remaining technical debt
+Run the complete requested test matrix in the repository's .NET build environment and add deterministic injected rollback-fault coverage.
 
-## 7. Phase 4 manifest preservation
-
-The manifest writer carries forward an existing `phase4Artifacts` JSON section without reconstructing it. The fallback catalog includes all seven current Phase 4 artifacts for a workspace that has no prior manifest.
-
-## 8. Relative path migration
-
-Every Phase 5 inventory entry uses a normalized workspace-relative `relativePath` beginning with `05-editorial/`. Physical paths are transient local variables used only for hashing and are not serialized.
-
-## 9. Optional diagnostics decision
-
-`certification-diagnostics.json` remains supporting evidence emitted by Phase 5, but Phase 6 request construction and reuse no longer fail solely when it is absent. The request contract therefore permits null diagnostics.
-
-## 10. Files added
-
-- `Backend/src/Astronomy.MediaFactory.Infrastructure/DocumentaryBlueprint/Phase5CommittedAuthorityEvaluator.cs`
-- `docs/audits/o2-orch-5-phase5-hardening.md`
-
-## 11. Files modified
-
-- `Backend/src/Astronomy.MediaFactory.Core/DocumentaryBlueprint/StoryFrameAuthorityContracts.cs`
-- `Backend/src/Astronomy.MediaFactory.Infrastructure/Extensions/ServiceCollectionExtensions.cs`
-- `Backend/src/Astronomy.MediaFactory.Infrastructure/Persistence/ProductionPipelineExecutionService.cs`
-
-## 12. Focused test commands
-
-- `dotnet build Backend/src/Astronomy.MediaFactory.Infrastructure/Astronomy.MediaFactory.Infrastructure.csproj --no-restore`
-- `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter "FullyQualifiedName~Phase5|FullyQualifiedName~DocumentaryBlueprintCertification|FullyQualifiedName~Phase4CommittedAuthority|FullyQualifiedName~StoryFrame"`
-- `dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter "FullyQualifiedName~Documentary"`
-
-## 13. Actual test totals
-
-The container has no `dotnet` executable. Tests could not execute: **passed 0, failed 0, skipped 0**. Environment-blocked commands are not classified as product failures; no unrelated pre-existing failures were observed because discovery could not run.
-
-## 14. Remaining technical debt
-
-Run compilation and the focused/full Documentary suites in the repository's .NET SDK environment. RC2 endpoint execution remains prohibited until those suites pass. The optional diagnostics field should be removed from the Phase 6 request in a later contract version rather than retained as nullable compatibility data.
-
-## 15. RC2 readiness verdict
-
-Committed authority, reuse, relative inventory, context handoff, Phase 4 preservation, and optional-diagnostics boundaries are implemented, but the mandatory test evidence is unavailable in this container. Accordingly RC2 must not run yet.
+## RC2 readiness verdict
+Build and behavioral verification are mandatory and remain outstanding due to the missing SDK.
 
 NOT_READY_FOR_RC2_PHASE_1_TO_5
