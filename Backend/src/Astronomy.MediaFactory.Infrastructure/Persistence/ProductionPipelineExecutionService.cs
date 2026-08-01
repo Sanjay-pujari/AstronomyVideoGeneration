@@ -9360,13 +9360,18 @@ public sealed partial class ProductionPipelineExecutionService(
     private static Phase15SceneIdLineageResolution ResolvePhase15VisualSceneIdLineage(string planRoot, string language, string format, IReadOnlyList<Phase15SrtBlock> blocks)
     {
         var expectedVisualSceneIds = ResolvePhase15ExpectedVisualSceneIds(planRoot, format);
-        var options = NormalizePhase14SubtitleTtsOptions(null, language);
         if (blocks.Count == 0)
             return new Phase15SceneIdLineageResolution([], expectedVisualSceneIds, []);
 
-        var rangeResolution = TryResolvePhase15SceneIdLineageFromSceneDurationRanges(planRoot, format, blocks, expectedVisualSceneIds);
-        if (rangeResolution is not null)
-            return rangeResolution;
+        var expectedSet = new HashSet<string>(expectedVisualSceneIds, StringComparer.OrdinalIgnoreCase);
+        if (expectedSet.Count > 0 && blocks.All(block => expectedSet.Contains(block.SceneId)))
+        {
+            var explicitDiagnostics = blocks.Select((block, index) => new Phase15SceneIdLineageCueDiagnostic(
+                index + 1, block.SceneId, string.Empty, block.SceneId, block.SceneId,
+                "explicit-parent-scene-metadata", false, block.Start.TotalSeconds, block.End.TotalSeconds,
+                block.SceneId, false, block.Text, false, "exact")).ToArray();
+            return new Phase15SceneIdLineageResolution(blocks.Select(block => block.SceneId).ToArray(), expectedVisualSceneIds, explicitDiagnostics);
+        }
 
         var narrationRoot = ResolvePhase15NarrationRoot(planRoot, language, format);
         var narrationFiles = ResolveOrderedPhase15NarrationFiles(planRoot, format, narrationRoot);
@@ -9378,38 +9383,64 @@ public sealed partial class ProductionPipelineExecutionService(
             narrationLanguage = "en";
         }
         if (narrationFiles.Count == 0)
-            return BuildPhase15FallbackSceneIdLineage(blocks, expectedVisualSceneIds, "srt-cue-metadata", "narration-files-missing");
+            return TryResolvePhase15SceneIdLineageFromSceneDurationRanges(planRoot, format, blocks, expectedVisualSceneIds)
+                ?? BuildPhase15FallbackSceneIdLineage(blocks, expectedVisualSceneIds, "srt-cue-metadata", "narration-files-missing");
 
-        var sceneIds = new List<string>();
-        var sourceFiles = new List<string>();
-        var sceneIdSources = new List<string>();
+        var options = NormalizePhase14SubtitleTtsOptions(null, narrationLanguage);
+        var reconstructed = new List<(string Text, string SceneId, string SourceFile)>();
+        var narrationScenes = new List<(string Text, string SceneId, string SourceFile)>();
         foreach (var narrationFile in narrationFiles)
         {
             if (!File.Exists(narrationFile)) continue;
             var sceneId = SanitizeFileName(Path.GetFileNameWithoutExtension(narrationFile));
             var narrationText = NormalizeNarrationWhitespace(File.ReadAllText(narrationFile).Trim());
-            var cueCount = SplitSubtitleChunks(narrationText, options).Count;
-            var cueSceneMappingSource = $"parentSceneId:options-based-narration-file-path:{narrationLanguage}";
-            for (var i = 0; i < cueCount; i++)
-            {
-                sceneIds.Add(sceneId);
-                sourceFiles.Add(narrationFile);
-                sceneIdSources.Add(cueSceneMappingSource);
-            }
+            narrationScenes.Add((narrationText, sceneId, narrationFile));
+            reconstructed.AddRange(SplitSubtitleChunks(narrationText, options)
+                .Select(text => (text, sceneId, narrationFile)));
         }
 
-        if (sceneIds.Count != blocks.Count)
-            return BuildPhase15FallbackSceneIdLineage(blocks, expectedVisualSceneIds, "srt-cue-metadata", $"narration-cue-count-mismatch:{sceneIds.Count}!={blocks.Count}");
+        var sceneIds = new List<string>();
+        var diagnostics = new List<Phase15SceneIdLineageCueDiagnostic>();
+        var sceneIndex = 0;
+        var consumedSceneText = string.Empty;
+        foreach (var block in blocks)
+        {
+            var actual = NormalizePhase15CueText(block.Text);
+            if (sceneIndex >= narrationScenes.Count) break;
+            var match = narrationScenes[sceneIndex];
+            var expectedSceneText = NormalizePhase15CueText(match.Text);
+            var candidate = string.Join(" ", new[] { consumedSceneText, actual }.Where(value => value.Length > 0));
+            if (!expectedSceneText.StartsWith(candidate, StringComparison.Ordinal)) break;
+            consumedSceneText = candidate;
+            sceneIds.Add(match.SceneId);
+            diagnostics.Add(new Phase15SceneIdLineageCueDiagnostic(
+                diagnostics.Count + 1, block.SceneId, match.SourceFile, match.SceneId, match.SceneId,
+                $"parentSceneId:options-based-narration-file-sequential:{narrationLanguage}", false,
+                block.Start.TotalSeconds, block.End.TotalSeconds, match.SceneId, IsNumericSceneId(block.SceneId),
+                block.Text, !string.Equals(block.Text.Trim(), actual, StringComparison.Ordinal),
+                expectedSceneText == consumedSceneText ? "exact-scene-boundary" : "ordered-prefix"));
+            if (expectedSceneText == consumedSceneText)
+            {
+                sceneIndex++;
+                consumedSceneText = string.Empty;
+            }
+        }
+        if (sceneIds.Count == blocks.Count)
+            return new Phase15SceneIdLineageResolution(sceneIds, expectedVisualSceneIds, diagnostics);
 
-        var diagnostics = blocks.Select((block, index) => new Phase15SceneIdLineageCueDiagnostic(
-            index + 1,
-            block.SceneId,
-            sourceFiles[index],
-            sceneIds[index],
-            sceneIds[index],
-            sceneIdSources[index],
-            IsNumericSceneId(sceneIds[index]))).ToArray();
-        return new Phase15SceneIdLineageResolution(sceneIds, expectedVisualSceneIds, diagnostics);
+        return TryResolvePhase15SceneIdLineageFromSceneDurationRanges(planRoot, format, blocks, expectedVisualSceneIds)
+            ?? BuildPhase15FallbackSceneIdLineage(blocks, expectedVisualSceneIds, "srt-cue-metadata", $"narration-sequential-match-failed:{sceneIds.Count}/{blocks.Count}");
+    }
+
+    private static string NormalizePhase15CueText(string text)
+    {
+        var normalized = text.Normalize(NormalizationForm.FormKC)
+            .Replace('\u2018', '\'').Replace('\u2019', '\'')
+            .Replace('\u201c', '"').Replace('\u201d', '"')
+            .Replace('\u0964', '.').Replace('\u0965', '.');
+        normalized = Regex.Replace(normalized, "[.!?,;:\"']+", " ");
+        normalized = Regex.Replace(normalized, @"\s+", " ");
+        return normalized.Trim().ToLowerInvariant();
     }
 
 
@@ -9577,7 +9608,12 @@ public sealed partial class ProductionPipelineExecutionService(
             extraTimelineSceneIds = extra,
             subtitleSplitter = "OptionsBased",
             subtitleOptionsLoaded = true,
+            physicalCueCount = resolution.Diagnostics.Count,
             reconstructedCueCount = resolution.AssignedSceneIds.Count,
+            visualSceneIds = expected,
+            unresolvedCueIds = resolution.Diagnostics.Where(d => !expectedSet.Contains(d.AssignedSceneId)).Select(d => d.CueId).ToArray(),
+            mappingSources = resolution.Diagnostics.Select(d => d.CueSceneMappingSource).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            passed = missing.Length == 0 && extra.Length == 0 && actual.Length == expected.Length,
             cues = resolution.Diagnostics.Select(d => new
             {
                 eventFamily,
@@ -9596,6 +9632,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 assignedSceneId = d.AssignedSceneId,
                 sceneIdSource = d.CueSceneMappingSource,
                 cueSceneMappingSource = d.CueSceneMappingSource,
+                sourceNarrationSceneFile = NormalizePath(d.CueSourceFile),
+                cueText = d.CueText,
+                normalizationApplied = d.NormalizationApplied,
+                matchConfidence = d.MatchConfidence,
                 numericSceneIdRejected = d.NumericSceneIdRejected && !expectedSet.Contains(d.AssignedSceneId),
                 distinctTimelineSceneIds = actual,
                 expectedVisualSceneIds = expected,
@@ -9660,7 +9700,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private sealed record Phase15SrtBlock(string SceneId, TimeSpan Start, TimeSpan End, string Text);
     private sealed record Phase15SceneIdLineageResolution(IReadOnlyList<string> AssignedSceneIds, IReadOnlyList<string> ExpectedVisualSceneIds, IReadOnlyList<Phase15SceneIdLineageCueDiagnostic> Diagnostics);
     private sealed record Phase15SceneDurationRange(string SceneId, double StartSec, double EndSec);
-    private sealed record Phase15SceneIdLineageCueDiagnostic(int CueIndex, string CueId, string CueSourceFile, string ParentSceneId, string VisualSceneId, string CueSceneMappingSource, bool NumericSceneIdRejected, double CueStartSec = 0, double CueEndSec = 0, string ResolvedParentSceneId = "", bool NumericCueIdIgnoredForSceneLineage = false)
+    private sealed record Phase15SceneIdLineageCueDiagnostic(int CueIndex, string CueId, string CueSourceFile, string ParentSceneId, string VisualSceneId, string CueSceneMappingSource, bool NumericSceneIdRejected, double CueStartSec = 0, double CueEndSec = 0, string ResolvedParentSceneId = "", bool NumericCueIdIgnoredForSceneLineage = false, string CueText = "", bool NormalizationApplied = false, string MatchConfidence = "unresolved")
     {
         public string AssignedSceneId => ParentSceneId;
         public string SceneIdSource => CueSceneMappingSource;
