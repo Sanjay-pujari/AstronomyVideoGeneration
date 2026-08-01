@@ -4995,7 +4995,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var diagnostics = new Phase14TranslationDiagnostics(
             requestedLanguage,
             resolvedFamily,
-            "full-scene-english-to-hindi-translation",
+            "deterministic-english-to-hindi-text-translation",
             Snippet(sourceText),
             Snippet(translatedText),
             false,
@@ -5548,11 +5548,16 @@ public sealed partial class ProductionPipelineExecutionService(
         if (string.Equals(family, "Meteor", StringComparison.OrdinalIgnoreCase) || string.Equals(family, "MeteorShower", StringComparison.OrdinalIgnoreCase))
         {
             var subject = lower.Contains("geminids") ? "जेमिनिड्स उल्का वर्षा" : "उल्का वर्षा";
+            if (lower.Contains("radiant") && scene.Contains("radiant", StringComparison.OrdinalIgnoreCase))
+                return $"रेडिएंट दिशा पहचानने में मदद देता है, लेकिन {subject} की लकीरें पूरे अंधेरे आसमान में कहीं भी चमक सकती हैं।";
             return purpose switch
             {
+                "hook" when lower.Contains("quiet dark sky") => $"{subject} अचानक चमकती उल्का रेखाओं से शांत अंधेरे आसमान को जीवंत बना सकती है।",
+                "hook" when lower.Contains("radiant") => $"आज रात {subject} अंधेरे आसमान में सबसे प्रबल है। रेडिएंट के पास देखें और चाँदनी से बचें।",
                 "hook" => $"आज रात {subject} जिज्ञासा की शुरुआत करती है: अंधेरे आसमान में अचानक चमकती लकीरें कब निकलेंगी, यही रोमांच है।",
                 "what-is-it" => $"{subject} वह समय है जब पृथ्वी मलबे की धारा से गुजरती है और छोटे कण वायुमंडल में चमकदार उल्का लकीर बनाते हैं।",
-                "cause" => $"कारण यह है कि पृथ्वी धूमकेतु या क्षुद्रग्रह से छूटे कणों की धारा काटती है; ये कण जलकर तेज चमक पैदा करते हैं।",
+                "cause" when lower.Contains("comet") => $"जब पृथ्वी धूमकेतु के मलबे की धारा से गुजरती है, तब {subject} दिखाई देती है और कण वायुमंडल में चमकते हैं।",
+                "cause" => $"कारण यह है कि पृथ्वी धूमकेतु या क्षुद्रग्रह से छूटे कणों की धारा से गुजरती है; ये कण जलकर तेज चमक पैदा करते हैं।",
                 "interesting-fact" => $"रोचक तथ्य यह है कि कई उल्काएं रेडिएंट की दिशा से आती लगती हैं, फिर भी उनकी चमक पूरे आकाश में कहीं भी दिख सकती है।",
                 "best-time" => $"सबसे अच्छा समय देर रात से भोर से पहले की अंधेरी खिड़की है, जब रेडिएंट ऊँचा होता है और चांदनी कम बाधा देती है।",
                 "accurate-sky-guide" => $"कहाँ देखें: रेडिएंट की दिशा पहचानें, लेकिन आँखों को पूरे खुले अंधेरे आसमान पर रखें ताकि किसी भी ओर की उल्का छूटे नहीं।",
@@ -5610,23 +5615,20 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var lower = sourceText.ToLowerInvariant();
             var purpose = string.IsNullOrWhiteSpace(scenePurpose) ? ResolvePhase14ScenePurpose(scene) : scenePurpose;
-            if (lower.Contains("certified") || lower.Contains("filter") || lower.Contains("glasses") || lower.Contains("eyes") || purpose == "viewing-tips")
-                return "सुरक्षित अवलोकन के लिए प्रमाणित सोलर फिल्टर लगाएं और आंशिक चरण में आँखों की सुरक्षा कभी न हटाएं।";
-            if (lower.Contains("corona") || purpose == "interesting-fact")
-                return "पूर्णता का क्षण छोटा होता है, लेकिन उसी समय सूर्य की कोरोना पूर्ण सूर्य ग्रहण को खास बनाती है।";
-            if (lower.Contains("path") || lower.Contains("unobstructed") || purpose == "accurate-sky-guide")
-                return "ग्रहण पथ, सूर्य की दिशा और आँखों की सुरक्षा को साथ जांचें; सुरक्षित अवलोकन के बिना आगे न बढ़ें।";
-            if (lower.Contains("best") || lower.Contains("time") || purpose == "best-time")
-                return "आंशिक चरण से पहले समय तय करें और ग्रहण पथ में सुरक्षित अवलोकन की तैयारी पूरी रखें।";
-            if (lower.Contains("block") || lower.Contains("between") || lower.Contains("shadow") || purpose == "cause")
-                return "पूर्ण सूर्य ग्रहण में चंद्रमा की छाया ग्रहण पथ पर आती है, इसलिए सूर्य का ढकना और पूर्णता का क्षण बनता है।";
-            if (lower.Contains("see") || lower.Contains("view") || purpose == "what-you-will-see")
-                return "आंशिक चरण में सूर्य का ढकना धीरे-धीरे बढ़ता है और पूर्णता का क्षण आने पर सूर्य की कोरोना दिख सकती है।";
-            if (lower.Contains("reminder") || scene.Contains("final") || purpose == "final-reminder")
-                return "पूर्ण सूर्य ग्रहण यादगार है, लेकिन हर आंशिक चरण में प्रमाणित सोलर फिल्टर और आँखों की सुरक्षा जरूरी है।";
-            if (purpose == "what-is-it")
-                return "सूर्य ग्रहण तब होता है जब चंद्रमा की छाया पृथ्वी पर पड़ती है और सूर्य का ढकना दिखाई देता है।";
-            return "सूर्य ग्रहण में चंद्रमा की छाया सूर्य का ढकना दिखाती है और सुरक्षित अवलोकन सबसे जरूरी रहता है।";
+            return purpose switch
+            {
+                "hook" => "पूर्ण सूर्य ग्रहण की शुरुआत में चंद्रमा की छाया सूर्य तक पहुँचती दिखती है और दिन का प्रकाश तेजी से बदलने लगता है।",
+                "what-is-it" => "सूर्य ग्रहण वह दृश्य है जिसमें चंद्रमा सूर्य की चमकती सतह को आंशिक या पूरी तरह ढकता है; यही सूर्य का ढकना है।",
+                "cause" => "कारण यह है कि चंद्रमा पृथ्वी और सूर्य के बीच आकर प्रकाश रोकता है और चंद्रमा की छाया पृथ्वी पर डालता है।",
+                "interesting-fact" => "रोचक तथ्य यह है कि पूर्णता के दौरान अँधेरी चंद्र डिस्क के चारों ओर सूर्य का कोरोना दिखाई दे सकता है।",
+                "best-time" => "सबसे अच्छा समय आंशिक चरण शुरू होने से पहले है; अपना स्थान और प्रमाणित सुरक्षा उपकरण पहले ही तैयार रखें।",
+                "accurate-sky-guide" => "कहाँ देखना है: ग्रहण पथ के भीतर खुला स्थान चुनें और केवल प्रमाणित सोलर फिल्टर से सूर्य को देखें।",
+                "what-you-will-see" => "दृश्य में सूर्य की चमकती डिस्क धीरे-धीरे ढकती जाएगी और पूर्णता के क्षण तक रोशनी बदलती रहेगी।",
+                "viewing-tips" => "अवलोकन सलाह: पूर्णता से पहले और बाद के हर आंशिक चरण में प्रमाणित ग्रहण चश्मा पहनना आवश्यक है।",
+                "final-reminder" => "अंतिम याद रखें: आँखों की सुरक्षा हर आंशिक चरण में अनिवार्य है; बिना प्रमाणित सोलर फिल्टर सूर्य को कभी न देखें।",
+                _ when lower.Contains("corona") => "पूर्णता के दौरान अँधेरी चंद्र डिस्क के चारों ओर सूर्य का कोरोना दिखाई दे सकता है।",
+                _ => "सूर्य ग्रहण में चंद्रमा की छाया के कारण सूर्य का ढकना दिखाई देता है।"
+            };
         }
 
     private static string BuildMoonHindiSceneTranslation(string sourceText, string scene, string scenePurpose)
@@ -5699,9 +5701,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static string BuildScenePurposeSemanticFingerprint(string scenePurpose, string sourceEnglishText, string translatedHindiText)
     {
-        var normalized = NormalizeNarrationForDuplicateCheck($"{scenePurpose} {sourceEnglishText} {translatedHindiText}");
-        var tokens = Regex.Matches(normalized, @"[\p{L}\p{Nd}]+")
-            .Select(match => match.Value)
+        var tokens = TokenizePhase14SemanticText($"{scenePurpose} {sourceEnglishText} {translatedHindiText}")
             .Where(token => token.Length > 1)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(token => token, StringComparer.OrdinalIgnoreCase)
@@ -5723,12 +5723,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var rightNormalized = NormalizeNarrationForDuplicateCheck(right);
         if (string.IsNullOrWhiteSpace(leftNormalized) || string.IsNullOrWhiteSpace(rightNormalized)) return 0;
         if (string.Equals(leftNormalized, rightNormalized, StringComparison.OrdinalIgnoreCase)) return 1;
-        var leftTokens = Regex.Matches(leftNormalized, @"[\p{L}\p{Nd}]+")
-            .Select(match => match.Value)
+        var leftTokens = TokenizePhase14SemanticText(leftNormalized)
             .Where(token => token.Length > 1)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var rightTokens = Regex.Matches(rightNormalized, @"[\p{L}\p{Nd}]+")
-            .Select(match => match.Value)
+        var rightTokens = TokenizePhase14SemanticText(rightNormalized)
             .Where(token => token.Length > 1)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (leftTokens.Count == 0 || rightTokens.Count == 0) return 0;
@@ -5737,6 +5735,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var tokenScore = union == 0 ? 0 : intersection / (double)union;
         var lengthScore = 1 - Math.Abs(leftNormalized.Length - rightNormalized.Length) / (double)Math.Max(leftNormalized.Length, rightNormalized.Length);
         return Math.Round((tokenScore * 0.75) + (lengthScore * 0.25), 3);
+    }
+
+    private static IEnumerable<string> TokenizePhase14SemanticText(string? value)
+    {
+        var normalized = (value ?? string.Empty).Normalize(NormalizationForm.FormC);
+        return Regex.Matches(normalized, @"\p{L}[\p{L}\p{M}\p{N}\-]*")
+            .Select(match => match.Value);
     }
 
     private static double CalculateScenePurposeSemanticSimilarityScore(string scenePurpose, string sourceEnglishText, string translatedHindiText)
@@ -8631,7 +8636,7 @@ public sealed partial class ProductionPipelineExecutionService(
         => FindDuplicateSubtitleCueBlocks(blocks).Sum(group => group.Count());
 
     private static string NormalizeNarrationForDuplicateCheck(string? value)
-        => Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
+        => Regex.Replace((value ?? string.Empty).Normalize(NormalizationForm.FormC), @"\s+", " ").Trim();
 
     private static string SubtitleChunkHash(string text)
     {

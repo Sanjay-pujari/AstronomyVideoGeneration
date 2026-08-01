@@ -2045,6 +2045,92 @@ Second display cue.
     }
 
     [Fact]
+    public void Phase14HindiTranslation_PreservesMeteorRadiantTerminology()
+    {
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
+        var shortTexts = new Dictionary<string, string> { ["006-radiant-guide"] = "Use the Geminids radiant to orient, then watch the whole dark sky." };
+
+        method!.Invoke(null, ["hi", "Meteor", shortTexts, new Dictionary<string, string>()]);
+
+        Assert.Contains("रेडिएंट", shortTexts.Single().Value);
+        Assert.Contains("अंधेरे आसमान", shortTexts.Single().Value);
+    }
+
+    [Fact]
+    public void Phase14HindiTranslation_PreservesQuietDarkSkyPhrase()
+    {
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
+        var shortTexts = new Dictionary<string, string> { ["001-hook"] = "Geminids can turn quiet dark sky into sudden streaks of light." };
+
+        method!.Invoke(null, ["hi", "Meteor", shortTexts, new Dictionary<string, string>()]);
+
+        Assert.Contains("शांत अंधेरे आसमान", shortTexts.Single().Value);
+        Assert.EndsWith("।", shortTexts.Single().Value);
+    }
+
+    [Fact]
+    public void Phase14HindiTranslation_TranslatesCometDebrisCauseAsCompleteSentence()
+    {
+        var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
+        var shortTexts = new Dictionary<string, string> { ["002-cause"] = "Meteor showers happen when Earth passes through a trail of comet debris." };
+
+        method!.Invoke(null, ["hi", "Meteor", shortTexts, new Dictionary<string, string>()]);
+        var translated = shortTexts.Single().Value;
+
+        Assert.Contains("धूमकेतु", translated);
+        Assert.Contains("पृथ्वी", translated);
+        Assert.Contains("गुजरती", translated);
+        Assert.DoesNotContain("passes through", translated, StringComparison.OrdinalIgnoreCase);
+        Assert.EndsWith("।", translated);
+    }
+
+    [Fact]
+    public void Phase14HindiSemanticTokenizer_PreservesDevanagariCombiningMarks()
+    {
+        var method = GetPrivateStaticMethod("TokenizePhase14SemanticText", typeof(string));
+        var tokens = ((IEnumerable<string>)method!.Invoke(null, ["पूर्ण सूर्य चंद्रमा आँखों सुरक्षा दृष्टि-रेखा"])!).ToArray();
+
+        Assert.Equal(new[] { "पूर्ण", "सूर्य", "चंद्रमा", "आँखों", "सुरक्षा", "दृष्टि-रेखा" }, tokens);
+    }
+
+    [Fact]
+    public void Phase14HindiTranslation_EclipseHookAndDefinitionAreDistinct()
+    {
+        var method = GetPrivateStaticMethod("BuildEclipseHindiSceneTranslation", typeof(string), typeof(string), typeof(string));
+        var hook = (string)method!.Invoke(null, ["A total solar eclipse begins.", "001-hook", "hook"])!;
+        var definition = (string)method.Invoke(null, ["A solar eclipse shows the Sun being covered.", "002-what-is-it", "what-is-it"])!;
+
+        Assert.NotEqual(hook, definition);
+        Assert.Contains("शुरुआत", hook);
+        Assert.Contains("दृश्य", definition);
+    }
+
+    [Fact]
+    public void Phase14HindiTranslation_EclipseDefinitionAndCauseAreDistinct()
+    {
+        var method = GetPrivateStaticMethod("BuildEclipseHindiSceneTranslation", typeof(string), typeof(string), typeof(string));
+        var definition = (string)method!.Invoke(null, ["A solar eclipse visibly covers the Sun.", "002-what-is-it", "what-is-it"])!;
+        var cause = (string)method.Invoke(null, ["The Moon passes between Earth and the Sun.", "003-cause", "cause"])!;
+
+        Assert.NotEqual(definition, cause);
+        Assert.Contains("सूर्य का ढकना", definition);
+        Assert.Contains("पृथ्वी और सूर्य के बीच", cause);
+    }
+
+    [Fact]
+    public void Phase14HindiTranslation_EclipsePurposeFingerprintUsesWholeHindiWords()
+    {
+        var method = GetPrivateStaticMethod("BuildScenePurposeSemanticFingerprint", typeof(string), typeof(string), typeof(string));
+        var fingerprint = (string)method!.Invoke(null, ["cause", string.Empty, "सूर्य ग्रहण में चंद्रमा की छाया पृथ्वी पर पड़ती है।"])!;
+
+        Assert.Contains("सूर्य", fingerprint.Split('|'));
+        Assert.Contains("ग्रहण", fingerprint.Split('|'));
+        Assert.Contains("चंद्रमा", fingerprint.Split('|'));
+        Assert.Contains("छाया", fingerprint.Split('|'));
+        Assert.DoesNotContain("णत", fingerprint.Split('|'));
+    }
+
+    [Fact]
     public void Phase14HindiTranslation_TranslatesConjunctionNarrationWithoutMeteorLeakage()
     {
         var method = GetPrivateStaticMethod("ApplyPhase14NarrationTranslationIfNeeded", typeof(string), typeof(string), typeof(IDictionary<string, string>), typeof(IDictionary<string, string>));
