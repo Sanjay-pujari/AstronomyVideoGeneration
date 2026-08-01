@@ -400,10 +400,12 @@ public sealed partial class ProductionPipelineExecutionService(
             12 => IsRequestedOutput(context, "Thumbnail"),
             13 => true,
             14 => true,
-            15 => IsRequestedOutput(context, "LongVideo") || IsRequestedOutput(context, "ShortVideo"),
+            15 => IsRequestedOutput(context, "LongVideo"),
             16 => IsRequestedOutput(context, "LongVideo") || IsRequestedOutput(context, "ShortVideo"),
-            17 => IsRequestedOutput(context, "LongVideo") || IsRequestedOutput(context, "ShortVideo"),
-            18 => IsRequestedOutput(context, "ShortVideo"),
+            17 => IsRequestedOutput(context, "LongVideo"),
+            // Phase 18 assembles both video formats; keep this aligned with the
+            // LongVideo completion map as well as the short-video contract.
+            18 => IsRequestedOutput(context, "ShortVideo") || IsRequestedOutput(context, "LongVideo"),
             19 => IsRequestedOutput(context, "LongVideo"),
             20 => true,
             _ => true
@@ -5892,6 +5894,18 @@ public sealed partial class ProductionPipelineExecutionService(
         var cleaned = Regex.Replace(value ?? string.Empty, @"\s+", " ").Trim();
         if (string.IsNullOrWhiteSpace(cleaned)) return isHindi ? "सूर्योदय से पहले" : "before sunrise";
         cleaned = Regex.Replace(cleaned, @"\b(best viewing window|local viewing window|best local viewing window|best time)\b", "", RegexOptions.IgnoreCase).Trim(' ', ':', '-', '–', '—');
+        if (!isHindi)
+        {
+            var daypart = Regex.Match(cleaned, @"\b(?:before sunrise|after sunset)\b", RegexOptions.IgnoreCase);
+            var withoutDaypart = daypart.Success ? Regex.Replace(cleaned, Regex.Escape(daypart.Value), "", RegexOptions.IgnoreCase) : cleaned;
+            withoutDaypart = Regex.Replace(withoutDaypart, @"\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b", "", RegexOptions.IgnoreCase);
+            withoutDaypart = Regex.Replace(withoutDaypart, @"\bon\b", "", RegexOptions.IgnoreCase).Trim(' ', ',', ':', '-', '–', '—');
+            if (DateTime.TryParse(withoutDaypart, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out var spokenDate))
+            {
+                var date = $"{CultureInfo.InvariantCulture.DateTimeFormat.GetMonthName(spokenDate.Month)} {EnglishOrdinal(spokenDate.Day)}";
+                return daypart.Success ? $"{daypart.Value.ToLowerInvariant()} on {date}" : date;
+            }
+        }
         cleaned = Regex.Replace(cleaned, @"\b\d{1,2}:\d{2}\s*(?:AM|PM)?\b", "", RegexOptions.IgnoreCase).Trim(' ', ',', ':', '-', '–', '—');
         var isoDate = Regex.Match(cleaned, @"\b(?<year>20\d{2})-(?<month>\d{1,2})-(?<day>\d{1,2})\b");
         if (isoDate.Success && int.TryParse(isoDate.Groups["year"].Value, out var isoYear) && int.TryParse(isoDate.Groups["month"].Value, out var isoMonth) && int.TryParse(isoDate.Groups["day"].Value, out var isoDay))
@@ -5903,6 +5917,19 @@ public sealed partial class ProductionPipelineExecutionService(
             return isHindi ? $"{day} {HindiMonth(MonthNumber(match.Groups["month"].Value))} को सूर्योदय से पहले" : $"before sunrise on {CultureInfo.InvariantCulture.TextInfo.ToTitleCase(match.Groups["month"].Value.TrimEnd('.').ToLowerInvariant())} {day}";
         return string.IsNullOrWhiteSpace(cleaned) ? (isHindi ? "सूर्योदय से पहले" : "before sunrise") : cleaned;
     }
+
+    private static string EnglishOrdinal(int day)
+        => day switch
+        {
+            1 => "first", 2 => "second", 3 => "third", 4 => "fourth", 5 => "fifth",
+            6 => "sixth", 7 => "seventh", 8 => "eighth", 9 => "ninth", 10 => "tenth",
+            11 => "eleventh", 12 => "twelfth", 13 => "thirteenth", 14 => "fourteenth",
+            15 => "fifteenth", 16 => "sixteenth", 17 => "seventeenth", 18 => "eighteenth",
+            19 => "nineteenth", 20 => "twentieth", 21 => "twenty-first", 22 => "twenty-second",
+            23 => "twenty-third", 24 => "twenty-fourth", 25 => "twenty-fifth", 26 => "twenty-sixth",
+            27 => "twenty-seventh", 28 => "twenty-eighth", 29 => "twenty-ninth", 30 => "thirtieth",
+            31 => "thirty-first", _ => day.ToString(CultureInfo.InvariantCulture)
+        };
 
     private static string NaturalSkyDirection(string? value, bool isHindi = false)
     {
@@ -5916,7 +5943,7 @@ public sealed partial class ProductionPipelineExecutionService(
         if (Regex.IsMatch(cleaned, @"^SW$|south[- ]?west|southwest", RegexOptions.IgnoreCase)) return isHindi ? "दक्षिण-पश्चिमी आकाश" : "southwestern sky";
         if (Regex.IsMatch(cleaned, @"^NW$|north[- ]?west|northwest", RegexOptions.IgnoreCase)) return isHindi ? "उत्तर-पश्चिमी आकाश" : "northwestern sky";
         if (Regex.IsMatch(cleaned, @"^E$|\beast(?:ern)?\b", RegexOptions.IgnoreCase)) return isHindi ? "पूर्वी आकाश" : "eastern sky";
-        if (Regex.IsMatch(cleaned, @"^W$|\bwest(?:ern)?\b", RegexOptions.IgnoreCase)) return isHindi ? "पश्चिमी आकाश" : "western sky";
+        if (Regex.IsMatch(cleaned, @"^W$|\bwest(?:ern)?\b", RegexOptions.IgnoreCase)) return isHindi ? "पश्चिमी आकाश" : (cleaned.Contains("horizon", StringComparison.OrdinalIgnoreCase) ? "the western horizon" : "western sky");
         if (Regex.IsMatch(cleaned, @"^N$|\bnorth(?:ern)?\b", RegexOptions.IgnoreCase)) return isHindi ? "उत्तरी आकाश" : "northern sky";
         if (Regex.IsMatch(cleaned, @"^S$|\bsouth(?:ern)?\b", RegexOptions.IgnoreCase)) return isHindi ? "दक्षिणी आकाश" : "southern sky";
         return isHindi ? "दक्षिण-पूर्वी आकाश" : "southeastern sky";
@@ -7493,7 +7520,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var scenePurpose = ResolvePhase14ScenePurpose(sceneId);
         var eventType = ResolveEventTypeFromCueRewriteContext(syncItem, durationItem);
-        var family = NormalizePhase14DuplicateCleanupFamily(eventType, eventType, [], [], string.Join(' ', new[] { syncItem?.NarrationText, syncItem?.NarrationBeat, syncItem?.VisualIntent, durationItem?.SceneId, sceneId, sourceSceneNarration, originalCueText }.Where(value => !string.IsNullOrWhiteSpace(value))));
+        var family = ResolveHindiCueEventFamily(originalCueText, sourceSceneNarration ?? string.Empty, syncItem, durationItem, sceneId);
         var attempt = 0;
         var wrappingRejects = 0;
 
@@ -7521,6 +7548,21 @@ public sealed partial class ProductionPipelineExecutionService(
         var lastResort = BuildLastResortHindiDuplicateCueText(originalCueText, scenePurpose, sceneId, occupied, options, ref duplicateCueRewriteAttemptCount, ref candidateRejectedByWrapping, loopName, format, cueIndex, duplicateCountBefore);
         candidateAccepted = true;
         return lastResort;
+    }
+
+    private static string ResolveHindiCueEventFamily(string cueText, string originalNarrationText, SceneAudioSyncItem? syncItem, SceneDurationPlanItem? durationItem, string sceneId)
+    {
+        var explicitFamily = ResolveEventTypeFromCueRewriteContext(syncItem, durationItem);
+        if (!string.IsNullOrWhiteSpace(explicitFamily))
+            return NormalizePhase14DuplicateCleanupFamily(explicitFamily, explicitFamily, [], [], string.Empty);
+
+        foreach (var signal in new[] { originalNarrationText, cueText, sceneId })
+        {
+            if (Regex.IsMatch(signal ?? string.Empty, @"meteor(?: shower)?|geminids?|radiant|उल्का(?: वर्षा)?|जेमिनिड्स|रेडिएंट", RegexOptions.IgnoreCase))
+                return "Meteor";
+        }
+
+        return NormalizePhase14DuplicateCleanupFamily(string.Empty, string.Empty, [], [], string.Join(' ', originalNarrationText, cueText, sceneId));
     }
 
     private static IReadOnlyList<string> BuildShortHindiDuplicateCueAlternates(string family, string scenePurpose, string sceneId)

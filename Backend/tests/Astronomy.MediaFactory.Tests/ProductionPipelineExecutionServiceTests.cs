@@ -766,6 +766,9 @@ public sealed class ProductionPipelineExecutionServiceTests
     private static string WritePassingHeroLayout(string safeAreaProperties)
     {
         var path = Path.Combine(Path.GetTempPath(), "hero-layout-" + Guid.NewGuid().ToString("N") + ".json");
+        var optionalSafeAreaProperties = string.IsNullOrWhiteSpace(safeAreaProperties)
+            ? string.Empty
+            : "," + Environment.NewLine + safeAreaProperties;
         File.WriteAllText(path, PassingLayoutJson($$"""
           "heroOverlayDiagnostics": {
             "heroTitleClipped": false,
@@ -773,8 +776,7 @@ public sealed class ProductionPipelineExecutionServiceTests
             "heroTitleOverflowDetected": false,
             "heroTextOverlapDetected": false,
             "heroTitleSubtitleOverlap": false,
-            "heroTitleMetadataOverlap": false,
-            {{safeAreaProperties}}
+            "heroTitleMetadataOverlap": false{{optionalSafeAreaProperties}}
           },
         """));
         return path;
@@ -1985,7 +1987,8 @@ Second display cue.
 
         Assert.Equal(["001-hook", "002-what-is-it", "003-cause", "004-viewing-tip", "005-final-reminder"], shortItems.Keys.ToArray());
         Assert.Equal(9, longItems.Count);
-        Assert.StartsWith("Before dawn, Jupiter takes the lead", shortItems["001-hook"]);
+        Assert.StartsWith("Welcome to Drashyam.", shortItems["001-hook"], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Before dawn, Jupiter takes the lead", shortItems["001-hook"], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Venus slips in beside it", shortItems["001-hook"], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("quiet sky story", shortItems["001-hook"], StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Jupiter", allText, StringComparison.OrdinalIgnoreCase);
@@ -1999,6 +2002,9 @@ Second display cue.
         Assert.True((int)diagnosticsType.GetProperty("DocumentaryScore")!.GetValue(diagnostics)! >= 90);
         Assert.True((int)diagnosticsType.GetProperty("WonderScore")!.GetValue(diagnostics)! >= 90);
         Assert.True((int)diagnosticsType.GetProperty("ScientificAccuracyScore")!.GetValue(diagnostics)! >= 95);
+        Assert.True((bool)diagnosticsType.GetProperty("HookGreetingRequired")!.GetValue(diagnostics)!);
+        Assert.True((bool)diagnosticsType.GetProperty("HookGreetingApplied")!.GetValue(diagnostics)!);
+        Assert.Equal("Welcome to Drashyam", diagnosticsType.GetProperty("HookGreetingText")!.GetValue(diagnostics));
     }
 
 
@@ -3092,11 +3098,17 @@ Second display cue.
         Assert.True(File.Exists(Path.Combine(subtitleRoot, "long.srt")));
         Assert.True(File.Exists(Path.Combine(context.ExecutionContext.NarrationRoot!, "narration.txt")));
         Assert.False(Directory.Exists(context.ExecutionContext.TtsRoot!));
-        Assert.DoesNotContain(deletedDirectories, path => path.Contains(Path.Combine("narration", "subtitles"), StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(deletedDirectories, path => path.EndsWith("tts", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(skippedDirectories, path => path.EndsWith("narration", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(skippedDirectories, path => path.Contains(Path.Combine("narration", "subtitles"), StringComparison.OrdinalIgnoreCase));
+        var normalizedDeleted = deletedDirectories.Select(NormalizeTestPath).ToArray();
+        var normalizedSkipped = skippedDirectories.Select(NormalizeTestPath).ToArray();
+        var narrationRoot = NormalizeTestPath(context.ExecutionContext.NarrationRoot!);
+        var subtitlesRoot = NormalizeTestPath(Path.Combine(context.ExecutionContext.NarrationRoot!, "subtitles"));
+        Assert.DoesNotContain(subtitlesRoot, normalizedDeleted, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(NormalizeTestPath(context.ExecutionContext.TtsRoot!), normalizedDeleted, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(narrationRoot, normalizedSkipped, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(subtitlesRoot, normalizedSkipped, StringComparer.OrdinalIgnoreCase);
     }
+
+    private static string NormalizeTestPath(string path) => path.Replace('\\', '/').TrimEnd('/');
 
     [Fact]
     public void PlanetConjunctionNarrationV22_HumanizesBestTimeAndSkyGuideFragments()
