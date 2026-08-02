@@ -325,9 +325,36 @@ public static class StoryFrameArtifactValidator
         void ValidateRelationships(IReadOnlyList<string>? actual,IReadOnlyList<string> certified,string field,StoryFrameAuthorityFrame f) { if(actual is null){Add("SF-REL-001","authority",field,"non-null",null,"Relationship collection is null.",f.Variant,f.SceneId,f.FrameId);return;} if(actual.Any(string.IsNullOrWhiteSpace)||actual.Distinct(StringComparer.Ordinal).Count()!=actual.Count||actual.Except(certified,StringComparer.Ordinal).Any()) Add("SF-REL-001","authority",field,"unique certified IDs",string.Join(',',actual),"Relationship collection is invalid.",f.Variant,f.SceneId,f.FrameId); }
         void ValidateCollection(IReadOnlyList<string>? actual,string field,StoryFrameAuthorityFrame f) { if(actual is null){Add("SF-REQ-001","authority",field,"non-null",null,"Requirement collection is null.",f.Variant,f.SceneId,f.FrameId);return;} if(actual.Any(x=>string.IsNullOrWhiteSpace(x)||UnsafeValue(x))||actual.Select(x=>x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count()!=actual.Count) Add("SF-REQ-001","authority",field,"safe unique values",string.Join('|',actual),"Requirement collection is invalid.",f.Variant,f.SceneId,f.FrameId); }
         foreach(var required in new[]{(e.MandatoryViewerQuestions,"ViewerQuestionIds",a.Frames.SelectMany(f=>f.ViewerQuestionIds??[])),(e.LearningObjectives,"LearningObjectiveIds",a.Frames.SelectMany(f=>f.LearningObjectiveIds??[])),(e.KnowledgeReferenceConstraints,"KnowledgeReferenceIds",a.Frames.SelectMany(f=>f.KnowledgeReferenceIds??[]))}) foreach(var missing in required.Item1.Except(required.Item3,StringComparer.Ordinal)) Add("SF-REL-001","authority",required.Item2,"mandatory coverage",missing,"Mandatory relationship is not covered.");
-        foreach(var variant in a.RequestedVariants) { double previousEnd=0; foreach(var scene in e.SceneOrder.Select((id,i)=>(id,i))) { var frames=a.Frames.Where(f=>f.Variant.Equals(variant,StringComparison.OrdinalIgnoreCase)&&f.SceneId==scene.id).ToArray(); if(frames.Length==0) Add("SF-SCENE-001","authority","SceneId",scene.id,"missing","Requested variant scene is missing.",variant,scene.id); foreach(var f in frames) { if(f.SceneNumber!=scene.i+1||f.NarrativeStage!=e.NarrativeStages.GetValueOrDefault(scene.id)||f.SceneRole!=e.SceneRoles.GetValueOrDefault(scene.id)) Add("SF-SCENE-001","authority","SceneMetadata","editorial projection",f.SceneNumber,"Scene metadata differs.",variant,scene.id,f.FrameId); if(f.EstimatedStart+TimingToleranceSeconds<previousEnd) Add("SF-TIME-001","authority","EstimatedStart",$">={previousEnd-TimingToleranceSeconds}",f.EstimatedStart,"Frames overlap beyond tolerance.",variant,scene.id,f.FrameId); previousEnd=Math.Max(previousEnd,f.EstimatedStart+f.EstimatedDuration); } if(!frames.Select(f=>f.FrameNumber).SequenceEqual(Enumerable.Range(1,frames.Length))) Add("SF-FRAME-001","authority","FrameNumber","contiguous 1-based sequence",string.Join(',',frames.Select(f=>f.FrameNumber)),"Frame sequence is invalid.",variant,scene.id); } }
-        if(a.Frames.Any(f=>!e.SceneOrder.Contains(f.SceneId,StringComparer.Ordinal))) Add("SF-SCENE-001","authority","SceneId","certified scene", "unknown", "Authority contains an uncertified scene.");
-        var canonical=a.RequestedVariants.SelectMany(v=>e.SceneOrder.SelectMany(scene=>a.Frames.Where(f=>f.Variant.Equals(v,StringComparison.OrdinalIgnoreCase)&&f.SceneId==scene).OrderBy(f=>f.FrameNumber).ThenBy(f=>f.FrameId,StringComparer.Ordinal))).Select(f=>f.FrameId); if(!a.Frames.Select(f=>f.FrameId).SequenceEqual(canonical,StringComparer.Ordinal)) Add("SF-FRAME-001","authority","Frames","canonical order","different order","Authority frame order is not canonical.");
+        IReadOnlyList<CertifiedStoryFrameSceneAuthority> CommittedScenes(string variant) =>
+            variant.Equals("Long",StringComparison.OrdinalIgnoreCase) ? request.LongScenes : request.ShortScenes;
+        foreach(var variant in a.RequestedVariants) {
+            double previousEnd=0;
+            var committed=CommittedScenes(variant).OrderBy(x=>x.SequenceNumber).ThenBy(x=>x.SourceSceneId,StringComparer.Ordinal).ToArray();
+            foreach(var scene in committed) {
+                var frames=a.Frames.Where(f=>f.Variant.Equals(variant,StringComparison.OrdinalIgnoreCase)&&f.SceneId==scene.SourceSceneId).ToArray();
+                if(frames.Length==0) Add("SF-SCENE-001","authority","SceneId",scene.SourceSceneId,"missing","Requested variant committed scene is missing.",variant,scene.SourceSceneId);
+                foreach(var f in frames) {
+                    var expectedKnowledge=scene.KnowledgeReferences.Select(x=>x.KnowledgeEntryId).Order(StringComparer.Ordinal);
+                    var actualKnowledge=(f.KnowledgeReferenceIds??[]).Order(StringComparer.Ordinal);
+                    if(f.SceneNumber!=scene.SequenceNumber||!string.Equals(f.NarrativeStage,scene.NarrativeStage.ToString(),StringComparison.Ordinal)||!string.Equals(f.SceneRole,scene.SceneRole.ToString(),StringComparison.Ordinal)||
+                       !(f.ViewerQuestionIds??[]).Contains(scene.ViewerQuestionId,StringComparer.Ordinal)||
+                       !(f.LearningObjectiveIds??[]).Contains(scene.LearningObjectiveId,StringComparer.Ordinal)||
+                       !actualKnowledge.SequenceEqual(expectedKnowledge,StringComparer.Ordinal))
+                        Add("SF-SCENE-001","authority","SceneMetadata","variant-specific committed scene authority",f.SceneNumber,"Scene metadata or lineage differs.",variant,scene.SourceSceneId,f.FrameId);
+                    if(f.EstimatedDuration<scene.MinimumDurationSeconds-TimingToleranceSeconds||f.EstimatedDuration>scene.MaximumDurationSeconds+TimingToleranceSeconds)
+                        Add("SF-TIME-001","authority","EstimatedDuration",$"{scene.MinimumDurationSeconds}..{scene.MaximumDurationSeconds}",f.EstimatedDuration,"Frame duration differs from committed scene bounds.",variant,scene.SourceSceneId,f.FrameId);
+                    if(f.EstimatedStart+TimingToleranceSeconds<previousEnd) Add("SF-TIME-001","authority","EstimatedStart",$">={previousEnd-TimingToleranceSeconds}",f.EstimatedStart,"Frames overlap beyond tolerance.",variant,scene.SourceSceneId,f.FrameId);
+                    previousEnd=Math.Max(previousEnd,f.EstimatedStart+f.EstimatedDuration);
+                }
+                if(!frames.Select(f=>f.FrameNumber).SequenceEqual(Enumerable.Range(1,frames.Length))) Add("SF-FRAME-001","authority","FrameNumber","contiguous 1-based sequence",string.Join(',',frames.Select(f=>f.FrameNumber)),"Frame sequence is invalid.",variant,scene.SourceSceneId);
+            }
+            var committedIds=committed.Select(x=>x.SourceSceneId).ToHashSet(StringComparer.Ordinal);
+            foreach(var unknown in a.Frames.Where(f=>f.Variant.Equals(variant,StringComparison.OrdinalIgnoreCase)&&!committedIds.Contains(f.SceneId)))
+                Add("SF-SCENE-001","authority","SceneId","scene committed for this variant",unknown.SceneId,"Authority contains an uncertified or cross-variant scene.",variant,unknown.SceneId,unknown.FrameId);
+        }
+        var canonical=a.RequestedVariants.SelectMany(v=>CommittedScenes(v).OrderBy(x=>x.SequenceNumber).ThenBy(x=>x.SourceSceneId,StringComparer.Ordinal)
+            .SelectMany(scene=>a.Frames.Where(f=>f.Variant.Equals(v,StringComparison.OrdinalIgnoreCase)&&f.SceneId==scene.SourceSceneId).OrderBy(f=>f.FrameNumber).ThenBy(f=>f.FrameId,StringComparer.Ordinal)))
+            .Select(f=>f.FrameId); if(!a.Frames.Select(f=>f.FrameId).SequenceEqual(canonical,StringComparer.Ordinal)) Add("SF-FRAME-001","authority","Frames","canonical variant-specific committed order","different order","Authority frame order is not canonical.");
 
         var expected=StoryFrameIndexProjector.Project(a,e.Checksum); CompareIndex(expected,index,Add);
         ReconcileDiagnostics(a,e,d,request,compatibility,Add);

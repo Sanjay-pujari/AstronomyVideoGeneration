@@ -131,7 +131,8 @@ public sealed class Phase6InputAuthorityEvaluator(IPhase4CommittedAuthorityEvalu
     {
         var scenes = projection.Blueprint.Scenes;
         if (scenes.Any(s => string.IsNullOrWhiteSpace(s.SceneId) || s.SceneNumber <= 0) ||
-            scenes.Select(x => x.SceneId).Distinct(StringComparer.Ordinal).Count() != scenes.Count)
+            scenes.Select(x => x.SceneId).Distinct(StringComparer.Ordinal).Count() != scenes.Count ||
+            !scenes.Select(x => x.SceneNumber).Order().SequenceEqual(Enumerable.Range(1, scenes.Count)))
             return (false, null, $"Invalid or duplicate {variant} source scene IDs/sequences.");
         if (projection.SceneTraceability.Any(x => string.IsNullOrWhiteSpace(x.SceneId)) ||
             projection.SceneTraceability.GroupBy(x => x.SceneId, StringComparer.Ordinal).Any(g => g.Count() != 1))
@@ -152,7 +153,14 @@ public sealed class Phase6InputAuthorityEvaluator(IPhase4CommittedAuthorityEvalu
                 string.IsNullOrWhiteSpace(scene.Transition.TransitionIntent) || scene.KnowledgeReferences.Count == 0 ||
                 scene.KnowledgeReferences.Count(x => x.IsPrimary) != 1 || evidence.MinimumDurationSeconds <= 0 ||
                 evidence.MaximumDurationSeconds < evidence.MinimumDurationSeconds || scene.EstimatedDurationSeconds < evidence.MinimumDurationSeconds ||
-                scene.EstimatedDurationSeconds > evidence.MaximumDurationSeconds)
+                scene.EstimatedDurationSeconds > evidence.MaximumDurationSeconds || intent.Sequence != scene.SceneNumber ||
+                intent.NarrativeStage != scene.NarrativeStage || intent.SceneRole != scene.SceneRole ||
+                !string.Equals(intent.ViewerQuestionId, evidence.PrimaryViewerQuestionId, StringComparison.Ordinal) ||
+                !string.Equals(intent.LearningObjectiveId, evidence.LearningObjectiveId, StringComparison.Ordinal) ||
+                intent.EstimatedDurationSeconds != scene.EstimatedDurationSeconds ||
+                !intent.KnowledgeReferenceIds.Order(StringComparer.Ordinal).SequenceEqual(
+                    scene.KnowledgeReferences.Select(x => x.KnowledgeEntryId).Order(StringComparer.Ordinal), StringComparer.Ordinal) ||
+                intent.EditorialOutcome != scene.EditorialOutcome || intent.TransitionIntent != scene.Transition)
                 return (false, null, $"Invalid certified evidence for {variant} scene '{scene.SceneId}'.");
             var checksum = Phase5SemanticChecksum.Calculate(scene);
             if (string.IsNullOrWhiteSpace(checksum)) return (false, null, $"Missing semantic checksum for {variant} scene '{scene.SceneId}'.");
