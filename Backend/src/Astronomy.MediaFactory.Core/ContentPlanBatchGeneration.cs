@@ -429,6 +429,34 @@ public sealed record ProductionPhaseResult(
     public string? ReasonCode { get; init; }
 }
 
+/// <summary>Canonical classification for completion of a requested production-phase range.</summary>
+public static class ProductionPhaseSatisfaction
+{
+    private static readonly HashSet<string> SatisfiedReuseReasonCodes = new(StringComparer.Ordinal)
+    {
+        "P1_RESUME_REUSABLE",
+        "P1_RESUME_RECOVERED_AUTHORITY",
+        "P1_COMPATIBILITY_REPAIRED",
+        "P1_MANIFEST_REPAIRED",
+        "P1_VALIDATION_REPAIRED",
+        "P2_REUSED",
+        "P3_REUSED",
+        "P3_RECOVERED",
+        "P4REUSE_VALID",
+        "P4PUB_ALREADY_PUBLISHED",
+        "P5REUSE_VALID",
+        "P5PUB_ALREADY_PUBLISHED",
+        "P6REUSE_VALID"
+    };
+
+    public static bool IsSatisfied(ProductionPhaseResult result) =>
+        result.Status == ProductionPhaseStatus.Succeeded ||
+        result.Status == ProductionPhaseStatus.Skipped && IsRecognizedReuse(result);
+
+    public static bool IsRecognizedReuse(ProductionPhaseResult result) =>
+        result.ReasonCode is not null && SatisfiedReuseReasonCodes.Contains(result.ReasonCode);
+}
+
 public interface IProductionPhase
 {
     int PhaseNo { get; }
@@ -540,7 +568,9 @@ public sealed record SuccessAggregationDiagnostics(
     bool Success = false,
     bool PartialPhaseSuccess = false,
     int FailedPlans = 0,
-    string SuccessAggregationMode = "PartialPhaseRange");
+    string SuccessAggregationMode = "PartialPhaseRange",
+    IReadOnlyList<int>? SatisfiedPhaseNumbers = null,
+    IReadOnlyList<int>? ReusedPhaseNumbers = null);
 
 public sealed record RequestedOutputCompletion(
     string OutputType,

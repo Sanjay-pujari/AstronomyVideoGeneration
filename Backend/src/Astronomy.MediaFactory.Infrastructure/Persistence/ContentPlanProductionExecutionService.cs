@@ -317,31 +317,40 @@ public sealed class ContentPlanProductionExecutionService(
     {
         var requestedStartPhase = request.StartPhaseNo.HasValue ? Math.Clamp(request.StartPhaseNo.Value, 1, 20) : (int?)null;
         var requestedEndPhase = request.EndPhaseNo.HasValue ? Math.Clamp(request.EndPhaseNo.Value, requestedStartPhase ?? 1, 20) : (int?)null;
-        var executedResults = (phaseResults ?? [])
-            .Where(result => result.Status != ProductionPhaseStatus.Skipped)
+        var inRange = (phaseResults ?? [])
+            .Where(result => (!requestedStartPhase.HasValue || result.PhaseNo >= requestedStartPhase) &&
+                             (!requestedEndPhase.HasValue || result.PhaseNo <= requestedEndPhase))
+            .OrderBy(result => result.PhaseNo)
             .ToArray();
-        var executed = executedResults
+        var reusedResults = inRange.Where(ProductionPhaseSatisfaction.IsRecognizedReuse).ToArray();
+        var satisfiedResults = inRange.Where(ProductionPhaseSatisfaction.IsSatisfied).ToArray();
+        // Executed means the production body ran; reuse is reported separately even when a
+        // legacy phase convention represents reuse with Succeeded rather than Skipped.
+        var executed = inRange
+            .Where(result => !ProductionPhaseSatisfaction.IsRecognizedReuse(result) && result.Status != ProductionPhaseStatus.Skipped)
             .Select(result => result.PhaseNo)
             .Distinct()
             .OrderBy(phaseNo => phaseNo)
             .ToArray();
-        var failed = executedResults
+        var failed = inRange
             .Where(result => result.Status == ProductionPhaseStatus.Failed)
             .Select(result => result.PhaseNo)
             .Distinct()
             .OrderBy(phaseNo => phaseNo)
             .ToArray();
-        var allSucceeded = executedResults.Length > 0 && executedResults.All(result => result.Status == ProductionPhaseStatus.Succeeded);
+        var allSucceeded = inRange.Length > 0 && inRange.All(ProductionPhaseSatisfaction.IsSatisfied);
         var outOfScope = (requestedOutputCompletion ?? [])
             .Where(output => string.Equals(output.Status, "OutOfScope", StringComparison.OrdinalIgnoreCase) || string.Equals(output.Status, "NotRun", StringComparison.OrdinalIgnoreCase))
             .Select(output => output.OutputType)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(output => output, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var lastCompletedPhaseNo = CalculateLastCompletedPhaseNo(executedResults);
+        var satisfied = satisfiedResults.Select(result => result.PhaseNo).Distinct().OrderBy(x => x).ToArray();
+        var reused = reusedResults.Select(result => result.PhaseNo).Distinct().OrderBy(x => x).ToArray();
+        var lastCompletedPhaseNo = satisfied.Cast<int?>().LastOrDefault();
         var lastFailedPhaseNo = failed.Cast<int?>().LastOrDefault();
         var success = allSucceeded && failed.Length == 0;
-        return new(requestedStartPhase, requestedEndPhase, executed, allSucceeded, failed, outOfScope, lastCompletedPhaseNo, lastFailedPhaseNo, success, success, success ? 0 : 1, "PartialPhaseRange");
+        return new(requestedStartPhase, requestedEndPhase, executed, allSucceeded, failed, outOfScope, lastCompletedPhaseNo, lastFailedPhaseNo, success, success, success ? 0 : 1, "PartialPhaseRange", satisfied, reused);
     }
 
     public static IReadOnlyList<string> BuildAuthoritativeErrors(IReadOnlyList<string>? orchestrationErrors, IReadOnlyList<ProductionPhaseResult>? phaseResults)
@@ -373,12 +382,12 @@ public sealed class ContentPlanProductionExecutionService(
 
     private static int? CalculateLastCompletedPhaseNo(IReadOnlyList<ProductionPhaseResult> phaseResults)
     {
-        var ordered = phaseResults.Where(p => p.Status != ProductionPhaseStatus.Skipped).OrderBy(p => p.PhaseNo).ToArray();
+        var ordered = phaseResults.OrderBy(p => p.PhaseNo).ToArray();
         int? last = null;
         foreach (var phase in ordered)
         {
             if (phase.Status == ProductionPhaseStatus.Failed) break;
-            if (phase.Status == ProductionPhaseStatus.Succeeded) last = phase.PhaseNo;
+            if (ProductionPhaseSatisfaction.IsSatisfied(phase)) last = phase.PhaseNo;
         }
         return last;
     }

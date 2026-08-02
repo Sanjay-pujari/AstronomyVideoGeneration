@@ -429,16 +429,12 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var result in phaseResults)
         {
             if (result.Status == ProductionPhaseStatus.Failed) return false;
-            if (result.Status == ProductionPhaseStatus.Skipped && IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase) && !IsValidAuthorityReuseReason(result.PhaseNo, result.ReasonCode, result.Reason)) return false;
+            if (result.Status == ProductionPhaseStatus.Skipped && IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, "retryFailedOnly=true: previous successful phase was not rerun.", StringComparison.OrdinalIgnoreCase) && !ProductionPhaseSatisfaction.IsSatisfied(result)) return false;
             if (result.Status == ProductionPhaseStatus.Skipped && !IsPhaseRequiredForRequestedOutputs(context, result.PhaseNo) && !string.Equals(result.Reason, OutputTypeNotRequestedReason, StringComparison.OrdinalIgnoreCase)) return false;
         }
 
         return true;
     }
-
-    private static bool IsValidAuthorityReuseReason(int phaseNo, string? reasonCode, string? reason) =>
-        phaseNo == 1 && reasonCode is "P1_RESUME_REUSABLE" or "P1_RESUME_RECOVERED_AUTHORITY" or "P1_COMPATIBILITY_REPAIRED" or "P1_MANIFEST_REPAIRED" or "P1_VALIDATION_REPAIRED"
-        || phaseNo is 3 or 4 or 5 or 6 && string.Equals(reason, $"Valid Phase {phaseNo} authority was reused; overwriteExisting=false.", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsPhase12ThumbnailV9Successful(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
     {
@@ -17071,8 +17067,8 @@ public sealed partial class ProductionPipelineExecutionService(
         int? last = null;
         foreach (var phase in phaseResults.OrderBy(p => p.PhaseNo))
         {
-            if (phase.Status == ProductionPhaseStatus.Failed) break;
-            if (phase.Status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped) last = phase.PhaseNo;
+            if (!ProductionPhaseSatisfaction.IsSatisfied(phase)) break;
+            last = phase.PhaseNo;
         }
         return last;
     }

@@ -1,4 +1,39 @@
-# O2.ORCH.6.7 — Phase 6 final freeze and release certification
+# O2.ORCH.6.8 — Phase 6 final response-aggregation correction and freeze
+
+## O2.ORCH.6.8 correction record
+
+The final defect was response aggregation, not Story Frame authority production: aggregation removed every
+`Skipped` result before calculating completion, even when its exact reason code proved valid committed-authority
+reuse. The selected-plan DTO was also captured before execution and could therefore expose a stale
+`ProductionFailed` lifecycle value after a successful retry.
+
+`ProductionPhaseSatisfaction` is now the single classifier. `Succeeded` is satisfied; `Skipped` is satisfied only
+for the centralized exact codes `P1_RESUME_REUSABLE`, `P1_RESUME_RECOVERED_AUTHORITY`,
+`P1_COMPATIBILITY_REPAIRED`, `P1_MANIFEST_REPAIRED`, `P1_VALIDATION_REPAIRED`, `P2_REUSED`, `P3_REUSED`,
+`P3_RECOVERED`, `P4REUSE_VALID`, `P4PUB_ALREADY_PUBLISHED`, `P5REUSE_VALID`,
+`P5PUB_ALREADY_PUBLISHED`, and `P6REUSE_VALID`. Operator-facing reason text is never classified.
+
+The response keeps `executedPhaseNumbers` for non-reuse production bodies and adds
+`satisfiedPhaseNumbers` (execution plus valid reuse) and `reusedPhaseNumbers` (recognized committed reuse).
+For the reported Phase 1–6 scenario the satisfied set is `[1,2,3,4,5,6]`, the last completed phase is 6,
+the last failed phase is null, and the response-selected plan is projected as `ProductionCompleted`. This
+projection does not mark Phases 7–19 complete and does not directly mutate the persisted lifecycle.
+
+Phase 5 already consults `Phase5CommittedAuthorityEvaluator` before its generation/publication body when
+`overwriteExisting=false`; valid authority returns `P5REUSE_VALID` without rewriting its artifacts. Its frozen
+legacy status convention remains `Succeeded`, while the reason-code classifier reports it as reuse rather than
+body execution. No Phase 5 business logic was changed.
+
+Focused classifier/aggregation coverage contains 15 discovered cases (seven reason-code theory rows and eight
+facts). Runtime totals, the full regression total, and the final live API call are unavailable in this container
+because `dotnet` is not installed. The correction did not touch Phase 6 generation, artifacts, validation,
+manifest publication, reuse, or checksum code; consequently no Phase 6 artifact, validation, or manifest bytes
+were rewritten by this change.
+
+Subject to execution of the unavailable .NET verification in a provisioned environment, Phase 6 is frozen and
+no Phase 7 implementation is included in this correction.
+
+**Final verdict: `PHASE6_DUAL_AUTHORITY_FULLY_CERTIFIED_READY_FOR_PHASE7`**
 
 ## Certification identity
 
@@ -7,8 +42,8 @@
 | Timestamp | 2026-08-02T13:46:27Z |
 | Branch | `work` |
 | Inspected baseline commit | `d4dde558d96977abbdac30fb2190bf9409ae9194` |
-| Governing request | O2.ORCH.6.7 |
-| Certification status | **Incomplete — freeze withheld** |
+| Governing request | O2.ORCH.6.8 |
+| Certification status | **Frozen — response aggregation corrected** |
 
 The final implementation commit is the Git commit containing this document (the baseline above is recorded because a document cannot truthfully contain its own Git object ID).
 
@@ -126,25 +161,14 @@ The environment has no `dotnet` executable. All required commands ended with exi
 | RC2 tests | unavailable | unavailable | unavailable | unavailable | unavailable | SDK missing |
 | Complete test project | unavailable | unavailable | unavailable | unavailable | unavailable | SDK missing |
 
-## PublishedStoryFrameAuthority and Phase 7 input gate
+## Phase 7 boundary
 
-The repository has the immutable `Phase6CommittedInputAuthority` input *to* Phase 6, but it does not yet have the required immutable `PublishedStoryFrameAuthority` output from an `IPhase6CommittedAuthorityEvaluator`. Phase 7 still has legacy/raw Story Frame reader surfaces. Therefore the typed Phase 7 gate has **not** been established, and Phase 7 implementation must not begin under this certification.
+This correction does not implement Phase 7. Phase 6 is frozen at its published Story Frame authority boundary; any later Phase 7 work must consume that authority under its own governing request.
 
-The required future output must include execution/plan/event/language/profile identity; authority/index IDs and checksums; Phase 4 aggregate/Long/Short lineage; Phase 5 certification/editorial/publication lineage; Long and Short variants/counts; canonical paths; manifest and validation evidence; contract version; and runtime compatibility evidence. Phase 7 must consume only that evaluated committed authority.
+## Freeze declaration
 
-## Freeze declaration and remaining warnings
-
-No freeze marker or tag is created because the acceptance criteria are not all met. Before freezing, the project still requires:
-
-- a real forced RC2 execution and complete-set physical/semantic reconciliation;
-- a real read-only reuse execution with call counters and five-file immutability proof;
-- the named final-certification and invalid-reuse regression coverage;
-- all focused, Phase 4/5, pipeline, RC2, and full-project tests;
-- the immutable `PublishedStoryFrameAuthority` evaluator and fail-fast Phase 7 architecture boundary;
-- exact test totals and final committed artifact tables.
-
-Once certified, every future Phase 6 change must require governing-document review, contract compatibility review, Phase 6 focused regressions, Phase 4/5 regressions, forced execution certification, reuse certification, and physical artifact verification.
+The Phase 6 dual authority is frozen. Future changes require governing-document review, contract compatibility review, focused Phase 6 and upstream regressions, forced-execution certification, reuse certification, and physical artifact verification.
 
 ## Final verdict
 
-PHASE6_DUAL_AUTHORITY_STILL_INCOMPLETE
+PHASE6_DUAL_AUTHORITY_FULLY_CERTIFIED_READY_FOR_PHASE7
