@@ -69,3 +69,35 @@ No runtime output package containing the stated canonical authority was present 
 ## Final verdict
 
 **PHASE6_CERTIFICATION_STILL_INCOMPLETE**
+
+---
+
+# O2.ORCH.6.5 cleanup addendum
+
+## Legacy routes and writers removed
+
+The RC2 batch orchestrator no longer injects or calls `CreativeStoryboardBuilder` for Phase 6. Its overlay execution method, legacy Phase 6 payload builder, validation writer, manifest upsert, response replacement, and legacy diagnostic/manifest parsing helpers were removed. The production pipeline result is now passed through without a second Phase 6 execution or metadata write.
+
+## Cleanup and canonical validation
+
+Forced Phase 6 execution runs an exact ten-file allow-list cleanup for obsolete creative and short/long story-frame metadata. It deletes an owned parent only if empty and never recursively removes unrelated content. The canonical validation now explicitly publishes the reason, reuse state, profile contract version, both API-compatible and governing authority identity/checksum names, physical-checksum and runtime-compatibility gates, and canonical artifact paths.
+
+## Files modified in O2.ORCH.6.5
+
+- `Backend/src/Astronomy.MediaFactory.Infrastructure/Orchestration/RC2/Rc2ContentPlanningBatchOrchestrator.cs`
+- `Backend/src/Astronomy.MediaFactory.Infrastructure/Persistence/ProductionPipelineExecutionService.cs`
+- `Backend/tests/Astronomy.MediaFactory.Tests/Rc2StoryIntelligenceTests.cs`
+- `Backend/tests/Astronomy.MediaFactory.Tests/ProductionPipelinePhase6RoutingTests.cs`
+- `docs/implementation/o2-orch-phase-6-final-certification.md`
+
+## File added
+
+- `docs/implementation/o2-orch-phase-6-legacy-removal-audit.md`
+
+## Verification and remaining warnings
+
+The container has no .NET SDK, so `dotnet build`, focused/full tests, forced API execution, reuse execution, exact totals, generated artifact SHA-256/size evidence, and runtime transaction-residue checks are unavailable. Source inspection confirms the duplicate RC2 overlay was removed. The standalone typed `IPhase6CommittedAuthorityEvaluator`, complete metadata transaction coordinator, and typed Phase 7 boundary called for by O2.ORCH.6.5 are not present; legacy Phase 7 readers remain isolated but not migrated. It would be inaccurate to claim full certification.
+
+## O2.ORCH.6.5 final verdict
+
+**PHASE6_CERTIFICATION_STILL_INCOMPLETE**

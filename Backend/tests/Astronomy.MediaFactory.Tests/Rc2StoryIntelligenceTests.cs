@@ -245,7 +245,6 @@ public sealed class Rc2NarrationV5OrchestrationTests
         var response = await new Rc2ContentPlanningBatchOrchestrator(
             new StubBatchGenerationService(BuildBaseResponse(root)),
             new Rc2PipelinePhaseRegistry(),
-            new CreativeStoryboardBuilder(NullLogger<CreativeStoryboardBuilder>.Instance),
             new StubCertifiedExecutionStatusReader(),
             NullLogger<Rc2ContentPlanningBatchOrchestrator>.Instance)
             .GenerateFromPlansAsync(request, CancellationToken.None);
@@ -372,7 +371,6 @@ public sealed class Rc2NarrationV5OrchestrationTests
         var response = await new Rc2ContentPlanningBatchOrchestrator(
             new StubBatchGenerationService(baseResponse),
             new Rc2PipelinePhaseRegistry(),
-            new CreativeStoryboardBuilder(NullLogger<CreativeStoryboardBuilder>.Instance),
             new StubCertifiedExecutionStatusReader(),
             NullLogger<Rc2ContentPlanningBatchOrchestrator>.Instance)
             .GenerateFromPlansAsync(new BatchGenerateFromPlansRequest(2026, "US", UseProductionPipeline: true, PlanId: planId, StartPhaseNo: 6, EndPhaseNo: 8), CancellationToken.None);

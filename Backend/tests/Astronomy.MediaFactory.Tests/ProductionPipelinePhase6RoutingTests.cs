@@ -15,6 +15,16 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class ProductionPipelinePhase6RoutingTests
 {
     [Fact]
+    public void CurrentPhase6_HasNoLegacyAuthorityDependenciesInRc2ApiOrchestrator()
+    {
+        var constructor = typeof(Rc2ContentPlanningBatchOrchestrator).GetConstructors().Single();
+
+        Assert.DoesNotContain(constructor.GetParameters(), parameter =>
+            parameter.ParameterType == typeof(CreativeStoryboardBuilder));
+        Assert.DoesNotContain("Creative Intelligence", constructor.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ServiceCollection_RegistersExactlyOnePhase6InputAuthorityEvaluator()
     {
         var registration = Assert.Single(BuildServices().Where(x =>
