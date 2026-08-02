@@ -809,7 +809,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var outcome = await ExecuteLockedPhase6Async(context, cancellationToken);
             var status = outcome.Kind == StoryFramePhase6ExecutionKind.Reused ? ProductionPhaseStatus.Skipped : ProductionPhaseStatus.Succeeded;
-            return await WritePhaseValidationAsync(context, 6, phaseName, status, [], outcome.OutputFiles, outcome.Warnings, [], outcome.Reason, false, cancellationToken, started);
+            return await WriteCanonicalPhase6ValidationAsync(context, status, outcome, started, cancellationToken);
         }
         catch (Phase6InputAuthorityException ex)
         {
@@ -820,6 +820,68 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             return await WritePhaseValidationAsync(context, 6, phaseName, ProductionPhaseStatus.Failed, [], [], [], [ex.Message], ex.Message, true, cancellationToken, started);
         }
+    }
+
+    /// <summary>
+    /// The canonical Story Frame publication is the only successful Phase 6 validation writer.
+    /// In particular, it must never flow through the former Creative Intelligence validation
+    /// projection, whose fields describe a different and now retired authority.
+    /// </summary>
+    private async Task<ProductionPhaseResult> WriteCanonicalPhase6ValidationAsync(
+        ProductionPhaseContext context, ProductionPhaseStatus status, StoryFramePhase6ExecutionOutcome outcome,
+        DateTimeOffset started, CancellationToken cancellationToken)
+    {
+        var authorityPath = Path.Combine(context.OutputRoot, "06-story-frames", "story-frames.json");
+        var indexPath = Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-index.json");
+        var diagnosticsPath = Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-diagnostics.json");
+        var validationPath = Path.Combine(context.OutputRoot, "validation", "phase-06-validation.json");
+        var authority = await ReadRequiredJsonAsync<StoryFramesAuthority>(authorityPath, cancellationToken);
+        var index = await ReadRequiredJsonAsync<StoryFrameIndex>(indexPath, cancellationToken);
+        var diagnostics = await ReadRequiredJsonAsync<StoryFrameDiagnostics>(diagnosticsPath, cancellationToken);
+        var input = await _phase6InputAuthorityEvaluator.EvaluateAsync(new(context.OutputRoot, authority.ExecutionId,
+            authority.PlanId, authority.EventId, authority.Language, authority.RequestedVariants), cancellationToken);
+        if (!input.IsValid || input.Authority is null)
+            throw new Phase6InputAuthorityException(input.ReasonCode, input.Errors);
+
+        var committed = input.Authority;
+        var longCount = authority.Frames.Count(frame => frame.Variant.Equals("Long", StringComparison.OrdinalIgnoreCase));
+        var shortCount = authority.Frames.Count(frame => frame.Variant.Equals("Short", StringComparison.OrdinalIgnoreCase));
+        var reasonCode = outcome.Kind == StoryFramePhase6ExecutionKind.Reused ? "P6REUSE_VALID" : "P6AUTH_COMMITTED";
+        var finished = DateTimeOffset.UtcNow;
+        var relativeOutputs = new[] { "06-story-frames/story-frames.json", "06-story-frames/story-frame-index.json", "06-story-frames/story-frame-diagnostics.json" };
+        Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        {
+            phaseNo = 6, phaseName = "Story Frames Authority", status = status.ToString(), reasonCode,
+            validationStatus = "Valid", publicationCommitted = true, committedStateValidationPassed = true,
+            authority.ExecutionId, authority.PlanId, authority.EventId, authority.Language, authority.Profile,
+            authority.RequestedVariants,
+            sourcePhase4AggregateId = committed.AggregateId, sourcePhase4Checksum = committed.AggregateChecksum,
+            sourceLongChecksum = committed.LongProjectionChecksum, sourceShortChecksum = committed.ShortProjectionChecksum,
+            sourceCertificationId = committed.CertificationId, sourceCertificationChecksum = committed.CertificationChecksum,
+            sourceEditorialContractId = committed.EditorialContractId,
+            sourceEditorialContractChecksum = committed.EditorialContractChecksum,
+            sourcePhase5PublicationId = committed.Phase5PublicationId,
+            authority.AuthorityId, authorityChecksum = authority.SemanticChecksum, index.IndexId,
+            indexChecksum = index.Checksum, diagnostics.DiagnosticsContractVersion,
+            longStoryFramesRequested = authority.RequestedVariants.Contains("Long", StringComparer.OrdinalIgnoreCase),
+            shortStoryFramesRequested = authority.RequestedVariants.Contains("Short", StringComparer.OrdinalIgnoreCase),
+            longStoryFramesGenerated = longCount > 0, shortStoryFramesGenerated = shortCount > 0,
+            longStoryFrameCount = longCount, shortStoryFrameCount = shortCount, totalFrameCount = authority.Frames.Count,
+            semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true,
+            lineageValidationPassed = true, relationshipValidationPassed = true,
+            narrationOwnershipValidationPassed = true, variantCoverageValidationPassed = true,
+            canonicalOrderingValidationPassed = true, errors = Array.Empty<string>(), warnings = outcome.Warnings,
+            inputFiles = StoryFrameCommittedInputDiagnostics.ArtifactPaths(committed), outputFiles = relativeOutputs,
+            startedUtc = started, finishedUtc = finished
+        }, JsonOptions), cancellationToken);
+
+        return new ProductionPhaseResult(6, "Story Frames Authority", status, started, finished,
+            (long)(finished - started).TotalMilliseconds,
+            StoryFrameCommittedInputDiagnostics.ArtifactPaths(committed), relativeOutputs, "validation/phase-06-validation.json",
+            outcome.Warnings, [], false, outcome.Kind == StoryFramePhase6ExecutionKind.Reused
+                ? "Valid committed Phase 6 Story Frame authority was reused."
+                : "Phase 6 Story Frame authority committed.") { ReasonCode = reasonCode };
     }
 
 
@@ -16336,12 +16398,16 @@ public sealed partial class ProductionPipelineExecutionService(
             new { relativePath = "05-editorial/pause-test-report.json", role = "SupportingValidation" }
         }.Select(x => new { x.relativePath, x.role, physicalPath=Path.Combine(context.OutputRoot,x.relativePath.Replace('/',Path.DirectorySeparatorChar)) })
         .Where(x => File.Exists(x.physicalPath)).Select(x => new { x.relativePath, x.role, semanticChecksum = ReadSemanticChecksum(x.physicalPath), physicalSha256 = PhysicalChecksum(x.physicalPath), size = new FileInfo(x.physicalPath).Length, sourcePhase4Checksum = context.ExecutionContext.PublishedDocumentaryBlueprintAggregate?.DeterministicChecksum }).ToArray();
+        // This is a governing inventory, not a convenience list of absolute file names.
+        // Physical evidence is captured at publication time so resume/readback can detect
+        // both semantic and byte-level substitution.
+        var phase6ValidationEvidence = ReadPhase6ValidationEvidence(context.OutputRoot);
         var phase6Artifacts = new[]
         {
-            new { path = NormalizePath(Path.Combine(context.OutputRoot, "06-story-frames", "story-frames.json")), role = "Authoritative" },
-            new { path = NormalizePath(Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-index.json")), role = "DownstreamContract" },
-            new { path = NormalizePath(Path.Combine(context.OutputRoot, "06-story-frames", "story-frame-diagnostics.json")), role = "Supporting" }
-        }.Where(x => File.Exists(x.path)).ToArray();
+            BuildPhase6ManifestArtifact(context.OutputRoot, "06-story-frames/story-frames.json", "CanonicalAuthority", "semanticChecksum", "authorityContractVersion", phase6ValidationEvidence),
+            BuildPhase6ManifestArtifact(context.OutputRoot, "06-story-frames/story-frame-index.json", "DownstreamContract", "checksum", "indexContractVersion", phase6ValidationEvidence),
+            BuildPhase6ManifestArtifact(context.OutputRoot, "06-story-frames/story-frame-diagnostics.json", "SupportingDiagnostics", null, "diagnosticsContractVersion", phase6ValidationEvidence)
+        }.Where(x => x is not null).ToArray();
         var generatedManifestJson = JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, phase1Artifacts, phase2Artifacts, currentRunArtifacts=filesGeneratedThisRun, existingDependencies=context.DryRun?Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).Where(File.Exists).Select(NormalizePath).ToArray():Array.Empty<string>(), phasesGenerated=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Succeeded).Select(x=>x.PhaseNo).ToArray(), phasesReused=phaseResults.Where(x=>!context.DryRun&&x.Status==ProductionPhaseStatus.Skipped&&x.OutputFiles.Count>0).Select(x=>x.PhaseNo).ToArray(), phasesFailed=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Failed).Select(x=>x.PhaseNo).ToArray(), phasesDryRunSkipped=context.DryRun?phaseResults.Select(x=>x.PhaseNo).ToArray():Array.Empty<int>(), phasesNotRequested=PhaseDefinitionsStatic().Where(x=>x<context.StartPhaseNo||x>context.EndPhaseNo).ToArray(), executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
             cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
@@ -16369,6 +16435,37 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         catch (JsonException) { return false; }
         catch (IOException) { return false; }
+    }
+
+    private static JsonObject ReadPhase6ValidationEvidence(string outputRoot)
+    {
+        var path = Path.Combine(outputRoot, "validation", "phase-06-validation.json");
+        try { return JsonNode.Parse(File.ReadAllText(path))?.AsObject() ?? new JsonObject(); }
+        catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException) { return new JsonObject(); }
+    }
+
+    private static JsonObject? BuildPhase6ManifestArtifact(string outputRoot, string relativePath, string role,
+        string? semanticProperty, string contractProperty, JsonObject validation)
+    {
+        if (Path.IsPathRooted(relativePath) || relativePath.Contains("..", StringComparison.Ordinal)) return null;
+        var physicalPath = Path.Combine(outputRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(physicalPath)) return null;
+        var artifact = JsonNode.Parse(File.ReadAllText(physicalPath))?.AsObject() ?? new JsonObject();
+        string? Value(string name) => artifact[name]?.GetValue<string>();
+        string? Evidence(string name) => validation[name]?.GetValue<string>();
+        return new JsonObject
+        {
+            ["relativePath"] = relativePath, ["role"] = role, ["required"] = true,
+            ["semanticChecksum"] = semanticProperty is null ? Evidence("authorityChecksum") : Value(semanticProperty),
+            ["physicalSha256"] = PhysicalChecksum(physicalPath), ["sizeBytes"] = new FileInfo(physicalPath).Length,
+            ["sourcePhase4Checksum"] = Evidence("sourcePhase4Checksum"),
+            ["sourceLongChecksum"] = Evidence("sourceLongChecksum"),
+            ["sourceShortChecksum"] = Evidence("sourceShortChecksum"),
+            ["sourceCertificationChecksum"] = Evidence("sourceCertificationChecksum"),
+            ["sourceEditorialContractChecksum"] = Evidence("sourceEditorialContractChecksum"),
+            ["sourcePhase5PublicationId"] = Evidence("sourcePhase5PublicationId"),
+            ["artifactContractVersion"] = Value(contractProperty)
+        };
     }
 
     private static async Task WritePhase1StagedManifestAsync(Phase1ManifestStagingContext staging,CancellationToken cancellationToken)
