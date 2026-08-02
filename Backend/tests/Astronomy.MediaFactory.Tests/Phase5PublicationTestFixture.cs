@@ -20,9 +20,14 @@ internal sealed class Phase5PublicationTestFixture : IDisposable
         var source = Phase5CertificationFixture.Create();
         CertificationRequest = source.Request;
         Candidate = source.Result;
+        // The adapter is the single projection boundary between the published Phase 4
+        // aggregate and Phase 5.  In particular, do not build a second, equivalent-
+        // looking Long/Short projection here: the certification service certifies the
+        // adapter projections and the committed evaluator must be given those checksums.
         Expected = new(source.PublishedPhase4.AggregateId, source.PublishedPhase4.DeterministicChecksum,
-            source.PublishedPhase4.LongVariant.DeterministicChecksum, source.PublishedPhase4.ShortVariant.DeterministicChecksum);
+            CertificationRequest.Long.Metadata.Checksum, CertificationRequest.Short.Metadata.Checksum);
         Request = new(Root, CertificationRequest, Candidate, Expected, "Editorial certification", DateTimeOffset.UtcNow);
+        ValidateFixtureLineage();
     }
 
     public Phase5PublicationTransactionCoordinator Coordinator(IPhase5CommittedAuthorityEvaluator? evaluator = null,
@@ -35,8 +40,43 @@ internal sealed class Phase5PublicationTestFixture : IDisposable
 
     public async Task PublishValidAsync()
     {
+        ValidateFixtureLineage();
         var result = await Coordinator().PublishAsync(Request);
-        Assert.True(result.Succeeded, string.Join("; ", result.Errors));
+        Assert.True(result.Succeeded, $"""
+            ReasonCode: {result.ReasonCode}
+            Reason: {result.Reason}
+            Errors: {string.Join("; ", result.Errors)}
+            Expected Phase 4 aggregate checksum: {Request.ExpectedPhase4.AggregateChecksum}
+            Expected Long checksum: {Request.ExpectedPhase4.LongChecksum}
+            Expected Short checksum: {Request.ExpectedPhase4.ShortChecksum}
+            Candidate aggregate checksum: {Candidate.Certification.SourcePhase4Checksum}
+            Candidate Long checksum: {Candidate.Certification.SourceLongBlueprintChecksum}
+            Candidate Short checksum: {Candidate.Certification.SourceShortBlueprintChecksum}
+            """);
+    }
+
+    public void ValidateFixtureLineage()
+    {
+        Assert.Equal(Request.ExpectedPhase4.AggregateChecksum, Candidate.Certification.SourcePhase4Checksum);
+        Assert.Equal(Request.ExpectedPhase4.LongChecksum, Candidate.Certification.SourceLongBlueprintChecksum);
+        Assert.Equal(Request.ExpectedPhase4.ShortChecksum, Candidate.Certification.SourceShortBlueprintChecksum);
+        Assert.Equal(Request.ExpectedPhase4.AggregateChecksum, Candidate.EditorialContract.SourcePhase4Checksum);
+        Assert.Equal(Request.ExpectedPhase4.AggregateChecksum, Candidate.Diagnostics.SourcePhase4Checksum);
+
+        var projections = new[]
+        {
+            (Candidate.Validation.SourceAggregateChecksum, Candidate.Validation.SourceLongChecksum, Candidate.Validation.SourceShortChecksum),
+            (Candidate.SceneIntents.SourceAggregateChecksum, Candidate.SceneIntents.SourceLongChecksum, Candidate.SceneIntents.SourceShortChecksum),
+            (Candidate.Coverage.SourceAggregateChecksum, Candidate.Coverage.SourceLongChecksum, Candidate.Coverage.SourceShortChecksum),
+            (Candidate.Transitions.SourceAggregateChecksum, Candidate.Transitions.SourceLongChecksum, Candidate.Transitions.SourceShortChecksum),
+            (Candidate.PauseTest.SourceAggregateChecksum, Candidate.PauseTest.SourceLongChecksum, Candidate.PauseTest.SourceShortChecksum)
+        };
+        Assert.All(projections, lineage =>
+        {
+            Assert.Equal(Request.ExpectedPhase4.AggregateChecksum, lineage.SourceAggregateChecksum);
+            Assert.Equal(Request.ExpectedPhase4.LongChecksum, lineage.SourceLongChecksum);
+            Assert.Equal(Request.ExpectedPhase4.ShortChecksum, lineage.SourceShortChecksum);
+        });
     }
 
     public Task<Phase5CommittedStateEvaluation> EvaluateAsync(Phase5ExpectedPhase4Authority? expected = null,
@@ -61,31 +101,47 @@ internal sealed class Phase5PublicationTestFixture : IDisposable
     public void Dispose() { if (Directory.Exists(Root)) Directory.Delete(Root, true); }
 }
 
+internal enum Phase5FileSystemOperation
+{
+    CreateDirectory, ReadAllBytes, ReadAllText, WriteAllText, CopyFile, MoveFile,
+    MoveDirectory, DeleteFile, DeleteDirectory, GetFiles, GetFileLength
+}
+
+internal sealed record Phase5FileSystemCall(Phase5FileSystemOperation Operation,
+    string PrimaryPath, string? SecondaryPath, int Sequence);
+
 internal sealed class FaultInjectingPhase5PublicationFileSystem : IPhase5PublicationFileSystem
 {
     private readonly IPhase5PublicationFileSystem inner = new Phase5PublicationFileSystem();
-    public Func<string, bool>? Fail { get; init; }
-    public List<string> Operations { get; } = [];
-    private void Hit(string operation) { Operations.Add(operation); if (Fail?.Invoke(operation) == true) throw new IOException($"Injected {operation} failure"); }
+    public Func<Phase5FileSystemCall, bool>? ShouldFail { get; init; }
+    public List<Phase5FileSystemCall> Calls { get; } = [];
+    private void Hit(Phase5FileSystemOperation operation, string primary, string? secondary = null)
+    {
+        var call = new Phase5FileSystemCall(operation, primary, secondary, Calls.Count + 1);
+        Calls.Add(call);
+        if (ShouldFail?.Invoke(call) == true)
+            throw new IOException($"Injected {operation} failure for '{primary}'" + (secondary is null ? "." : $" -> '{secondary}'."));
+    }
     public bool FileExists(string p) => inner.FileExists(p); public bool DirectoryExists(string p) => inner.DirectoryExists(p);
-    public void CreateDirectory(string p) { Hit($"CreateDirectory:{p}"); inner.CreateDirectory(p); }
-    public async Task<byte[]> ReadAllBytesAsync(string p, CancellationToken t) { Hit($"ReadAllBytes:{p}"); return await inner.ReadAllBytesAsync(p,t); }
-    public async Task<string> ReadAllTextAsync(string p, CancellationToken t) { Hit($"ReadAllText:{p}"); return await inner.ReadAllTextAsync(p,t); }
-    public async Task WriteAllTextAsync(string p,string c,CancellationToken t) { Hit($"WriteAllText:{p}"); await inner.WriteAllTextAsync(p,c,t); }
-    public void CopyFile(string s,string d,bool o) { Hit($"CopyFile:{d}"); inner.CopyFile(s,d,o); }
-    public void MoveFile(string s,string d,bool o=false) { Hit($"MoveFile:{d}"); inner.MoveFile(s,d,o); }
-    public void MoveDirectory(string s,string d) { Hit($"MoveDirectory:{d}"); inner.MoveDirectory(s,d); }
-    public void DeleteFile(string p) { Hit($"DeleteFile:{p}"); inner.DeleteFile(p); }
-    public void DeleteDirectory(string p,bool r) { Hit($"DeleteDirectory:{p}"); inner.DeleteDirectory(p,r); }
-    public string[] GetFiles(string p,string q) { Hit($"GetFiles:{p}"); return inner.GetFiles(p,q); }
-    public long GetFileLength(string p) { Hit($"GetFileLength:{p}"); return inner.GetFileLength(p); }
+    public void CreateDirectory(string p) { Hit(Phase5FileSystemOperation.CreateDirectory,p); inner.CreateDirectory(p); }
+    public async Task<byte[]> ReadAllBytesAsync(string p, CancellationToken t) { Hit(Phase5FileSystemOperation.ReadAllBytes,p); return await inner.ReadAllBytesAsync(p,t); }
+    public async Task<string> ReadAllTextAsync(string p, CancellationToken t) { Hit(Phase5FileSystemOperation.ReadAllText,p); return await inner.ReadAllTextAsync(p,t); }
+    public async Task WriteAllTextAsync(string p,string c,CancellationToken t) { Hit(Phase5FileSystemOperation.WriteAllText,p); await inner.WriteAllTextAsync(p,c,t); }
+    public void CopyFile(string s,string d,bool o) { Hit(Phase5FileSystemOperation.CopyFile,s,d); inner.CopyFile(s,d,o); }
+    public void MoveFile(string s,string d,bool o=false) { Hit(Phase5FileSystemOperation.MoveFile,s,d); inner.MoveFile(s,d,o); }
+    public void MoveDirectory(string s,string d) { Hit(Phase5FileSystemOperation.MoveDirectory,s,d); inner.MoveDirectory(s,d); }
+    public void DeleteFile(string p) { Hit(Phase5FileSystemOperation.DeleteFile,p); inner.DeleteFile(p); }
+    public void DeleteDirectory(string p,bool r) { Hit(Phase5FileSystemOperation.DeleteDirectory,p); inner.DeleteDirectory(p,r); }
+    public string[] GetFiles(string p,string q) { Hit(Phase5FileSystemOperation.GetFiles,p,q); return inner.GetFiles(p,q); }
+    public long GetFileLength(string p) { Hit(Phase5FileSystemOperation.GetFileLength,p); return inner.GetFileLength(p); }
 }
 
 internal sealed class StubPhase5Evaluator(Func<Task<Phase5CommittedStateEvaluation>> evaluate) : IPhase5CommittedAuthorityEvaluator
 {
     public int Calls { get; private set; }
     public Task<Phase5CommittedStateEvaluation> EvaluateAsync(string a,string b,string c,string d,string e,Phase5ExpectedPhase4Authority f,CancellationToken g=default) { Calls++; return evaluate(); }
-    public static StubPhase5Evaluator Invalid(string code="P5REUSE_CHECKSUM_INVALID") => new(() => Task.FromResult(new Phase5CommittedStateEvaluation(false,code,["readback failed"],[],null)));
+    public static StubPhase5Evaluator Invalid(string code="P5REUSE_CHECKSUM_INVALID", string error="readback failed") =>
+        new(() => Task.FromResult(new Phase5CommittedStateEvaluation(false,code,[error],[],null)));
 }
 internal sealed class StubPhase5Recovery(Phase5PublicationRecoveryResult result) : IPhase5PublicationRecoveryService
 {
