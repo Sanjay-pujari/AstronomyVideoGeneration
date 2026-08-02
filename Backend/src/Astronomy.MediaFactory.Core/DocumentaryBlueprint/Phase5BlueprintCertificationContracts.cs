@@ -84,7 +84,14 @@ public sealed record Phase5ExpectedPhase4Authority(string AggregateId, string Ag
 
 public sealed record Phase5CommittedStateEvaluation(bool IsValid, string ReasonCode,
     IReadOnlyList<string> Errors, IReadOnlyList<Phase5ArtifactInventoryEntry> Artifacts,
-    PublishedBlueprintCertification? PublishedAuthority);
+    PublishedBlueprintCertification? PublishedAuthority)
+{
+    public string PublicationTransactionId { get; init; } = string.Empty;
+    public bool PublicationCommitted { get; init; }
+    public bool CommittedStateValidationPassed { get; init; }
+    public IReadOnlyList<string> CommittedValidationEvidence { get; init; } = [];
+    public IReadOnlyList<string> ManifestEvidence { get; init; } = [];
+}
 
 public static class Phase5SemanticChecksum
 {

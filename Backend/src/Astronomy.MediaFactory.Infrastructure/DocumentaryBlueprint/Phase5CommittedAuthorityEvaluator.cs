@@ -97,6 +97,8 @@ public sealed class Phase5CommittedAuthorityEvaluator : IPhase5CommittedAuthorit
             using var validationDocument = JsonDocument.Parse(await File.ReadAllBytesAsync(validationPath, token));
             var vr = validationDocument.RootElement;
             if (!IsSuccessfulValidation(vr)) return Invalid("P5REUSE_COMMITTED_STATE_INVALID", "Phase 5 validation record did not pass.");
+            if (!TryString(vr, "transactionId", out var transactionId))
+                return Invalid("P5REUSE_COMMITTED_STATE_INVALID", "Phase 5 validation record has no publication transaction identity.");
 
             using var manifest = JsonDocument.Parse(await File.ReadAllBytesAsync(manifestPath, token));
             if (!manifest.RootElement.TryGetProperty("phase5Artifacts", out var entries) || entries.ValueKind != JsonValueKind.Array)
@@ -145,7 +147,14 @@ public sealed class Phase5CommittedAuthorityEvaluator : IPhase5CommittedAuthorit
             var authority = new PublishedBlueprintCertification(certification, editorial, validation, intents, coverage,
                 transitions, pause, expectedPhase4.AggregateId, expectedPhase4.AggregateChecksum,
                 validation.ContractVersion, certification.SemanticChecksum);
-            return new(true, "P5REUSE_VALID", [], inventory, authority);
+            return new(true, "P5REUSE_VALID", [], inventory, authority)
+            {
+                PublicationTransactionId = transactionId,
+                PublicationCommitted = true,
+                CommittedStateValidationPassed = true,
+                CommittedValidationEvidence = ["validation/phase-05-validation.json"],
+                ManifestEvidence = ["phase-manifest.json"]
+            };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException or NotSupportedException)
         { return Invalid("P5REUSE_COMMITTED_STATE_INVALID", ex.Message); }
