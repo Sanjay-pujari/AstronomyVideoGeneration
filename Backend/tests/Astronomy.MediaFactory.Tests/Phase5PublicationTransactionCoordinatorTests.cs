@@ -17,6 +17,124 @@ public sealed class Phase5PublicationTransactionCoordinatorTests
     }
 
     [Fact]
+    public async Task PublishAsync_InvalidCandidate_ReturnsCertificationBlockingIssues()
+    {
+        using var f = new Phase5PublicationTestFixture();
+        var certification = f.Candidate.Certification with { BlockingIssues = ["The production certification blocker."] };
+        var result = await PublishInvalid(f, f.Candidate with { Certification = certification });
+
+        Assert.Contains("P5_CERTIFICATION_BLOCKING: The production certification blocker.", result.Errors);
+    }
+
+    [Fact]
+    public async Task PublishAsync_InvalidCoverage_ReturnsVariantAndIssue()
+    {
+        using var f = new Phase5PublicationTestFixture();
+        var original = f.Candidate.Coverage.Variants[0];
+        var scene = f.Candidate.SceneIntents.Scenes.First(x => x.Variant == original.Variant);
+        var issue = $"Missing {scene.ViewerQuestionId}, {scene.LearningObjectiveId}, and {scene.KnowledgeReferenceIds[0]} in {scene.SceneId}.";
+        var invalid = original with { IsValid = false, Issues = [issue] };
+        var coverage = f.Candidate.Coverage with { IsValid = false, Variants = [invalid, .. f.Candidate.Coverage.Variants.Skip(1)] };
+        coverage = coverage with { SemanticChecksum = Phase5SemanticChecksum.Calculate(coverage with { SemanticChecksum = string.Empty }) };
+
+        var result = await PublishInvalid(f, f.Candidate with { Coverage = coverage });
+
+        Assert.Contains($"P5_COVERAGE_INVALID: variant={original.Variant};sceneId={scene.SceneId};viewerQuestionId={scene.ViewerQuestionId};learningObjectiveId={scene.LearningObjectiveId};knowledgeEntryId={scene.KnowledgeReferenceIds[0]};issue={issue}", result.Errors);
+    }
+
+    [Fact]
+    public async Task PublishAsync_InvalidTransition_ReturnsVariantSceneAndIssue()
+    {
+        using var f = new Phase5PublicationTestFixture();
+        var original = f.Candidate.Transitions.Variants[0];
+        var scene = f.Candidate.SceneIntents.Scenes.First(x => x.Variant == original.Variant);
+        var issue = $"Abrupt handoff at {scene.SceneId}.";
+        var invalid = original with { IsValid = false, Issues = [issue] };
+        var transitions = f.Candidate.Transitions with { IsValid = false, Variants = [invalid, .. f.Candidate.Transitions.Variants.Skip(1)] };
+        transitions = transitions with { SemanticChecksum = Phase5SemanticChecksum.Calculate(transitions with { SemanticChecksum = string.Empty }) };
+
+        var result = await PublishInvalid(f, f.Candidate with { Transitions = transitions });
+
+        Assert.Contains($"P5_TRANSITION_INVALID: variant={original.Variant};sceneId={scene.SceneId};issue={issue}", result.Errors);
+    }
+
+    [Fact]
+    public async Task PublishAsync_InvalidPauseTest_ReturnsVariantSceneAndIssue()
+    {
+        using var f = new Phase5PublicationTestFixture();
+        var original = f.Candidate.PauseTest.Scenes[0];
+        var invalid = original with { Passed = false, Issues = ["Scene purpose is unclear."] };
+        var pauseTest = f.Candidate.PauseTest with { IsValid = false, FailedSceneCount = 1,
+            PassedSceneCount = f.Candidate.PauseTest.Scenes.Count - 1, Scenes = [invalid, .. f.Candidate.PauseTest.Scenes.Skip(1)] };
+        pauseTest = pauseTest with { SemanticChecksum = Phase5SemanticChecksum.Calculate(pauseTest with { SemanticChecksum = string.Empty }) };
+
+        var result = await PublishInvalid(f, f.Candidate with { PauseTest = pauseTest });
+
+        Assert.Contains($"P5_PAUSE_TEST_INVALID: variant={original.Variant};sceneId={original.SceneId};issue=Scene purpose is unclear.", result.Errors);
+    }
+
+    [Fact]
+    public async Task PublishAsync_InvalidEditorialFinding_ReturnsVariantSceneAndMessage()
+    {
+        using var f = new Phase5PublicationTestFixture();
+        var original = f.Candidate.Validation.Variants[0];
+        var scene = f.Candidate.SceneIntents.Scenes.First(x => x.Variant == original.Variant);
+        var finding = new DocumentaryBlueprintValidationFinding("TEST-P5", DocumentaryBlueprintValidationSeverity.Error,
+            "Editorial continuity failed.", "test-blueprint", scene.SceneId);
+        var invalid = original with { IsValid = false, EditorialFindings = [.. original.EditorialFindings, finding] };
+        var validation = f.Candidate.Validation with { OverallValid = false,
+            Variants = [invalid, .. f.Candidate.Validation.Variants.Skip(1)] };
+
+        var result = await PublishInvalid(f, f.Candidate with { Validation = validation });
+
+        Assert.Contains($"P5_EDITORIAL_INVALID: variant={original.Variant};sceneId={scene.SceneId};issue=Editorial continuity failed.", result.Errors);
+    }
+
+    [Fact]
+    public async Task PublishAsync_InvalidCandidate_DeduplicatesDetailedErrors()
+    {
+        using var f = new Phase5PublicationTestFixture();
+        var original = f.Candidate.Coverage.Variants[0];
+        var invalid = original with { IsValid = false, Issues = ["Duplicate issue.", "Duplicate issue."] };
+        var coverage = f.Candidate.Coverage with { IsValid = false, Variants = [invalid, .. f.Candidate.Coverage.Variants.Skip(1)] };
+        var result = await PublishInvalid(f, f.Candidate with { Coverage = coverage });
+
+        Assert.Single(result.Errors.Where(x => x == $"P5_COVERAGE_INVALID: variant={original.Variant};issue=Duplicate issue."));
+    }
+
+    [Fact]
+    public async Task PublishAsync_InvalidCandidate_DoesNotPublishPhase5Authority()
+    {
+        using var f = new Phase5PublicationTestFixture();
+        await PublishInvalid(f, InvalidCandidate(f));
+        Assert.False(Directory.Exists(Path.Combine(f.Root, "05-editorial")));
+        Assert.False(File.Exists(f.Manifest));
+    }
+
+    [Fact]
+    public async Task PublishAsync_InvalidCandidate_DoesNotWriteStablePhase5Validation()
+    {
+        using var f = new Phase5PublicationTestFixture();
+        await PublishInvalid(f, InvalidCandidate(f));
+        Assert.False(File.Exists(f.Validation));
+    }
+
+    [Fact]
+    public async Task PublishAsync_InvalidCandidate_DoesNotModifyExistingCommittedAuthority()
+    {
+        using var f = new Phase5PublicationTestFixture();
+        SeedPreviousAuthority(f);
+        var before = Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)
+            .ToDictionary(x => Path.GetRelativePath(f.Root, x), File.ReadAllText, StringComparer.Ordinal);
+
+        await PublishInvalid(f, InvalidCandidate(f));
+
+        var after = Directory.EnumerateFiles(f.Root, "*", SearchOption.AllDirectories)
+            .ToDictionary(x => Path.GetRelativePath(f.Root, x), File.ReadAllText, StringComparer.Ordinal);
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
     public async Task PublishAsync_InvokesRecoveryBeforePublication()
     {
         using var f = new Phase5PublicationTestFixture();
@@ -168,6 +286,15 @@ public sealed class Phase5PublicationTransactionCoordinatorTests
     }
 
     private static async Task<Phase5PublicationTestFixture> Published() { var f = new Phase5PublicationTestFixture(); await f.PublishValidAsync(); return f; }
+    private static DocumentaryBlueprintCertificationIntegrationResult InvalidCandidate(Phase5PublicationTestFixture f) =>
+        f.Candidate with { Certification = f.Candidate.Certification with { Passed = false } };
+    private static async Task<Phase5PublicationTransactionResult> PublishInvalid(Phase5PublicationTestFixture f,
+        DocumentaryBlueprintCertificationIntegrationResult candidate)
+    {
+        var result = await f.Coordinator().PublishAsync(f.Request with { Candidate = candidate });
+        Failed(result, "P5PUB_CANDIDATE_INVALID", false);
+        return result;
+    }
     private static StubPhase5Recovery SuccessfulRecovery() => new(new(true, "ok", [], []));
     private static void Committed(Phase5PublicationTransactionResult r) { Assert.True(r.Succeeded); Assert.True(r.PublicationCommitted); Assert.True(r.CommittedStateValidationPassed); Assert.Equal("P5PUB_COMMITTED", r.ReasonCode); Assert.False(r.RollbackPerformed); Assert.True(r.RollbackSucceeded); Assert.Null(r.FailureDiagnosticsPath); }
     private static void Failed(Phase5PublicationTransactionResult r, string code, bool rollback) { Assert.False(r.Succeeded); Assert.False(r.PublicationCommitted); Assert.False(r.CommittedStateValidationPassed); Assert.Equal(code, r.ReasonCode); Assert.Equal(rollback, r.RollbackPerformed); }

@@ -29,7 +29,8 @@ public sealed class Phase5PublicationTransactionCoordinator(
         var id = Guid.NewGuid().ToString("N");
         var paths = Phase5PublicationTransactionPaths.Create(request.OutputRoot, id);
         var candidateErrors = DocumentaryBlueprintCertificationArtifactValidator.Validate(request.Candidate, request.CertificationRequest);
-        if (candidateErrors.Count != 0) return Failed(id, "P5PUB_CANDIDATE_INVALID", candidateErrors);
+        if (candidateErrors.Count != 0)
+            return Failed(id, "P5PUB_CANDIDATE_INVALID", BuildCandidateRejectionErrors(request.Candidate, candidateErrors));
         var recovered = await recovery.RecoverAsync(request.OutputRoot, request.CertificationRequest.ExecutionId,
             request.CertificationRequest.PlanId, request.CertificationRequest.EventId,
             request.CertificationRequest.Language, request.ExpectedPhase4, token);
@@ -170,5 +171,81 @@ public sealed class Phase5PublicationTransactionCoordinator(
     private void RestoreFile(string snapshot, string destination, bool existed) { if (existed) { if (!fileSystem.FileExists(snapshot)) throw new InvalidOperationException($"Snapshot missing: {snapshot}"); fileSystem.MoveFile(snapshot, destination, true); } else if (fileSystem.FileExists(destination)) fileSystem.DeleteFile(destination); }
     private void CleanupSuccess(Phase5PublicationTransactionPaths p) { if (fileSystem.DirectoryExists(p.BackupRoot)) fileSystem.DeleteDirectory(p.BackupRoot, true); if (fileSystem.DirectoryExists(p.StagingRoot)) fileSystem.DeleteDirectory(p.StagingRoot, true); foreach (var f in new[] { p.ManifestBackupPath, p.ValidationBackupPath, p.TransactionMarkerPath }) if (fileSystem.FileExists(f)) fileSystem.DeleteFile(f); }
     private static IEnumerable<string> AllPaths(Phase5PublicationTransactionPaths p) => [p.EditorialRoot,p.StagingRoot,p.BackupRoot,p.FailedRoot,p.ManifestBackupPath,p.ValidationBackupPath,p.TransactionMarkerPath];
+
+    private static IReadOnlyList<string> BuildCandidateRejectionErrors(
+        DocumentaryBlueprintCertificationIntegrationResult candidate,
+        IReadOnlyList<string> artifactValidationErrors)
+    {
+        var errors = new List<CandidateRejectionError>();
+        void Add(string category, string variant, string sceneId, string message, string formatted) =>
+            errors.Add(new(category, variant, sceneId, message, formatted));
+
+        foreach (var issue in artifactValidationErrors)
+            Add("00_ARTIFACT", string.Empty, string.Empty, issue, issue);
+        foreach (var issue in candidate.Certification.BlockingIssues)
+            Add("10_CERTIFICATION", string.Empty, string.Empty, issue, $"P5_CERTIFICATION_BLOCKING: {issue}");
+        foreach (var result in candidate.Coverage.Variants.Where(x => !x.IsValid))
+        foreach (var issue in result.Issues)
+        {
+            var identifiers = FindIdentifiers(candidate, issue);
+            var details = FormatIdentifiers(identifiers);
+            Add("20_COVERAGE", result.Variant, identifiers.SceneId, issue,
+                $"P5_COVERAGE_INVALID: variant={result.Variant};{details}issue={issue}");
+        }
+        foreach (var result in candidate.Transitions.Variants.Where(x => !x.IsValid))
+        foreach (var issue in result.Issues)
+        {
+            var sceneId = FindSceneId(candidate, issue);
+            var scene = string.IsNullOrEmpty(sceneId) ? string.Empty : $"sceneId={sceneId};";
+            Add("30_TRANSITION", result.Variant, sceneId, issue,
+                $"P5_TRANSITION_INVALID: variant={result.Variant};{scene}issue={issue}");
+        }
+        foreach (var result in candidate.PauseTest.Scenes.Where(x => !x.Passed))
+        foreach (var issue in result.Issues)
+            Add("40_PAUSE_TEST", result.Variant, result.SceneId, issue,
+                $"P5_PAUSE_TEST_INVALID: variant={result.Variant};sceneId={result.SceneId};issue={issue}");
+        foreach (var result in candidate.Validation.Variants)
+        foreach (var finding in result.EditorialFindings.Where(x => x.Severity == DocumentaryBlueprintValidationSeverity.Error))
+        {
+            var sceneId = finding.SceneId ?? string.Empty;
+            var scene = sceneId.Length == 0 ? string.Empty : $"sceneId={sceneId};";
+            Add("50_EDITORIAL", result.Variant, sceneId, finding.Message,
+                $"P5_EDITORIAL_INVALID: variant={result.Variant};{scene}issue={finding.Message}");
+        }
+
+        return errors.OrderBy(x => x.Category, StringComparer.Ordinal)
+            .ThenBy(x => x.Variant, StringComparer.Ordinal)
+            .ThenBy(x => x.SceneId, StringComparer.Ordinal)
+            .ThenBy(x => x.Message, StringComparer.Ordinal)
+            .Select(x => x.Formatted).Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    private static CandidateIdentifiers FindIdentifiers(DocumentaryBlueprintCertificationIntegrationResult candidate, string issue)
+    {
+        var scenes = candidate.SceneIntents.Scenes;
+        return new(FindValue(scenes.Select(x => x.SceneId), issue),
+            FindValue(scenes.Select(x => x.ViewerQuestionId), issue),
+            FindValue(scenes.Select(x => x.LearningObjectiveId), issue),
+            FindValue(scenes.SelectMany(x => x.KnowledgeReferenceIds), issue));
+    }
+
+    private static string FindSceneId(DocumentaryBlueprintCertificationIntegrationResult candidate, string issue) =>
+        FindValue(candidate.SceneIntents.Scenes.Select(x => x.SceneId), issue);
+
+    private static string FindValue(IEnumerable<string> values, string issue) =>
+        values.Where(x => !string.IsNullOrWhiteSpace(x) && issue.Contains(x, StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).FirstOrDefault() ?? string.Empty;
+
+    private static string FormatIdentifiers(CandidateIdentifiers value) =>
+        (value.SceneId.Length == 0 ? string.Empty : $"sceneId={value.SceneId};") +
+        (value.ViewerQuestionId.Length == 0 ? string.Empty : $"viewerQuestionId={value.ViewerQuestionId};") +
+        (value.LearningObjectiveId.Length == 0 ? string.Empty : $"learningObjectiveId={value.LearningObjectiveId};") +
+        (value.KnowledgeEntryId.Length == 0 ? string.Empty : $"knowledgeEntryId={value.KnowledgeEntryId};");
+
+    private sealed record CandidateRejectionError(string Category, string Variant, string SceneId,
+        string Message, string Formatted);
+    private sealed record CandidateIdentifiers(string SceneId, string ViewerQuestionId,
+        string LearningObjectiveId, string KnowledgeEntryId);
+
     private static Phase5PublicationTransactionResult Failed(string id, string code, IReadOnlyList<string> errors) => new(false,false,false,false,id,code,"Phase 5 publication did not start.",[],[],errors,null,null,false,true,false,null);
 }
