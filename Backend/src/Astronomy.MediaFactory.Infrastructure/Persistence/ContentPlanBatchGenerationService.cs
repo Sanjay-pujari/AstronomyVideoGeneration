@@ -132,13 +132,19 @@ public sealed class ContentPlanBatchGenerationService(
 
             ValidateExactPlanIdExecutionResult(effectivePlanId, execution.PlanId, exactPlanIdMode);
 
+            // SelectedPlans is captured before execution. Project this request's successful,
+            // range-aware outcome rather than leaking a stale persisted ProductionFailed state.
+            var responseSelectedPlans = execution.Success && (execution.SuccessDiagnostics is null || execution.SuccessDiagnostics.PartialPhaseSuccess)
+                ? selectedPlans.Select(plan => plan with { Status = "ProductionCompleted", PlanStatus = "ProductionCompleted" }).ToArray()
+                : selectedPlans;
+
             return new BatchGenerateFromPlansResponse(
                 Success: execution.Success,
                 DryRun: request.DryRun,
                 RequestedTitleCount: requestedTitles.Length,
                 SelectedPlanCount: selectedPlans.Length,
                 MaxPlans: maxPlans,
-                SelectedPlans: selectedPlans,
+                SelectedPlans: responseSelectedPlans,
                 Steps: (execution.PhaseResults is { Count: > 0 } ? execution.PhaseResults.Cast<object>().ToArray() : execution.PlannedProductionSteps.Cast<object>().ToArray()),
                 Warnings: warnings.Concat(execution.Warnings.Select(w => new BatchGenerateFromPlansWarning(selectedPlans[0].Title, true, true, w))).ToArray(),
                 Errors: execution.Errors,
