@@ -1,6 +1,6 @@
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
-using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -24,12 +24,35 @@ public sealed class ProductionPipelinePhase6RoutingTests
     }
 
     [Fact]
-    public void ProductionPipelineConstruction_RequiresPhase6InputAuthorityEvaluator()
+    public async Task RegisteredEvaluator_RejectsMissingPhase4AuthorityBeforePhase5Integration()
     {
-        var parameter = typeof(ProductionPipelineExecutionService).GetConstructors().Single().GetParameters()
-            .Single(value => value.ParameterType == typeof(IPhase6InputAuthorityEvaluator));
+        var calls = new List<string>();
+        var evaluator = new Phase6InputAuthorityEvaluator(new MissingPhase4(calls), new RecordingPhase5(calls));
 
-        Assert.False(parameter.HasDefaultValue);
-        Assert.False(parameter.IsOptional);
+        var result = await evaluator.EvaluateAsync(new("missing", "execution", "plan", "event", "en", ["Long"]));
+
+        Assert.False(result.IsValid);
+        Assert.Equal("P6INPUT_PHASE4_INVALID", result.ReasonCode);
+        Assert.Equal(["evaluator"], calls);
+    }
+
+    private sealed class MissingPhase4(List<string> calls) : IPhase4CommittedAuthorityEvaluator
+    {
+        public Task<Phase4CommittedAuthorityEvaluation> EvaluateAsync(string a, string b, string c, string d, string e,
+            CancellationToken cancellationToken = default)
+        {
+            calls.Add("evaluator");
+            return Task.FromResult(new Phase4CommittedAuthorityEvaluation(false, null, "P4REUSE_AUTHORITY_MISSING", [], []));
+        }
+    }
+
+    private sealed class RecordingPhase5(List<string> calls) : IPhase5CommittedAuthorityEvaluator
+    {
+        public Task<Phase5CommittedStateEvaluation> EvaluateAsync(string a, string b, string c, string d, string e,
+            Phase5ExpectedPhase4Authority expected, CancellationToken cancellationToken = default)
+        {
+            calls.Add("integration");
+            return Task.FromResult(new Phase5CommittedStateEvaluation(false, "unexpected", [], [], null));
+        }
     }
 }
