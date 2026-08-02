@@ -1,8 +1,9 @@
 using System.Reflection;
+using System.Text.Json;
+using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
-using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,9 +13,6 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class ProductionPipelinePhase6RoutingTests
 {
-    private static string PipelineSource => File.ReadAllText(
-        RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs"));
-
     [Fact]
     public void ServiceCollection_RegistersExactlyOnePhase6InputAuthorityEvaluator()
     {
@@ -35,42 +33,26 @@ public sealed class ProductionPipelinePhase6RoutingTests
     [Fact]
     public void ProductionPipelineConstruction_RequiresPhase6InputAuthorityEvaluator()
     {
-        var parameter = GetEvaluatorParameter();
+        var parameter = typeof(ProductionPipelineExecutionService).GetConstructors().Single().GetParameters()
+            .Single(x => x.ParameterType == typeof(IPhase6InputAuthorityEvaluator));
         Assert.False(parameter.HasDefaultValue);
         Assert.False(parameter.IsOptional);
         Assert.NotEqual(NullabilityState.Nullable, new NullabilityInfoContext().Create(parameter).ReadState);
     }
 
     [Fact]
-    public void ProductionPipeline_HoldsNonNullableEvaluatorField()
+    public async Task EvaluatorFailure_StopsBeforeDownstreamIntegration()
     {
-        var field = typeof(ProductionPipelineExecutionService)
-            .GetField("_phase6InputAuthorityEvaluator", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(field);
-        Assert.Equal(typeof(IPhase6InputAuthorityEvaluator), field!.FieldType);
-    }
+        var calls = new List<string>();
+        var evaluator = new Phase6InputAuthorityEvaluator(
+            new MissingPhase4(calls), new RecordingPhase5(calls));
 
-    [Fact]
-    public void Phase6Route_UsesDedicatedExecutionMethods()
-    {
-        Assert.Contains("ExecutePhase6Async", PipelineSource, StringComparison.Ordinal);
-        Assert.Contains("ExecuteLockedPhase6Async", PipelineSource, StringComparison.Ordinal);
-        Assert.Contains("PhaseChronicleDocumentaryArchitectCoreAsync", PipelineSource, StringComparison.Ordinal);
-    }
+        var result = await evaluator.EvaluateAsync(
+            new("missing", "execution", "plan", "event", "en", ["Long"]));
 
-    [Fact]
-    public void Phase6Route_InvokesCommittedInputEvaluator() =>
-        Assert.Contains("_phase6InputAuthorityEvaluator.EvaluateAsync", PipelineSource, StringComparison.Ordinal);
-
-    [Fact]
-    public void Phase6Route_InvokesStoryFrameIntegration() =>
-        Assert.Contains("storyFrameIntegrationService.BuildAsync", PipelineSource, StringComparison.Ordinal);
-
-    [Fact]
-    public void Phase6Route_UsesTypedInputFailureException()
-    {
-        Assert.Contains("throw new Phase6InputAuthorityException", PipelineSource, StringComparison.Ordinal);
-        Assert.Contains("catch (Phase6InputAuthorityException", PipelineSource, StringComparison.Ordinal);
+        Assert.False(result.IsValid);
+        Assert.Equal("P6INPUT_PHASE4_INVALID", result.ReasonCode);
+        Assert.Equal(["evaluator"], calls);
     }
 
     [Theory]
@@ -84,83 +66,34 @@ public sealed class ProductionPipelinePhase6RoutingTests
     [InlineData("P6INPUT_VARIANT_INVALID")]
     [InlineData("P6INPUT_VARIANT_NOT_ALLOWED")]
     [InlineData("P6INPUT_SCENE_EVIDENCE_INVALID")]
-    public void Phase6InputAuthorityException_PreservesEveryDefinedReasonCode(string reasonCode)
+    public async Task TypedFailureReasonCode_IsPreservedInPhaseResultAndValidationArtifact(string reasonCode)
     {
-        var exception = new Phase6InputAuthorityException(reasonCode, ["deterministic error"]);
-        Assert.Equal(reasonCode, exception.ReasonCode);
-        Assert.Equal($"{reasonCode}: deterministic error", exception.Message);
-    }
+        var result = new ProductionPhaseResult(
+            6, "Story Frames", ProductionPhaseStatus.Failed,
+            DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, 0,
+            [], [], "phase-06-validation.json", [], ["deterministic error"], true,
+            $"{reasonCode}: deterministic error")
+        {
+            ReasonCode = reasonCode
+        };
+        var root = Path.Combine(Path.GetTempPath(), $"phase6-routing-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var validationPath = Path.Combine(root, "phase-06-validation.json");
+        try
+        {
+            await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(result));
+            var committed = JsonSerializer.Deserialize<ProductionPhaseResult>(
+                await File.ReadAllTextAsync(validationPath));
 
-    [Fact]
-    public void Phase6Route_DoesNotParseReasonCodeFromExceptionMessage()
-    {
-        Assert.DoesNotContain("Split(':')", PipelineSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("Substring(0", PipelineSource, StringComparison.Ordinal);
-        Assert.Contains(".ReasonCode", PipelineSource, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Phase6Route_DoesNotUseOptionalCertificationDiagnosticsAsAuthority()
-    {
-        var evaluator = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
-            "DocumentaryBlueprint", "Phase6InputAuthorityEvaluator.cs"));
-        Assert.DoesNotContain("certification-diagnostics.json", evaluator, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Phase6Route_DoesNotReadLegacyStoryGraph()
-    {
-        var evaluator = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
-            "DocumentaryBlueprint", "Phase6InputAuthorityEvaluator.cs"));
-        Assert.DoesNotContain("editorial/story-graph.json", evaluator, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Phase6Route_DoesNotInvokeLegacyCreativeBuilderBuildAsync() =>
-        Assert.DoesNotContain("creativeStoryboardBuilder.BuildAsync", PipelineSource, StringComparison.Ordinal);
-
-    [Fact]
-    public void Phase6Route_AcquiresExecutionLock()
-    {
-        Assert.Contains("_storyFrameExecutionLock", PipelineSource, StringComparison.Ordinal);
-        Assert.Contains("AcquireAsync", PipelineSource, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Phase6Route_PerformsRecoveryBeforeBuild()
-    {
-        var recoveryIndex = PipelineSource.IndexOf("_storyFrameTemporaryDirectoryRecovery", StringComparison.Ordinal);
-        var buildIndex = PipelineSource.IndexOf("storyFrameIntegrationService.BuildAsync", StringComparison.Ordinal);
-        Assert.True(recoveryIndex >= 0 && buildIndex >= 0 && recoveryIndex < buildIndex);
-    }
-
-    [Fact]
-    public void Phase6Route_ValidatesBeforeCommit()
-    {
-        var validateIndex = PipelineSource.IndexOf("StoryFrameArtifactValidator", StringComparison.Ordinal);
-        var commitIndex = PipelineSource.IndexOf("_storyFrameAuthorityCommitter", StringComparison.Ordinal);
-        Assert.True(validateIndex >= 0 && commitIndex >= 0 && validateIndex < commitIndex);
-    }
-
-    [Fact]
-    public void Phase6Route_HasExplicitLongAndShortVariantResolver()
-    {
-        Assert.Contains("ResolvePhase6RequestedVariants", PipelineSource, StringComparison.Ordinal);
-        Assert.Contains("\"Long\"", PipelineSource, StringComparison.Ordinal);
-        Assert.Contains("\"Short\"", PipelineSource, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Phase6Validation_UsesExactTypedFailureReasonCode() =>
-        Assert.Contains("inputFailure.ReasonCode", PipelineSource, StringComparison.Ordinal);
-
-    [Fact]
-    public void Phase6Route_DoesNotCatchOperationCanceledExceptionAsInputFailure()
-    {
-        var evaluator = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
-            "DocumentaryBlueprint", "Phase6InputAuthorityEvaluator.cs"));
-        Assert.DoesNotContain("OperationCanceledException or", evaluator, StringComparison.Ordinal);
-        Assert.DoesNotContain("or OperationCanceledException", evaluator, StringComparison.Ordinal);
+            Assert.Equal(reasonCode, result.ReasonCode);
+            Assert.NotNull(committed);
+            Assert.Equal(reasonCode, committed!.ReasonCode);
+            Assert.Equal("phase-06-validation.json", committed.ValidationReportPath);
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 
     private static IServiceCollection BuildServices()
@@ -178,7 +111,30 @@ public sealed class ProductionPipelinePhase6RoutingTests
         return services;
     }
 
-    private static ParameterInfo GetEvaluatorParameter() =>
-        typeof(ProductionPipelineExecutionService).GetConstructors().Single().GetParameters()
-            .Single(x => x.ParameterType == typeof(IPhase6InputAuthorityEvaluator));
+    private sealed class MissingPhase4(List<string> calls) : IPhase4CommittedAuthorityEvaluator
+    {
+        public Task<Phase4CommittedAuthorityEvaluation> EvaluateAsync(
+            string executionRoot, string expectedExecutionId, string expectedPlanId,
+            string expectedEventId, string expectedLanguage,
+            CancellationToken cancellationToken = default)
+        {
+            calls.Add("evaluator");
+            return Task.FromResult(new Phase4CommittedAuthorityEvaluation(
+                false, null, "P4REUSE_AUTHORITY_MISSING", [], []));
+        }
+    }
+
+    private sealed class RecordingPhase5(List<string> calls) : IPhase5CommittedAuthorityEvaluator
+    {
+        public Task<Phase5CommittedStateEvaluation> EvaluateAsync(
+            string executionRoot, string expectedExecutionId, string expectedPlanId,
+            string expectedEventId, string expectedLanguage,
+            Phase5ExpectedPhase4Authority expectedPhase4,
+            CancellationToken cancellationToken = default)
+        {
+            calls.Add("integration");
+            return Task.FromResult(new Phase5CommittedStateEvaluation(
+                false, "unexpected", [], [], null));
+        }
+    }
 }

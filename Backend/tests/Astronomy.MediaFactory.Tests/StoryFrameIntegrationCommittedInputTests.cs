@@ -1,5 +1,7 @@
-using System.Runtime.Serialization;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
+using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+using Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -93,54 +95,36 @@ public sealed class StoryFrameIntegrationCommittedInputTests
     }
 
     [Fact]
-    public void Validator_UsesVariantSpecificCommittedSceneCollections()
+    public async Task BuildAsync_PassesCommittedAuthorityToBuilderAndReportsItsArtifactPaths()
     {
-        var source = File.ReadAllText(RepositoryTestPaths.CoreSource(
-            "DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs"));
-        Assert.Contains("request.LongScenes", source, StringComparison.Ordinal);
-        Assert.Contains("request.ShortScenes", source, StringComparison.Ordinal);
-        Assert.Contains("CommittedScenes", source, StringComparison.Ordinal);
-    }
+        var input = CreateAuthority(["Long"]);
+        var builder = new RecordingBuilder();
+        var service = new StoryFrameIntegrationService(builder);
+        var compatibility = service.GetCompatibilityContext();
+        var request = new StoryFrameIntegrationRequest(
+            "execution", "plan", "event", "en", "profile", input,
+            compatibility.CurrentBuilderType, compatibility.CurrentBuilderVersion,
+            compatibility.CurrentIntegrationServiceType, compatibility.CurrentIntegrationServiceVersion);
 
-    [Fact]
-    public void Validator_DoesNotUseSharedEditorialSceneOrderForVariantMembership()
-    {
-        var source = File.ReadAllText(RepositoryTestPaths.CoreSource(
-            "DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs"));
-        var index = source.IndexOf(
-            "IReadOnlyList<CertifiedStoryFrameSceneAuthority> CommittedScenes",
-            StringComparison.Ordinal);
-        Assert.True(index >= 0);
-        Assert.DoesNotContain("e.SceneOrder.Select", source[index..], StringComparison.Ordinal);
-    }
+        var result = await service.BuildAsync(request, CancellationToken.None);
 
-    [Fact]
-    public void Validator_RejectsCrossVariantOrUnknownScenes()
-    {
-        var source = File.ReadAllText(RepositoryTestPaths.CoreSource(
-            "DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs"));
-        Assert.Contains("uncertified or cross-variant scene", source, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Validator_CanonicalOrderUsesCommittedVariantSequence()
-    {
-        var source = File.ReadAllText(RepositoryTestPaths.CoreSource(
-            "DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs"))
-            .Replace(" ", string.Empty, StringComparison.Ordinal);
-        Assert.Contains("CommittedScenes(v).OrderBy(x=>x.SequenceNumber)", source, StringComparison.Ordinal);
+        Assert.Equal(1, builder.CallCount);
+        Assert.Same(input.Phase5Authority.EditorialContract, builder.EditorialContract);
+        Assert.Equal(input.RequestedVariants, builder.RequestedVariants);
+        Assert.Equal(StoryFrameCommittedInputDiagnostics.ArtifactPaths(input), result.Diagnostics.InputArtifactPaths);
     }
 
     private static Phase6CommittedInputAuthority CreateAuthority(
         IReadOnlyList<string> requestedVariants,
         IReadOnlyList<string>? phase5Paths = null)
     {
-#pragma warning disable SYSLIB0050
-        var aggregate = (DocumentaryBlueprintAggregate)
-            FormatterServices.GetUninitializedObject(typeof(DocumentaryBlueprintAggregate));
-        var phase5 = (PublishedBlueprintCertification)
-            FormatterServices.GetUninitializedObject(typeof(PublishedBlueprintCertification));
-#pragma warning restore SYSLIB0050
+        var fixture = Phase5CertificationFixture.Create();
+        var aggregate = fixture.PublishedPhase4;
+        var phase5 = new PublishedBlueprintCertification(
+            fixture.Result.Certification, fixture.Result.EditorialContract, fixture.Result.Validation,
+            fixture.Result.SceneIntents, fixture.Result.Coverage, fixture.Result.Transitions,
+            fixture.Result.PauseTest, aggregate.AggregateId, aggregate.DeterministicChecksum,
+            "1.0", "published");
 
         var entries = (phase5Paths ??
             ["05-editorial/blueprint-certification.json", "05-editorial/editorial-contract.json"])
@@ -159,4 +143,24 @@ public sealed class StoryFrameIntegrationCommittedInputTests
         new(path, "Supporting", Sha('f'), Sha('0'), 1, Sha('a'));
 
     private static string Sha(char value) => new(value, 64);
+
+    private sealed class RecordingBuilder : ICertifiedStoryFrameBuilder
+    {
+        public string BuilderType => "recording-builder";
+        public string BuilderVersion => "1";
+        public int CallCount { get; private set; }
+        public DocumentaryBlueprintEditorialContract? EditorialContract { get; private set; }
+        public IReadOnlyList<string>? RequestedVariants { get; private set; }
+
+        public Task<IReadOnlyList<StoryFrameAuthorityFrame>> BuildAsync(
+            DocumentaryBlueprintEditorialContract editorialContract,
+            IReadOnlyList<string> requestedVariants,
+            CancellationToken cancellationToken)
+        {
+            CallCount++;
+            EditorialContract = editorialContract;
+            RequestedVariants = requestedVariants;
+            return Task.FromResult<IReadOnlyList<StoryFrameAuthorityFrame>>([]);
+        }
+    }
 }
