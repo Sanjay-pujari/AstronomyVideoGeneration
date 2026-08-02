@@ -25,6 +25,7 @@ public sealed class Phase5PublicationTransactionCoordinator(
     public async Task<Phase5PublicationTransactionResult> PublishAsync(Phase5PublicationTransactionRequest request,
         CancellationToken token = default)
     {
+        token.ThrowIfCancellationRequested();
         var id = Guid.NewGuid().ToString("N");
         var paths = Phase5PublicationTransactionPaths.Create(request.OutputRoot, id);
         var candidateErrors = DocumentaryBlueprintCertificationArtifactValidator.Validate(request.Candidate, request.CertificationRequest);
@@ -90,17 +91,25 @@ public sealed class Phase5PublicationTransactionCoordinator(
         Phase5CommittedStateEvaluation? evaluation, CancellationToken token)
     {
         var p = marker.Paths; var errors = new List<string>();
+        var editorialWasSwapped = marker.Status >= Phase5PublicationTransactionStatus.EditorialSwapped;
+        var committedStateSnapshotCaptured = marker.Status >= Phase5PublicationTransactionStatus.StagedValidated;
         async Task Attempt(Action action) { try { action(); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException or NotSupportedException) { errors.Add(ex.Message); } await Task.CompletedTask; }
         marker = marker with { Status = Phase5PublicationTransactionStatus.RollingBack, UpdatedUtc = DateTimeOffset.UtcNow };
         try { await WriteMarker(marker, token); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or JsonException or NotSupportedException) { errors.Add(ex.Message); }
-        await Attempt(() => { if (fileSystem.DirectoryExists(p.EditorialRoot)) fileSystem.MoveDirectory(p.EditorialRoot, p.FailedRoot); });
-        await Attempt(() => { if (marker.PreviousEditorialExisted) { if (!fileSystem.DirectoryExists(p.BackupRoot)) throw new InvalidOperationException("Editorial backup is missing."); fileSystem.MoveDirectory(p.BackupRoot, p.EditorialRoot); } });
-        await Attempt(() => RestoreFile(p.ManifestBackupPath, p.ManifestPath, marker.PreviousManifestExisted));
-        await Attempt(() => RestoreFile(p.ValidationBackupPath, p.ValidationPath, marker.PreviousValidationExisted));
-        if (marker.PreviousEditorialExisted != fileSystem.DirectoryExists(p.EditorialRoot)) errors.Add("Restored editorial state does not match snapshot.");
-        if (marker.PreviousManifestExisted != fileSystem.FileExists(p.ManifestPath)) errors.Add("Restored manifest state does not match snapshot.");
-        if (marker.PreviousValidationExisted != fileSystem.FileExists(p.ValidationPath)) errors.Add("Restored validation state does not match snapshot.");
+        // Before EditorialSwapped the active directory is still the previous
+        // committed authority; only transaction-owned staging may be discarded.
+        await Attempt(() => { if (editorialWasSwapped && fileSystem.DirectoryExists(p.EditorialRoot))
+                fileSystem.MoveDirectory(p.EditorialRoot, p.FailedRoot); });
+        if (committedStateSnapshotCaptured)
+        {
+            await Attempt(() => { if (marker.PreviousEditorialExisted) { if (!fileSystem.DirectoryExists(p.BackupRoot)) throw new InvalidOperationException("Editorial backup is missing."); fileSystem.MoveDirectory(p.BackupRoot, p.EditorialRoot); } });
+            await Attempt(() => RestoreFile(p.ManifestBackupPath, p.ManifestPath, marker.PreviousManifestExisted));
+            await Attempt(() => RestoreFile(p.ValidationBackupPath, p.ValidationPath, marker.PreviousValidationExisted));
+            if (marker.PreviousEditorialExisted != fileSystem.DirectoryExists(p.EditorialRoot)) errors.Add("Restored editorial state does not match snapshot.");
+            if (marker.PreviousManifestExisted != fileSystem.FileExists(p.ManifestPath)) errors.Add("Restored manifest state does not match snapshot.");
+            if (marker.PreviousValidationExisted != fileSystem.FileExists(p.ValidationPath)) errors.Add("Restored validation state does not match snapshot.");
+        }
         var restored = marker.PreviousEditorialExisted && fileSystem.DirectoryExists(p.EditorialRoot);
         if (errors.Count == 0)
         {

@@ -101,7 +101,7 @@ public static class DocumentaryBlueprintCertificationArtifactValidator
             };
             foreach (var report in reports)
             {
-                if (report.Aggregate != aggregate.DeterministicChecksum || report.Long != aggregate.LongVariant.DeterministicChecksum || report.Short != aggregate.ShortVariant.DeterministicChecksum)
+                if (report.Aggregate != aggregate.DeterministicChecksum || report.Long != request.Long.Metadata.Checksum || report.Short != request.Short.Metadata.Checksum)
                     errors.Add($"Phase 5 {report.Name} lineage is stale.");
                 if (report.Checksum != report.Expected) errors.Add($"Phase 5 {report.Name} semantic checksum is invalid.");
             }
