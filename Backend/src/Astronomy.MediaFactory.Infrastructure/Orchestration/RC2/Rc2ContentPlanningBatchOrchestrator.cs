@@ -204,6 +204,36 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             || status.Equals("Valid", StringComparison.OrdinalIgnoreCase)
             || status.Equals("Passed", StringComparison.OrdinalIgnoreCase));
 
+    private static BatchGenerateFromPlansResponse UpsertResponsePhase(BatchGenerateFromPlansResponse response, ProductionPhaseResult phase)
+    {
+        var steps = response.Steps.OfType<ProductionPhaseResult>().Any(existing => existing.PhaseNo == phase.PhaseNo)
+            ? response.Steps.Select(step => step is ProductionPhaseResult existing && existing.PhaseNo == phase.PhaseNo ? phase : step).ToArray()
+            : response.Steps.Concat([phase]).ToArray();
+        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution
+                ? execution with { PhaseResults = UpsertPhaseResult(execution.PhaseResults, phase) }
+                : result)
+            .ToArray();
+        return response with { Steps = steps, Results = results };
+    }
+
+    private static IReadOnlyList<ProductionPhaseResult>? UpsertPhaseResult(IReadOnlyList<ProductionPhaseResult>? phases, ProductionPhaseResult phase)
+    {
+        if (phases is null) return [phase];
+        return phases.Any(existing => existing.PhaseNo == phase.PhaseNo)
+            ? phases.Select(existing => existing.PhaseNo == phase.PhaseNo ? phase : existing).ToArray()
+            : phases.Concat([phase]).ToArray();
+    }
+
+    private static BatchGenerateFromPlansResponse MarkResponseFailed(BatchGenerateFromPlansResponse response, int phaseNo, IReadOnlyList<string> errors)
+        => response with
+        {
+            Success = false,
+            FailedPlans = Math.Max(1, response.FailedPlans),
+            LastFailedPhaseNo = phaseNo,
+            LastCompletedPhaseNo = response.LastCompletedPhaseNo is null ? null : Math.Min(response.LastCompletedPhaseNo.Value, phaseNo - 1),
+            Errors = response.Errors.Concat(errors).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+        };
+
     private static string Combine(string? root, params string[] parts)
         => string.IsNullOrWhiteSpace(root) ? Path.Combine(parts) : Path.Combine(new[] { root }.Concat(parts).ToArray());
 
