@@ -13,7 +13,6 @@ public interface IRc2ContentPlanningBatchOrchestrator
 public sealed class Rc2ContentPlanningBatchOrchestrator(
     IContentPlanBatchGenerationService v4BatchGeneration,
     Rc2PipelinePhaseRegistry phaseRegistry,
-    SceneIntentBuilder sceneIntentBuilder,
     CreativeStoryboardBuilder creativeStoryboardBuilder,
     IRc2CertifiedExecutionStatusReader certifiedExecutionStatusReader,
     ILogger<Rc2ContentPlanningBatchOrchestrator> logger) : IRc2ContentPlanningBatchOrchestrator
@@ -53,27 +52,9 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
         var response = await v4BatchGeneration.GenerateFromPlansAsync(request, cancellationToken);
         response = ValidateManualPlanExecutionResponse(request, response, requestedPhases);
         response = await ReconcileEarlyPhaseValidationsAsync(response, requestedPhases, cancellationToken);
-        // Phase 4 is exclusively owned by DocumentaryBlueprintPhase4IntegrationService in the
-        // production pipeline.  Do not create the former editorial/story-graph authority here.
-        if (requestedPhases.Contains(5) && CanRunRc2Overlay(response, 5))
-        {
-            response = await ExecuteRc2OverlayPhaseAsync(
-                response,
-                5,
-                "Editorial Intelligence",
-                [
-                    Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json"),
-                    Combine(response.OutputRoot, "editorial", "story-graph.json")
-                ],
-                Combine(response.OutputRoot, "editorial", "editorial-diagnostics.json"),
-                async () =>
-                {
-                    var sceneIntentResult = await sceneIntentBuilder.BuildAndWriteDiagnosticsAsync(request, response, cancellationToken);
-                    response = ApplyRc2Phase5Response(response, sceneIntentResult);
-                    return sceneIntentResult.GeneratedFiles;
-                },
-                cancellationToken);
-        }
+        // Phase 5 is exclusively owned by ProductionPipelineExecutionService's documentary
+        // blueprint certification transaction. RC2 consumes that authoritative result as-is;
+        // it must not run the legacy editorial overlay or rewrite its validation.
         if (requestedPhases.Contains(6) && CanRunRc2Overlay(response, 6))
         {
             response = await ExecuteRc2OverlayPhaseAsync(
@@ -482,50 +463,6 @@ public sealed class Rc2ContentPlanningBatchOrchestrator(
             || status.Equals("Skipped", StringComparison.OrdinalIgnoreCase)
             || status.Equals("Valid", StringComparison.OrdinalIgnoreCase)
             || status.Equals("Passed", StringComparison.OrdinalIgnoreCase));
-
-    private static BatchGenerateFromPlansResponse ApplyRc2Phase5Response(BatchGenerateFromPlansResponse response, SceneIntentBuilderResult sceneIntentResult)
-    {
-        var generatedFiles = sceneIntentResult.GeneratedFiles;
-        var steps = response.Steps.Select(step => step is ProductionPhaseResult phase && phase.PhaseNo == 5
-                ? phase with { PhaseName = "Editorial Intelligence", OutputFiles = generatedFiles.ToArray() }
-                : step)
-            .ToArray();
-
-        if (!steps.OfType<ProductionPhaseResult>().Any(phase => phase.PhaseNo == 5) && generatedFiles.Count > 0)
-        {
-            steps = steps.Concat([new ProductionPhaseResult(
-                5,
-                "Editorial Intelligence",
-                ProductionPhaseStatus.Succeeded,
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow,
-                0,
-                [
-                    Combine(response.OutputRoot, "plan-input", "production-event-intelligence.json"),
-                    Combine(response.OutputRoot, "editorial", "story-graph.json")
-                ],
-                generatedFiles,
-                Combine(response.OutputRoot, "editorial", "editorial-diagnostics.json"),
-                [],
-                [],
-                false)])
-                .ToArray();
-        }
-
-        var results = response.Results?.Select(result => result is ContentPlanProductionExecutionResult execution
-                ? execution with
-                {
-                    GeneratedFiles = execution.GeneratedFiles.Concat(generatedFiles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                    PhaseResults = execution.PhaseResults?.Select(phase => phase.PhaseNo == 5
-                            ? phase with { PhaseName = "Editorial Intelligence", OutputFiles = generatedFiles.ToArray() }
-                            : phase)
-                        .ToArray()
-                }
-                : result)
-            .ToArray();
-
-        return response with { Steps = steps, Results = results };
-    }
 
     private static BatchGenerateFromPlansResponse ApplyRc2Phase6Response(BatchGenerateFromPlansResponse response, CreativeStoryboardBuilderResult creativeStoryboardResult)
     {
