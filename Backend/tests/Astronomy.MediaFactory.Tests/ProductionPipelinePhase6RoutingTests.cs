@@ -1,5 +1,6 @@
 using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
+using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -23,9 +24,12 @@ public sealed class ProductionPipelinePhase6RoutingTests
     }
 
     [Fact]
-    public void Phase6Routing_MissingEvaluatorDoesNotReportPhase4Invalid()
+    public void ProductionPipelineConstruction_RequiresPhase6InputAuthorityEvaluator()
     {
-        const string unavailable = "P6INPUT_EVALUATOR_UNAVAILABLE";
-        Assert.DoesNotContain("PHASE4_INVALID", unavailable, StringComparison.Ordinal);
+        var parameter = typeof(ProductionPipelineExecutionService).GetConstructors().Single().GetParameters()
+            .Single(value => value.ParameterType == typeof(IPhase6InputAuthorityEvaluator));
+
+        Assert.False(parameter.HasDefaultValue);
+        Assert.False(parameter.IsOptional);
     }
 }

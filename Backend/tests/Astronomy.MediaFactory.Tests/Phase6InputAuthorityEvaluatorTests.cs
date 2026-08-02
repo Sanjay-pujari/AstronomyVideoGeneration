@@ -27,10 +27,13 @@ public sealed class Phase6InputAuthorityEvaluatorTests
     }
 
     [Fact]
-    public void EvaluateAsync_DuplicateRequestedVariants_AreCanonicalizedOrRejected_DeduplicationPolicyIsDeclared()
+    public void Phase6InputAuthorityException_PreservesReasonCodeAndDeterministicErrors()
     {
-        // The evaluator's stored order is a projection of this frozen canonical order.
-        Assert.Equal(["Long", "Short"], new[] { "Long", "Short" });
+        var exception = new Phase6InputAuthorityException("P6INPUT_PHASE5_INVALID", ["first", "second"]);
+
+        Assert.Equal("P6INPUT_PHASE5_INVALID", exception.ReasonCode);
+        Assert.Equal(["first", "second"], exception.Errors);
+        Assert.Equal("P6INPUT_PHASE5_INVALID: first; second", exception.Message);
     }
 
     private sealed class ThrowingPhase4 : IPhase4CommittedAuthorityEvaluator

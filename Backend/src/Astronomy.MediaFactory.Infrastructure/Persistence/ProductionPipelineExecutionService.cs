@@ -53,6 +53,7 @@ public sealed partial class ProductionPipelineExecutionService(
     IPhase5CommittedAuthorityEvaluator phase5CommittedAuthorityEvaluator,
     IPhase5PublicationTransactionCoordinator phase5PublicationTransactionCoordinator,
     IStoryFrameIntegrationService storyFrameIntegrationService,
+    IPhase6InputAuthorityEvaluator phase6InputAuthorityEvaluator,
     IPhase1AuthorityProjector phase1AuthorityProjector,
     IPhase1AuthorityPersistence phase1AuthorityPersistence,
     IPhase1AuthorityReader phase1AuthorityReader,
@@ -84,8 +85,7 @@ public sealed partial class ProductionPipelineExecutionService(
     IStoryFrameAuthorityCommitter? storyFrameAuthorityCommitter = null,
     IStoryFrameTemporaryDirectoryRecovery? storyFrameTemporaryDirectoryRecovery = null,
     IStoryFrameRuntimeIdentityProvider? storyFrameRuntimeIdentityProvider = null,
-    IStoryFrameFileSystem? storyFrameFileSystem = null,
-    IPhase6InputAuthorityEvaluator? phase6InputAuthorityEvaluator = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IStoryFrameFileSystem? storyFrameFileSystem = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     // The action delegate and the generic phase-result writer are deliberately separate.
     // Preserve the publication transaction selected by the Phase 3 action so the stable
@@ -114,7 +114,8 @@ public sealed partial class ProductionPipelineExecutionService(
         ?? storyFrameIntegrationService as IStoryFrameRuntimeIdentityProvider
         ?? throw new InvalidOperationException("The Story Frame integration service must provide its runtime compatibility identity.");
     private readonly IStoryFrameFileSystem _storyFrameFileSystem = storyFrameFileSystem ?? new StoryFrameFileSystem();
-    private readonly IPhase6InputAuthorityEvaluator? _phase6InputAuthorityEvaluator = phase6InputAuthorityEvaluator;
+    private readonly IPhase6InputAuthorityEvaluator _phase6InputAuthorityEvaluator = phase6InputAuthorityEvaluator
+        ?? throw new ArgumentNullException(nameof(phase6InputAuthorityEvaluator));
     private const string ValidPhase6ReuseReason = "Valid Phase 6 authority was reused; overwriteExisting=false.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -810,6 +811,11 @@ public sealed partial class ProductionPipelineExecutionService(
             var status = outcome.Kind == StoryFramePhase6ExecutionKind.Reused ? ProductionPhaseStatus.Skipped : ProductionPhaseStatus.Succeeded;
             return await WritePhaseValidationAsync(context, 6, phaseName, status, [], outcome.OutputFiles, outcome.Warnings, [], outcome.Reason, false, cancellationToken, started);
         }
+        catch (Phase6InputAuthorityException ex)
+        {
+            return await WritePhaseValidationAsync(context, 6, phaseName, ProductionPhaseStatus.Failed, [], [], [],
+                ex.Errors, ex.Message, true, cancellationToken, started, reasonCodeOverride: ex.ReasonCode);
+        }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
             return await WritePhaseValidationAsync(context, 6, phaseName, ProductionPhaseStatus.Failed, [], [], [], [ex.Message], ex.Message, true, cancellationToken, started);
@@ -1157,13 +1163,11 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<StoryFramePhase6ExecutionOutcome> PhaseChronicleDocumentaryArchitectCoreAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var evaluator = _phase6InputAuthorityEvaluator
-            ?? throw new InvalidOperationException("P6INPUT_EVALUATOR_UNAVAILABLE: Phase 6 input authority evaluator is unavailable from composition.");
         var identity = context.Request.PlanId.ToString("D");
-        var input = await evaluator.EvaluateAsync(new(context.OutputRoot, identity, identity, context.EventId,
+        var input = await _phase6InputAuthorityEvaluator.EvaluateAsync(new(context.OutputRoot, identity, identity, context.EventId,
             context.Request.Language, ResolvePhase6RequestedVariants(context.Request.RequestedOutputs)), cancellationToken);
         if (!input.IsValid || input.Authority is null)
-            throw new InvalidOperationException($"{input.ReasonCode}: {string.Join("; ", input.Errors)}");
+            throw new Phase6InputAuthorityException(input.ReasonCode, input.Errors);
         var compatibility = _storyFrameRuntimeIdentityProvider.GetCompatibilityContext();
         var request=new StoryFrameIntegrationRequest(identity,identity,context.EventId, context.Request.Language,
             context.Request.PlannedFormat??context.Request.Category,input.Authority, compatibility.CurrentBuilderType,
@@ -14609,7 +14613,7 @@ public sealed partial class ProductionPipelineExecutionService(
         IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles, IReadOnlyList<string> MissingFiles, IReadOnlyList<string> EmptyFiles,
         IReadOnlyList<string> InvalidFiles, string Phase2AuthorityPath, string? Phase2AuthorityChecksum, IReadOnlyList<string> Errors);
 
-    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, Phase10ValidationDiagnostics? phase10TitleDiagnostics = null, Phase1ExecutionOutcome? phase1Outcome = null, string? outputPath = null)
+    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, Phase10ValidationDiagnostics? phase10TitleDiagnostics = null, Phase1ExecutionOutcome? phase1Outcome = null, string? outputPath = null, string? reasonCodeOverride = null)
     {
         var started = startedUtc ?? DateTimeOffset.UtcNow;
         var finished = DateTimeOffset.UtcNow;
@@ -14667,7 +14671,7 @@ public sealed partial class ProductionPipelineExecutionService(
             reason = phase3Certification.Errors.FirstOrDefault() ?? "Phase 3 committed physical validation failed.";
             canRetry = true;
         }
-        var reasonCode = phase1Outcome?.ReasonCode ?? (phaseNo == 3
+        var reasonCode = reasonCodeOverride ?? phase1Outcome?.ReasonCode ?? (phaseNo == 3
             ? status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped
                 ? phase3Certification?.Recovered == true ? "P3_RECOVERED" : phase3Certification?.Reused == true ? "P3_REUSED" : context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED"
                 : "P3_COMMITTED_VALIDATION_FAILED"
