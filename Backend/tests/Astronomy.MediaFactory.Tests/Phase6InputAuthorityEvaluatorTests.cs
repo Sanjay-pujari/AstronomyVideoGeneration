@@ -1,7 +1,7 @@
 using System.Reflection;
-using System.Runtime.Serialization;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
+using Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -70,7 +70,7 @@ public sealed class Phase6InputAuthorityEvaluatorTests
     [Fact]
     public async Task EvaluateAsync_MissingPhase4ValidationEvidence_ReturnsPhase4Invalid()
     {
-        var aggregate = MinimalAggregate();
+        var aggregate = Aggregate();
         var phase4 = ValidPhase4(aggregate) with { CommittedValidationEvidence = [] };
         var evaluator = new Phase6InputAuthorityEvaluator(
             new StaticPhase4(phase4),
@@ -87,7 +87,7 @@ public sealed class Phase6InputAuthorityEvaluatorTests
     [Fact]
     public async Task EvaluateAsync_UnsafePhase4ValidationEvidence_ReturnsPhase4Invalid()
     {
-        var aggregate = MinimalAggregate();
+        var aggregate = Aggregate();
         var phase4 = ValidPhase4(aggregate) with
         {
             CommittedValidationEvidence = ["../validation/phase-04-validation.json"],
@@ -106,7 +106,7 @@ public sealed class Phase6InputAuthorityEvaluatorTests
     [Fact]
     public async Task EvaluateAsync_MissingPhase4ManifestEvidence_ReturnsPhase4Invalid()
     {
-        var aggregate = MinimalAggregate();
+        var aggregate = Aggregate();
         var phase4 = ValidPhase4(aggregate) with { ManifestEvidence = [] };
         var evaluator = new Phase6InputAuthorityEvaluator(
             new StaticPhase4(phase4),
@@ -125,7 +125,7 @@ public sealed class Phase6InputAuthorityEvaluatorTests
     public async Task EvaluateAsync_ExpectedPhase5Exception_ReturnsPhase5Invalid(Exception exception)
     {
         var evaluator = new Phase6InputAuthorityEvaluator(
-            new StaticPhase4(ValidPhase4(MinimalAggregate())),
+            new StaticPhase4(ValidPhase4(Aggregate())),
             new ThrowingPhase5(exception));
 
         var result = await evaluator.EvaluateAsync(LongRequest);
@@ -140,7 +140,7 @@ public sealed class Phase6InputAuthorityEvaluatorTests
     public async Task EvaluateAsync_OperationCanceledExceptionFromPhase5_Propagates()
     {
         var evaluator = new Phase6InputAuthorityEvaluator(
-            new StaticPhase4(ValidPhase4(MinimalAggregate())),
+            new StaticPhase4(ValidPhase4(Aggregate())),
             new ThrowingPhase5(new OperationCanceledException("cancelled")));
 
         await Assert.ThrowsAsync<OperationCanceledException>(
@@ -158,7 +158,7 @@ public sealed class Phase6InputAuthorityEvaluatorTests
         var phase5 = new Phase5CommittedStateEvaluation(
             false, phase5Code, [phase5Error], [], null);
         var evaluator = new Phase6InputAuthorityEvaluator(
-            new StaticPhase4(ValidPhase4(MinimalAggregate())),
+            new StaticPhase4(ValidPhase4(Aggregate())),
             new StaticPhase5(phase5));
 
         var result = await evaluator.EvaluateAsync(LongRequest);
@@ -244,29 +244,8 @@ public sealed class Phase6InputAuthorityEvaluatorTests
             ManifestEvidence = ["phase-manifest.json"]
         };
 
-    private static DocumentaryBlueprintAggregate MinimalAggregate()
-    {
-#pragma warning disable SYSLIB0050
-        var aggregate = (DocumentaryBlueprintAggregate)
-            FormatterServices.GetUninitializedObject(typeof(DocumentaryBlueprintAggregate));
-#pragma warning restore SYSLIB0050
-        SetAutoProperty(aggregate, "AggregateId", "aggregate-id");
-        SetAutoProperty(aggregate, "DeterministicChecksum", Sha('a'));
-        SetAutoProperty(aggregate, "LongProjectionChecksum", Sha('b'));
-        SetAutoProperty(aggregate, "ShortProjectionChecksum", Sha('c'));
-        return aggregate;
-    }
-
-    private static string Sha(char value) => new(value, 64);
-
-    private static void SetAutoProperty(object target, string propertyName, object? value)
-    {
-        var field = target.GetType().GetField(
-            $"<{propertyName}>k__BackingField",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(field);
-        field!.SetValue(target, value);
-    }
+    private static DocumentaryBlueprintAggregate Aggregate() =>
+        Phase5CertificationFixture.Create().PublishedPhase4;
 
     private sealed class StaticPhase4(Phase4CommittedAuthorityEvaluation result)
         : IPhase4CommittedAuthorityEvaluator
