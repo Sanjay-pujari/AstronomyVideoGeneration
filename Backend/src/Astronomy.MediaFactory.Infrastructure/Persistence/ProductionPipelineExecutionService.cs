@@ -1007,6 +1007,20 @@ public sealed partial class ProductionPipelineExecutionService(
         return variants;
     }
 
+    private static IReadOnlyList<string> ResolvePhase6RequestedVariants(IReadOnlyList<string> requestedOutputs)
+    {
+        var longRequested = requestedOutputs.Contains("LongVideo", StringComparer.OrdinalIgnoreCase);
+        var shortRequested = requestedOutputs.Contains("ShortVideo", StringComparer.OrdinalIgnoreCase);
+        if (!longRequested && !shortRequested)
+            throw new InvalidOperationException("P6INPUT_VARIANT_INVALID: Phase 6 requires LongVideo and/or ShortVideo in RequestedOutputs.");
+        return (longRequested, shortRequested) switch
+        {
+            (true, true) => ["Long", "Short"],
+            (true, false) => ["Long"],
+            _ => ["Short"]
+        };
+    }
+
     private static async Task WriteJsonArtifactAsync<T>(string path, T value, CancellationToken cancellationToken)
     {
         var temporaryPath = path + ".tmp";
@@ -1144,10 +1158,10 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         cancellationToken.ThrowIfCancellationRequested();
         var evaluator = _phase6InputAuthorityEvaluator
-            ?? throw new InvalidOperationException("P6INPUT_PHASE4_INVALID: Phase 6 input authority evaluator is unavailable.");
+            ?? throw new InvalidOperationException("P6INPUT_EVALUATOR_UNAVAILABLE: Phase 6 input authority evaluator is unavailable from composition.");
         var identity = context.Request.PlanId.ToString("D");
         var input = await evaluator.EvaluateAsync(new(context.OutputRoot, identity, identity, context.EventId,
-            context.Request.Language, ResolveViewerVariants(context.EndPhaseNo, context.Request.RequestedOutputs)), cancellationToken);
+            context.Request.Language, ResolvePhase6RequestedVariants(context.Request.RequestedOutputs)), cancellationToken);
         if (!input.IsValid || input.Authority is null)
             throw new InvalidOperationException($"{input.ReasonCode}: {string.Join("; ", input.Errors)}");
         var compatibility = _storyFrameRuntimeIdentityProvider.GetCompatibilityContext();
@@ -1199,7 +1213,7 @@ public sealed partial class ProductionPipelineExecutionService(
             throw;
         }
         logger.LogInformation("Phase 6 Story Frames authority completed. ExecutionId={ExecutionId} PlanId={PlanId} EventId={EventId} Language={Language} Profile={Profile} CertificationId={CertificationId} CertificationChecksum={CertificationChecksum} EditorialContractId={EditorialContractId} EditorialChecksum={EditorialChecksum} RequestedVariants={RequestedVariants} BuilderType={BuilderType} BuilderVersion={BuilderVersion} SceneCount={SceneCount} FrameCount={FrameCount} NarrationFrameCount={NarrationFrameCount} VisualFrameCount={VisualFrameCount} WarningCount={WarningCount} BlockingIssueCount={BlockingIssueCount} OutputRoot={OutputRoot}",
-            request.ExecutionId,request.PlanId,request.EventId,request.Language,request.Profile,certification.CertificationId,certification.SemanticChecksum,editorial.ContractId,editorial.Checksum,string.Join(",",request.RequestedVariants),result.Authority.BuilderType,result.Authority.BuilderVersion,result.Diagnostics.GeneratedSceneCount,result.Diagnostics.GeneratedFrameCount,result.Diagnostics.NarrationFrameCount,result.Diagnostics.VisualFrameCount,result.Diagnostics.WarningCount,result.Diagnostics.BlockingIssueCount,root);
+            request.ExecutionId,request.PlanId,request.EventId,request.Language,request.Profile,request.Certification.CertificationId,request.Certification.SemanticChecksum,request.EditorialContract.ContractId,request.EditorialContract.Checksum,string.Join(",",request.RequestedVariants),result.Authority.BuilderType,result.Authority.BuilderVersion,result.Diagnostics.GeneratedSceneCount,result.Diagnostics.GeneratedFrameCount,result.Diagnostics.NarrationFrameCount,result.Diagnostics.VisualFrameCount,result.Diagnostics.WarningCount,result.Diagnostics.BlockingIssueCount,root);
         return new(StoryFramePhase6ExecutionKind.Generated,
             [Path.Combine(root,"story-frames.json"),Path.Combine(root,"story-frame-index.json"),Path.Combine(root,"story-frame-diagnostics.json")],
             "Phase 6 Story Frames authority generated and certified.", warnings.Distinct(StringComparer.Ordinal).ToArray());

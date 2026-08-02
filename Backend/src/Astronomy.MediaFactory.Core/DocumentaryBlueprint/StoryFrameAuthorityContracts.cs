@@ -126,7 +126,7 @@ public sealed record Phase6CommittedInputAuthority(
     string LongProjectionChecksum, string ShortProjectionChecksum, string ProfileId, string ProfileVersion,
     IReadOnlyList<string> Phase4CommittedValidationEvidence, IReadOnlyList<string> Phase4ManifestEvidence,
     PublishedBlueprintCertification Phase5Authority, string CertificationId, string CertificationChecksum,
-    string EditorialContractChecksum, string Phase5PublicationId,
+    string EditorialContractId, string EditorialContractChecksum, string Phase5PublicationId,
     IReadOnlyList<string> Phase5CommittedValidationEvidence, IReadOnlyList<Phase5ArtifactInventoryEntry> Phase5ManifestEvidence,
     bool StoryFrameEligible, IReadOnlyList<string> AllowedVariants, IReadOnlyList<string> RequestedVariants,
     bool Phase4LineageMatched, bool CertificationAccepted, bool CoverageValid, bool TransitionsValid,
@@ -152,6 +152,30 @@ public sealed record StoryFrameIntegrationRequest(string ExecutionId, string Pla
 }
 public sealed record StoryFrameIntegrationResult(StoryFramesAuthority Authority, StoryFrameIndex Index,
     StoryFrameDiagnostics Diagnostics);
+
+public static class StoryFrameCommittedInputDiagnostics
+{
+    public static IReadOnlyList<string> ArtifactPaths(Phase6CommittedInputAuthority authority)
+    {
+        var paths = new List<string> { "04-blueprint/documentary-blueprint-aggregate.json" };
+        if (authority.RequestedVariants.Contains("Long", StringComparer.Ordinal))
+            paths.Add("04-blueprint/documentary-blueprint-long.json");
+        if (authority.RequestedVariants.Contains("Short", StringComparer.Ordinal))
+            paths.Add("04-blueprint/documentary-blueprint-short.json");
+        paths.AddRange(authority.Phase4CommittedValidationEvidence);
+        paths.AddRange(authority.Phase4ManifestEvidence);
+        paths.AddRange(authority.Phase5ManifestEvidence.Select(x => x.RelativePath));
+        paths.AddRange(authority.Phase5CommittedValidationEvidence);
+        paths.Add("phase-manifest.json");
+        return paths.Where(Safe).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static bool Safe(string path) => !string.IsNullOrWhiteSpace(path) && !Path.IsPathRooted(path) &&
+        !path.Contains('\\') && !path.Split('/').Any(x => x is "" or "." or "..") &&
+        !path.Contains("staging", StringComparison.OrdinalIgnoreCase) && !path.Contains("backup", StringComparison.OrdinalIgnoreCase) &&
+        !path.EndsWith("certification-diagnostics.json", StringComparison.OrdinalIgnoreCase) &&
+        !path.Equals("editorial/story-graph.json", StringComparison.OrdinalIgnoreCase);
+}
 
 public interface IStoryFrameIntegrationService
 {
@@ -285,7 +309,7 @@ public static class StoryFrameArtifactValidator
         var canonical=a.RequestedVariants.SelectMany(v=>e.SceneOrder.SelectMany(scene=>a.Frames.Where(f=>f.Variant.Equals(v,StringComparison.OrdinalIgnoreCase)&&f.SceneId==scene).OrderBy(f=>f.FrameNumber).ThenBy(f=>f.FrameId,StringComparer.Ordinal))).Select(f=>f.FrameId); if(!a.Frames.Select(f=>f.FrameId).SequenceEqual(canonical,StringComparer.Ordinal)) Add("SF-FRAME-001","authority","Frames","canonical order","different order","Authority frame order is not canonical.");
 
         var expected=StoryFrameIndexProjector.Project(a,e.Checksum); CompareIndex(expected,index,Add);
-        ReconcileDiagnostics(a,e,d,compatibility,Add);
+        ReconcileDiagnostics(a,e,d,request,compatibility,Add);
         if(compatibility is not null) { CheckCompat(a.BuilderType,compatibility.CurrentBuilderType,"BuilderType"); CheckCompat(a.BuilderVersion,compatibility.CurrentBuilderVersion,"BuilderVersion"); CheckCompat(d.IntegrationServiceType,compatibility.CurrentIntegrationServiceType,"IntegrationServiceType"); CheckCompat(d.IntegrationServiceVersion,compatibility.CurrentIntegrationServiceVersion,"IntegrationServiceVersion"); }
         void CheckCompat(string stored,string current,string field) { if(string.IsNullOrWhiteSpace(current)||!string.Equals(stored,current,StringComparison.Ordinal)) Add("SF-COMPAT-001","complete-set",field,current,stored,$"Stored {field} is incompatible with the current runtime."); }
         return new(errors.Count==0,errors);
@@ -298,13 +322,14 @@ public static class StoryFrameArtifactValidator
         if(JsonSerializer.Serialize(expectedSemantic,options)!=JsonSerializer.Serialize(actualSemantic,options)) add("SF-INDEX-001","index","Projection","exact authority projection","mismatch","Index does not exactly project the authority.",null,null,null);
         if(actual.Checksum!=StoryFrameAuthorityChecksum.Index(actual)) add("SF-CHECKSUM-001","index","Checksum","recomputed checksum",actual.Checksum,"Index checksum does not reconcile.",null,null,null);
     }
-    private static void ReconcileDiagnostics(StoryFramesAuthority a,DocumentaryBlueprintEditorialContract e,StoryFrameDiagnostics d,StoryFrameValidationCompatibilityContext? compatibility,Action<string,string,string,string,object?,string,string?,string?,string?> add)
+    private static void ReconcileDiagnostics(StoryFramesAuthority a,DocumentaryBlueprintEditorialContract e,StoryFrameDiagnostics d,StoryFrameIntegrationRequest request,StoryFrameValidationCompatibilityContext? compatibility,Action<string,string,string,string,object?,string,string?,string?,string?> add)
     {
-        var paths=new[]{"05-editorial/blueprint-certification.json","05-editorial/editorial-contract.json","05-editorial/certification-diagnostics.json"};
+        var paths=StoryFrameCommittedInputDiagnostics.ArtifactPaths(request.InputAuthority);
         var checksums=new Dictionary<string,string>{{"certification",a.SourceCertificationChecksum},{"editorialContract",a.SourceEditorialContractChecksum},{"phase4",a.SourcePhase4Checksum}};
         var perVariant=a.Frames.GroupBy(f=>f.Variant,StringComparer.OrdinalIgnoreCase).ToDictionary(g=>g.Key,g=>g.Count(),StringComparer.OrdinalIgnoreCase); var perScene=a.Frames.GroupBy(f=>$"{f.Variant}:{f.SceneId}",StringComparer.OrdinalIgnoreCase).ToDictionary(g=>g.Key,g=>g.Count(),StringComparer.OrdinalIgnoreCase);
         bool dictionaries=DictionaryEqual(d.InputArtifactChecksums,checksums)&&DictionaryEqual(d.FramesPerVariant,perVariant)&&DictionaryEqual(d.FramesPerScene,perScene);
-        bool counts=d.ExecutionId==a.ExecutionId&&d.BuilderType==a.BuilderType&&d.BuilderVersion==a.BuilderVersion&&d.InputSceneCount==e.SceneOrder.Count&&d.GeneratedSceneCount==a.Frames.Select(f=>f.SceneId).Distinct(StringComparer.Ordinal).Count()&&d.GeneratedVariantSceneCount==perScene.Count&&d.GeneratedFrameCount==a.Frames.Count&&d.NarrationFrameCount==a.Frames.Count(f=>f.NarrationRequired)&&d.VisualFrameCount==a.Frames.Count(f=>f.ImageRequirements.Count+f.BrollRequirements.Count>0)&&d.ImageRequirementCount==a.Frames.Sum(f=>f.ImageRequirements.Count)&&d.BrollRequirementCount==a.Frames.Sum(f=>f.BrollRequirements.Count)&&d.OverlayRequirementCount==a.Frames.Sum(f=>f.OverlayRequirements.Count)&&d.WarningCount==a.Frames.Sum(f=>f.Warnings.Count)&&d.BlockingIssueCount==a.Frames.Sum(f=>f.BlockingConstraints.Count);
+        var inputCount=request.RequestedVariants.Sum(v=>v=="Long"?request.LongScenes.Count:request.ShortScenes.Count);
+        bool counts=d.ExecutionId==a.ExecutionId&&d.BuilderType==a.BuilderType&&d.BuilderVersion==a.BuilderVersion&&d.InputSceneCount==inputCount&&d.GeneratedSceneCount==a.Frames.Select(f=>f.SceneId).Distinct(StringComparer.Ordinal).Count()&&d.GeneratedVariantSceneCount==perScene.Count&&d.GeneratedFrameCount==a.Frames.Count&&d.NarrationFrameCount==a.Frames.Count(f=>f.NarrationRequired)&&d.VisualFrameCount==a.Frames.Count(f=>f.ImageRequirements.Count+f.BrollRequirements.Count>0)&&d.ImageRequirementCount==a.Frames.Sum(f=>f.ImageRequirements.Count)&&d.BrollRequirementCount==a.Frames.Sum(f=>f.BrollRequirements.Count)&&d.OverlayRequirementCount==a.Frames.Sum(f=>f.OverlayRequirements.Count)&&d.WarningCount==a.Frames.Sum(f=>f.Warnings.Count)&&d.BlockingIssueCount==a.Frames.Sum(f=>f.BlockingConstraints.Count);
         bool stages=d.ValidationStagesExecuted.Distinct(StringComparer.Ordinal).Count()==d.ValidationStagesExecuted.Count&&RequiredStages.All(s=>d.ValidationStagesExecuted.Contains(s,StringComparer.Ordinal));
         if(!d.InputArtifactPaths.SequenceEqual(paths,StringComparer.Ordinal)||d.InputArtifactPaths.Any(p=>Path.IsPathRooted(p)||p.Contains("..")||p.Contains("staging",StringComparison.OrdinalIgnoreCase)||p.Contains("backup",StringComparison.OrdinalIgnoreCase))||!dictionaries||!counts||!stages||d.BuildDurationMilliseconds<0) add("SF-DIAG-001","diagnostics","Reconciliation","exact generated projection","mismatch","Diagnostics do not exactly reconcile.",null,null,null);
         static bool DictionaryEqual<T>(IReadOnlyDictionary<string,T> x,IReadOnlyDictionary<string,T> y)=>x.Count==y.Count&&x.All(kv=>y.TryGetValue(kv.Key,out var value)&&EqualityComparer<T>.Default.Equals(kv.Value,value));
