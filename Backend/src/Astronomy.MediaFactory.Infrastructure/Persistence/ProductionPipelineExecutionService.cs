@@ -84,7 +84,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IStoryFrameAuthorityCommitter? storyFrameAuthorityCommitter = null,
     IStoryFrameTemporaryDirectoryRecovery? storyFrameTemporaryDirectoryRecovery = null,
     IStoryFrameRuntimeIdentityProvider? storyFrameRuntimeIdentityProvider = null,
-    IStoryFrameFileSystem? storyFrameFileSystem = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IStoryFrameFileSystem? storyFrameFileSystem = null,
+    IPhase6InputAuthorityEvaluator? phase6InputAuthorityEvaluator = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     // The action delegate and the generic phase-result writer are deliberately separate.
     // Preserve the publication transaction selected by the Phase 3 action so the stable
@@ -113,6 +114,7 @@ public sealed partial class ProductionPipelineExecutionService(
         ?? storyFrameIntegrationService as IStoryFrameRuntimeIdentityProvider
         ?? throw new InvalidOperationException("The Story Frame integration service must provide its runtime compatibility identity.");
     private readonly IStoryFrameFileSystem _storyFrameFileSystem = storyFrameFileSystem ?? new StoryFrameFileSystem();
+    private readonly IPhase6InputAuthorityEvaluator? _phase6InputAuthorityEvaluator = phase6InputAuthorityEvaluator;
     private const string ValidPhase6ReuseReason = "Valid Phase 6 authority was reused; overwriteExisting=false.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -558,21 +560,8 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private bool ExistingStoryFrameArtifactsAreValid(ProductionPhaseContext context)
     {
-        var root=Path.Combine(context.OutputRoot,"06-story-frames");
-        var paths=new[]{Path.Combine(root,"story-frames.json"),Path.Combine(root,"story-frame-index.json"),Path.Combine(root,"story-frame-diagnostics.json")};
-        if(paths.Any(p=>!File.Exists(p)) || !Phase6ManifestIsValid(context,paths)) return false;
-        try
-        {
-            var p5=Path.Combine(context.OutputRoot,"05-editorial");
-            var certification=JsonSerializer.Deserialize<DocumentaryBlueprintCertification>(File.ReadAllText(Path.Combine(p5,"blueprint-certification.json")),JsonOptions)!;
-            var editorial=JsonSerializer.Deserialize<DocumentaryBlueprintEditorialContract>(File.ReadAllText(Path.Combine(p5,"editorial-contract.json")),JsonOptions)!;
-            var diagnosticsPath=Path.Combine(p5,"certification-diagnostics.json");
-            var diagnostics=File.Exists(diagnosticsPath)?JsonSerializer.Deserialize<DocumentaryBlueprintCertificationDiagnostics>(File.ReadAllText(diagnosticsPath),JsonOptions):null;
-            var request=new StoryFrameIntegrationRequest(context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),context.EventId,context.Request.Language,context.Request.PlannedFormat??context.Request.Category,certification,editorial,diagnostics,ResolveViewerVariants(context.EndPhaseNo, context.Request.RequestedOutputs));
-            var result=new StoryFrameIntegrationResult(JsonSerializer.Deserialize<StoryFramesAuthority>(File.ReadAllText(paths[0]),JsonOptions)!,JsonSerializer.Deserialize<StoryFrameIndex>(File.ReadAllText(paths[1]),JsonOptions)!,JsonSerializer.Deserialize<StoryFrameDiagnostics>(File.ReadAllText(paths[2]),JsonOptions)!);
-            return StoryFrameArtifactValidator.Validate(result,request).Count==0;
-        }
-        catch(Exception ex) when(ex is JsonException or IOException or InvalidOperationException or ArgumentException){return false;}
+        // Phase 6 reuse is evaluated inside the locked route, after committed input authority succeeds.
+        return false;
     }
 
     private static bool Phase6ManifestIsValid(ProductionPhaseContext context,IReadOnlyList<string> expectedPaths)
@@ -1154,26 +1143,19 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<StoryFramePhase6ExecutionOutcome> PhaseChronicleDocumentaryArchitectCoreAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!PreviousPhaseSucceeded(context, 5))
-            throw new InvalidOperationException("Phase 6 rejected missing or invalid Phase 5 validation, manifest, authority, identity, lineage, or checksum.");
-        var phase5Root=Path.Combine(context.OutputRoot,"05-editorial");
-        var published=context.ExecutionContext.PublishedBlueprintCertification;
-        if (published is null)
-        {
-            var evaluation=await phase5CommittedAuthorityEvaluator.EvaluateAsync(context.OutputRoot,context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),context.EventId,context.Request.Language,ExpectedPhase4(context),cancellationToken);
-            published=evaluation.PublishedAuthority??throw new InvalidOperationException($"Phase 6 rejected Phase 5 committed authority ({evaluation.ReasonCode}).");
-        }
-        var certification=published.Certification;
-        var editorial=published.EditorialContract;
-        var diagnosticsPath=Path.Combine(phase5Root,"certification-diagnostics.json");
-        var diagnostics=File.Exists(diagnosticsPath)?await ReadRequiredJsonAsync<DocumentaryBlueprintCertificationDiagnostics>(diagnosticsPath,cancellationToken):null;
-        var request=new StoryFrameIntegrationRequest(context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),context.EventId,
-            context.Request.Language,context.Request.PlannedFormat??context.Request.Category,certification,editorial,diagnostics,
-            ResolveViewerVariants(context.EndPhaseNo, context.Request.RequestedOutputs));
-        if (!editorial.StoryFrameEligible) throw new InvalidOperationException("Phase 5 editorial contract has StoryFrameEligible=false.");
+        var evaluator = _phase6InputAuthorityEvaluator
+            ?? throw new InvalidOperationException("P6INPUT_PHASE4_INVALID: Phase 6 input authority evaluator is unavailable.");
+        var identity = context.Request.PlanId.ToString("D");
+        var input = await evaluator.EvaluateAsync(new(context.OutputRoot, identity, identity, context.EventId,
+            context.Request.Language, ResolveViewerVariants(context.EndPhaseNo, context.Request.RequestedOutputs)), cancellationToken);
+        if (!input.IsValid || input.Authority is null)
+            throw new InvalidOperationException($"{input.ReasonCode}: {string.Join("; ", input.Errors)}");
+        var compatibility = _storyFrameRuntimeIdentityProvider.GetCompatibilityContext();
+        var request=new StoryFrameIntegrationRequest(identity,identity,context.EventId, context.Request.Language,
+            context.Request.PlannedFormat??context.Request.Category,input.Authority, compatibility.CurrentBuilderType,
+            compatibility.CurrentBuilderVersion, compatibility.CurrentIntegrationServiceType, compatibility.CurrentIntegrationServiceVersion);
         cancellationToken.ThrowIfCancellationRequested();
         var root=Path.Combine(context.OutputRoot,"06-story-frames");
-        var compatibility = _storyFrameRuntimeIdentityProvider.GetCompatibilityContext();
         var recovery = await _storyFrameTemporaryDirectoryRecovery.RecoverAsync(new(context.OutputRoot, root, request, compatibility, TimeSpan.FromHours(1)), cancellationToken);
         var warnings = new List<string>(recovery.Warnings);
         cancellationToken.ThrowIfCancellationRequested();

@@ -112,11 +112,44 @@ public sealed record StoryFrameValidationResult(bool IsValid, IReadOnlyList<Stor
 public sealed record StoryFrameDownstreamReadiness(bool IsEligible,
     IReadOnlyList<string> BlockingReasons, IReadOnlyList<string> Warnings);
 
+public sealed record CertifiedStoryFrameSceneAuthority(string SourceSceneId, string Variant, int SequenceNumber,
+    DocumentaryNarrativeStage NarrativeStage, DocumentarySceneRole SceneRole,
+    string ViewerQuestionId, string ViewerQuestionText, string LearningObjectiveId, string LearningObjectiveText,
+    EditorialOutcome EditorialOutcome, SceneTransition TransitionIntent,
+    IReadOnlyList<KnowledgeReference> KnowledgeReferences, int MinimumDurationSeconds,
+    int TargetDurationSeconds, int MaximumDurationSeconds, VisualOpportunity? SafeVisualOpportunity,
+    string SourceSceneSemanticChecksum);
+
+/// <summary>The sole, immutable input boundary for Phase 6.</summary>
+public sealed record Phase6CommittedInputAuthority(
+    DocumentaryBlueprintAggregate Phase4Aggregate, string AggregateId, string AggregateChecksum,
+    string LongProjectionChecksum, string ShortProjectionChecksum, string ProfileId, string ProfileVersion,
+    IReadOnlyList<string> Phase4CommittedValidationEvidence, IReadOnlyList<string> Phase4ManifestEvidence,
+    PublishedBlueprintCertification Phase5Authority, string CertificationId, string CertificationChecksum,
+    string EditorialContractChecksum, string Phase5PublicationId,
+    IReadOnlyList<string> Phase5CommittedValidationEvidence, IReadOnlyList<Phase5ArtifactInventoryEntry> Phase5ManifestEvidence,
+    bool StoryFrameEligible, IReadOnlyList<string> AllowedVariants, IReadOnlyList<string> RequestedVariants,
+    bool Phase4LineageMatched, bool CertificationAccepted, bool CoverageValid, bool TransitionsValid,
+    bool PauseTestValid, bool PublicationCommitted, bool CommittedStateValidationPassed,
+    IReadOnlyList<CertifiedStoryFrameSceneAuthority> LongScenes,
+    IReadOnlyList<CertifiedStoryFrameSceneAuthority> ShortScenes);
+
+public sealed record Phase6InputAuthorityRequest(string ExecutionRoot, string ExecutionId, string PlanId,
+    string EventId, string Language, IReadOnlyList<string> RequestedVariants);
+public sealed record Phase6InputAuthorityEvaluation(bool IsValid, string ReasonCode,
+    IReadOnlyList<string> Errors, Phase6CommittedInputAuthority? Authority);
+
 public sealed record StoryFrameIntegrationRequest(string ExecutionId, string PlanId, string EventId,
-    string Language, string Profile, DocumentaryBlueprintCertification Certification,
-    DocumentaryBlueprintEditorialContract EditorialContract,
-    DocumentaryBlueprintCertificationDiagnostics? CertificationDiagnostics,
-    IReadOnlyList<string> RequestedVariants);
+    string Language, string Profile, Phase6CommittedInputAuthority InputAuthority,
+    string RuntimeBuilderIdentity, string RuntimeBuilderVersion,
+    string RuntimeIntegrationIdentity, string RuntimeIntegrationVersion)
+{
+    public DocumentaryBlueprintCertification Certification => InputAuthority.Phase5Authority.Certification;
+    public DocumentaryBlueprintEditorialContract EditorialContract => InputAuthority.Phase5Authority.EditorialContract;
+    public IReadOnlyList<string> RequestedVariants => InputAuthority.RequestedVariants;
+    public IReadOnlyList<CertifiedStoryFrameSceneAuthority> LongScenes => InputAuthority.LongScenes;
+    public IReadOnlyList<CertifiedStoryFrameSceneAuthority> ShortScenes => InputAuthority.ShortScenes;
+}
 public sealed record StoryFrameIntegrationResult(StoryFramesAuthority Authority, StoryFrameIndex Index,
     StoryFrameDiagnostics Diagnostics);
 
