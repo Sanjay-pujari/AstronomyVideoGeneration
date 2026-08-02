@@ -69,8 +69,10 @@ public readonly record struct StoryFrameContractVersion(int Major, int Minor)
 
 public static class StoryFrameContractCompatibility
 {
-    public const string CurrentVersion = "1.1";
-    private static readonly HashSet<string> SupportedVersions = new(StringComparer.Ordinal) { "1.0", "1.1" };
+    // 1.2 defines RequestedVariants as variants selected for governing Phase 6 authority
+    // publication, independently of requested media delivery outputs.
+    public const string CurrentVersion = "1.2";
+    private static readonly HashSet<string> SupportedVersions = new(StringComparer.Ordinal) { "1.0", "1.1", "1.2" };
     public static bool IsSupported(string? version) => version is not null
         && StoryFrameContractVersion.TryParse(version, out _) && SupportedVersions.Contains(version);
 }
@@ -286,7 +288,10 @@ public static class StoryFrameArtifactValidator
             || value.StartsWith("\\\\",StringComparison.Ordinal) || (value.Length>1 && char.IsLetter(value[0]) && value[1]==':')
             || value.Contains("staging",StringComparison.OrdinalIgnoreCase) || value.Contains("backup",StringComparison.OrdinalIgnoreCase)
             || new[]{"password=","apikey=","api_key=","clientsecret=","connectionstring=","bearer "}.Any(x=>value.Contains(x,StringComparison.OrdinalIgnoreCase));
-        void Version(string artifact,string field,string? value) { if(!StoryFrameContractCompatibility.IsSupported(value)) Add("SF-COMPAT-001",artifact,field,"explicitly supported contract version",value,"Contract version is not reusable."); }
+        void Version(string artifact,string field,string? value,string? current) {
+            if(!StoryFrameContractCompatibility.IsSupported(value) || current is not null && !string.Equals(value,current,StringComparison.Ordinal))
+                Add("SF-COMPAT-001",artifact,field,current ?? "explicitly supported contract version",value,"Contract version is not reusable.");
+        }
 
         foreach(var pair in new[]{("AuthorityId",a.AuthorityId),("ExecutionId",a.ExecutionId),("PlanId",a.PlanId),("EventId",a.EventId),("Language",a.Language),("Profile",a.Profile),("BuilderType",a.BuilderType),("BuilderVersion",a.BuilderVersion)})
             if(UnsafeId(pair.Item2)) Add("SF-AUTH-001","authority",pair.Item1,"safe non-empty identity",pair.Item2,$"{pair.Item1} is invalid.");
@@ -294,7 +299,9 @@ public static class StoryFrameArtifactValidator
         foreach(var pair in new[]{("ExecutionId",a.ExecutionId,request.ExecutionId),("PlanId",a.PlanId,request.PlanId),("EventId",a.EventId,request.EventId),("Language",a.Language,request.Language),("Profile",a.Profile,request.Profile)})
             if(!string.Equals(pair.Item2,pair.Item3,StringComparison.Ordinal)) Add("SF-AUTH-001","authority",pair.Item1,pair.Item3,pair.Item2,"Authority identity does not match request.");
         if(a.GeneratedUtc==default || a.GeneratedUtc>DateTimeOffset.UtcNow.AddMinutes(5)) Add("SF-AUTH-001","authority","GeneratedUtc","non-default timestamp within five-minute clock skew",a.GeneratedUtc,"Generated timestamp is invalid.");
-        Version("authority","AuthorityContractVersion",a.AuthorityContractVersion); Version("index","IndexContractVersion",index.IndexContractVersion); Version("diagnostics","DiagnosticsContractVersion",d.DiagnosticsContractVersion);
+        Version("authority","AuthorityContractVersion",a.AuthorityContractVersion,compatibility?.CurrentAuthorityContractVersion);
+        Version("index","IndexContractVersion",index.IndexContractVersion,compatibility?.CurrentIndexContractVersion);
+        Version("diagnostics","DiagnosticsContractVersion",d.DiagnosticsContractVersion,compatibility?.CurrentDiagnosticsContractVersion);
         foreach(var pair in new[]{("SemanticChecksum",a.SemanticChecksum),("SourceCertificationChecksum",a.SourceCertificationChecksum),("SourceEditorialContractChecksum",a.SourceEditorialContractChecksum),("SourcePhase4Checksum",a.SourcePhase4Checksum)}) if(!Sha(pair.Item2)) Add("SF-CHECKSUM-001","authority",pair.Item1,"lowercase SHA-256",pair.Item2,"Checksum format is invalid.");
         if(!Sha(index.Checksum)) Add("SF-CHECKSUM-001","index","Checksum","lowercase SHA-256",index.Checksum,"Checksum format is invalid.");
         if(a.SourceCertificationId!=request.Certification.CertificationId || a.SourceCertificationChecksum!=request.Certification.SemanticChecksum || a.SourceEditorialContractId!=e.ContractId || a.SourceEditorialContractChecksum!=e.Checksum || a.SourcePhase4Checksum!=e.SourcePhase4Checksum) Add("SF-LINEAGE-001","authority","Source*","exact Phase 5 lineage","mismatch","Phase 5 lineage does not reconcile.");
