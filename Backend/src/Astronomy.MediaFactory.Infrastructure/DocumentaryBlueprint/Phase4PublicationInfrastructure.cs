@@ -287,6 +287,30 @@ public sealed class Phase4PublishedAuthorityValidator(
             var traces = aggregateValue.LongVariant.SceneTraceability
                 .Concat(aggregateValue.ShortVariant.SceneTraceability)
                 .ToArray();
+            var scenes = aggregateValue.LongVariant.Blueprint.Scenes
+                .Concat(aggregateValue.ShortVariant.Blueprint.Scenes).ToArray();
+            foreach (var scene in scenes)
+            {
+                var trace = traces.SingleOrDefault(x => x.SceneId == scene.SceneId);
+                if (scene.KnowledgeReferences.Count == 0 || scene.KnowledgeReferences.Count(x => x.IsPrimary) != 1)
+                    Fail($"Published scene '{scene.SceneId}' must contain exactly one primary knowledge reference.");
+                if (trace is null || trace.KnowledgeSelections.Count == 0 ||
+                    !scene.KnowledgeReferences.Select(x => x.KnowledgeEntryId).Order(StringComparer.Ordinal).SequenceEqual(
+                        trace.KnowledgeSelections.Select(x => x.KnowledgeReferenceId).Order(StringComparer.Ordinal), StringComparer.Ordinal))
+                    Fail($"Published scene '{scene.SceneId}' knowledge does not reconcile with traceability.");
+                if (trace?.EditorialConstraints.Any(x => x.Code == "RequiresEditorialCompletion") == true)
+                    Fail($"Published scene '{scene.SceneId}' still requires editorial completion.");
+                if (scene.SceneRole == DocumentarySceneRole.PracticalObservation && !scene.EditorialOutcome.ProvidesPracticalGuidance)
+                    Fail($"Practical-observation scene '{scene.SceneId}' does not provide practical guidance.");
+            }
+            foreach (var variant in new[] { aggregateValue.LongVariant, aggregateValue.ShortVariant })
+            {
+                var final = variant.Blueprint.Scenes.OrderBy(x => x.SceneNumber).LastOrDefault();
+                if (final is null || final.SceneRole != DocumentarySceneRole.ReflectiveClosing ||
+                    final.NarrativeStage != DocumentaryNarrativeStage.Inspiration ||
+                    final.Transition.TransitionIntent != "Close" || !final.EditorialOutcome.DeliversEmotionalPayoff)
+                    Fail($"{variant.Variant} final scene violates the committed closing invariant (role, stage, transition, or payoff).");
+            }
             var expectedEditorialOnly = traces.Count(x =>
                 x.QuestionEvidenceStatus == QuestionEvidenceStatus.EditorialOnly);
             var expectedMixed = traces.Count(x =>
@@ -297,6 +321,8 @@ public sealed class Phase4PublishedAuthorityValidator(
             {
                 Fail("Knowledge evidence-status totals do not match aggregate traceability.");
             }
+            if (artifact.EditorialOnlySceneCount != 0 || artifact.MixedSceneCount != 0)
+                Fail("Committed knowledge authority contains unresolved editorial-only or mixed scenes.");
 
             var editorialOnlySceneIds = traces
                 .Where(x => x.QuestionEvidenceStatus == QuestionEvidenceStatus.EditorialOnly)

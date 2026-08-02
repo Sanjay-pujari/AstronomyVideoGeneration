@@ -82,9 +82,15 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
             uses[q.QuestionId] = uses.GetValueOrDefault(q.QuestionId) + 1;
             var opportunityId = DocumentaryIntentChecksum.Id($"dso-{p.Variant.ToLowerInvariant()}-{slot.Order:00}-", Version,
                 r.ExecutionId, r.PlanId, r.EventId, r.Profile.ProfileId, r.Profile.ProfileVersion, p.Variant, slot.SlotId, slot.Order, q.QuestionId, objective.ObjectiveId);
-            var selections = selected.Evidence.References.Select((k, i) => new DocumentaryKnowledgeSelection(
+            // Editorial opportunities are allowed while choosing a question, but committed scenes
+            // are resolved against certified authority before they leave the planner.
+            var resolvedReferences = ResolveKnowledge(selected.Evidence.References, certified.Values, q, objective, slot);
+            var evidenceStatus = QuestionEvidenceStatus.ResolvedGrounded;
+            var selections = resolvedReferences.Select((k, i) => new DocumentaryKnowledgeSelection(
                 DocumentaryIntentChecksum.Id("dks-", opportunityId, k.ReferenceId), p.Variant, opportunityId, q.QuestionId,
-                k.ReferenceId, k.SourceArtifact, k.SourcePointer, k.SemanticChecksum, slot.PurposeCode, "QuestionCertifiedReference", i == 0, selected.Evidence.Status)).ToArray();
+                k.ReferenceId, k.SourceArtifact, k.SourcePointer, k.SemanticChecksum, slot.PurposeCode,
+                selected.Evidence.References.Count != 0 ? "QuestionCertifiedReference" : "SemanticCertifiedReference",
+                i == 0, evidenceStatus)).ToArray();
 
             var supporting = slot.CanConsolidateSupportingQuestions
                 ? questions.Where(x => x.QuestionId != q.QuestionId && IsSlotEligible(x, p, slot) && Evidence(x, certified).Status != QuestionEvidenceStatus.Rejected)
@@ -97,12 +103,9 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
             };
             records.AddRange(supporting.Select(x => new DocumentaryQuestionCoverageRecord(x.QuestionId, p.Variant, "Supporting", opportunityId,
                 q.QuestionId, "ConsolidatedSupportingQuestion", "SlotAllowsSupportingConsolidation")));
-            var editorial = selected.Evidence.Status is QuestionEvidenceStatus.EditorialOnly or QuestionEvidenceStatus.Mixed
-                ? new[] { new DocumentaryEditorialConstraint("RequiresEditorialCompletion"), new DocumentaryEditorialConstraint("DoNotClaimUnsupportedDetail") } : [];
             var scene = new DocumentarySceneOpportunity(opportunityId, p.Variant, slot.Order, slot.SlotId, slot.NarrativeStage, slot.SceneRole,
-                slot.PurposeCode, q.QuestionId, q.QuestionText, supporting.Select(x => x.QuestionId).ToArray(), selected.Evidence.Status,
-                objective.ObjectiveId, objective.Text, slot.OutcomeTemplateCode, slot.EditorialOutcome, selections, records, editorial,
-                selected.Evidence.Status == QuestionEvidenceStatus.ResolvedGrounded ? [] : ["SpecificViewingTime", "SpecificHorizon", "EquipmentRequirement"],
+                slot.PurposeCode, q.QuestionId, q.QuestionText, supporting.Select(x => x.QuestionId).ToArray(), evidenceStatus,
+                objective.ObjectiveId, objective.Text, slot.OutcomeTemplateCode, slot.EditorialOutcome, selections, records, [], [],
                 slot.ClosingBehavior.Equals("Terminal", StringComparison.OrdinalIgnoreCase) ? "Close" : slot.TransitionIntentCode,
                 durationBySlot[slot.SlotId], p.MinimumSceneDurationSeconds, p.MaximumSceneDurationSeconds, slot.VisualOpportunityIntent, "");
             scene = scene with {
@@ -126,6 +129,25 @@ public sealed class DocumentaryIntentPlanner : IDocumentaryIntentPlanner
             r.Profile.ProfileVersion, p.ExpectedSceneCount, p.DurationBudgetSeconds, scenes, coverage, coverage, deferrals,
             scenes.SelectMany(x => x.EditorialConstraints).Distinct().OrderBy(x => x.Code, StringComparer.Ordinal).ToArray(), scenes.Sum(x => x.TargetDurationSeconds), "");
         return variant with { DeterministicChecksum = DocumentaryIntentChecksum.Hash(variant with { DeterministicChecksum = "" }) };
+    }
+
+    private static IReadOnlyList<CertifiedDocumentaryKnowledgeReference> ResolveKnowledge(
+        IReadOnlyList<CertifiedDocumentaryKnowledgeReference> exact, IEnumerable<CertifiedDocumentaryKnowledgeReference> available,
+        CuriosityViewerQuestion question, LearningObjective objective, DocumentaryNarrativeSlot slot)
+    {
+        var direct = exact.Where(ValidAuthority).OrderBy(x => x.ReferenceId, StringComparer.Ordinal).FirstOrDefault();
+        if (direct is not null) return [direct];
+        var intent = Tokens(string.Join(" ", [question.QuestionText, question.Category, objective.Text, slot.PurposeCode,
+            slot.SceneRole, slot.NarrativeStage, string.Join(" ", slot.PreferredKnowledgeCategories)]));
+        var resolved = available.Where(ValidAuthority)
+            .Select(x => new { Authority = x, Score = Tokens(string.Join(" ", [x.ReferenceId, x.SourcePointer, x.Category])).Count(intent.Contains) })
+            .OrderByDescending(x => x.Score).ThenBy(x => x.Authority.ReferenceId, StringComparer.Ordinal).FirstOrDefault();
+        if (resolved is null) throw new PlanningException("DI_SLOT_ALLOCATION_FAILED", $"Slot '{slot.SlotId}' has no certified knowledge authority.", []);
+        return [resolved.Authority];
+
+        static HashSet<string> Tokens(string value) => value.Split([' ', '/', '.', '-', '_', ':'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(x => x.Length >= 3).Select(x => x.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal);
     }
 
     private static bool IsSlotEligible(CuriosityViewerQuestion q, DocumentaryVariantProfile p, DocumentaryNarrativeSlot slot) =>
