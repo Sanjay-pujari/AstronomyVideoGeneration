@@ -315,7 +315,13 @@ public static class StoryFrameArtifactValidator
             if(UnsafeId(f.FrameId)||UnsafeId(f.SceneId)) Add("SF-FRAME-001","authority","FrameId/SceneId","safe identifiers",$"{f.FrameId}/{f.SceneId}","Frame or scene identifier is unsafe.",f.Variant,f.SceneId,f.FrameId);
             foreach(var pair in new[]{("NarrativeStage",f.NarrativeStage),("SceneRole",f.SceneRole),("FrameRole",f.FrameRole),("NarrativeIntent",f.NarrativeIntent),("VisualIntent",f.VisualIntent),("ShotType",f.ShotType),("CameraDirection",f.CameraDirection),("CameraMovement",f.CameraMovement),("Subject",f.Subject),("Setting",f.Setting),("Composition",f.Composition),("Lighting",f.Lighting),("Mood",f.Mood),("MotionIntent",f.MotionIntent),("TransitionIn",f.TransitionIn),("TransitionOut",f.TransitionOut)}) if(InvalidText(pair.Item2)) Add("SF-FRAME-001","authority",pair.Item1,"production-ready value",pair.Item2,"Required frame field is invalid.",f.Variant,f.SceneId,f.FrameId);
             if(!double.IsFinite(f.EstimatedStart)||!double.IsFinite(f.EstimatedDuration)||f.EstimatedStart < -TimingToleranceSeconds||f.EstimatedDuration<=0||!double.IsFinite(f.EstimatedStart+f.EstimatedDuration)) Add("SF-TIME-001","authority","Timing","finite non-negative start and positive duration",$"{f.EstimatedStart}/{f.EstimatedDuration}","Frame timing is invalid.",f.Variant,f.SceneId,f.FrameId);
-            ValidateRelationships(f.ViewerQuestionIds,e.MandatoryViewerQuestions,"ViewerQuestionIds",f); ValidateRelationships(f.LearningObjectiveIds,e.LearningObjectives,"LearningObjectiveIds",f); ValidateRelationships(f.KnowledgeReferenceIds,e.KnowledgeReferenceConstraints,"KnowledgeReferenceIds",f);
+            var matchingScenes=RequestedScenes().Where(scene=>scene.Variant.Equals(f.Variant,StringComparison.OrdinalIgnoreCase)&&scene.SourceSceneId==f.SceneId).ToArray();
+            if(matchingScenes.Length==1) {
+                var committed=matchingScenes[0];
+                ValidateRelationships(f.ViewerQuestionIds,[committed.ViewerQuestionId],"ViewerQuestionIds",f);
+                ValidateRelationships(f.LearningObjectiveIds,[committed.LearningObjectiveId],"LearningObjectiveIds",f);
+                ValidateRelationships(f.KnowledgeReferenceIds,committed.KnowledgeReferences.Select(x=>x.KnowledgeEntryId).ToArray(),"KnowledgeReferenceIds",f);
+            }
             ValidateCollection(f.OverlayRequirements,"OverlayRequirements",f); ValidateCollection(f.LowerThirdRequirements,"LowerThirdRequirements",f); ValidateCollection(f.ImageRequirements,"ImageRequirements",f); ValidateCollection(f.BrollRequirements,"BrollRequirements",f); ValidateCollection(f.ProductionNotes,"ProductionNotes",f); ValidateCollection(f.BlockingConstraints,"BlockingConstraints",f); ValidateCollection(f.Warnings,"Warnings",f);
             var narrationFields=new[]{f.NarrativeIntent,f.VisualIntent}.Concat(f.ProductionNotes??[]).Concat(f.OverlayRequirements??[]);
             var markers=new[]{"<speak","<prosody","<voice","WEBVTT","narration.mp3",".wav","voiceName","SSML","-->"};
@@ -323,11 +329,39 @@ public static class StoryFrameArtifactValidator
             if(f.NarrationRequired&&!string.Equals(f.NarrationOwnership,NarrationOwner,StringComparison.Ordinal)) Add("SF-NARR-001","authority","NarrationOwnership",NarrationOwner,f.NarrationOwnership,"Narration ownership is invalid.",f.Variant,f.SceneId,f.FrameId);
             if(f.BlockingConstraints is {Count:>0}) Add("SF-REQ-001","authority","BlockingConstraints","empty",f.BlockingConstraints.Count,"Blocking constraints prevent downstream readiness.",f.Variant,f.SceneId,f.FrameId);
         }
-        void ValidateRelationships(IReadOnlyList<string>? actual,IReadOnlyList<string> certified,string field,StoryFrameAuthorityFrame f) { if(actual is null){Add("SF-REL-001","authority",field,"non-null",null,"Relationship collection is null.",f.Variant,f.SceneId,f.FrameId);return;} if(actual.Any(string.IsNullOrWhiteSpace)||actual.Distinct(StringComparer.Ordinal).Count()!=actual.Count||actual.Except(certified,StringComparer.Ordinal).Any()) Add("SF-REL-001","authority",field,"unique certified IDs",string.Join(',',actual),"Relationship collection is invalid.",f.Variant,f.SceneId,f.FrameId); }
+        void ValidateRelationships(IReadOnlyList<string>? actual,IReadOnlyList<string> expected,string field,StoryFrameAuthorityFrame f) {
+            var expectedValues=expected.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            var actualValues=actual?.Order(StringComparer.Ordinal).ToArray();
+            if(actual is null||actual.Any(string.IsNullOrWhiteSpace)||actual.Distinct(StringComparer.Ordinal).Count()!=actual.Count||
+               actualValues is null||!actualValues.SequenceEqual(expectedValues,StringComparer.Ordinal))
+                Add("SF-REL-001","authority",field,string.Join(',',expectedValues),actual is null?null:string.Join(',',actual),"Relationship collection does not exactly match its committed scene authority.",f.Variant,f.SceneId,f.FrameId);
+        }
         void ValidateCollection(IReadOnlyList<string>? actual,string field,StoryFrameAuthorityFrame f) { if(actual is null){Add("SF-REQ-001","authority",field,"non-null",null,"Requirement collection is null.",f.Variant,f.SceneId,f.FrameId);return;} if(actual.Any(x=>string.IsNullOrWhiteSpace(x)||UnsafeValue(x))||actual.Select(x=>x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count()!=actual.Count) Add("SF-REQ-001","authority",field,"safe unique values",string.Join('|',actual),"Requirement collection is invalid.",f.Variant,f.SceneId,f.FrameId); }
-        foreach(var required in new[]{(e.MandatoryViewerQuestions,"ViewerQuestionIds",a.Frames.SelectMany(f=>f.ViewerQuestionIds??[])),(e.LearningObjectives,"LearningObjectiveIds",a.Frames.SelectMany(f=>f.LearningObjectiveIds??[])),(e.KnowledgeReferenceConstraints,"KnowledgeReferenceIds",a.Frames.SelectMany(f=>f.KnowledgeReferenceIds??[]))}) foreach(var missing in required.Item1.Except(required.Item3,StringComparer.Ordinal)) Add("SF-REL-001","authority",required.Item2,"mandatory coverage",missing,"Mandatory relationship is not covered.");
         IReadOnlyList<CertifiedStoryFrameSceneAuthority> CommittedScenes(string variant) =>
             variant.Equals("Long",StringComparison.OrdinalIgnoreCase) ? request.LongScenes : request.ShortScenes;
+        IReadOnlyList<CertifiedStoryFrameSceneAuthority> RequestedScenes() => canonicalRequested.SelectMany(CommittedScenes).ToArray();
+        var requestedScenes=RequestedScenes();
+        var requestedVariantNames=string.Join(',',canonicalRequested);
+        void ValidateCoverage(IEnumerable<string> required,IEnumerable<string> actual,string field) {
+            foreach(var missing in required.Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).Except(actual,StringComparer.Ordinal))
+                Add("SF-REL-001","authority",field,$"requestedVariants={requestedVariantNames}",$"missingRelationshipId={missing}","Requested committed-scene relationship is not covered.");
+        }
+        ValidateCoverage(requestedScenes.Select(x=>x.ViewerQuestionId),a.Frames.Where(f=>canonicalRequested.Contains(f.Variant,StringComparer.OrdinalIgnoreCase)).SelectMany(f=>f.ViewerQuestionIds??[]),"ViewerQuestionIds");
+        ValidateCoverage(requestedScenes.Select(x=>x.LearningObjectiveId),a.Frames.Where(f=>canonicalRequested.Contains(f.Variant,StringComparer.OrdinalIgnoreCase)).SelectMany(f=>f.LearningObjectiveIds??[]),"LearningObjectiveIds");
+        ValidateCoverage(requestedScenes.SelectMany(x=>x.KnowledgeReferences.Select(k=>k.KnowledgeEntryId)),a.Frames.Where(f=>canonicalRequested.Contains(f.Variant,StringComparer.OrdinalIgnoreCase)).SelectMany(f=>f.KnowledgeReferenceIds??[]),"KnowledgeReferenceIds");
+
+        // Phase 5's question/objective collections historically contain semantic text in some
+        // contracts. Reconcile like with like while keeping typed scene IDs authoritative here.
+        void ValidatePhase5Evidence(IReadOnlyList<string> evidence,IEnumerable<(string Id,string Text)> relationships,string field) {
+            var pairs=relationships.Distinct().ToArray();
+            var storesIds=pairs.Any(pair=>evidence.Contains(pair.Id,StringComparer.Ordinal));
+            foreach(var missing in pairs.Where(pair=>!evidence.Contains(storesIds?pair.Id:pair.Text,StringComparer.Ordinal)))
+                Add("SF-LINEAGE-001","phase5",field,storesIds?missing.Id:"matching semantic text",storesIds?"missing":$"missing relationship for {missing.Id}","Requested committed scene relationship is absent from the corresponding Phase 5 certified evidence.");
+        }
+        ValidatePhase5Evidence(e.MandatoryViewerQuestions,requestedScenes.Select(x=>(x.ViewerQuestionId,x.ViewerQuestionText)),"MandatoryViewerQuestions");
+        ValidatePhase5Evidence(e.LearningObjectives,requestedScenes.Select(x=>(x.LearningObjectiveId,x.LearningObjectiveText)),"LearningObjectives");
+        foreach(var missing in requestedScenes.SelectMany(x=>x.KnowledgeReferences.Select(k=>k.KnowledgeEntryId)).Distinct(StringComparer.Ordinal).Except(e.KnowledgeReferenceConstraints,StringComparer.Ordinal))
+            Add("SF-LINEAGE-001","phase5","KnowledgeReferenceConstraints",missing,"missing","Requested committed scene knowledge relationship is absent from Phase 5 certified evidence.");
         foreach(var variant in a.RequestedVariants) {
             double previousEnd=0;
             var committed=CommittedScenes(variant).OrderBy(x=>x.SequenceNumber).ThenBy(x=>x.SourceSceneId,StringComparer.Ordinal).ToArray();
