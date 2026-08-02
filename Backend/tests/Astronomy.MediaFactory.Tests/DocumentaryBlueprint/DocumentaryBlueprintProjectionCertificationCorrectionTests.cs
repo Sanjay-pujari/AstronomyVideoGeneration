@@ -109,6 +109,33 @@ public sealed class DocumentaryBlueprintProjectionCertificationCorrectionTests
         profile.ShortProfile.NarrativeSlots.Should().OnlyContain(slot => slot.CanReusePrimaryQuestion);
     }
 
+    [Fact]
+    public void Phase4ShortFinalScene_PassesClosingTransitionValidation()
+    {
+        var profile = new CanonicalDocumentaryBlueprintProfileAdapter(new RecordingRegistry(new ConstellationCertificationProfile()))
+            .ProjectOrionGold();
+        var final = profile.ShortProfile.NarrativeSlots.OrderBy(x => x.Order).Last();
+
+        final.SceneRole.Should().Be(nameof(DocumentarySceneRole.ReflectiveClosing));
+        final.NarrativeStage.Should().Be(nameof(DocumentaryNarrativeStage.Inspiration));
+        final.TransitionIntentCode.Should().Be("Close");
+        final.TransitionNextQuestionSeed.Should().Be("Conclude without a new question.");
+        final.TransitionEditorialDirection.Should().Be("Close the documentary.");
+    }
+
+    [Theory]
+    [InlineData("PracticalObservation", true, false)]
+    [InlineData("ReflectiveClosing", false, true)]
+    public void Phase4Projection_EditorialOutcomeMatchesSceneRole(string role, bool practical, bool payoff)
+    {
+        var opportunity = Opportunity("op-1", 1, "Question") with { SceneRole = role };
+        var input = DocumentaryBlueprintProjector.MapScene(
+            IntentFor(opportunity), Variant([opportunity]), opportunity);
+
+        input.EditorialOutcome.ProvidesPracticalGuidance.Should().Be(practical);
+        input.EditorialOutcome.DeliversEmotionalPayoff.Should().Be(payoff);
+    }
+
     private static DocumentaryBlueprintAggregate Aggregate()
     {
         var longArtifact = Artifact("Long", Blueprint("long", [Scene(Input(Opportunity("long-op", 1, "Long question")))]));
@@ -160,6 +187,15 @@ public sealed class DocumentaryBlueprintProjectionCertificationCorrectionTests
     private static DocumentarySourceLineage Lineage() =>
         new("execution", "plan", "phase2", "phase2-checksum", null, "knowledge", "knowledge-checksum",
             "questions", "questions-checksum", "objectives", "objectives-checksum", "question-plan", "plan-checksum", "en", "orion-gold", "1");
+
+    private static DocumentaryIntent IntentFor(DocumentarySceneOpportunity opportunity)
+    {
+        var variant = Variant([opportunity]);
+        return new("1", "1", "1", "intent", "execution", "plan", "event", "en", "orion-gold", "1",
+            "phase2", "phase3", Lineage(), "audience", "goal", [], [], [], "knowledge", "questions",
+            variant, variant with { Variant = "Short", VariantIntentId = "short-intent" },
+            new([], [], [], [], [], []), [], "checksum");
+    }
 
     private sealed class RecordingRegistry(IFamilyCertificationProfile owner) : IFamilyCertificationProfileRegistry
     {

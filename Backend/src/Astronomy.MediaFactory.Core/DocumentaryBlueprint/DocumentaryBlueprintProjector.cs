@@ -138,13 +138,22 @@ public sealed class DocumentaryBlueprintProjector(
         return new(sceneId, scene.Order, scene.PrimaryViewerQuestionText, stage, role,
             new(scene.PrimaryViewerQuestionText),
             new(scene.LearningObjectiveText, scene.LearningObjectiveText, scene.ObjectiveCuriosityGoal, scene.ObjectiveEmotionalGoal),
-            new(scene.EditorialOutcome, scene.EditorialOutcomeCode, false, false, false, false, false),
+            EditorialOutcomeFor(role, scene),
             scene.EditorialPriority,
             scene.SelectedKnowledgeReferences.Select(x => new KnowledgeReference(
                 x.KnowledgeReferenceId, x.SourcePointer, x.PurposeCode, x.IsPrimary)).ToArray(),
             [new(scene.VisualOpportunityIntent, scene.VisualOpportunityType, null, null, scene.VisualIsScientificallyRequired)],
             new(scene.TransitionIntent, scene.TransitionNextQuestionSeed, scene.TransitionEditorialDirection), scene.TargetDurationSeconds);
     }
+
+    private static EditorialOutcome EditorialOutcomeFor(DocumentarySceneRole role, DocumentarySceneOpportunity scene) => role switch
+    {
+        DocumentarySceneRole.OpeningHook => new(scene.EditorialOutcome, scene.EditorialOutcomeCode, false, false, true, false, false),
+        DocumentarySceneRole.PracticalObservation or DocumentarySceneRole.AstrophotographyGuide => new(scene.EditorialOutcome, scene.EditorialOutcomeCode, false, true, false, true, false),
+        DocumentarySceneRole.ReflectiveClosing => new(scene.EditorialOutcome, scene.EditorialOutcomeCode, false, true, false, false, true),
+        DocumentarySceneRole.ScientificExplanation or DocumentarySceneRole.CoreDiscovery or DocumentarySceneRole.MisconceptionCorrection => new(scene.EditorialOutcome, scene.EditorialOutcomeCode, true, true, false, false, false),
+        _ => new(scene.EditorialOutcome, scene.EditorialOutcomeCode, true, false, false, false, false)
+    };
 
     private static void ValidateVariant(DocumentaryVariantIntent variant, DocumentaryVariantProfile profile,
         string expectedVariant, List<DocumentaryBlueprintProjectionDiagnostic> errors)
@@ -175,6 +184,10 @@ public sealed class DocumentaryBlueprintProjector(
                 string.IsNullOrWhiteSpace(x.SourcePointer) || string.IsNullOrWhiteSpace(x.SemanticChecksum) ||
                 x.PurposeCode != scene.PurposeCode || x.EvidenceStatus != scene.QuestionEvidenceStatus))
                 Add("P4P_KNOWLEDGE_RECONCILIATION_FAILED", $"Opportunity '{scene.OpportunityId}' contains knowledge drift.");
+            if (scene.SelectedKnowledgeReferences.Count == 0 || scene.SelectedKnowledgeReferences.Count(x => x.IsPrimary) != 1)
+                Add("P4P_KNOWLEDGE_RECONCILIATION_FAILED", $"Opportunity '{scene.OpportunityId}' must contain exactly one primary certified knowledge reference.");
+            if (scene.EditorialConstraints.Any(x => x.Code == "RequiresEditorialCompletion"))
+                Add("P4P_EDITORIAL_SAFETY_FAILED", $"Opportunity '{scene.OpportunityId}' remains unresolved at publication projection.");
             if ((scene.QuestionEvidenceStatus is QuestionEvidenceStatus.EditorialOnly or QuestionEvidenceStatus.Mixed) &&
                 (scene.EditorialConstraints.Count == 0 || scene.MustNotClaim.Count == 0 ||
                  scene.QuestionEvidenceStatus == QuestionEvidenceStatus.EditorialOnly && scene.SelectedKnowledgeReferences.Count != 0))

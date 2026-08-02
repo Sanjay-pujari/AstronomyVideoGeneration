@@ -22,7 +22,7 @@ public sealed class CanonicalDocumentaryBlueprintProfileAdapter(IFamilyCertifica
         var stages = new[] { "Wonder", "Recognition", "Discovery", "Science", "History", "Culture", "ModernAstronomy", "Clarification", "Observation", "Astrophotography", "Inspiration", "Inspiration" };
         var roles = new[] { "OpeningHook", "Orientation", "RecognitionGuide", "ScientificExplanation", "HistoricalContext", "CulturalContext", "CoreDiscovery", "MisconceptionCorrection", "PracticalObservation", "AstrophotographyGuide", "CoreDiscovery", "ReflectiveClosing" };
         var slots = Enumerable.Range(1, count).Select(i => new DocumentaryNarrativeSlot($"{name.ToLowerInvariant()}-{i:00}", i,
-            stages[i - 1], roles[i - 1], $"OrionGold{i:00}", [], [], [], false, $"Objective{i:00}",
+            i == count ? "Inspiration" : stages[i - 1], i == count ? "ReflectiveClosing" : roles[i - 1], $"OrionGold{i:00}", [], [], [], false, $"Objective{i:00}",
             $"Outcome{i:00}", i == count ? "Close" : $"Advance{i:00}", 1, true, true, i == count ? "Terminal" : "Continue")
         {
             VisualOpportunityIntent = $"OrionGoldVisual{i:00}", EditorialOutcome = $"Orion Gold scene {i:00} outcome",
