@@ -1190,7 +1190,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var result=await storyFrameIntegrationService.BuildAsync(request,cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var errors=StoryFrameArtifactValidator.ValidateDetailed(result,request,compatibility).Errors;
-        if(errors.Count>0) throw new InvalidOperationException("Phase 6 authority validation failed: "+string.Join("; ",errors.Select(x=>x.Message)));
+        if(errors.Count>0) throw new Phase6InputAuthorityException("P6AUTH_CANDIDATE_INVALID",
+            errors.Select(x => $"{x.Code}: variant={x.Variant ?? "<none>"};sceneId={x.SceneId ?? "<none>"};frameId={x.FrameId ?? "<none>"};rule={x.Field}; {x.Message}")
+                .Distinct(StringComparer.Ordinal).ToArray());
         var staging=Path.Combine(context.OutputRoot,$".06-story-frames-staging-{Guid.NewGuid():N}");
         var backup=Path.Combine(context.OutputRoot,$".06-story-frames-backup-{Guid.NewGuid():N}");
         _storyFrameFileSystem.CreateDirectory(staging);
@@ -1204,7 +1206,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 await ReadRequiredJsonAsync<StoryFrameIndex>(Path.Combine(staging,"story-frame-index.json"),cancellationToken),
                 await ReadRequiredJsonAsync<StoryFrameDiagnostics>(Path.Combine(staging,"story-frame-diagnostics.json"),cancellationToken));
             var stagedErrors=StoryFrameArtifactValidator.ValidateDetailed(staged,request,compatibility).Errors;
-            if(stagedErrors.Count>0) throw new InvalidOperationException("Staged Phase 6 authority failed validation: "+string.Join("; ",stagedErrors.Select(x=>x.Message)));
+            if(stagedErrors.Count>0) throw new Phase6InputAuthorityException("P6AUTH_CANDIDATE_INVALID",
+                stagedErrors.Select(x => $"{x.Code}: variant={x.Variant ?? "<none>"};sceneId={x.SceneId ?? "<none>"};frameId={x.FrameId ?? "<none>"};rule={x.Field}; {x.Message}")
+                    .Distinct(StringComparer.Ordinal).ToArray());
             cancellationToken.ThrowIfCancellationRequested();
             var commit = await _storyFrameAuthorityCommitter.CommitAsync(new(root, staging, backup), cancellationToken);
             warnings.AddRange(commit.Warnings);

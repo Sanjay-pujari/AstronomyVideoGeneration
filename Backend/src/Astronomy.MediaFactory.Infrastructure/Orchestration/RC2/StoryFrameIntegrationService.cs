@@ -16,19 +16,21 @@ public sealed class StoryFrameIntegrationService(ICertifiedStoryFrameBuilder bui
     {
         cancellationToken.ThrowIfCancellationRequested();
         var watch=Stopwatch.StartNew();
-        var frames=await builder.BuildAsync(request.EditorialContract, request.RequestedVariants, cancellationToken);
+        var frames=await builder.BuildAsync(request.InputAuthority, cancellationToken);
+        var requestedVariants=new[] { "Long", "Short" }
+            .Where(v => request.RequestedVariants.Contains(v, StringComparer.OrdinalIgnoreCase)).ToArray();
         var now=DateTimeOffset.UtcNow;
         var authority=new StoryFramesAuthority(StoryFrameAuthorityIdentity.BuildAuthorityId(request.ExecutionId), request.ExecutionId, request.PlanId,
             request.EventId, request.Language, request.Profile, request.Certification.CertificationId,
             request.Certification.SemanticChecksum, request.EditorialContract.ContractId, request.EditorialContract.Checksum,
             request.EditorialContract.SourcePhase4Checksum, builder.BuilderType, builder.BuilderVersion,
-            request.RequestedVariants, frames, now, "");
+            requestedVariants, frames, now, "");
         authority=authority with { SemanticChecksum=StoryFrameAuthorityChecksum.Authority(authority) };
         var index=StoryFrameIndexProjector.Project(authority, request.EditorialContract.Checksum);
         var diagnostics=new StoryFrameDiagnostics(request.ExecutionId,builder.BuilderType,builder.BuilderVersion,
             nameof(StoryFrameIntegrationService),Version,StoryFrameCommittedInputDiagnostics.ArtifactPaths(request.InputAuthority),
             new Dictionary<string,string>{{"certification",request.Certification.SemanticChecksum},{"editorialContract",request.EditorialContract.Checksum},{"phase4",request.EditorialContract.SourcePhase4Checksum}},
-            request.Certification.SemanticChecksum,request.EditorialContract.Checksum,request.EditorialContract.SourcePhase4Checksum,request.RequestedVariants,
+            request.Certification.SemanticChecksum,request.EditorialContract.Checksum,request.EditorialContract.SourcePhase4Checksum,requestedVariants,
             request.RequestedVariants.Sum(v=>v=="Long"?request.LongScenes.Count:request.ShortScenes.Count),frames.Select(x=>x.SceneId).Distinct().Count(),frames.Count,
             frames.GroupBy(x=>x.Variant).ToDictionary(x=>x.Key,x=>x.Count()),frames.GroupBy(x=>$"{x.Variant}:{x.SceneId}").ToDictionary(x=>x.Key,x=>x.Count()),
             frames.Count(x=>x.NarrationRequired),frames.Count(x=>x.ImageRequirements.Count+x.BrollRequirements.Count>0),frames.Sum(x=>x.ImageRequirements.Count),frames.Sum(x=>x.BrollRequirements.Count),frames.Sum(x=>x.OverlayRequirements.Count),frames.Sum(x=>x.Warnings.Count),frames.Sum(x=>x.BlockingConstraints.Count),
