@@ -61,8 +61,13 @@ public sealed class Phase5CommittedAuthorityArchitectureTests
     [Fact]
     public void phase6_does_not_require_optional_certification_diagnostics()
     {
-        Assert.Contains("File.Exists(diagnosticsPath)?", Pipeline);
-        Assert.Contains("CertificationDiagnostics?", File.ReadAllText(RepositoryTestPaths.CoreSource("DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs")));
+        var phase6 = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("DocumentaryBlueprint", "Phase6InputAuthorityEvaluator.cs"));
+        var contracts = File.ReadAllText(RepositoryTestPaths.CoreSource("DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs"));
+
+        Assert.Contains("IPhase5CommittedAuthorityEvaluator phase5Evaluator", phase6);
+        Assert.Contains("phase5Evaluator.EvaluateAsync", phase6);
+        Assert.DoesNotContain("certification-diagnostics.json", phase6, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("!path.EndsWith(\"certification-diagnostics.json\"", contracts);
     }
 
     private static int Count(string source, string value) =>
