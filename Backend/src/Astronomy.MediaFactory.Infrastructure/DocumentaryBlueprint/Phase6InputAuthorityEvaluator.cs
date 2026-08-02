@@ -97,12 +97,9 @@ public sealed class Phase6InputAuthorityEvaluator(IPhase4CommittedAuthorityEvalu
             return Invalid("P6INPUT_PHASE5_INVALID", "Phase 5 allowed variants are empty, duplicated, blank, or unsupported.");
         if (published.SceneIntents.Scenes.Any(x => string.IsNullOrWhiteSpace(x.Variant) || !SupportedVariants.Contains(x.Variant)))
             return Invalid("P6INPUT_VARIANT_INVALID", "Phase 5 scene-intent evidence contains an unsupported variant.");
-        if (request.RequestedVariants.Count == 0 || request.RequestedVariants.Any(string.IsNullOrWhiteSpace) ||
-            request.RequestedVariants.Any(v => !SupportedVariants.Contains(v)))
-            return Invalid("P6INPUT_VARIANT_INVALID", "A requested variant is empty or unsupported.");
-        var requested = CanonicalVariants.Where(v => request.RequestedVariants.Contains(v, StringComparer.OrdinalIgnoreCase)).ToArray();
-        if (requested.Any(v => !allowed.Contains(v, StringComparer.OrdinalIgnoreCase)))
-            return Invalid("P6INPUT_VARIANT_NOT_ALLOWED", "A requested variant is not authorized by Phase 5.");
+        // Phase 6 publishes governing authority, not a projection of the immediate media request.
+        // The legacy request field is retained at this boundary for wire/test compatibility only.
+        var requested = ResolvePhase6AuthorityVariants(allowed);
 
         var longResult = BuildScenes("Long", aggregate.LongVariant, published);
         if (!longResult.Valid) return Invalid("P6INPUT_SCENE_EVIDENCE_INVALID", longResult.Error!);
@@ -125,6 +122,9 @@ public sealed class Phase6InputAuthorityEvaluator(IPhase4CommittedAuthorityEvalu
             longResult.Scenes!, shortResult.Scenes!);
         return new(true, "P6INPUT_VALID", [], authority);
     }
+
+    internal static IReadOnlyList<string> ResolvePhase6AuthorityVariants(IReadOnlyList<string> allowedVariants) =>
+        CanonicalVariants.Where(variant => allowedVariants.Contains(variant, StringComparer.OrdinalIgnoreCase)).ToArray();
 
     private static (bool Valid, IReadOnlyList<CertifiedStoryFrameSceneAuthority>? Scenes, string? Error) BuildScenes(
         string variant, DocumentaryBlueprintVariantArtifact projection, PublishedBlueprintCertification p5)

@@ -11,6 +11,21 @@ public sealed class Phase6InputAuthorityEvaluatorTests
     private static readonly Phase6InputAuthorityRequest LongRequest =
         new("root", "execution", "plan", "event", "en", ["Long"]);
 
+    [Theory]
+    [InlineData(new[] { "Long", "Short" }, new[] { "Long", "Short" })]
+    [InlineData(new[] { "Short", "Long" }, new[] { "Long", "Short" })]
+    [InlineData(new[] { "Short" }, new[] { "Short" })]
+    public void Phase6VariantPolicy_UsesCommittedAllowedVariantsInCanonicalOrder(
+        string[] allowed, string[] expected)
+    {
+        var method = typeof(Phase6InputAuthorityEvaluator).GetMethod(
+            "ResolvePhase6AuthorityVariants", BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(method);
+        var actual = Assert.IsAssignableFrom<IReadOnlyList<string>>(method!.Invoke(null, [allowed]));
+        Assert.Equal(expected, actual);
+    }
+
     [Fact]
     public async Task EvaluateAsync_CancellationBeforePhase4_Propagates()
     {

@@ -1083,20 +1083,6 @@ public sealed partial class ProductionPipelineExecutionService(
         return variants;
     }
 
-    private static IReadOnlyList<string> ResolvePhase6RequestedVariants(IReadOnlyList<string> requestedOutputs)
-    {
-        var longRequested = requestedOutputs.Contains("LongVideo", StringComparer.OrdinalIgnoreCase);
-        var shortRequested = requestedOutputs.Contains("ShortVideo", StringComparer.OrdinalIgnoreCase);
-        if (!longRequested && !shortRequested)
-            throw new InvalidOperationException("P6INPUT_VARIANT_INVALID: Phase 6 requires LongVideo and/or ShortVideo in RequestedOutputs.");
-        return (longRequested, shortRequested) switch
-        {
-            (true, true) => ["Long", "Short"],
-            (true, false) => ["Long"],
-            _ => ["Short"]
-        };
-    }
-
     private static async Task WriteJsonArtifactAsync<T>(string path, T value, CancellationToken cancellationToken)
     {
         var temporaryPath = path + ".tmp";
@@ -1235,7 +1221,9 @@ public sealed partial class ProductionPipelineExecutionService(
         cancellationToken.ThrowIfCancellationRequested();
         var identity = context.Request.PlanId.ToString("D");
         var input = await _phase6InputAuthorityEvaluator.EvaluateAsync(new(context.OutputRoot, identity, identity, context.EventId,
-            context.Request.Language, ResolvePhase6RequestedVariants(context.Request.RequestedOutputs)), cancellationToken);
+            // Phase6InputAuthorityEvaluator resolves governing variants from committed Phase 5
+            // AllowedVariants. RequestedOutputs intentionally remain a downstream delivery concern.
+            context.Request.Language, []), cancellationToken);
         if (!input.IsValid || input.Authority is null)
             throw new Phase6InputAuthorityException(input.ReasonCode, input.Errors);
         var compatibility = _storyFrameRuntimeIdentityProvider.GetCompatibilityContext();
