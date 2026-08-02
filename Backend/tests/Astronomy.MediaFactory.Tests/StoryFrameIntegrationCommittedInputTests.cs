@@ -109,8 +109,7 @@ public sealed class StoryFrameIntegrationCommittedInputTests
         var result = await service.BuildAsync(request, CancellationToken.None);
 
         Assert.Equal(1, builder.CallCount);
-        Assert.Same(input.Phase5Authority.EditorialContract, builder.EditorialContract);
-        Assert.Equal(input.RequestedVariants, builder.RequestedVariants);
+        Assert.Same(input, builder.InputAuthority);
         Assert.Equal(StoryFrameCommittedInputDiagnostics.ArtifactPaths(input), result.Diagnostics.InputArtifactPaths);
     }
 
@@ -149,17 +148,14 @@ public sealed class StoryFrameIntegrationCommittedInputTests
         public string BuilderType => "recording-builder";
         public string BuilderVersion => "1";
         public int CallCount { get; private set; }
-        public DocumentaryBlueprintEditorialContract? EditorialContract { get; private set; }
-        public IReadOnlyList<string>? RequestedVariants { get; private set; }
+        public Phase6CommittedInputAuthority? InputAuthority { get; private set; }
 
         public Task<IReadOnlyList<StoryFrameAuthorityFrame>> BuildAsync(
-            DocumentaryBlueprintEditorialContract editorialContract,
-            IReadOnlyList<string> requestedVariants,
+            Phase6CommittedInputAuthority inputAuthority,
             CancellationToken cancellationToken)
         {
             CallCount++;
-            EditorialContract = editorialContract;
-            RequestedVariants = requestedVariants;
+            InputAuthority = inputAuthority;
             return Task.FromResult<IReadOnlyList<StoryFrameAuthorityFrame>>([]);
         }
     }

@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
@@ -13,41 +15,53 @@ public sealed class CreativeStoryboardBuilder(ILogger<CreativeStoryboardBuilder>
     // This is the single in-memory production generation boundary used by RC2 Phase 6.
     // The legacy file-writing entry point remains for compatibility outside the authority pipeline.
     public Task<IReadOnlyList<StoryFrameAuthorityFrame>> BuildCertifiedFramesAsync(
-        DocumentaryBlueprintEditorialContract editorial, IReadOnlyList<string> variants,
-        CancellationToken cancellationToken)
+        Phase6CommittedInputAuthority inputAuthority, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var frames = new List<StoryFrameAuthorityFrame>();
-        foreach (var variant in variants)
+        var editorial = inputAuthority.Phase5Authority.EditorialContract;
+        foreach (var variant in new[] { "Long", "Short" }.Where(v =>
+                     inputAuthority.RequestedVariants.Contains(v, StringComparer.OrdinalIgnoreCase)))
         {
             double start = 0;
-            for (var index = 0; index < editorial.SceneOrder.Count; index++)
+            var scenes = (variant == "Long" ? inputAuthority.LongScenes : inputAuthority.ShortScenes)
+                .OrderBy(scene => scene.SequenceNumber)
+                .ThenBy(scene => scene.SourceSceneId, StringComparer.Ordinal);
+            foreach (var scene in scenes)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var sceneId = editorial.SceneOrder[index];
-                var role = editorial.SceneRoles.GetValueOrDefault(sceneId, "SupportingDetail");
-                var stage = editorial.NarrativeStages.GetValueOrDefault(sceneId, "Development");
+                var sceneId = scene.SourceSceneId;
+                var role = scene.SceneRole.ToString();
+                var stage = scene.NarrativeStage.ToString();
                 var isShort=variant.Equals("Short", StringComparison.OrdinalIgnoreCase);
-                var duration = isShort ? 11d : 18d;
+                var duration = (double)scene.TargetDurationSeconds;
                 var visualGoal=BuildVisualGoal(sceneId,role);
                 var composition=BuildComposition(role,variant);
                 var cameraPlan=BuildCameraPlan(role,variant);
-                frames.Add(new($"{variant.ToLowerInvariant()}-{sceneId}-frame-001", sceneId, index + 1, 1,
-                    variant, stage, role, "Primary", editorial.MandatoryViewerQuestions,
-                    editorial.LearningObjectives, editorial.KnowledgeReferenceConstraints,
-                    $"Advance the certified {role} scene without adding editorial claims.", visualGoal,
+                var frameId = BuildFrameId(variant, scene, inputAuthority.ProfileVersion);
+                var visual = scene.SafeVisualOpportunity;
+                frames.Add(new(frameId, sceneId, scene.SequenceNumber, 1,
+                    variant, stage, role, "Primary", [scene.ViewerQuestionId],
+                    [scene.LearningObjectiveId], scene.KnowledgeReferences.Select(x => x.KnowledgeEntryId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                    $"Advance the certified {role} intent; final narration remains owned by Phase 7.", visual?.Description ?? visualGoal,
                     isShort ? "Medium" : "Wide", cameraPlan, BuildMotionHint(role,variant),
                     BuildSubjectFocus(sceneId,editorial), BuildBackground(role,variant), composition,
-                    "Natural astronomical lighting", "Documentary", BuildMotionHint(role,variant), index == 0 ? "FadeIn" : "ContinuityCut",
-                    index == editorial.SceneOrder.Count - 1 ? "FadeOut" : "ContinuityCut", editorial.DownstreamRequirements.Where(x=>x.Contains("overlay",StringComparison.OrdinalIgnoreCase)).ToArray(),
-                    editorial.DownstreamRequirements.Where(x=>x.Contains("lower",StringComparison.OrdinalIgnoreCase)).ToArray(),
-                    ["Generate or select a fact-consistent visual asset downstream."], [], true, "Phase7NarrationLifecycle",
-                    start, duration, editorial.DownstreamRequirements, editorial.BlockingConstraints, editorial.ApprovedEditorialWarnings));
+                    "Natural astronomical lighting", "Documentary", BuildMotionHint(role,variant), scene.SequenceNumber == 1 ? "FadeIn" : scene.TransitionIntent.TransitionIntent,
+                    scene.TransitionIntent.TransitionIntent, [], [],
+                    [$"Downstream visual asset must implement the certified {visual?.Type ?? "documentary"} opportunity for {sceneId}."], [], true, StoryFrameArtifactValidator.NarrationOwner,
+                    start, duration, [], [], []));
                 start += duration;
             }
         }
-        logger.LogInformation("Existing CreativeStoryboardBuilder generated {FrameCount} certified authority frames for {VariantCount} variants.", frames.Count, variants.Count);
+        logger.LogInformation("CreativeStoryboardBuilder generated {FrameCount} variant-certified authority frames for {VariantCount} variants.", frames.Count, inputAuthority.RequestedVariants.Count);
         return Task.FromResult<IReadOnlyList<StoryFrameAuthorityFrame>>(frames);
+    }
+
+    private static string BuildFrameId(string variant, CertifiedStoryFrameSceneAuthority scene, string profileVersion)
+    {
+        var stable = $"{variant}\n{scene.SourceSceneId}\n{profileVersion}\n{scene.SourceSceneSemanticChecksum}";
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stable))).ToLowerInvariant();
+        return $"{variant.ToLowerInvariant()}-frame-{digest[..24]}";
     }
 
     // Shared pure production rules. Both the legacy writer and the Phase 6 authority projection call

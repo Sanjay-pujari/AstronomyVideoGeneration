@@ -9,8 +9,7 @@ public sealed class CertifiedStoryFrameBuilderAdapter(CreativeStoryboardBuilder 
     public string BuilderVersion => CreativeStoryboardBuilder.AuthorityBuilderVersion;
 
     public Task<IReadOnlyList<StoryFrameAuthorityFrame>> BuildAsync(
-        DocumentaryBlueprintEditorialContract editorialContract,
-        IReadOnlyList<string> requestedVariants,
+        Phase6CommittedInputAuthority inputAuthority,
         CancellationToken cancellationToken) =>
-        builder.BuildCertifiedFramesAsync(editorialContract, requestedVariants, cancellationToken);
+        builder.BuildCertifiedFramesAsync(inputAuthority, cancellationToken);
 }

@@ -217,8 +217,7 @@ public interface ICertifiedStoryFrameBuilder
     string BuilderType { get; }
     string BuilderVersion { get; }
     Task<IReadOnlyList<StoryFrameAuthorityFrame>> BuildAsync(
-        DocumentaryBlueprintEditorialContract editorialContract,
-        IReadOnlyList<string> requestedVariants,
+        Phase6CommittedInputAuthority inputAuthority,
         CancellationToken cancellationToken);
 }
 
@@ -307,7 +306,9 @@ public static class StoryFrameArtifactValidator
             foreach(var v in values) if(string.IsNullOrWhiteSpace(v)||!Variants.Contains(v)) Add("SF-VARIANT-001",artifact,field,"Long or Short",v,"Unknown variant.",v);
             if(values.Distinct(StringComparer.OrdinalIgnoreCase).Count()!=values.Count) Add("SF-VARIANT-001",artifact,field,"no canonical duplicates",string.Join(',',values),"Duplicate canonical variant.");
             if(expected is not null && !values.SequenceEqual(expected,StringComparer.OrdinalIgnoreCase)) Add("SF-VARIANT-001",artifact,field,"declared request order",string.Join(',',values),"Variant order or membership differs."); }
-        ValidateVariantList(request.RequestedVariants,"request","RequestedVariants"); ValidateVariantList(a.RequestedVariants,"authority","RequestedVariants",request.RequestedVariants); ValidateVariantList(d.RequestedVariants,"diagnostics","RequestedVariants",a.RequestedVariants);
+        ValidateVariantList(request.RequestedVariants,"request","RequestedVariants");
+        var canonicalRequested=new[] { "Long", "Short" }.Where(v=>request.RequestedVariants.Contains(v,StringComparer.OrdinalIgnoreCase)).ToArray();
+        ValidateVariantList(a.RequestedVariants,"authority","RequestedVariants",canonicalRequested); ValidateVariantList(d.RequestedVariants,"diagnostics","RequestedVariants",a.RequestedVariants);
         var duplicateFrames=a.Frames.GroupBy(f=>f.FrameId,StringComparer.Ordinal).Where(g=>g.Count()>1); foreach(var duplicate in duplicateFrames) Add("SF-FRAME-001","authority","FrameId","unique",duplicate.Key,"Duplicate frame ID.",frame:duplicate.Key);
         foreach(var f in a.Frames) {
             if(!Variants.Contains(f.Variant)||!a.RequestedVariants.Contains(f.Variant,StringComparer.OrdinalIgnoreCase)) Add("SF-VARIANT-001","authority","Frame.Variant","requested variant",f.Variant,"Frame variant is unknown or unrequested.",f.Variant,f.SceneId,f.FrameId);
@@ -360,7 +361,10 @@ public static class StoryFrameArtifactValidator
         ReconcileDiagnostics(a,e,d,request,compatibility,Add);
         if(compatibility is not null) { CheckCompat(a.BuilderType,compatibility.CurrentBuilderType,"BuilderType"); CheckCompat(a.BuilderVersion,compatibility.CurrentBuilderVersion,"BuilderVersion"); CheckCompat(d.IntegrationServiceType,compatibility.CurrentIntegrationServiceType,"IntegrationServiceType"); CheckCompat(d.IntegrationServiceVersion,compatibility.CurrentIntegrationServiceVersion,"IntegrationServiceVersion"); }
         void CheckCompat(string stored,string current,string field) { if(string.IsNullOrWhiteSpace(current)||!string.Equals(stored,current,StringComparison.Ordinal)) Add("SF-COMPAT-001","complete-set",field,current,stored,$"Stored {field} is incompatible with the current runtime."); }
-        return new(errors.Count==0,errors);
+        var deduplicated=errors.GroupBy(error => new { error.Code, error.Artifact, error.Field, error.Variant,
+                error.SceneId, error.FrameId, error.Expected, error.Actual, error.Message })
+            .Select(group=>group.First()).ToArray();
+        return new(deduplicated.Length==0,deduplicated);
     }
 
     private static void CompareIndex(StoryFrameIndex expected,StoryFrameIndex actual,Action<string,string,string,string,object?,string,string?,string?,string?> add)
