@@ -20,12 +20,9 @@ internal sealed class Phase5PublicationTestFixture : IDisposable
         var source = Phase5CertificationFixture.Create();
         CertificationRequest = source.Request;
         Candidate = source.Result;
-        // The adapter is the single projection boundary between the published Phase 4
-        // aggregate and Phase 5.  In particular, do not build a second, equivalent-
-        // looking Long/Short projection here: the certification service certifies the
-        // adapter projections and the committed evaluator must be given those checksums.
-        Expected = new(source.PublishedPhase4.AggregateId, source.PublishedPhase4.DeterministicChecksum,
-            CertificationRequest.Long.Metadata.Checksum, CertificationRequest.Short.Metadata.Checksum);
+        // Expected lineage is constructed only from the committed Phase 4 authority;
+        // compatibility artifacts have separate, non-authoritative checksums.
+        Expected = Phase5ExpectedPhase4Authority.From(source.PublishedPhase4);
         Request = new(Root, CertificationRequest, Candidate, Expected, "Editorial certification", DateTimeOffset.UtcNow);
         ValidateFixtureLineage();
     }

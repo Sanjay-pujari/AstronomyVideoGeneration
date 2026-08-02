@@ -16274,8 +16274,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var authority = context.ExecutionContext.PublishedDocumentaryBlueprintAggregate
             ?? throw new InvalidDataException("P5_UPSTREAM_PHASE4_AUTHORITY_INVALID: current committed Phase 4 authority is unavailable.");
-        return new(authority.AggregateId, authority.DeterministicChecksum,
-            authority.LongVariant.DeterministicChecksum, authority.ShortVariant.DeterministicChecksum);
+        return Phase5ExpectedPhase4Authority.From(authority);
     }
 
     private static async Task WritePhaseManifestAsync(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, CancellationToken cancellationToken, string? outputPath = null)
