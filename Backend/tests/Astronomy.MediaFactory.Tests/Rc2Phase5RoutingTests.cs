@@ -74,7 +74,7 @@ public sealed class Rc2Phase5RoutingTests
     public void Rc2Phase5Routing_CertifiedExecutionIncludesPhase5()
     {
         Assert.Contains("Rc2CertifiedExecution = await certifiedExecutionStatusReader.ReadAsync(response", Rc2Source);
-        Assert.Contains("x.PhaseNo is >= 1 and <= 5", ReadInfrastructure("Orchestration", "RC2", "Rc2CertifiedExecutionStatusReader.cs"));
+        Assert.Contains("x.PhaseNo is >= 1 and <= 6", ReadInfrastructure("Orchestration", "RC2", "Rc2CertifiedExecutionStatusReader.cs"));
     }
 
     private static string ReadInfrastructure(params string[] parts) => File.ReadAllText(RepositoryTestPaths.InfrastructureSource(parts));

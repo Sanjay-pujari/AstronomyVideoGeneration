@@ -144,7 +144,8 @@ public sealed record Rc2CertifiedExecutionStatus(
     string DownstreamAuthorityType = "PublishedDocumentaryBlueprintAggregate",
     bool LegacyCompatibilityArtifactExists = false,
     bool LegacyPhase4AuthorityUsed = false,
-    string? CommittedStateReasonCode = null);
+    string? CommittedStateReasonCode = null,
+    Rc2Phase6PublicationStatus? Phase6Publication = null);
 
 public sealed record Rc2CertifiedPhaseStatus(int PhaseNo, string PhaseName, string Status, string? ReasonCode);
 
@@ -154,6 +155,14 @@ public sealed record Rc2Phase4PublicationStatus(
     bool PhysicalAuthorityExists,
     bool CommittedStateValidationPassed,
     bool LegacyAuthorityProduced);
+
+public sealed record Rc2Phase6PublicationStatus(
+    string IntegrationService, string Status, bool PhysicalAuthorityExists,
+    bool CommittedStateValidationPassed, bool LegacyAuthorityUsed,
+    string? AuthorityId, string? AuthorityChecksum, string? IndexChecksum,
+    IReadOnlyList<string> RequestedVariants, int LongFrameCount, int ShortFrameCount,
+    int TotalFrameCount, bool PublicationCommitted, bool AlreadyPublished,
+    IReadOnlyList<string> ArtifactPaths, string CommittedStateReasonCode);
 
 public sealed record BatchGenerateFromPlansSelectedPlan(
     Guid ContentGenerationPlanId,
