@@ -321,7 +321,10 @@ public sealed partial class ProductionPipelineExecutionService(
             warnings.AddRange(result.Warnings);
             errors.AddRange(result.Errors);
             // Phase 5 manifest and validation publication are exclusively owned by its coordinator.
-            if (phase.No is not (1 or 4 or 5)) await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+            // A certified Phase 6 reuse is a read-only operation.  The manifest is part of the
+            // committed complete set, so even serializing equivalent JSON would violate reuse.
+            if (phase.No is not (1 or 4 or 5) && !(phase.No == 6 && result.ReasonCode == "P6REUSE_VALID"))
+                await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
             if (result.Status == ProductionPhaseStatus.Failed)
             {
                 logger.LogWarning("Production phase {PhaseNo} {PhaseName} failed for plan {PlanId}: {Errors}", result.PhaseNo, result.PhaseName, productionRequest.PlanId, string.Join(" | ", result.Errors));
@@ -573,12 +576,28 @@ public sealed partial class ProductionPipelineExecutionService(
             using var document=JsonDocument.Parse(File.ReadAllText(path));
             if(!document.RootElement.TryGetProperty("planId",out var planId)||!Guid.TryParse(planId.GetString(),out var parsedPlanId)||parsedPlanId!=context.Request.PlanId
                 ||!document.RootElement.TryGetProperty("phase6Artifacts",out var entries)||entries.ValueKind!=JsonValueKind.Array) return false;
-            var actual=entries.EnumerateArray().Select(e => e.TryGetProperty("path", out var p) && e.TryGetProperty("role", out var r)
+            var actual=entries.EnumerateArray().Select(e => e.TryGetProperty("relativePath", out var p) && e.TryGetProperty("role", out var r)
                 ? (Path:NormalizePath(p.GetString()??""),Role:r.GetString()??"") : (Path:"",Role:"")).ToArray();
-            var roles=new[]{"Authoritative","DownstreamContract","Supporting"};
-            return actual.Length==3&&actual.Count(x=>x.Role=="Authoritative")==1&&actual.Select(x=>x.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count()==3
-                &&actual.All(x=>StoryFramePathSecurity.IsCanonicalContainedPath(context.OutputRoot,x.Path,"06-story-frames",Path.GetFileName(x.Path)))
-                &&expectedPaths.Select((p,i)=>actual.Any(x=>x.Path==NormalizePath(p)&&x.Role==roles[i])).All(x=>x);
+            var roles=new[]{"CanonicalAuthority","DownstreamContract","SupportingDiagnostics"};
+            var relatives=expectedPaths.Select(p=>NormalizePath(Path.GetRelativePath(context.OutputRoot,p))).ToArray();
+            var structurallyValid=actual.Length==3&&actual.Count(x=>x.Role=="CanonicalAuthority")==1&&actual.Select(x=>x.Path).Distinct(StringComparer.Ordinal).Count()==3
+                &&actual.All(x=>StoryFramePathSecurity.IsCanonicalContainedPath(context.OutputRoot,Path.Combine(context.OutputRoot,x.Path),"06-story-frames",Path.GetFileName(x.Path)))
+                &&relatives.Select((p,i)=>actual.Any(x=>x.Path==p&&x.Role==roles[i])).All(x=>x);
+            if(!structurallyValid)return false;
+            foreach(var entry in entries.EnumerateArray())
+            {
+                var relative=entry.GetProperty("relativePath").GetString()!;
+                var physical=Path.Combine(context.OutputRoot,relative.Replace('/',Path.DirectorySeparatorChar));
+                if(!entry.TryGetProperty("required",out var required)||required.ValueKind!=JsonValueKind.True
+                    ||!entry.TryGetProperty("physicalSha256",out var hash)||hash.GetString()!=PhysicalChecksum(physical)
+                    ||!entry.TryGetProperty("sizeBytes",out var size)||!size.TryGetInt64(out var expectedSize)||expectedSize!=new FileInfo(physical).Length
+                    ||!entry.TryGetProperty("semanticChecksum",out var semantic)||string.IsNullOrWhiteSpace(semantic.GetString())
+                    ||!entry.TryGetProperty("contractVersion",out var version)||version.GetString()!=StoryFrameContractCompatibility.CurrentVersion)
+                    return false;
+                foreach(var lineage in new[]{"sourcePhase4Checksum","sourceLongChecksum","sourceShortChecksum","sourceCertificationChecksum","sourceEditorialContractChecksum","sourcePhase5PublicationId"})
+                    if(!entry.TryGetProperty(lineage,out var value)||string.IsNullOrWhiteSpace(value.GetString()))return false;
+            }
+            return true;
         }
         catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException or ArgumentException or NotSupportedException) { return false; }
     }
@@ -809,6 +828,15 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var outcome = await ExecuteLockedPhase6Async(context, cancellationToken);
             var status = outcome.Kind == StoryFramePhase6ExecutionKind.Reused ? ProductionPhaseStatus.Skipped : ProductionPhaseStatus.Succeeded;
+            if (outcome.Kind == StoryFramePhase6ExecutionKind.Reused)
+            {
+                var finished = DateTimeOffset.UtcNow;
+                return new ProductionPhaseResult(6, "Story Frames Authority", status, started, finished,
+                    (long)(finished-started).TotalMilliseconds,
+                    [], outcome.OutputFiles, "validation/phase-06-validation.json", outcome.Warnings, [], false,
+                    "Valid committed Phase 6 Story Frame authority was reused; overwriteExisting=false.")
+                    { ReasonCode = "P6REUSE_VALID" };
+            }
             return await WriteCanonicalPhase6ValidationAsync(context, status, outcome, started, cancellationToken);
         }
         catch (Phase6InputAuthorityException ex)
@@ -16496,7 +16524,7 @@ public sealed partial class ProductionPipelineExecutionService(
             ["sourceCertificationChecksum"] = Evidence("sourceCertificationChecksum"),
             ["sourceEditorialContractChecksum"] = Evidence("sourceEditorialContractChecksum"),
             ["sourcePhase5PublicationId"] = Evidence("sourcePhase5PublicationId"),
-            ["artifactContractVersion"] = Value(contractProperty)
+            ["contractVersion"] = Value(contractProperty)
         };
     }
 

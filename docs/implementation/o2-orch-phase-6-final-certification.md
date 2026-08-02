@@ -1,103 +1,150 @@
-# O2.ORCH.6.4 — Phase 6 final-closure certification
+# O2.ORCH.6.7 — Phase 6 final freeze and release certification
 
-## Scope and governing material
+## Certification identity
 
-This review used the O2.ORCH.6.4 closure requirements, the Phase 4/5 committed-authority patterns, and the existing Story Frame authority contracts. It changes the publication/orchestration boundary only; Story Frame construction, relationship mapping, Phases 1–5, and Phase 7 are unchanged.
-
-## Duplicate owners and routing discovered
-
-The production pipeline already dispatched phase 6 through `ExecutePhase6Async` and `ExecuteLockedPhase6Async`, but the successful result was subsequently passed to the generic `WritePhaseValidationAsync` writer. That generic writer included the legacy Phase 6 enrichment/Creative Intelligence validation projection. The generic manifest writer also rebuilt `phase6Artifacts` as absolute `{ path, role }` pairs. Separately, `Rc2CertifiedExecutionStatusReader` filtered certified phase results to phases 1–5. The older `Rc2ContentPlanningBatchOrchestrator`, `CreativeStoryboardBuilder`, certification service, and legacy tests retain Creative Intelligence compatibility terminology; they are not the production-pipeline phase-6 dispatch selected by `ProductionPipelineExecutionService`.
-
-## Disposition and canonical owner
-
-`ProductionPipelineExecutionService → ExecutePhase6Async → ExecuteLockedPhase6Async → PhaseChronicleDocumentaryArchitectCoreAsync → IPhase6InputAuthorityEvaluator → IStoryFrameIntegrationService → StoryFrameArtifactValidator → IStoryFrameAuthorityCommitter` remains the one current production route. Its phase name is **Story Frames Authority**. Legacy `creative/*`, `story-frames/{short,long}/*`, and visual-intelligence files are classified as compatibility/diagnostic residue and are excluded from the governing inventory; this change does not delete user output.
-
-## Validation contract and API aggregation
-
-Successful/reused Phase 6 publication now uses a dedicated canonical writer. It physically rereads all three Story Frame artifacts, reevaluates the typed Phase 4/5 input authority, and emits lineage, identity, requested-variant, frame-count, checksum, validation-gate, warning/error, and canonical relative-path fields. Generated publication uses `P6AUTH_COMMITTED`; reuse uses `P6REUSE_VALID`. The returned API phase result uses the same name, reason code, relative inputs/outputs, and stable validation path, preventing the generic legacy payload from overwriting successful canonical state.
-
-## Manifest contract
-
-The governing `phase6Artifacts` inventory contains only:
-
-| Relative path | Role |
+| Item | Value |
 |---|---|
-| `06-story-frames/story-frames.json` | `CanonicalAuthority` |
-| `06-story-frames/story-frame-index.json` | `DownstreamContract` |
-| `06-story-frames/story-frame-diagnostics.json` | `SupportingDiagnostics` |
+| Timestamp | 2026-08-02T13:46:27Z |
+| Branch | `work` |
+| Inspected baseline commit | `d4dde558d96977abbdac30fb2190bf9409ae9194` |
+| Governing request | O2.ORCH.6.7 |
+| Certification status | **Incomplete — freeze withheld** |
 
-Each existing entry includes `required`, semantic checksum, physical SHA-256, byte size, Phase 4 long/short lineage, Phase 5 certification/editorial/publication lineage, and artifact contract version. No absolute path or creative compatibility artifact is authoritative. Phase history is produced from the single phase result.
+The final implementation commit is the Git commit containing this document (the baseline above is recorded because a document cannot truthfully contain its own Git object ID).
 
-## Committed-state evaluation, transaction, recovery, and reuse
+## Governing material and frozen boundary
 
-The current committed-state check continues to combine `IPhase6InputAuthorityEvaluator`, `EvaluateStoryFrameResume`, `StoryFrameArtifactValidator`, manifest physical hash validation, runtime compatibility identity, and the three typed Story Frame documents. The committer retains staging readback, stable-directory swap, rollback, and temporary-directory recovery. Valid `overwriteExisting=false` reuse does not invoke the builder and now reports `P6REUSE_VALID`; invalid authority, manifest, semantic data, lineage, or runtime identity regenerates. A future hardening item is to move manifest and validation into the same filesystem transaction as the authority directory; this patch prevents the known generic overwrite but does not claim that broader transaction coordinator exists.
+The O2.ORCH.6.7 acceptance contract, existing Phase 4/5 committed-authority patterns, Story Frame authority contracts, manifest publication, RC2 aggregation, and the previous Phase 6 audits were reviewed. Phases 1–5 remain frozen: no authority artifact, validation file, contract, checksum behavior, inventory, or history entry in those phases was changed.
 
-## RC2 certified execution
+## Canonical responsibility, owner, and route
 
-Certified phase aggregation now includes phases 1–6. A typed `Rc2Phase6PublicationStatus` reports integration identity, physical authority presence, committed validation, legacy-use flag, authority/index checksums, requested variants, long/short/total counts, publication/reuse state, paths, and committed-state reason code.
+Phase 6 owns deterministic Story Frame production from every committed Long and Short scene. The single production route remains `ProductionPipelineExecutionService → ExecutePhase6Async → ExecuteLockedPhase6Async → PhaseChronicleDocumentaryArchitectCoreAsync → IPhase6InputAuthorityEvaluator → IStoryFrameIntegrationService → StoryFrameArtifactValidator → IStoryFrameAuthorityCommitter`. The governing contract is version 1.2; requested media outputs do not narrow its dual authority.
 
-## Files added
+## Canonical artifact inventory and manifest policy
 
-- `docs/implementation/o2-orch-phase-6-final-certification.md`
+| Relative path | Role | Required contract version |
+|---|---|---|
+| `06-story-frames/story-frames.json` | `CanonicalAuthority` | 1.2 |
+| `06-story-frames/story-frame-index.json` | `DownstreamContract` | 1.2 |
+| `06-story-frames/story-frame-diagnostics.json` | `SupportingDiagnostics` | 1.2 |
 
-## Files modified
+The implementation now reads `relativePath` (not the retired absolute `path` shape), requires exactly those three roles, checks safe canonical containment, uniqueness, `required=true`, physical SHA-256, `sizeBytes`, nonempty semantic checksum, all six lineage values, and `contractVersion=1.2`. Publication emits the required `contractVersion` field rather than the non-contractual `artifactContractVersion` alias.
+
+## Authority content, relationships, narration, and duration
+
+The supplied expected execution describes 12 Long frames / 600 seconds followed by 4 Short frames / 120 seconds (16 total), with one frame per committed scene. It also reports relationship, lineage, ordering, runtime, narration ownership, semantic, and physical gates as passing. **No committed execution output package exists in this checkout**, so this review cannot independently reread all frames or certify the supplied IDs/checksums.
+
+### Long frame table
+
+| Sequence | Expected frame | Duration evidence |
+|---:|---:|---|
+| 1–12 | one per committed Long scene | aggregate expected total: 600 seconds; runtime evidence unavailable |
+
+### Short frame table
+
+| Sequence | Expected frame | Duration evidence |
+|---:|---:|---|
+| 1–4 | one per committed Short scene | aggregate expected total: 120 seconds; runtime evidence unavailable |
+
+Relationship reconciliation, Phase7 narration ownership, absence of final narration/SSML/subtitle/TTS payload, transition intent, editorial outcome, safe visual direction, and deterministic per-frame checksums remain runtime certification items. They are not asserted from counts alone.
+
+## Authority, index, and diagnostics checksums
+
+| Artifact | Supplied semantic checksum | Independently recalculated |
+|---|---|---|
+| Authority | `885acd54f8772e080b8d9e3ac239505667f7d45d23456eb2bb27c4c5ab75ea07` | No — artifact absent |
+| Index | `1801f9eb98e1b53cb41849453b81300e3ff16139aa2ab1c24161c63190d146fd` | No — artifact absent |
+| Diagnostics | governed by committed validation/authority lineage | No — artifact absent |
+
+## Manifest physical evidence
+
+| Relative path | Physical SHA-256 | Size | Manifest match | Semantic validation | Lineage validation |
+|---|---|---:|---|---|---|
+| `06-story-frames/story-frames.json` | unavailable | unavailable | not executed | not executed | not executed |
+| `06-story-frames/story-frame-index.json` | unavailable | unavailable | not executed | not executed | not executed |
+| `06-story-frames/story-frame-diagnostics.json` | unavailable | unavailable | not executed | not executed | not executed |
+
+## Diagnostics and validation summary
+
+The expected diagnostics are 16 input/generated scenes, 16 generated frames, Long=12, Short=4, 16 narration frames, 16 visual frames, zero warnings/blockers, and each of the ten required validation stages exactly once. The expected stable validation is `Succeeded/P6AUTH_COMMITTED/Valid` with all gates true and no errors or warnings. Neither file is present, so complete-set reconciliation is unavailable.
+
+## Manifest history
+
+Expected history is one `phaseNo=6`, `Story Frames Authority`, `Succeeded`, `P6AUTH_COMMITTED` entry with canonical inputs/outputs and `validation/phase-06-validation.json`; execution state must be completed through phase 6 with no failed phase. No runtime manifest is present, so history was not certified. Phase 1–5 history code/data was not modified.
+
+## Forced API and certified-execution summaries
+
+No runnable output fixture and no .NET SDK are available. Consequently the forced RC2 call, the top-level/nested aggregation, and `rc2CertifiedExecution.phase6Publication` could not be executed. The supplied expected forced result remains evidence, not an independently certified result.
+
+## Reuse behavior and immutability
+
+Two concrete reuse defects were corrected:
+
+1. resume validation now understands the canonical manifest schema and validates physical hash, byte size, contract version, and lineage;
+2. `P6REUSE_VALID` no longer rewrites stable validation or the manifest. It constructs the API phase result from the committed readback and bypasses both writers.
+
+The builder and committer remain downstream of the successful resume return, so the source route makes their expected valid-reuse invocation counts zero. Runtime recording counters, before/after five-file hashes/sizes/timestamps, and an actual reuse API result could not be produced here.
+
+| Reuse evidence | Result |
+|---|---|
+| Expected reason code | `P6REUSE_VALID` |
+| Stable validation writer | bypassed by source route |
+| Manifest writer | bypassed by source route |
+| Builder invocation count | expected 0; not runtime-recorded |
+| Committer invocation count | expected 0; not runtime-recorded |
+| Five-file byte/timestamp immutability | not executed |
+
+## Legacy and transaction residue scans
+
+An exact repository scan found none of the named Phase 6-owned legacy artifacts and none of the named staging/backup/transaction residue patterns. This certifies only this checkout, not an absent runtime execution root.
+
+## Files
+
+### Added
+
+- None.
+
+### Modified
 
 - `Backend/src/Astronomy.MediaFactory.Infrastructure/Persistence/ProductionPipelineExecutionService.cs`
-- `Backend/src/Astronomy.MediaFactory.Infrastructure/Orchestration/RC2/Rc2CertifiedExecutionStatusReader.cs`
-- `Backend/src/Astronomy.MediaFactory.Core/ContentPlanBatchGeneration.cs`
+- `docs/implementation/o2-orch-phase-6-final-certification.md`
 
-## Tests and verification
+### Tests added
 
-The environment does not contain the .NET SDK (`dotnet: command not found`). Consequently focused/full test totals and forced/reuse endpoint responses cannot be truthfully certified here.
+- None. The requested named integration coverage and invalid-reuse matrix are not complete in this change.
 
-| Suite | Total | Passed | Failed | Skipped | Duration |
-|---|---:|---:|---:|---:|---:|
-| Phase6/StoryFrame focused | unavailable | unavailable | unavailable | unavailable | unavailable |
-| Complete test project | unavailable | unavailable | unavailable | unavailable | unavailable |
+## Build and test results
 
-## Artifact certification
+The environment has no `dotnet` executable. All required commands ended with exit 127 before discovery, so totals and durations are unavailable rather than zero.
 
-No runtime output package containing the stated canonical authority was present in this checkout, so physical output hashes, artifact counts, endpoint summaries, timestamp stability, and transaction-residue scans cannot be recorded. The implementation computes SHA-256 and byte sizes from the actual committed files when the manifest is published.
+| Suite | Total | Passed | Failed | Skipped | Duration | Result |
+|---|---:|---:|---:|---:|---:|---|
+| Build | unavailable | unavailable | unavailable | unavailable | unavailable | SDK missing |
+| Phase6/StoryFrame focused | unavailable | unavailable | unavailable | unavailable | unavailable | SDK missing |
+| Phase 4/5 regressions | unavailable | unavailable | unavailable | unavailable | unavailable | SDK missing |
+| ProductionPipelineExecutionServiceTests | unavailable | unavailable | unavailable | unavailable | unavailable | SDK missing |
+| RC2 tests | unavailable | unavailable | unavailable | unavailable | unavailable | SDK missing |
+| Complete test project | unavailable | unavailable | unavailable | unavailable | unavailable | SDK missing |
 
-## Remaining warnings and Phase 7 typed input
+## PublishedStoryFrameAuthority and Phase 7 input gate
 
-- Full authority/manifest/validation atomicity still needs a dedicated Phase 6 transaction coordinator and failure-injection coverage.
-- A standalone `IPhase6CommittedAuthorityEvaluator` returning a typed immutable Phase 7 authority has not yet replaced the existing combined resume validation.
-- Required behavioral, transaction, recovery, reuse, regression, forced-RC2, and full-suite runs remain outstanding because the SDK and runnable output fixture are unavailable.
-- Phase 7 must continue to be considered blocked until those checks pass; this work does not execute or modify Phase 7.
+The repository has the immutable `Phase6CommittedInputAuthority` input *to* Phase 6, but it does not yet have the required immutable `PublishedStoryFrameAuthority` output from an `IPhase6CommittedAuthorityEvaluator`. Phase 7 still has legacy/raw Story Frame reader surfaces. Therefore the typed Phase 7 gate has **not** been established, and Phase 7 implementation must not begin under this certification.
+
+The required future output must include execution/plan/event/language/profile identity; authority/index IDs and checksums; Phase 4 aggregate/Long/Short lineage; Phase 5 certification/editorial/publication lineage; Long and Short variants/counts; canonical paths; manifest and validation evidence; contract version; and runtime compatibility evidence. Phase 7 must consume only that evaluated committed authority.
+
+## Freeze declaration and remaining warnings
+
+No freeze marker or tag is created because the acceptance criteria are not all met. Before freezing, the project still requires:
+
+- a real forced RC2 execution and complete-set physical/semantic reconciliation;
+- a real read-only reuse execution with call counters and five-file immutability proof;
+- the named final-certification and invalid-reuse regression coverage;
+- all focused, Phase 4/5, pipeline, RC2, and full-project tests;
+- the immutable `PublishedStoryFrameAuthority` evaluator and fail-fast Phase 7 architecture boundary;
+- exact test totals and final committed artifact tables.
+
+Once certified, every future Phase 6 change must require governing-document review, contract compatibility review, Phase 6 focused regressions, Phase 4/5 regressions, forced execution certification, reuse certification, and physical artifact verification.
 
 ## Final verdict
 
-**PHASE6_CERTIFICATION_STILL_INCOMPLETE**
-
----
-
-# O2.ORCH.6.5 cleanup addendum
-
-## Legacy routes and writers removed
-
-The RC2 batch orchestrator no longer injects or calls `CreativeStoryboardBuilder` for Phase 6. Its overlay execution method, legacy Phase 6 payload builder, validation writer, manifest upsert, response replacement, and legacy diagnostic/manifest parsing helpers were removed. The production pipeline result is now passed through without a second Phase 6 execution or metadata write.
-
-## Cleanup and canonical validation
-
-Forced Phase 6 execution runs an exact ten-file allow-list cleanup for obsolete creative and short/long story-frame metadata. It deletes an owned parent only if empty and never recursively removes unrelated content. The canonical validation now explicitly publishes the reason, reuse state, profile contract version, both API-compatible and governing authority identity/checksum names, physical-checksum and runtime-compatibility gates, and canonical artifact paths.
-
-## Files modified in O2.ORCH.6.5
-
-- `Backend/src/Astronomy.MediaFactory.Infrastructure/Orchestration/RC2/Rc2ContentPlanningBatchOrchestrator.cs`
-- `Backend/src/Astronomy.MediaFactory.Infrastructure/Persistence/ProductionPipelineExecutionService.cs`
-- `Backend/tests/Astronomy.MediaFactory.Tests/Rc2StoryIntelligenceTests.cs`
-- `Backend/tests/Astronomy.MediaFactory.Tests/ProductionPipelinePhase6RoutingTests.cs`
-- `docs/implementation/o2-orch-phase-6-final-certification.md`
-
-## File added
-
-- `docs/implementation/o2-orch-phase-6-legacy-removal-audit.md`
-
-## Verification and remaining warnings
-
-The container has no .NET SDK, so `dotnet build`, focused/full tests, forced API execution, reuse execution, exact totals, generated artifact SHA-256/size evidence, and runtime transaction-residue checks are unavailable. Source inspection confirms the duplicate RC2 overlay was removed. The standalone typed `IPhase6CommittedAuthorityEvaluator`, complete metadata transaction coordinator, and typed Phase 7 boundary called for by O2.ORCH.6.5 are not present; legacy Phase 7 readers remain isolated but not migrated. It would be inaccurate to claim full certification.
-
-## O2.ORCH.6.5 final verdict
-
-**PHASE6_CERTIFICATION_STILL_INCOMPLETE**
+PHASE6_DUAL_AUTHORITY_STILL_INCOMPLETE
