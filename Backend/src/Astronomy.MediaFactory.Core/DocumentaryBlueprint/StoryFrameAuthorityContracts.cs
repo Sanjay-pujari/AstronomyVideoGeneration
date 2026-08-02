@@ -139,6 +139,27 @@ public sealed record Phase6InputAuthorityRequest(string ExecutionRoot, string Ex
 public sealed record Phase6InputAuthorityEvaluation(bool IsValid, string ReasonCode,
     IReadOnlyList<string> Errors, Phase6CommittedInputAuthority? Authority);
 
+/// <summary>Preserves a rejected committed-input evaluation across the production routing boundary.</summary>
+public sealed class Phase6InputAuthorityException : InvalidOperationException
+{
+    public Phase6InputAuthorityException(string reasonCode, IReadOnlyList<string> errors)
+        : base(BuildMessage(reasonCode, errors))
+    {
+        if (string.IsNullOrWhiteSpace(reasonCode)) throw new ArgumentException("A Phase 6 input reason code is required.", nameof(reasonCode));
+        ReasonCode = reasonCode;
+        Errors = (errors ?? []).Where(error => !string.IsNullOrWhiteSpace(error)).ToArray();
+    }
+
+    public string ReasonCode { get; }
+    public IReadOnlyList<string> Errors { get; }
+
+    private static string BuildMessage(string reasonCode, IReadOnlyList<string>? errors)
+    {
+        var details = errors is null ? [] : errors.Where(error => !string.IsNullOrWhiteSpace(error)).ToArray();
+        return details.Length == 0 ? reasonCode : $"{reasonCode}: {string.Join("; ", details)}";
+    }
+}
+
 public sealed record StoryFrameIntegrationRequest(string ExecutionId, string PlanId, string EventId,
     string Language, string Profile, Phase6CommittedInputAuthority InputAuthority,
     string RuntimeBuilderIdentity, string RuntimeBuilderVersion,
