@@ -272,7 +272,11 @@ public sealed partial class ProductionPipelineExecutionService(
                     continue;
                 }
             }
-            if (request.RetryFailedOnly && phase.No is not (1 or 4 or 6) && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
+            // Phase 2 must pass through its committed-authority evaluator.  A successful
+            // validation there produces the canonical P2_REUSED result; the generic retry
+            // skip has no authority-specific reason code and therefore cannot satisfy a
+            // requested range.
+            if (request.RetryFailedOnly && phase.No is not (1 or 2 or 4 or 6) && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], "retryFailedOnly=true: previous successful phase was not rerun.", false, cancellationToken);
                 phaseResults.Add(skipped);
@@ -993,7 +997,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 warnings = outcome.Warnings, errors = Array.Empty<string>(), startedUtc = started, completedUtc = DateTimeOffset.UtcNow
             }, JsonOptions), cancellationToken);
             var status = outcome.Reused ? ProductionPhaseStatus.Skipped : ProductionPhaseStatus.Succeeded;
-            return new(2, phaseName, status, started, DateTimeOffset.UtcNow, (long)(DateTimeOffset.UtcNow-started).TotalMilliseconds, [Path.Combine(context.OutputRoot,"01-plan","execution-context.json")], outcome.OutputFiles.Append(validationPath).ToArray(), validationPath, outcome.Warnings, [], false, outcome.ReasonCode) { ReasonCode = outcome.ReasonCode };
+            var reason = outcome.Reused
+                ? "Valid Phase 2 authority was reused; overwriteExisting=false."
+                : outcome.ReasonCode;
+            return new(2, phaseName, status, started, DateTimeOffset.UtcNow, (long)(DateTimeOffset.UtcNow-started).TotalMilliseconds, [Path.Combine(context.OutputRoot,"01-plan","execution-context.json")], outcome.OutputFiles.Append(validationPath).ToArray(), validationPath, outcome.Warnings, [], false, reason) { ReasonCode = outcome.ReasonCode };
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or JsonException)
         {
