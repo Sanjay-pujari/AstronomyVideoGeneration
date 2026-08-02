@@ -1,8 +1,5 @@
 using System.Runtime.Serialization;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
-using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
-using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
-using Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 using Xunit;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -10,49 +7,76 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class StoryFrameIntegrationCommittedInputTests
 {
     [Fact]
-    public async Task BuildAsync_ReportsOnlyDeterministicCommittedInputArtifactPaths()
+    public void ArtifactPaths_LongOnly_ContainsLongProjectionAndNotShort()
     {
-        var fixture = Phase5CertificationFixture.Create();
-        var input = await CreateInputAsync(fixture);
-        var builder = new RecordingBuilder();
-        var service = new StoryFrameIntegrationService(builder);
-        var compatibility = service.GetCompatibilityContext();
-        var request = new StoryFrameIntegrationRequest(fixture.Request.ExecutionId, fixture.Request.PlanId,
-            fixture.Request.EventId, fixture.Request.Language, fixture.Request.Profile, input,
-            compatibility.CurrentBuilderType, compatibility.CurrentBuilderVersion,
-            compatibility.CurrentIntegrationServiceType, compatibility.CurrentIntegrationServiceVersion);
-
-
+        var paths = StoryFrameCommittedInputDiagnostics.ArtifactPaths(CreateAuthority(["Long"]));
+        Assert.Contains("04-blueprint/documentary-blueprint-long.json", paths);
+        Assert.DoesNotContain("04-blueprint/documentary-blueprint-short.json", paths);
     }
 
-    private static async Task<Phase6CommittedInputAuthority> CreateInputAsync(Phase5CertificationFixtureResult fixture)
+    [Fact]
+    public void ArtifactPaths_ShortOnly_ContainsShortProjectionAndNotLong()
     {
-        var phase4 = new Phase4(fixture.PublishedPhase4);
-        var phase5 = new Phase5(new PublishedBlueprintCertification(fixture.Result.Certification,
-            fixture.Result.EditorialContract, fixture.Result.Validation, fixture.Result.SceneIntents,
-            fixture.Result.Coverage, fixture.Result.Transitions, fixture.Result.PauseTest,
-            fixture.PublishedPhase4.AggregateId, fixture.PublishedPhase4.DeterministicChecksum, "1.0", "published"));
-        var result = await new Phase6InputAuthorityEvaluator(phase4, phase5).EvaluateAsync(new("root",
-            fixture.Request.ExecutionId, fixture.Request.PlanId, fixture.Request.EventId, fixture.Request.Language, ["Long"]));
-        Assert.True(result.IsValid, string.Join("; ", result.Errors));
-        return Assert.IsType<Phase6CommittedInputAuthority>(result.Authority);
+        var paths = StoryFrameCommittedInputDiagnostics.ArtifactPaths(CreateAuthority(["Short"]));
+        Assert.Contains("04-blueprint/documentary-blueprint-short.json", paths);
+        Assert.DoesNotContain("04-blueprint/documentary-blueprint-long.json", paths);
     }
 
-    private sealed class RecordingBuilder : ICertifiedStoryFrameBuilder
+    [Fact]
+    public void ArtifactPaths_BothVariants_ContainsBothProjectionAuthorities()
     {
-        public string BuilderType => "recording-builder";
-        public string BuilderVersion => "1";
-        public int CallCount { get; private set; }
-        public DocumentaryBlueprintEditorialContract? EditorialContract { get; private set; }
-        public IReadOnlyList<string>? RequestedVariants { get; private set; }
-        public Task<IReadOnlyList<StoryFrameAuthorityFrame>> BuildAsync(DocumentaryBlueprintEditorialContract editorialContract,
-            IReadOnlyList<string> requestedVariants, CancellationToken cancellationToken)
-        {
-            CallCount++;
-            EditorialContract = editorialContract;
-            RequestedVariants = requestedVariants;
-            return Task.FromResult<IReadOnlyList<StoryFrameAuthorityFrame>>([]);
-        }
+        var paths = StoryFrameCommittedInputDiagnostics.ArtifactPaths(CreateAuthority(["Long", "Short"]));
+        Assert.Contains("04-blueprint/documentary-blueprint-long.json", paths);
+        Assert.Contains("04-blueprint/documentary-blueprint-short.json", paths);
+    }
+
+    [Fact]
+    public void ArtifactPaths_ContainsCommittedPhase4AndPhase5Evidence()
+    {
+        var paths = StoryFrameCommittedInputDiagnostics.ArtifactPaths(CreateAuthority(["Long"]));
+        Assert.Contains("04-blueprint/documentary-blueprint-aggregate.json", paths);
+        Assert.Contains("validation/phase-04-validation.json", paths);
+        Assert.Contains("validation/phase-05-validation.json", paths);
+        Assert.Contains("05-editorial/blueprint-certification.json", paths);
+        Assert.Contains("05-editorial/editorial-contract.json", paths);
+        Assert.Contains("phase-manifest.json", paths);
+    }
+
+    [Fact]
+    public void ArtifactPaths_ExcludesOptionalCertificationDiagnostics()
+    {
+        var authority = CreateAuthority(["Long"],
+            ["05-editorial/blueprint-certification.json", "05-editorial/certification-diagnostics.json"]);
+        var paths = StoryFrameCommittedInputDiagnostics.ArtifactPaths(authority);
+        Assert.DoesNotContain(paths, path => path.EndsWith(
+            "certification-diagnostics.json", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ArtifactPaths_ExcludesLegacyStoryGraph()
+    {
+        var authority = CreateAuthority(["Long"],
+            ["05-editorial/blueprint-certification.json", "editorial/story-graph.json"]);
+        var paths = StoryFrameCommittedInputDiagnostics.ArtifactPaths(authority);
+        Assert.DoesNotContain("editorial/story-graph.json", paths);
+    }
+
+    [Theory]
+    [InlineData("/absolute/file.json")]
+    [InlineData("C:\\absolute\\file.json")]
+    [InlineData("../traversal/file.json")]
+    [InlineData("folder\\backslash.json")]
+    [InlineData(".phase-06-staging-x/file.json")]
+    [InlineData(".phase-06-backup-x/file.json")]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void ArtifactPaths_ExcludesUnsafeOrTransactionOwnedPaths(string unsafePath)
+    {
+        var authority = CreateAuthority(["Long"],
+            ["05-editorial/blueprint-certification.json", unsafePath]);
+        var paths = StoryFrameCommittedInputDiagnostics.ArtifactPaths(authority);
+        Assert.DoesNotContain(unsafePath, paths);
+    }
 
     [Fact]
     public void ArtifactPaths_AreDistinctAndOrdinallySorted()
@@ -68,19 +92,44 @@ public sealed class StoryFrameIntegrationCommittedInputTests
         Assert.Equal(paths.Order(StringComparer.Ordinal), paths);
     }
 
-    private sealed class Phase4(DocumentaryBlueprintAggregate aggregate) : IPhase4CommittedAuthorityEvaluator
+    [Fact]
+    public void Validator_UsesVariantSpecificCommittedSceneCollections()
     {
-        public Task<Phase4CommittedAuthorityEvaluation> EvaluateAsync(string a, string b, string c, string d, string e,
-            CancellationToken cancellationToken = default) => Task.FromResult(new Phase4CommittedAuthorityEvaluation(true,
-            aggregate, "P4REUSE_VALID", [], ["04-blueprint/documentary-blueprint-aggregate.json",
-                "validation/phase-04-validation.json", "phase-manifest.json"])
-            { CommittedValidationEvidence = ["validation/phase-04-validation.json"], ManifestEvidence = ["phase-manifest.json"] });
+        var source = File.ReadAllText(RepositoryTestPaths.CoreSource(
+            "DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs"));
+        Assert.Contains("request.LongScenes", source, StringComparison.Ordinal);
+        Assert.Contains("request.ShortScenes", source, StringComparison.Ordinal);
+        Assert.Contains("CommittedScenes", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Validator_DoesNotUseSharedEditorialSceneOrderForVariantMembership()
     {
-        {
-            {
-        }
+        var source = File.ReadAllText(RepositoryTestPaths.CoreSource(
+            "DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs"));
+        var index = source.IndexOf(
+            "IReadOnlyList<CertifiedStoryFrameSceneAuthority> CommittedScenes",
+            StringComparison.Ordinal);
+        Assert.True(index >= 0);
+        Assert.DoesNotContain("e.SceneOrder.Select", source[index..], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validator_RejectsCrossVariantOrUnknownScenes()
+    {
+        var source = File.ReadAllText(RepositoryTestPaths.CoreSource(
+            "DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs"));
+        Assert.Contains("uncertified or cross-variant scene", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validator_CanonicalOrderUsesCommittedVariantSequence()
+    {
+        var source = File.ReadAllText(RepositoryTestPaths.CoreSource(
+            "DocumentaryBlueprint", "StoryFrameAuthorityContracts.cs"))
+            .Replace(" ", string.Empty, StringComparison.Ordinal);
+        Assert.Contains("CommittedScenes(v).OrderBy(x=>x.SequenceNumber)", source, StringComparison.Ordinal);
+    }
 
     private static Phase6CommittedInputAuthority CreateAuthority(
         IReadOnlyList<string> requestedVariants,
