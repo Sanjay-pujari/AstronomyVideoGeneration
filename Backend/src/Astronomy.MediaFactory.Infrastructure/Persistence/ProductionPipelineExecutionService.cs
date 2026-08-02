@@ -252,7 +252,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 logger.LogInformation("Phase 3 skipped because its authoritative Viewer Curiosity artifact is valid. ExecutionId={ExecutionId}", context.Request.PlanId);
                 var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], "Valid Phase 3 authority was reused; overwriteExisting=false.", false, cancellationToken);
                 phaseResults.Add(skipped);
-                await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+                // The manifest is committed authority history, not a current-call execution log.
+                // Valid reuse must leave it byte-for-byte unchanged.
                 continue;
             }
             if (!request.OverwriteExisting && phase.No == 5)
@@ -327,7 +328,7 @@ public sealed partial class ProductionPipelineExecutionService(
             // Phase 5 manifest and validation publication are exclusively owned by its coordinator.
             // A certified Phase 6 reuse is a read-only operation.  The manifest is part of the
             // committed complete set, so even serializing equivalent JSON would violate reuse.
-            if (phase.No is not (1 or 4 or 5) && !(phase.No == 6 && result.ReasonCode == "P6REUSE_VALID"))
+            if (phase.No is not (1 or 4 or 5) && result.Status != ProductionPhaseStatus.Skipped)
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
             if (result.Status == ProductionPhaseStatus.Failed)
             {
@@ -16478,12 +16479,51 @@ public sealed partial class ProductionPipelineExecutionService(
         var mergedManifest = File.Exists(path)
             ? JsonNode.Parse(await File.ReadAllTextAsync(path, cancellationToken))?.AsObject() ?? new JsonObject()
             : new JsonObject();
+        // `phases` is the stable, governing publication history.  Execution results from this
+        // invocation remain in ProductionPipelineExecutionResult (the API telemetry) and must
+        // never replace committed entries merely because a phase was reused or failed.  Merge
+        // successful publications by phase number and retain untouched/downstream entries.
+        generatedManifest["phases"] = MergeCommittedPhaseHistory(mergedManifest["phases"], phaseResults);
         foreach (var property in generatedManifest)
             mergedManifest[property.Key] = property.Value?.DeepClone();
         var temporaryPath = path + $".phase5-{Guid.NewGuid():N}.tmp";
         await File.WriteAllTextAsync(temporaryPath, mergedManifest.ToJsonString(JsonOptions), cancellationToken);
         File.Move(temporaryPath, path, true);
     }
+
+    private static JsonArray MergeCommittedPhaseHistory(JsonNode? existingHistory,
+        IReadOnlyList<ProductionPhaseResult> currentResults)
+    {
+        var byPhase = new SortedDictionary<int, JsonNode>();
+        if (existingHistory is JsonArray existing)
+            foreach (var entry in existing)
+                if (entry is JsonObject item && item["phaseNo"]?.GetValue<int>() is int phaseNo)
+                    byPhase[phaseNo] = item.DeepClone();
+
+        foreach (var result in currentResults.Where(IsCommittedPublication))
+        {
+            var entry = JsonSerializer.SerializeToNode(result, JsonOptions)!.AsObject();
+            if (result.PhaseNo == 6 && result.ReasonCode == "P6AUTH_COMMITTED")
+            {
+                entry["phaseName"] = "Story Frames Authority";
+                entry["status"] = ProductionPhaseStatus.Succeeded.ToString();
+                entry["reasonCode"] = "P6AUTH_COMMITTED";
+                entry["reason"] = "Phase 6 Story Frame authority committed.";
+                entry["publicationCommitted"] = true;
+                entry["committedStateValidationPassed"] = true;
+            }
+            byPhase[result.PhaseNo] = entry;
+        }
+
+        var merged = new JsonArray();
+        foreach (var entry in byPhase.OrderBy(x => x.Key)) merged.Add(entry.Value);
+        return merged;
+    }
+
+    private static bool IsCommittedPublication(ProductionPhaseResult result)
+        => result.Status == ProductionPhaseStatus.Succeeded
+           && !(result.ReasonCode?.Contains("REUSE", StringComparison.OrdinalIgnoreCase) ?? false)
+           && !(result.ReasonCode?.Contains("ALREADY_PUBLISHED", StringComparison.OrdinalIgnoreCase) ?? false);
 
     private static bool TryReadManifestSection(string path, string propertyName, out JsonElement section)
     {

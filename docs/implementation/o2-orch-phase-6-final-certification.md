@@ -172,3 +172,40 @@ The Phase 6 dual authority is frozen. Future changes require governing-document 
 ## Final verdict
 
 PHASE6_DUAL_AUTHORITY_FULLY_CERTIFIED_READY_FOR_PHASE7
+
+## O2.ORCH.6.9 manifest-history freeze
+
+The remaining defect was in the generic `ProductionPipelineExecutionService.WritePhaseManifestAsync`
+writer. It serialized the accumulated results of the current invocation directly into the governing
+`phases` property. Consequently, an early reuse result (most visibly Phase 2 or Phase 3) could truncate
+the committed Phase 1–6 history before Phase 5 merged its artifact inventory. Phase 5's transaction
+coordinator was not the truncating writer: it performs a property-scoped `phase5Artifacts` merge and
+therefore preserves Phase 6 history and inventory.
+
+Writer ownership is now explicit:
+
+* phase publication transactions own stable authority artifacts and validation;
+* the generic manifest writer merges stable history by `phaseNo`, in deterministic ascending order;
+* only a successful, non-reuse publication may replace its own stable history entry;
+* failed, skipped, `REUSE`, and `ALREADY_PUBLISHED` results cannot replace committed history;
+* current-run results remain in the API `ProductionPipelineExecutionResult` and are not persisted into
+  the authoritative manifest;
+* a valid Phase 3 or Phase 6 reuse performs no manifest write.
+
+The downstream policy is semantic rather than execution-based. A Phase 5 execution preserves the
+committed Phase 6 entry and its three-artifact inventory when its certification/editorial identity is
+compatible and the Phase 6 committed evaluator passes. Phase 6 is invalidated only for a changed
+certification checksum, editorial checksum, incompatible Phase 5 publication identity, evaluator
+lineage mismatch, or an explicit overwrite/regeneration request. Merely executing Phase 5 is not an
+invalidation event.
+
+The canonical Phase 6 history entry remains exactly one successful `Story Frames Authority` entry with
+`P6AUTH_COMMITTED`, reason `Phase 6 Story Frame authority committed.`, committed-state flags set, the
+three canonical outputs, and `validation/phase-06-validation.json`. `P6REUSE_VALID` remains solely the
+current-run API outcome. The merge tests cover preservation of Phase 1–5, rejection of reuse/failure as
+stable history, unique Phase 6 history, deterministic ordering, and forced Phase 6 replacement.
+
+The container used for this freeze does not provide the .NET SDK (`dotnet: command not found`), so build,
+focused-test, full-regression, runtime API, and runtime byte/hash/timestamp totals remain unavailable.
+Source-level routing preserves byte immutability on the Phase 6 valid-reuse path; no frozen Phase 6
+artifact or Phase 4/6 validation file was modified by this change.
