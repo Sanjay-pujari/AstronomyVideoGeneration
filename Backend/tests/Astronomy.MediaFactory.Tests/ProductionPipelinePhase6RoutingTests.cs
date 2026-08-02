@@ -1,8 +1,8 @@
 using System.Reflection;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.Extensions;
-using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -178,7 +178,13 @@ public sealed class ProductionPipelinePhase6RoutingTests
         return services;
     }
 
-    private static ParameterInfo GetEvaluatorParameter() =>
-        typeof(ProductionPipelineExecutionService).GetConstructors().Single().GetParameters()
-            .Single(x => x.ParameterType == typeof(IPhase6InputAuthorityEvaluator));
+    [Fact]
+    public void ProductionPipelineConstruction_RequiresPhase6InputAuthorityEvaluator()
+    {
+        var parameter = typeof(ProductionPipelineExecutionService).GetConstructors().Single().GetParameters()
+            .Single(value => value.ParameterType == typeof(IPhase6InputAuthorityEvaluator));
+
+        Assert.False(parameter.HasDefaultValue);
+        Assert.False(parameter.IsOptional);
+    }
 }
