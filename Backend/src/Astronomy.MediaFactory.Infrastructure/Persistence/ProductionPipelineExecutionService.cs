@@ -526,11 +526,10 @@ public sealed partial class ProductionPipelineExecutionService(
                     &&doc.RootElement.TryGetProperty("validationStatus",out var validationStatus)&&string.Equals(validationStatus.GetString(),"Valid",StringComparison.Ordinal)
                     &&doc.RootElement.TryGetProperty("reasonCode",out _);
             }
-            if(phaseNo==1 && string.Equals(status.GetString(),ProductionPhaseStatus.Skipped.ToString(),StringComparison.OrdinalIgnoreCase) && doc.RootElement.TryGetProperty("reasonCode",out var phase1Code))return IsValidAuthorityReuseReason(1,phase1Code.GetString(),null);
-            return phaseNo is 3 or 4 or 5 or 6
+            return phaseNo is 1 or 2 or 3 or 4 or 5 or 6
                 && string.Equals(status.GetString(), ProductionPhaseStatus.Skipped.ToString(), StringComparison.OrdinalIgnoreCase)
-                && doc.RootElement.TryGetProperty("reason", out var reason)
-                && IsValidAuthorityReuseReason(phaseNo, null, reason.GetString());
+                && doc.RootElement.TryGetProperty("reasonCode", out var reasonCode)
+                && ProductionPhaseSatisfaction.IsRecognizedReuseReasonCode(reasonCode.GetString());
         }
         catch (JsonException)
         {

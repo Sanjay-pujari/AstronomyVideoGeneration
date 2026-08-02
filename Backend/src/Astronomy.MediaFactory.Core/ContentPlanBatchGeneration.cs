@@ -454,7 +454,10 @@ public static class ProductionPhaseSatisfaction
         result.Status == ProductionPhaseStatus.Skipped && IsRecognizedReuse(result);
 
     public static bool IsRecognizedReuse(ProductionPhaseResult result) =>
-        result.ReasonCode is not null && SatisfiedReuseReasonCodes.Contains(result.ReasonCode);
+        IsRecognizedReuseReasonCode(result.ReasonCode);
+
+    public static bool IsRecognizedReuseReasonCode(string? reasonCode) =>
+        reasonCode is not null && SatisfiedReuseReasonCodes.Contains(reasonCode);
 }
 
 public interface IProductionPhase
