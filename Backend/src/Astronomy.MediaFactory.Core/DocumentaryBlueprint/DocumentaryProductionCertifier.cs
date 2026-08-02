@@ -18,8 +18,10 @@ public sealed class DocumentaryProductionCertifier
         var status = !passed ? DocumentaryBlueprintCertificationStatus.Rejected : warnings.Length == 0 ? DocumentaryBlueprintCertificationStatus.Certified : DocumentaryBlueprintCertificationStatus.CertifiedWithWarnings;
         var scenes = variants.SelectMany(a => a.Blueprint.Scenes.Select(s => new DocumentaryBlueprintSceneOutcome(s.SceneId, a.Metadata.Variant, s.SceneNumber, s.NarrativeStage, s.SceneRole, passed, s.KnowledgeReferences.Select(k => k.KnowledgeEntryId).Order(StringComparer.Ordinal).ToArray()))).ToArray();
         var source = DocumentaryBlueprintCertificationChecksum.SourcePhase4(request);
+        var published = request.PublishedAggregate
+            ?? throw new InvalidOperationException("Phase 5 requires PublishedDocumentaryBlueprintAggregate.");
         var value = new DocumentaryBlueprintCertification($"{request.ExecutionId}.blueprint-certification", request.ExecutionId, request.PlanId, request.EventId, request.Language, request.Profile, source,
-            request.Master.Metadata.Checksum, request.Long.Metadata.Checksum, request.Short.Metadata.Checksum, "1.0", nameof(DocumentaryProductionCertifier), status, passed,
+            request.Master.Metadata.Checksum, published.LongProjectionChecksum, published.ShortProjectionChecksum, "1.0", nameof(DocumentaryProductionCertifier), status, passed,
             blocking.Distinct().Order(StringComparer.Ordinal).ToArray(), warnings, passed ? requested : [], passed ? [] : requested, scenes,
             request.Master.Coverage.CoveredViewerQuestionIds.Order(StringComparer.Ordinal).ToArray(), scenes.SelectMany(x => x.KnowledgeReferenceIds).Distinct().Order(StringComparer.Ordinal).ToArray(),
             request.Master.Blueprint.Scenes.Select(x => $"{x.SceneId}:{x.SceneRole}").ToArray(), DateTimeOffset.UtcNow, string.Empty);

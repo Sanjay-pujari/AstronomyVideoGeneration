@@ -72,7 +72,15 @@ public sealed record Phase5ArtifactInventoryEntry(string RelativePath, string Ar
 /// lineage copied from Phase 5 with the current upstream authority.
 /// </summary>
 public sealed record Phase5ExpectedPhase4Authority(string AggregateId, string AggregateChecksum,
-    string LongChecksum, string ShortChecksum);
+    string LongChecksum, string ShortChecksum)
+{
+    public static Phase5ExpectedPhase4Authority From(DocumentaryBlueprintAggregate committedAuthority)
+    {
+        ArgumentNullException.ThrowIfNull(committedAuthority);
+        return new(committedAuthority.AggregateId, committedAuthority.DeterministicChecksum,
+            committedAuthority.LongProjectionChecksum, committedAuthority.ShortProjectionChecksum);
+    }
+}
 
 public sealed record Phase5CommittedStateEvaluation(bool IsValid, string ReasonCode,
     IReadOnlyList<string> Errors, IReadOnlyList<Phase5ArtifactInventoryEntry> Artifacts,

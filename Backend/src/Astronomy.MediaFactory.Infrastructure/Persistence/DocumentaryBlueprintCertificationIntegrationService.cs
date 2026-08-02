@@ -54,11 +54,10 @@ public sealed class DocumentaryBlueprintCertificationIntegrationService(Document
             ["Phase4Authority", "ProductionCertification", "EditorialContract", "CompleteSet"], timer.ElapsedMilliseconds, certification.SourcePhase4Checksum);
         const string version = "1.0";
         var aggregateChecksum = aggregate.DeterministicChecksum;
-        // Phase 5 reports describe the projections actually certified by Phase 5.
-        // Those are the compatibility-adapter projections, not the differently
-        // shaped Phase 4 storage artifacts embedded in the aggregate.
-        var longChecksum = request.Long.Metadata.Checksum;
-        var shortChecksum = request.Short.Metadata.Checksum;
+        // Source lineage is the committed Phase 4 projection identity. Compatibility
+        // artifacts retain their own metadata checksums and must never replace it.
+        var longChecksum = aggregate.LongProjectionChecksum;
+        var shortChecksum = aggregate.ShortProjectionChecksum;
         var coverage = new BlueprintCoverageReport(aggregate.ExecutionId, aggregate.PlanId, aggregate.EventId, aggregate.Language, aggregate.ProfileId,
             aggregate.AggregateId, aggregateChecksum, longChecksum, shortChecksum, version, coverageResults, coverageResults.All(x => x.IsValid), string.Empty);
         coverage = coverage with { SemanticChecksum = Phase5SemanticChecksum.Calculate(coverage with { SemanticChecksum = string.Empty }) };

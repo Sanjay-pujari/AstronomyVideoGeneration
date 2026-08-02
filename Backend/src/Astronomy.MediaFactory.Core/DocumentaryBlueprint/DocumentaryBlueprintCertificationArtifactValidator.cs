@@ -37,8 +37,10 @@ public static class DocumentaryBlueprintCertificationArtifactValidator
             errors.Add("Certification language/profile does not match.");
         if (c.SourcePhase4Checksum != DocumentaryBlueprintCertificationChecksum.SourcePhase4(request)) errors.Add("Certification source Phase 4 checksum is stale.");
         if (c.SourceMasterBlueprintChecksum != request.Master.Metadata.Checksum) errors.Add("Certification source master blueprint checksum is stale.");
-        if (c.SourceLongBlueprintChecksum != request.Long.Metadata.Checksum) errors.Add("Certification source long blueprint checksum is stale.");
-        if (c.SourceShortBlueprintChecksum != request.Short.Metadata.Checksum) errors.Add("Certification source short blueprint checksum is stale.");
+        if (request.PublishedAggregate is { } published &&
+            c.SourceLongBlueprintChecksum != published.LongProjectionChecksum) errors.Add("Certification source long blueprint checksum is stale.");
+        if (request.PublishedAggregate is { } publishedShort &&
+            c.SourceShortBlueprintChecksum != publishedShort.ShortProjectionChecksum) errors.Add("Certification source short blueprint checksum is stale.");
         if (c.SemanticChecksum != DocumentaryBlueprintCertificationChecksum.Calculate(c)) errors.Add("Certification semantic checksum is invalid.");
 
         if (c.Passed && c.CertificationStatus == DocumentaryBlueprintCertificationStatus.Rejected) errors.Add("Rejected certification cannot have Passed=true.");
@@ -101,7 +103,7 @@ public static class DocumentaryBlueprintCertificationArtifactValidator
             };
             foreach (var report in reports)
             {
-                if (report.Aggregate != aggregate.DeterministicChecksum || report.Long != request.Long.Metadata.Checksum || report.Short != request.Short.Metadata.Checksum)
+                if (report.Aggregate != aggregate.DeterministicChecksum || report.Long != aggregate.LongProjectionChecksum || report.Short != aggregate.ShortProjectionChecksum)
                     errors.Add($"Phase 5 {report.Name} lineage is stale.");
                 if (report.Checksum != report.Expected) errors.Add($"Phase 5 {report.Name} semantic checksum is invalid.");
             }
