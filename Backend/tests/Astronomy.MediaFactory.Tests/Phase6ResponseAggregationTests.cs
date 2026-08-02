@@ -36,6 +36,38 @@ public sealed class Phase6ResponseAggregationTests
     }
 
     [Fact]
+    public void SatisfiedClassifier_RecognizesPhase2ReuseCode() =>
+        Assert.True(ProductionPhaseSatisfaction.IsSatisfied(Phase(2, ProductionPhaseStatus.Skipped, "P2_REUSED")));
+
+    [Fact]
+    public void Phase2RetrySkip_ValidAuthorityReturnsTypedReuseCode()
+    {
+        var phase = Phase(2, ProductionPhaseStatus.Skipped, "P2_REUSED") with
+        {
+            Reason = "Valid Phase 2 authority was reused; overwriteExisting=false."
+        };
+
+        Assert.Equal("P2_REUSED", phase.ReasonCode);
+        Assert.True(ProductionPhaseSatisfaction.IsSatisfied(phase));
+    }
+
+    [Fact]
+    public void Phase2RetrySkip_DoesNotReturnNullReasonCode() =>
+        Assert.NotNull(Phase(2, ProductionPhaseStatus.Skipped, "P2_REUSED").ReasonCode);
+
+    [Fact]
+    public void SatisfiedClassifier_DoesNotInferFromRetryReasonText()
+    {
+        var phase = Phase(2, ProductionPhaseStatus.Skipped) with
+        {
+            Reason = "retryFailedOnly=true: previous successful phase was not rerun."
+        };
+
+        Assert.False(ProductionPhaseSatisfaction.IsSatisfied(phase));
+        Assert.Null(phase.ReasonCode);
+    }
+
+    [Fact]
     public void Aggregation_Phase6ReuseSetsLastCompletedPhaseToSix()
     {
         var diagnostics = Aggregate([
@@ -55,6 +87,37 @@ public sealed class Phase6ResponseAggregationTests
         Assert.Equal([1, 2, 3, 6], diagnostics.ReusedPhaseNumbers);
         Assert.Equal([4, 5], diagnostics.ExecutedPhaseNumbers);
     }
+
+    [Fact]
+    public void Rc2Reuse_Phase2IsIncludedInSatisfiedPhaseNumbers() =>
+        Assert.Contains(2, Rc2ReuseDiagnostics().SatisfiedPhaseNumbers);
+
+    [Fact]
+    public void Rc2Reuse_SatisfiedPhaseNumbersAreOneThroughSix() =>
+        Assert.Equal([1, 2, 3, 4, 5, 6], Rc2ReuseDiagnostics().SatisfiedPhaseNumbers);
+
+    [Fact]
+    public void Rc2Reuse_ReusedPhaseNumbersIncludePhase2() =>
+        Assert.Contains(2, Rc2ReuseDiagnostics().ReusedPhaseNumbers);
+
+    [Fact]
+    public void Rc2Reuse_LastCompletedPhaseIsSix() => Assert.Equal(6, Rc2ReuseDiagnostics().LastCompletedPhaseNo);
+
+    [Fact]
+    public void Rc2Reuse_LastFailedPhaseIsNull() => Assert.Null(Rc2ReuseDiagnostics().LastFailedPhaseNo);
+
+    [Fact]
+    public void Rc2Reuse_ReturnsSuccessTrue() => Assert.True(Rc2ReuseDiagnostics().Success);
+
+    [Fact]
+    public void Rc2Reuse_ReturnsPartialPhaseSuccessTrue() => Assert.True(Rc2ReuseDiagnostics().PartialPhaseSuccess);
+
+    [Fact]
+    public void Rc2Reuse_FailedPlansIsZero() => Assert.Equal(0, Rc2ReuseDiagnostics().FailedPlans);
+
+    [Fact]
+    public void Rc2Reuse_AllExecutedPhasesSucceeded() =>
+        Assert.True(Rc2ReuseDiagnostics().AllExecutedPhasesSucceeded);
 
     [Fact]
     public void Aggregation_UnsupportedSkipDoesNotCountAsReusableCompletion()
@@ -77,6 +140,14 @@ public sealed class Phase6ResponseAggregationTests
     private static SuccessAggregationDiagnostics Aggregate(IReadOnlyList<ProductionPhaseResult> phases, int start = 1, int end = 6) =>
         ContentPlanProductionExecutionService.BuildSuccessAggregationDiagnostics(
             new ContentPlanProductionExecutionRequest(Guid.NewGuid(), false, StartPhaseNo: start, EndPhaseNo: end), phases, []);
+
+    private static SuccessAggregationDiagnostics Rc2ReuseDiagnostics() => Aggregate([
+        Phase(1, ProductionPhaseStatus.Skipped, "P1_RESUME_REUSABLE"),
+        Phase(2, ProductionPhaseStatus.Skipped, "P2_REUSED"),
+        Phase(3, ProductionPhaseStatus.Skipped, "P3_REUSED"),
+        Phase(4, ProductionPhaseStatus.Skipped, "P4REUSE_VALID"),
+        Phase(5, ProductionPhaseStatus.Succeeded, "P5PUB_COMMITTED"),
+        Phase(6, ProductionPhaseStatus.Skipped, "P6REUSE_VALID")]);
 
     private static ProductionPhaseResult Phase(int no, ProductionPhaseStatus status, string? code = null) =>
         new(no, $"Phase {no}", status, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, 0, [], [], null, [], [], false)
