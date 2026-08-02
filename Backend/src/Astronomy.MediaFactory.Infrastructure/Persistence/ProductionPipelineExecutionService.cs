@@ -853,8 +853,13 @@ public sealed partial class ProductionPipelineExecutionService(
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
         {
             phaseNo = 6, phaseName = "Story Frames Authority", status = status.ToString(), reasonCode,
+            reason = outcome.Kind == StoryFramePhase6ExecutionKind.Reused
+                ? "Valid committed Phase 6 Story Frame authority was reused."
+                : "Phase 6 Story Frame authority committed.",
             validationStatus = "Valid", publicationCommitted = true, committedStateValidationPassed = true,
+            alreadyPublished = outcome.Kind == StoryFramePhase6ExecutionKind.Reused,
             authority.ExecutionId, authority.PlanId, authority.EventId, authority.Language, authority.Profile,
+            profileVersion = authority.AuthorityContractVersion,
             authority.RequestedVariants,
             sourcePhase4AggregateId = committed.AggregateId, sourcePhase4Checksum = committed.AggregateChecksum,
             sourceLongChecksum = committed.LongProjectionChecksum, sourceShortChecksum = committed.ShortProjectionChecksum,
@@ -862,16 +867,19 @@ public sealed partial class ProductionPipelineExecutionService(
             sourceEditorialContractId = committed.EditorialContractId,
             sourceEditorialContractChecksum = committed.EditorialContractChecksum,
             sourcePhase5PublicationId = committed.Phase5PublicationId,
-            authority.AuthorityId, authorityChecksum = authority.SemanticChecksum, index.IndexId,
+            authority.AuthorityId, storyFrameAuthorityId = authority.AuthorityId,
+            authorityChecksum = authority.SemanticChecksum, storyFrameAuthorityChecksum = authority.SemanticChecksum, index.IndexId,
             indexChecksum = index.Checksum, diagnostics.DiagnosticsContractVersion,
             longStoryFramesRequested = authority.RequestedVariants.Contains("Long", StringComparer.OrdinalIgnoreCase),
             shortStoryFramesRequested = authority.RequestedVariants.Contains("Short", StringComparer.OrdinalIgnoreCase),
             longStoryFramesGenerated = longCount > 0, shortStoryFramesGenerated = shortCount > 0,
             longStoryFrameCount = longCount, shortStoryFrameCount = shortCount, totalFrameCount = authority.Frames.Count,
-            semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true,
+            semanticValidationPassed = true, checksumValidationPassed = true,
+            physicalChecksumValidationPassed = true, manifestValidationPassed = true,
             lineageValidationPassed = true, relationshipValidationPassed = true,
             narrationOwnershipValidationPassed = true, variantCoverageValidationPassed = true,
-            canonicalOrderingValidationPassed = true, errors = Array.Empty<string>(), warnings = outcome.Warnings,
+            canonicalOrderingValidationPassed = true, runtimeCompatibilityValidationPassed = true,
+            artifactPaths = relativeOutputs, errors = Array.Empty<string>(), warnings = outcome.Warnings,
             inputFiles = StoryFrameCommittedInputDiagnostics.ArtifactPaths(committed), outputFiles = relativeOutputs,
             startedUtc = started, finishedUtc = finished
         }, JsonOptions), cancellationToken);
@@ -1238,6 +1246,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var root=Path.Combine(context.OutputRoot,"06-story-frames");
         var recovery = await _storyFrameTemporaryDirectoryRecovery.RecoverAsync(new(context.OutputRoot, root, request, compatibility, TimeSpan.FromHours(1)), cancellationToken);
         var warnings = new List<string>(recovery.Warnings);
+        if (context.OverwriteExisting)
+            RemoveLegacyPhase6Artifacts(context.OutputRoot);
         cancellationToken.ThrowIfCancellationRequested();
 
         if (!context.OverwriteExisting)
@@ -1287,6 +1297,40 @@ public sealed partial class ProductionPipelineExecutionService(
         return new(StoryFramePhase6ExecutionKind.Generated,
             [Path.Combine(root,"story-frames.json"),Path.Combine(root,"story-frame-index.json"),Path.Combine(root,"story-frame-diagnostics.json")],
             "Phase 6 Story Frames authority generated and certified.", warnings.Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    private void RemoveLegacyPhase6Artifacts(string outputRoot)
+    {
+        string[] relativePaths =
+        [
+            "creative/creative-storyboard.json",
+            "creative/creative-diagnostics.json",
+            "creative/documentary-contract.long.json",
+            "creative/documentary-contract.short.json",
+            "creative/documentary-architecture-diagnostics.json",
+            "creative/documentary-decision-log.json",
+            "story-frames/short/story-frame-manifest.json",
+            "story-frames/short/story-frame-diagnostics.json",
+            "story-frames/long/story-frame-manifest.json",
+            "story-frames/long/story-frame-diagnostics.json"
+        ];
+        var removed = new List<string>();
+        foreach (var relativePath in relativePaths)
+        {
+            var path = Path.Combine(outputRoot, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(path)) continue;
+            File.Delete(path);
+            removed.Add(relativePath);
+        }
+        foreach (var relativeDirectory in new[] { "story-frames/short", "story-frames/long", "story-frames", "creative" })
+        {
+            var directory = Path.Combine(outputRoot, relativeDirectory.Replace('/', Path.DirectorySeparatorChar));
+            if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
+                Directory.Delete(directory);
+        }
+        if (removed.Count > 0)
+            logger.LogInformation("Removed obsolete Phase 6 artifacts: {RemovedLegacyPhase6Artifacts}",
+                string.Join(", ", removed));
     }
 
     private StoryFrameResumeEvaluation EvaluateStoryFrameResume(ProductionPhaseContext context,
