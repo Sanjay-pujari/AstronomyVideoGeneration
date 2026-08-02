@@ -26,10 +26,10 @@ public sealed class StoryFrameIntegrationService(ICertifiedStoryFrameBuilder bui
         authority=authority with { SemanticChecksum=StoryFrameAuthorityChecksum.Authority(authority) };
         var index=StoryFrameIndexProjector.Project(authority, request.EditorialContract.Checksum);
         var diagnostics=new StoryFrameDiagnostics(request.ExecutionId,builder.BuilderType,builder.BuilderVersion,
-            nameof(StoryFrameIntegrationService),Version,["05-editorial/blueprint-certification.json","05-editorial/editorial-contract.json","05-editorial/certification-diagnostics.json"],
+            nameof(StoryFrameIntegrationService),Version,["04-blueprint/documentary-blueprint-aggregate.json","05-editorial/blueprint-certification.json","05-editorial/editorial-contract.json"],
             new Dictionary<string,string>{{"certification",request.Certification.SemanticChecksum},{"editorialContract",request.EditorialContract.Checksum},{"phase4",request.EditorialContract.SourcePhase4Checksum}},
             request.Certification.SemanticChecksum,request.EditorialContract.Checksum,request.EditorialContract.SourcePhase4Checksum,request.RequestedVariants,
-            request.EditorialContract.SceneOrder.Count,frames.Select(x=>x.SceneId).Distinct().Count(),frames.Count,
+            request.LongScenes.Count + request.ShortScenes.Count,frames.Select(x=>x.SceneId).Distinct().Count(),frames.Count,
             frames.GroupBy(x=>x.Variant).ToDictionary(x=>x.Key,x=>x.Count()),frames.GroupBy(x=>$"{x.Variant}:{x.SceneId}").ToDictionary(x=>x.Key,x=>x.Count()),
             frames.Count(x=>x.NarrationRequired),frames.Count(x=>x.ImageRequirements.Count+x.BrollRequirements.Count>0),frames.Sum(x=>x.ImageRequirements.Count),frames.Sum(x=>x.BrollRequirements.Count),frames.Sum(x=>x.OverlayRequirements.Count),frames.Sum(x=>x.Warnings.Count),frames.Sum(x=>x.BlockingConstraints.Count),
             ["Phase5CompleteSet","Authority","Variants","Scenes","Frames","Relationships","ProductionIntent","Index","Diagnostics","Checksums"],watch.ElapsedMilliseconds)
