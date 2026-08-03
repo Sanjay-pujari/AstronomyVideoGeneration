@@ -30,10 +30,22 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             var evergreen=prior.Origin==Phase7KnowledgeOrigin.Evergreen?prior:candidate; var ev=prior.Origin==Phase7KnowledgeOrigin.Event?prior:candidate;
             var classified=classifier.Classify(new(candidate.SemanticIdentity,candidate.Domain,candidate.ApprovedFieldPath,evergreen,ev,new Dictionary<string,string>(),new Dictionary<string,string>()));
             var selected=classified.Classification switch { Phase7KnowledgeMergeClassification.EventMorePrecise=>ev, Phase7KnowledgeMergeClassification.EventSpecificSpecialization=>ev, _=>evergreen };
-            if(classified.Classification==Phase7KnowledgeMergeClassification.Contradictory) issues.Add($"P7KNOWLEDGE_CONTRADICTION:{candidate.SemanticIdentity}"); else merged[candidate.SemanticIdentity]=selected;
+            if (classified.Classification == Phase7KnowledgeMergeClassification.Equivalent)
+                selected = selected with { SourceIds = evergreen.SourceIds.Concat(ev.SourceIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() };
+            if(classified.Classification==Phase7KnowledgeMergeClassification.Contradictory)
+            {
+                // A contradiction is diagnostic authority only: neither candidate may leak into accepted claims.
+                merged.Remove(candidate.SemanticIdentity);
+                issues.Add($"P7KNOWLEDGE_CONTRADICTION:{candidate.SemanticIdentity}");
+            }
+            else merged[candidate.SemanticIdentity]=selected;
             decisions.Add(new(candidate.SemanticIdentity,classified.Classification,evergreen,ev,[],classified.Reason,new Dictionary<string,string>(),classified.Warnings,classified.BlockingIssues));
         }
         var claims = merged.Values.Select(x=>Claim(x,payload,issues)).OrderBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray();
+        var claimIdsBySemantic = claims.ToDictionary(x => x.SemanticIdentity, x => x.ClaimId, StringComparer.Ordinal);
+        decisions = decisions.Select(d => d.Classification == Phase7KnowledgeMergeClassification.Contradictory
+            ? d
+            : d with { SelectedClaimIds = claimIdsBySemantic.TryGetValue(d.SemanticIdentity, out var claimId) ? [claimId] : [] }).ToList();
         if (claims.GroupBy(x=>x.ClaimId,StringComparer.Ordinal).Any(g=>g.Count()>1)) issues.Add("P7KNOWLEDGE_DUPLICATE_CLAIM_ID");
         if (claims.GroupBy(x=>x.SemanticIdentity,StringComparer.Ordinal).Any(g=>g.Count()>1)) issues.Add("P7KNOWLEDGE_DUPLICATE_SEMANTIC_IDENTITY");
         var required = profile.MandatoryKnowledgeDomains.Select(ParseDomain).ToHashSet();
@@ -78,7 +90,9 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         var certified=p.ReviewedSources.Where(x=>x.Certified&&x.Reviewed&&x.Language.Equals(p.Language,StringComparison.OrdinalIgnoreCase)).ToArray();
         var exactClaim=certified.Where(x=>x.SupportedClaimIds.Contains(c.SemanticIdentity,StringComparer.OrdinalIgnoreCase)).ToArray();
         var exactEntity=certified.Where(x=>x.SupportedKnowledgeIds.Contains(c.KnowledgeId,StringComparer.OrdinalIgnoreCase)).ToArray();
-        var exactField=certified.Where(x=>x.SupportedApprovedFieldPaths.Contains(c.ApprovedFieldPath,StringComparer.OrdinalIgnoreCase)).ToArray();
+        var canonicalField = Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath);
+        var exactField=certified.Where(x=>x.SupportedApprovedFieldPaths.Any(path =>
+            Phase7CanonicalFieldPathPolicy.TryCanonicalize(path, out var canonical) && canonical == canonicalField)).ToArray();
         var chosen=exactClaim.Length>0?exactClaim:exactEntity.Length>0?exactEntity:exactField;
         var precision=exactClaim.Length>0?Phase7ProvenancePrecision.ExactClaim:exactEntity.Length>0?Phase7ProvenancePrecision.ExactKnowledgeEntity:exactField.Length>0?Phase7ProvenancePrecision.ExactApprovedField:Phase7ProvenancePrecision.None;
         if(chosen.Length==0) issues.Add($"P7KNOWLEDGE_REQUIRED_CLAIM_UNSUPPORTED:{c.SemanticIdentity}");

@@ -81,7 +81,7 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
             var relative = path == section ? property.Name : $"{path[(section.Length + 1)..]}.{property.Name}";
             if (fields.TryGetValue(relative, out var domain) || fields.TryGetValue(property.Name, out domain))
             {
-                Emit(property.Value, entityId, $"{section}.{relative}", domain, sources, claims, context: null);
+                Emit(property.Value, entityId, Phase7CanonicalFieldPathPolicy.Canonicalize($"{section}.{relative}"), domain, sources, claims, context: null);
             }
             else if (property.Value.ValueKind == JsonValueKind.Object && AllowsContainer(property.Name))
                 Visit(property.Value, $"{path}.{property.Name}", entityId, sources, claims, entities, unknown, blocking);
@@ -104,7 +104,7 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
             // Scalar identity describes the certified fact, never its current rendering/value.
             // Content fallback is reserved for genuinely multi-valued primitive collections.
             var item = collection ? $".{Phase7Determinism.Hash(text.Trim().ToLowerInvariant())[..12]}" : "";
-            var semantic = $"{entityId}.{fieldPath}{item}".ToLowerInvariant();
+            var semantic = $"{entityId.ToLowerInvariant()}.{fieldPath}{item}";
             claims.Add(new(entityId, fieldPath, domain, text.Trim(), sources, Qualified, HumanReview, semantic)
             { AdapterId=AdapterId, AdapterVersion=AdapterVersion });
         }
