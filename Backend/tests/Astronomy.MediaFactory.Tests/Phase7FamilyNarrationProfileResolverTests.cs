@@ -38,4 +38,29 @@ public sealed class Phase7FamilyNarrationProfileResolverTests
     [Fact]
     public void Resolve_UnsupportedFamilyFailsWithDeterministicCode()
         => Assert.Equal("P7INPUT_EVENT_FAMILY_UNSUPPORTED", resolver.Resolve("UNKNOWN", "en").ReasonCode);
+
+    [Fact]
+    public void ConstellationProfile_UsesEightTwelveSixteenBounds()
+    {
+        var profile = resolver.Resolve("CONSTELLATION", "en").Profile!;
+        Assert.Equal((8, 12, 16), (profile.LongProfile.MinimumScenes, profile.LongProfile.PreferredScenes, profile.LongProfile.MaximumScenes));
+    }
+
+    [Theory]
+    [InlineData("OCCULTATION", "occultation-documentary-v1")]
+    [InlineData("TRANSIT", "transit-documentary-v1")]
+    [InlineData("OPPOSITION", "opposition-documentary-v1")]
+    [InlineData("ELONGATION", "elongation-documentary-v1")]
+    [InlineData("CLOSE_APPROACH", "close-approach-documentary-v1")]
+    public void SpecializedAlignmentFamilies_AreNotConjunction(string family, string expected)
+    {
+        var profile = resolver.Resolve(family, "en").Profile!;
+        Assert.Equal(expected, profile.ProfileId);
+        Assert.NotEqual(resolver.Resolve("CONJUNCTION", "en").Profile!.DeterministicChecksum, profile.DeterministicChecksum);
+    }
+
+    [Fact]
+    public void AllProfiles_UseCanonicalDomainKeys()
+        => Assert.All(resolver.Profiles.SelectMany(x => x.MandatoryKnowledgeDomains),
+            domain => Assert.True(Astronomy.MediaFactory.Core.DocumentaryBlueprint.NarrationKnowledgeDomains.TryParse(domain, out _), domain));
 }
