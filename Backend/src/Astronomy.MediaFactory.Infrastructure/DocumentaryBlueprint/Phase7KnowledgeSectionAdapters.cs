@@ -156,7 +156,10 @@ public sealed class CultureAndMythologyKnowledgeAdapter() : ApprovedFieldKnowled
     protected override bool AllowsContainer(string name)=>name is "greek" or "roman" or "indianHindu" or "chinese" or "arabic" or "other";
     protected override string ReviewReason(string path,string text) =>
         path.Split('.').Length < 3 ? "MissingTraditionIdentity" :
-        path.EndsWith("uncertaintyNote",StringComparison.OrdinalIgnoreCase) ? "UnresolvedCulturalUncertainty" : "";
+        path.EndsWith("uncertaintyNote",StringComparison.OrdinalIgnoreCase) ? "UnresolvedCulturalUncertainty" :
+        path.EndsWith("rashiNote",StringComparison.OrdinalIgnoreCase) || path.EndsWith("nakshatraNote",StringComparison.OrdinalIgnoreCase)
+            ? "SensitiveCulturalAssociationRequiresReview" :
+        path.Contains(".other.",StringComparison.OrdinalIgnoreCase) ? "UncategorisedTraditionRequiresReview" : "";
 }
 public sealed class RegionalTraditionKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.regional.v1","regionalTraditions",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.RegionalTraditions,"summary","qualification","tradition"));
 public sealed class AstrologyClarificationKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.astrology.v1","astrologyRelationships",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.AstrologyClarification,"westernZodiacNotes","indianRashiNotes","nakshatraNotes","disclaimer"))

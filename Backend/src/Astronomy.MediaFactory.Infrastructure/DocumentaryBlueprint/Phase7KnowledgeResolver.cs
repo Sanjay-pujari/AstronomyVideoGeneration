@@ -70,6 +70,8 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         {
             var domain=candidate.Domain.ToString();
             var disposition=candidate.RequiresHumanReview ? Phase7ClaimDisposition.HumanReview
+                : candidate.Domain==NarrationKnowledgeDomainKey.CultureAndMythology
+                    ? CulturalDisposition(candidate,payload,mandatoryNames.Contains(domain),optionalNames.Contains(domain))
                 : mandatoryNames.Contains(domain) ? Phase7ClaimDisposition.Required
                 : optionalNames.Contains(domain) ? Phase7ClaimDisposition.Optional : Phase7ClaimDisposition.Deferred;
             return ResolveClaim(candidate, disposition, payload, issues, warnings);
@@ -166,6 +168,25 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
     }
     private sealed record ResolvedClaim(CertifiedNarrationClaim Claim,IReadOnlyList<Phase7ClaimSupportEvidence> Evidence,
         Phase7ClaimResolutionDiagnostic Diagnostic);
+
+    /// <summary>
+    /// A mandatory cultural domain is an at-least-one authority requirement.  It is
+    /// deliberately not inherited by every tradition branch in that domain.
+    /// </summary>
+    private Phase7ClaimDisposition CulturalDisposition(Phase7AdapterClaimCandidate candidate,CertifiedKnowledgePayload payload,bool mandatory,bool optional)
+    {
+        if(!mandatory)return optional?Phase7ClaimDisposition.Optional:Phase7ClaimDisposition.Deferred;
+        // Only a named tradition's bounded summary is an authority-bearing cultural
+        // claim. Sensitive correspondences and uncategorised material are classified
+        // by the adapter as review claims and never arrive here.
+        if(!candidate.ApprovedFieldPath.EndsWith(".summary",StringComparison.OrdinalIgnoreCase))
+            return Phase7ClaimDisposition.Optional;
+        var requiredEvidence=Phase7KnowledgeSourcePool.Get(payload)
+            .Where(x=>candidate.SourceIds.Count==0||candidate.SourceIds.Contains(x.SourceId,StringComparer.Ordinal))
+            .Any(source=>sourceEligibility.Classify(new(source,payload.Language,candidate.KnowledgeId,candidate.SemanticIdentity,
+                candidate.ApprovedFieldPath,true,false,false)).Eligibility==Phase7SourceEligibility.EligibleForRequiredClaim);
+        return requiredEvidence?Phase7ClaimDisposition.Required:Phase7ClaimDisposition.Optional;
+    }
     private ResolvedClaim ResolveClaim(Phase7AdapterClaimCandidate c,Phase7ClaimDisposition disposition,CertifiedKnowledgePayload p,List<string> issues,List<string> warnings)
     {
         var sourcePool=Phase7KnowledgeSourcePool.Get(p);
@@ -181,6 +202,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         var precision=evaluated.Select(x=>x.Result.Precision).DefaultIfEmpty(Phase7ProvenancePrecision.None).Min();
         var chosen=evaluated.Where(x=>x.Result.Precision==precision).ToArray();
         if(required&&chosen.Length==0) issues.Add($"P7KNOWLEDGE_REQUIRED_CLAIM_UNSUPPORTED:{c.SemanticIdentity}");
+        if(disposition==Phase7ClaimDisposition.Optional&&chosen.Length==0) warnings.Add($"P7KNOWLEDGE_OPTIONAL_CLAIM_UNSUPPORTED:{c.SemanticIdentity}");
         var id=Phase7Determinism.SemanticClaimId(c.KnowledgeId,c.SemanticIdentity,p.Language,p.EvergreenPayloadId??p.PayloadId);
         var cultural=c.Domain is NarrationKnowledgeDomainKey.CultureAndMythology or NarrationKnowledgeDomainKey.RegionalTraditions;
         var draft=new CertifiedNarrationClaim(id,c.Domain.ToString(),c.Text,chosen.Select(x=>x.Source.SourceId).Distinct().Order(StringComparer.Ordinal).ToArray(),[c.KnowledgeId,c.SemanticIdentity],chosen.Length==0?.5m:chosen.Min(x=>x.Source.Confidence),
