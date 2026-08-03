@@ -101,13 +101,27 @@ public sealed record Phase7KnowledgeCompleteSetReadback(IReadOnlyList<Phase7Know
 public sealed record Phase7KnowledgeManifestEntry(int PhaseNo, string PhaseComponent, string Status,
     string ReasonCode, bool PublicationCommitted, bool CommittedStateValidationPassed, string AuthorityId,
     string AuthorityChecksum, string ValidationPhysicalSha256, string PublicationId, string ContractVersion,
-    string DeterministicChecksum);
+    string DeterministicChecksum)
+{
+    public string ExecutionId { get; init; } = "";
+    public string PlanId { get; init; } = "";
+    public string EventId { get; init; } = "";
+    public string Language { get; init; } = "";
+    public string ProfileId { get; init; } = "";
+}
 
 public sealed record Phase7KnowledgePublicationEvidence(string ContractVersion, string PublicationId,
     string ExecutionId, string PlanId, string EventId, string Language, string AuthorityId,
     string AuthorityChecksum, string ValidationPhysicalSha256, string ManifestEntryChecksum,
     bool PublicationCommitted, bool CommittedStateValidationPassed, DateTimeOffset CreatedUtc,
     string DeterministicChecksum);
+
+public sealed record Phase7KnowledgeCommittedEvidence(
+    Phase7KnowledgeManifestEntry ManifestEntry,
+    Phase7KnowledgePublicationEvidence PublicationEvidence,
+    string ValidationPhysicalSha256,
+    string ManifestEntryChecksum,
+    string ManifestDocumentChecksum);
 
 public interface IPhase7KnowledgeAuthorityBuilder
 {
@@ -140,7 +154,7 @@ public interface IPhase7KnowledgePhysicalReadback
         Phase7KnowledgeAuthority authority, Phase7KnowledgeArtifactInventory inventory, CancellationToken token = default);
     Task<Phase7KnowledgeCompleteSetReadback> ValidateCommittedCompleteSetAsync(string executionRoot,
         Phase7KnowledgeAuthority authority, Phase7KnowledgeArtifactInventory inventory,
-        string expectedValidationHash, bool manifestEvidenceValid, CancellationToken token = default);
+        Phase7KnowledgeCommittedEvidence evidence, CancellationToken token = default);
 }
 public interface IPhase7KnowledgeExecutionLock { Task<IAsyncDisposable> AcquireAsync(string key, CancellationToken token = default); }
 

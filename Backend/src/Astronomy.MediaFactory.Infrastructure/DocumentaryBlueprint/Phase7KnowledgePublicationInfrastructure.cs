@@ -54,8 +54,26 @@ public sealed class Phase7KnowledgePhysicalReadback(IPhase7KnowledgeFileSystem f
     }
     public Task<Phase7KnowledgeCompleteSetReadback> ValidateCandidateCompleteSetAsync(string root,Phase7KnowledgeAuthority a,Phase7KnowledgeArtifactInventory i,CancellationToken token=default)
         =>Validate(root,a,i,null,true,token);
-    public Task<Phase7KnowledgeCompleteSetReadback> ValidateCommittedCompleteSetAsync(string root,Phase7KnowledgeAuthority a,Phase7KnowledgeArtifactInventory i,string validationHash,bool manifest,CancellationToken token=default)
-        =>Validate(root,a,i,validationHash,manifest,token);
+    public async Task<Phase7KnowledgeCompleteSetReadback> ValidateCommittedCompleteSetAsync(string root,Phase7KnowledgeAuthority a,Phase7KnowledgeArtifactInventory i,Phase7KnowledgeCommittedEvidence evidence,CancellationToken token=default)
+    {
+        root=Path.GetFullPath(root);var errors=new List<string>();
+        var manifestPath=Path.Combine(root,"phase-manifest.json");var publicationPath=Path.Combine(root,".phase-07-knowledge-publication.json");
+        if(!fs.FileExists(manifestPath)||!fs.FileExists(publicationPath))
+            return (await Validate(root,a,i,evidence.ValidationPhysicalSha256,false,token)) with { Errors=["P7KNOWLEDGE_MANIFEST_EVIDENCE_MISSING"],IsValid=false,ManifestEvidenceValid=false };
+        try
+        {
+            var manifestBytes=await fs.ReadAllBytesAsync(manifestPath,token);var manifest=JsonNode.Parse(manifestBytes)?.AsObject()??throw new JsonException("Manifest root missing.");
+            var entries=manifest["phase7KnowledgeAuthorities"]?.Deserialize<Phase7KnowledgeManifestEntry[]>(Json)??[];
+            var matches=entries.Where(x=>x.PhaseNo==7&&x.PhaseComponent=="Knowledge Authority"&&x.ExecutionId==a.ExecutionId&&x.PlanId==a.PlanId&&x.EventId==a.EventId&&string.Equals(x.Language,a.Language,StringComparison.OrdinalIgnoreCase)&&x.AuthorityId==a.AuthorityId).ToArray();
+            var publication=JsonSerializer.Deserialize<Phase7KnowledgePublicationEvidence>(await fs.ReadAllBytesAsync(publicationPath,token),Json)??throw new JsonException("Publication evidence missing.");
+            var entry=matches.Length==1?matches[0]:null;
+            if(entry is null||entry!=evidence.ManifestEntry||publication!=evidence.PublicationEvidence||Sha(manifestBytes)!=evidence.ManifestDocumentChecksum||entry.DeterministicChecksum!=evidence.ManifestEntryChecksum||publication.ManifestEntryChecksum!=entry.DeterministicChecksum||publication.ValidationPhysicalSha256!=evidence.ValidationPhysicalSha256)
+                errors.Add("P7KNOWLEDGE_MANIFEST_EVIDENCE_INVALID");
+        }
+        catch(JsonException){errors.Add("P7KNOWLEDGE_MANIFEST_EVIDENCE_INVALID");}
+        var result=await Validate(root,a,i,evidence.ValidationPhysicalSha256,errors.Count==0,token);
+        return errors.Count==0?result:result with{ManifestEvidenceValid=false,IsValid=false,Errors=[..result.Errors,..errors]};
+    }
     private async Task<Phase7KnowledgeCompleteSetReadback> Validate(string root,Phase7KnowledgeAuthority a,Phase7KnowledgeArtifactInventory inventory,string? expectedValidationHash,bool manifest,CancellationToken token)
     {
         root=Path.GetFullPath(root);var all=new List<Phase7KnowledgeArtifactReadbackEvidence>();var errors=new List<string>();
@@ -80,7 +98,9 @@ public sealed class Phase7KnowledgePhysicalReadback(IPhase7KnowledgeFileSystem f
         foreach(var expected in Types.Keys.Where(x=>!inventory.Artifacts.Any(y=>y.RelativePath==x)))errors.Add("P7KNOWLEDGE_ARTIFACT_MISSING");
         Phase7KnowledgeArtifactReadbackEvidence? validation=null;var vp=Path.Combine(root,"validation","phase-07-knowledge-validation.json");
         if(fs.FileExists(vp)){var b=await fs.ReadAllBytesAsync(vp,token);Phase7KnowledgeValidation? v=null;try{v=JsonSerializer.Deserialize<Phase7KnowledgeValidation>(b,Json);}catch(JsonException ex){errors.Add(ex.Message);}
-            var ok=v?.AuthorityId==a.AuthorityId&&v.ArtifactInventory?.DeterministicChecksum==inventory.DeterministicChecksum;
+            var checksumValid=v is not null&&v.DeterministicChecksum==Phase7Determinism.Hash(v with{DeterministicChecksum=""});
+            var ok=v?.AuthorityId==a.AuthorityId&&v.ArtifactInventory?.DeterministicChecksum==inventory.DeterministicChecksum&&checksumValid;
+            if(v is not null&&!checksumValid)errors.Add("P7KNOWLEDGE_VALIDATION_CHECKSUM_INVALID");
             if(expectedValidationHash is not null&&Sha(b)!=expectedValidationHash){ok=false;errors.Add("P7KNOWLEDGE_VALIDATION_HASH_MISMATCH");}
             validation=new("validation/phase-07-knowledge-validation.json",true,b.LongLength,Sha(b),v is not null,nameof(Phase7KnowledgeValidation),Phase7KnowledgeContract.Version,ok,ok,true,true,ok?[]:["P7KNOWLEDGE_VALIDATION_MISMATCH"]);}
         else errors.Add("P7KNOWLEDGE_VALIDATION_MISSING");
@@ -113,7 +133,7 @@ public sealed class Phase7KnowledgePhysicalReadback(IPhase7KnowledgeFileSystem f
 }
 
 public sealed class Phase7KnowledgeCommittedStateEvaluator(IPhase7KnowledgeFileSystem fs,
-    IPhase7KnowledgePhysicalReadback readback) : IPhase7KnowledgeCommittedStateEvaluator
+    IPhase7KnowledgePhysicalReadback readback, IPhase7KnowledgeAuthorityValidator validator) : IPhase7KnowledgeCommittedStateEvaluator
 {
     private static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web);
     public async Task<Phase7KnowledgeCommittedStateEvaluation> EvaluateAsync(Phase7KnowledgeCommittedStateRequest request,CancellationToken token=default)
@@ -126,22 +146,28 @@ public sealed class Phase7KnowledgeCommittedStateEvaluator(IPhase7KnowledgeFileS
         {
             var a=JsonSerializer.Deserialize<Phase7KnowledgeAuthority>(await fs.ReadAllTextAsync(authorityPath,token),Json)!;
             var v=JsonSerializer.Deserialize<Phase7KnowledgeValidation>(await fs.ReadAllTextAsync(validationPath,token),Json)!;
+            var resolution=JsonSerializer.Deserialize<ResolvedNarrationKnowledge>(await fs.ReadAllTextAsync(Path.Combine(root,"07-narration","knowledge","knowledge-resolution-report.json"),token),Json)!;
+            var diagnostics=JsonSerializer.Deserialize<Phase7KnowledgeDiagnostics>(await fs.ReadAllTextAsync(Path.Combine(root,"07-narration","knowledge","knowledge-diagnostics.json"),token),Json)!;
             var e=JsonSerializer.Deserialize<Phase7KnowledgePublicationEvidence>(await fs.ReadAllTextAsync(evidencePath,token),Json)!;
             var manifest=JsonNode.Parse(await fs.ReadAllTextAsync(manifestPath,token))?.AsObject()??throw new JsonException("Manifest root missing.");
             var entries=manifest["phase7KnowledgeAuthorities"]?.Deserialize<Phase7KnowledgeManifestEntry[]>(Json)??[];
-            var matchingEntries=entries.Where(x=>x.PhaseNo==7&&x.PhaseComponent=="Knowledge Authority").ToArray();
+            var matchingEntries=entries.Where(x=>x.PhaseNo==7&&x.PhaseComponent=="Knowledge Authority"&&x.ExecutionId==request.ExecutionId&&x.PlanId==request.PlanId&&x.EventId==request.EventId&&string.Equals(x.Language,request.Language,StringComparison.OrdinalIgnoreCase)&&x.AuthorityId==a.AuthorityId).ToArray();
             var me=matchingEntries.Length==1?matchingEntries[0]:null;
             var errors=new List<string>();
             if(a.ExecutionId!=request.ExecutionId||a.PlanId!=request.PlanId||a.EventId!=request.EventId||a.Language!=request.Language)errors.Add("P7KNOWLEDGE_IDENTITY_MISMATCH");
             if(a.SemanticChecksum!=Phase7Determinism.Hash(a with{SemanticChecksum=""}))errors.Add("P7KNOWLEDGE_AUTHORITY_CHECKSUM_INVALID");
             if(v.ArtifactInventory is null||v.ArtifactInventory.Artifacts.Count!=3)errors.Add("P7KNOWLEDGE_INVENTORY_INVALID");
             if(!v.IsValid||v.Mode!=Phase7KnowledgeValidationMode.CommittedPhysical)errors.Add("P7KNOWLEDGE_VALIDATION_INVALID");
+            if(v.DeterministicChecksum!=Phase7Determinism.Hash(v with{DeterministicChecksum=""}))errors.Add("P7KNOWLEDGE_VALIDATION_CHECKSUM_INVALID");
             var evidenceChecksum=Phase7Determinism.Hash(e with{DeterministicChecksum=""});
             if(e.ContractVersion!=Phase7KnowledgeContract.Version||string.IsNullOrWhiteSpace(e.PublicationId)||e.ExecutionId!=request.ExecutionId||e.PlanId!=request.PlanId||e.EventId!=request.EventId||!string.Equals(e.Language,request.Language,StringComparison.OrdinalIgnoreCase)||e.AuthorityId!=a.AuthorityId||e.AuthorityChecksum!=a.SemanticChecksum||!e.PublicationCommitted||!e.CommittedStateValidationPassed||e.DeterministicChecksum!=evidenceChecksum)errors.Add("P7KNOWLEDGE_PUBLICATION_EVIDENCE_INVALID");
             if(me is null||me.ContractVersion!=Phase7KnowledgeContract.Version||me.Status!="Succeeded"||me.ReasonCode!="P7KNOWLEDGE_COMMITTED"||!me.PublicationCommitted||!me.CommittedStateValidationPassed||me.AuthorityId!=a.AuthorityId||me.AuthorityChecksum!=a.SemanticChecksum||me.PublicationId!=e.PublicationId||me.ValidationPhysicalSha256!=e.ValidationPhysicalSha256||me.DeterministicChecksum!=Phase7Determinism.Hash(me with{DeterministicChecksum=""})||e.ManifestEntryChecksum!=me.DeterministicChecksum)errors.Add("P7KNOWLEDGE_MANIFEST_INVALID");
             if(errors.Count>0)return new(false,null,errors[0],errors,[]);
-            var physical=await readback.ValidateCommittedCompleteSetAsync(root,a,v.ArtifactInventory!,e.ValidationPhysicalSha256,me is not null,token);
+            var manifestHash=Sha(await fs.ReadAllBytesAsync(manifestPath,token));
+            var physical=await readback.ValidateCommittedCompleteSetAsync(root,a,v.ArtifactInventory!,new(me!,e,e.ValidationPhysicalSha256,me!.DeterministicChecksum,manifestHash),token);
             if(!physical.IsValid)return new(false,null,"P7KNOWLEDGE_PHYSICAL_READBACK_INVALID",physical.Errors,[]);
+            var recomputed=validator.Validate(a,resolution,diagnostics,Phase7KnowledgeValidationMode.CommittedPhysical,physical);
+            if(!Equivalent(v,recomputed))return new(false,null,"P7KNOWLEDGE_COMMITTED_SEMANTIC_MISMATCH",["Committed validation does not match recomputed semantic governance."],[]);
             var paths=physical.Artifacts.Select(x=>x.RelativePath).Append("validation/phase-07-knowledge-validation.json").ToArray();
             var published=new PublishedPhase7KnowledgeAuthority(a,paths,
                 physical.Artifacts.ToDictionary(x=>x.RelativePath,x=>v.ArtifactInventory!.Artifacts.Single(y=>y.RelativePath==x.RelativePath).SemanticChecksum),
@@ -153,6 +179,11 @@ public sealed class Phase7KnowledgeCommittedStateEvaluator(IPhase7KnowledgeFileS
         catch(Exception ex) when(ex is JsonException or InvalidDataException or IOException)
         { return new(false,null,"P7KNOWLEDGE_PHYSICAL_READBACK_INVALID",[ex.Message],[]); }
     }
+    private static bool Equivalent(Phase7KnowledgeValidation left,Phase7KnowledgeValidation right)=>
+        left.IsValid==right.IsValid&&left.ReasonCode==right.ReasonCode&&left.AuthorityId==right.AuthorityId&&
+        left.Errors.SequenceEqual(right.Errors)&&left.Gates.Select(x=>(x.Name,x.Passed,string.Join('|',x.Errors))).SequenceEqual(right.Gates.Select(x=>(x.Name,x.Passed,string.Join('|',x.Errors))))&&
+        Equals(left.ArtifactInventory,right.ArtifactInventory)&&left.DeterministicChecksum==right.DeterministicChecksum;
+    private static string Sha(byte[] b)=>Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
 }
 
 public sealed class Phase7KnowledgeRecoveryService(IPhase7KnowledgeFileSystem fs) : IPhase7KnowledgeRecoveryService
@@ -291,18 +322,30 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
             fs.CreateDirectory(Path.GetDirectoryName(stableValidation)!);fs.MoveFile(stageValidation,stableValidation,true);
             await Mark(Phase7KnowledgeTransactionState.ValidationPublished,token);
 
-            var committedReadback=await readback.ValidateCommittedCompleteSetAsync(request.ExecutionRoot,a,inventory,Sha(await fs.ReadAllBytesAsync(stableValidation,token)),true,token);
-            var committedValidation=validator.Validate(a,resolvedKnowledge,d,Phase7KnowledgeValidationMode.CommittedPhysical,committedReadback);
-            if(!committedValidation.IsValid)throw new InvalidDataException(committedValidation.ReasonCode);
-            await Write(stableValidation,committedValidation,token);
-            var validationHash=Sha(await fs.ReadAllBytesAsync(stableValidation,token));var publicationId="p7kp-"+a.AuthorityId;
-            var manifestEntry=new Phase7KnowledgeManifestEntry(7,"Knowledge Authority","Succeeded","P7KNOWLEDGE_COMMITTED",true,true,a.AuthorityId,a.SemanticChecksum,validationHash,publicationId,Phase7KnowledgeContract.Version,"");
-            manifestEntry=manifestEntry with{DeterministicChecksum=Phase7Determinism.Hash(manifestEntry)};
+            var publicationId="p7kp-"+a.AuthorityId;
+            var provisionalHash=Sha(await fs.ReadAllBytesAsync(stableValidation,token));
+            var provisionalEntry=new Phase7KnowledgeManifestEntry(7,"Knowledge Authority","Publishing","P7KNOWLEDGE_PENDING",false,false,a.AuthorityId,a.SemanticChecksum,provisionalHash,publicationId,Phase7KnowledgeContract.Version,"")
+                {ExecutionId=a.ExecutionId,PlanId=a.PlanId,EventId=a.EventId,Language=a.Language,ProfileId=a.ProfileId};
+            provisionalEntry=provisionalEntry with{DeterministicChecksum=Phase7Determinism.Hash(provisionalEntry)};
             JsonObject manifest;
             if(previousManifest)manifest=JsonNode.Parse(await fs.ReadAllTextAsync(paths.BackupManifestPath,token))?.AsObject()??throw new JsonException("Existing phase manifest is invalid.");
             else manifest=new JsonObject();
             var old=manifest["phase7KnowledgeAuthorities"]?.Deserialize<Phase7KnowledgeManifestEntry[]>(Json)??[];
-            manifest["phase7KnowledgeAuthorities"]=JsonSerializer.SerializeToNode(old.Where(x=>x.PhaseComponent!="Knowledge Authority").Append(manifestEntry).ToArray(),Json);
+            bool SameIdentity(Phase7KnowledgeManifestEntry x)=>x.PhaseNo==7&&x.PhaseComponent=="Knowledge Authority"&&x.ExecutionId==a.ExecutionId&&x.PlanId==a.PlanId&&x.EventId==a.EventId&&string.Equals(x.Language,a.Language,StringComparison.OrdinalIgnoreCase);
+            manifest["phase7KnowledgeAuthorities"]=JsonSerializer.SerializeToNode(old.Where(x=>!SameIdentity(x)).Append(provisionalEntry).ToArray(),Json);
+            await fs.WriteAllTextAsync(paths.StableManifestPath,manifest.ToJsonString(Json),token);
+            var provisionalEvidence=new Phase7KnowledgePublicationEvidence(Phase7KnowledgeContract.Version,publicationId,request.ExecutionId,request.PlanId,request.EventId,request.Language,a.AuthorityId,a.SemanticChecksum,provisionalHash,provisionalEntry.DeterministicChecksum,false,false,DateTimeOffset.UtcNow,"");
+            provisionalEvidence=provisionalEvidence with{DeterministicChecksum=Phase7Determinism.Hash(provisionalEvidence)};await Write(paths.StablePublicationEvidencePath,provisionalEvidence,token);
+            var evidenceInput=new Phase7KnowledgeCommittedEvidence(provisionalEntry,provisionalEvidence,provisionalHash,provisionalEntry.DeterministicChecksum,Sha(await fs.ReadAllBytesAsync(paths.StableManifestPath,token)));
+            var committedReadback=await readback.ValidateCommittedCompleteSetAsync(request.ExecutionRoot,a,inventory,evidenceInput,token);
+            var committedValidation=validator.Validate(a,resolvedKnowledge,d,Phase7KnowledgeValidationMode.CommittedPhysical,committedReadback);
+            if(!committedValidation.IsValid)throw new InvalidDataException(committedValidation.ReasonCode);
+            await Write(stableValidation,committedValidation,token);
+            var validationHash=Sha(await fs.ReadAllBytesAsync(stableValidation,token));
+            var manifestEntry=new Phase7KnowledgeManifestEntry(7,"Knowledge Authority","Succeeded","P7KNOWLEDGE_COMMITTED",true,true,a.AuthorityId,a.SemanticChecksum,validationHash,publicationId,Phase7KnowledgeContract.Version,"");
+            manifestEntry=manifestEntry with{ExecutionId=a.ExecutionId,PlanId=a.PlanId,EventId=a.EventId,Language=a.Language,ProfileId=a.ProfileId};
+            manifestEntry=manifestEntry with{DeterministicChecksum=Phase7Determinism.Hash(manifestEntry)};
+            manifest["phase7KnowledgeAuthorities"]=JsonSerializer.SerializeToNode(old.Where(x=>!SameIdentity(x)).Append(manifestEntry).ToArray(),Json);
             await fs.WriteAllTextAsync(paths.StableManifestPath,manifest.ToJsonString(Json),token);
             var evidence=new Phase7KnowledgePublicationEvidence(Phase7KnowledgeContract.Version,publicationId,request.ExecutionId,request.PlanId,request.EventId,request.Language,a.AuthorityId,a.SemanticChecksum,validationHash,manifestEntry.DeterministicChecksum,true,true,DateTimeOffset.UtcNow,"");
             evidence=evidence with{DeterministicChecksum=Phase7Determinism.Hash(evidence)};await Write(paths.StablePublicationEvidencePath,evidence,token);
