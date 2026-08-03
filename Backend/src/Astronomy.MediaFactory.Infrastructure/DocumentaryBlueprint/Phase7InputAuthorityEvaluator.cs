@@ -13,7 +13,10 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
         token.ThrowIfCancellationRequested();
         var p6 = await phase6Evaluator.EvaluateAsync(new(request.ExecutionRoot, request.ExecutionId, request.PlanId, request.EventId, request.Language), token);
         token.ThrowIfCancellationRequested();
-        if (!p6.IsValid || p6.Authority is null) return Bad("P7INPUT_PHASE6_INVALID", p6.Errors.FirstOrDefault() ?? p6.ReasonCode);
+        if (!p6.IsValid || p6.Authority is null)
+            return new(false, null, "P7INPUT_PHASE6_INVALID",
+                new[] { $"Phase 6 evaluator reason: {p6.ReasonCode}." }.Concat(p6.Errors).Distinct(StringComparer.Ordinal).ToArray(),
+                p6.Warnings);
         var published = p6.Authority;
         var authority = published.Authority;
         if (authority.ExecutionId != request.ExecutionId || authority.PlanId != request.PlanId || authority.EventId != request.EventId
