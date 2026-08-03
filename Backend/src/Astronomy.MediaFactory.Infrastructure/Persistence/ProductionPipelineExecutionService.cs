@@ -86,7 +86,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IStoryFrameTemporaryDirectoryRecovery? storyFrameTemporaryDirectoryRecovery = null,
     IStoryFrameRuntimeIdentityProvider? storyFrameRuntimeIdentityProvider = null,
     IStoryFrameFileSystem? storyFrameFileSystem = null,
-    IPhase7KnowledgeService? phase7KnowledgeService = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IPhase7KnowledgeService? phase7KnowledgeService = null,
+    IFamilyNarrationProfileResolver? familyNarrationProfileResolver = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     // The action delegate and the generic phase-result writer are deliberately separate.
     // Preserve the publication transaction selected by the Phase 3 action so the stable
@@ -864,13 +865,17 @@ public sealed partial class ProductionPipelineExecutionService(
                 [],[],null,[],["IPhase7KnowledgeService is not registered."],false,"P7.1A Knowledge Authority service unavailable.")
                 {ReasonCode="P7KNOWLEDGE_SERVICE_UNAVAILABLE"};
         }
-        var phase4=context.ExecutionContext.PublishedDocumentaryBlueprintAggregate;
+        var profileResolution=(familyNarrationProfileResolver ?? new FamilyNarrationProfileResolver())
+            .Resolve(FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType),context.Request.Language);
+        var canonicalProfile=profileResolution.Profile is null ? null : new Phase7CanonicalProfileIdentity(
+            profileResolution.Profile.EventFamily,profileResolution.Profile.ProfileId,profileResolution.Profile.ContractVersion,context.Request.Language);
         var request=new Phase7InputAuthorityRequest(context.OutputRoot,context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),
-            context.EventId,context.Request.Language,phase4?.ProfileId??"",["Long","Short"])
+            context.EventId,context.Request.Language,canonicalProfile?.ProfileId??"",["Long","Short"])
         {
-            ExpectedProfileVersion = phase4?.ProfileVersion ?? "",
+            ExpectedProfileVersion = canonicalProfile?.ProfileVersion ?? "",
             EventType = context.Request.EventType,
-            ContentCategory = context.ExecutionContext.Category
+            ContentCategory = context.ExecutionContext.Category,
+            CanonicalProfileIdentity = canonicalProfile
         };
         var result=await _phase7KnowledgeService.ExecuteAsync(request,context.OverwriteExisting,cancellationToken);
         var finishedUtc=DateTimeOffset.UtcNow;

@@ -43,13 +43,19 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
         if (!profileResult.IsValid || profileResult.Profile is null)
             return Bad(profileResult.ReasonCode, profileResult.Errors.FirstOrDefault() ?? "Narration profile resolution failed.");
         var profile = profileResult.Profile;
+        var expected = request.CanonicalProfileIdentity;
         logger.LogInformation("Phase7ProfileIdentityComparison ExpectedProfileId={ExpectedProfileId} ExpectedProfileVersion={ExpectedProfileVersion} ResolvedFamilyProfileId={ResolvedFamilyProfileId} ResolvedFamilyProfileVersion={ResolvedFamilyProfileVersion} PublishedProfileId={PublishedProfileId} PublishedProfileVersion={PublishedProfileVersion} Phase6AuthorityProfileId={Phase6AuthorityProfileId} Phase6AuthorityProfileVersion={Phase6AuthorityProfileVersion} Phase4AuthorityProfileId={Phase4AuthorityProfileId} Phase4AuthorityProfileVersion={Phase4AuthorityProfileVersion} ProductionPipelineRequestEventType={ProductionPipelineRequestEventType} ProductionPipelineRequestContentCategory={ProductionPipelineRequestContentCategory}",
-            request.ExpectedProfile, request.ExpectedProfileVersion, profile.ProfileId, profile.ContractVersion,
+            expected?.ProfileId ?? request.ExpectedProfile, expected?.ProfileVersion ?? request.ExpectedProfileVersion, profile.ProfileId, profile.ContractVersion,
             published.ProfileId, published.ProfileVersion, authority.Profile, published.ProfileVersion,
             request.ExpectedProfile, request.ExpectedProfileVersion, request.EventType, request.ContentCategory);
-        if (!ProfileIdentityMatches(request.ExpectedProfile, request.ExpectedProfileVersion,
-                published.ProfileId, published.ProfileVersion))
-            return Bad("P7INPUT_PROFILE_INVALID", "Expected profile does not match canonical published profile authority.");
+        // Phase 6's ProfileId describes its Story Frame rendering authority.  It remains
+        // lineage evidence, but is deliberately not treated as a Phase 7 narration profile.
+        // The family resolver is the sole owner of the narration identity at this boundary.
+        var normalizedFamily = FamilyNarrationProfileResolver.NormalizeEventFamily(payload.EventFamily);
+        if (expected is null || !string.Equals(expected.EventFamily, normalizedFamily, StringComparison.Ordinal)
+            || !ProfileIdentityMatches(expected.ProfileId, expected.ProfileVersion, profile.ProfileId, profile.ContractVersion)
+            || !string.Equals(expected.Language, request.Language, StringComparison.OrdinalIgnoreCase))
+            return Bad("P7INPUT_PROFILE_INVALID", ProfileMismatchDiagnostics(request, expected, profile, published, normalizedFamily));
         var knowledge = knowledgeResolver.Resolve(payload, profile);
         if (knowledge.BlockingIssues.Count > 0) return Bad("P7INPUT_KNOWLEDGE_PAYLOAD_INVALID", string.Join("; ", knowledge.BlockingIssues));
         var longFrames = authority.Frames.Where(x => x.Variant.Equals("Long", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SceneNumber).ThenBy(x => x.FrameNumber).ToArray();
@@ -73,6 +79,14 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
         && !string.IsNullOrWhiteSpace(expectedProfileVersion)
         && string.Equals(expectedProfileId, publishedProfileId, StringComparison.OrdinalIgnoreCase)
         && string.Equals(expectedProfileVersion, publishedProfileVersion, StringComparison.OrdinalIgnoreCase);
+    private static string ProfileMismatchDiagnostics(Phase7InputAuthorityRequest request,
+        Phase7CanonicalProfileIdentity? expected, FamilyNarrationProfile canonical,
+        PublishedStoryFrameAuthority published, string eventFamily) =>
+        "Expected profile does not match canonical narration profile authority. " +
+        $"ExpectedProfileId={expected?.ProfileId ?? "<missing>"}; ExpectedProfileVersion={expected?.ProfileVersion ?? "<missing>"}; " +
+        $"CanonicalProfileId={canonical.ProfileId}; CanonicalProfileVersion={canonical.ContractVersion}; " +
+        $"PublishedProfileId={published.ProfileId}; PublishedProfileVersion={published.ProfileVersion}; " +
+        $"PublishedProfileAuthority=Phase6StoryFrame; EventFamily={eventFamily}; EventType={request.EventType}.";
     private static bool SafePath(string path) => !string.IsNullOrWhiteSpace(path) && !Path.IsPathRooted(path) && !path.Contains('\\')
         && !path.Split('/').Any(x => x is "" or "." or "..") && !path.Contains("staging", StringComparison.OrdinalIgnoreCase)
         && !path.Contains("backup", StringComparison.OrdinalIgnoreCase);

@@ -32,6 +32,20 @@ public sealed class Phase7KnowledgePipelineIsolationTests
     [Fact] public async Task OverwriteExistingTrue_IsForwarded_Runtime() => await AssertInvocationAsync(true);
     [Fact] public async Task OverwriteExistingFalse_IsForwarded_Runtime() => await AssertInvocationAsync(false);
 
+    [Fact]
+    public async Task ConstellationProductionRoute_UsesCanonicalNarrationProfile()
+    {
+        var context = CreateContext(false, "CONSTELLATION");
+        var fake = new RecordingKnowledgeService(Committed());
+
+        var result = await ExecuteAsync(fake, context);
+
+        Assert.Equal(ProductionPhaseStatus.Succeeded, result.Status);
+        Assert.Equal("constellation-documentary-v1", fake.ReceivedRequest!.CanonicalProfileIdentity!.ProfileId);
+        Assert.Equal("CONSTELLATION", fake.ReceivedRequest.CanonicalProfileIdentity.EventFamily);
+        Assert.NotEqual("orion-gold", fake.ReceivedRequest.ExpectedProfile);
+    }
+
     [Theory]
     [InlineData(0, "Phase7OverwriteCleanup_PreservesKnowledgeAuthorityAtServiceBoundary")]
     [InlineData(1, "Phase7OverwriteCleanup_PreservesResolutionReportAtServiceBoundary")]
@@ -163,10 +177,10 @@ public sealed class Phase7KnowledgePipelineIsolationTests
     private static void InvokeCleanup(ProductionPipelineExecutionService service, ProductionPhaseContext context) =>
         typeof(ProductionPipelineExecutionService).GetMethod("ClearPhaseRangeOutputsForOverwrite", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(service, [context, null]);
 
-    private static ProductionPhaseContext CreateContext(bool overwrite)
+    private static ProductionPhaseContext CreateContext(bool overwrite, string eventType = "MeteorShower")
     {
         var method = typeof(ProductionPipelineExecutionServiceTests).GetMethod("CreateContext", BindingFlags.Static | BindingFlags.NonPublic)!;
-        var context = (ProductionPhaseContext)method.Invoke(null, ["MeteorShower", new[] { "KnowledgeAuthority" }, null, false])!;
+        var context = (ProductionPhaseContext)method.Invoke(null, [eventType, new[] { "KnowledgeAuthority" }, null, false])!;
         return context with { StartPhaseNo = 7, EndPhaseNo = 7, OverwriteExisting = overwrite, RetryFailedOnly = true };
     }
 

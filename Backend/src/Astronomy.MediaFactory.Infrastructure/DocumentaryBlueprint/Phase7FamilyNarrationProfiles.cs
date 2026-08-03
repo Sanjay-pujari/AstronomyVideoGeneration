@@ -39,13 +39,17 @@ public sealed class FamilyNarrationProfileResolver : IFamilyNarrationProfileReso
     public IReadOnlyList<FamilyNarrationProfile> Profiles { get; }
     public FamilyNarrationProfileResolution Resolve(string eventFamily, string language)
     {
-        if (!registrations.TryGetValue(eventFamily ?? "", out var profile))
-            return new(false, null, "P7INPUT_EVENT_FAMILY_UNSUPPORTED", [$"Unsupported event family '{eventFamily}'."]);
+        var family = NormalizeEventFamily(eventFamily);
+        if (!registrations.TryGetValue(family, out var profile))
+            return new(false, null, "P7INPUT_FAMILY_UNSUPPORTED", [$"Unsupported event family '{family}'."]);
         var normalized = NormalizeLanguage(language);
         if (!profile.SupportedLanguages.Contains(normalized, StringComparer.OrdinalIgnoreCase))
             return new(false, null, "P7INPUT_LANGUAGE_INVALID", [$"Language '{language}' is not supported by profile '{profile.ProfileId}'."]);
         return new(true, profile, "P7PROFILE_VALID", []);
     }
+
+    public static string NormalizeEventFamily(string? value) =>
+        (value ?? "").Trim().Replace('-', '_').Replace(' ', '_').ToUpperInvariant();
 
     private static void Alias(IDictionary<string, FamilyNarrationProfile> map, string canonical, params string[] aliases)
     { foreach (var alias in aliases) map[alias] = map[canonical]; }

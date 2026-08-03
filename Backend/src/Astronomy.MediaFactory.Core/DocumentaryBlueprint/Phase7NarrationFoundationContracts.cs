@@ -317,12 +317,16 @@ public sealed record Phase7KnowledgeAdapterDiagnostic(string AdapterId, string A
     int ExactFieldProvenanceCount, int CoarseProvenanceCount, int UnsupportedClaimCount,
     IReadOnlyDictionary<string,int> MergeDecisionCounts, int RejectedSourceCount, int UncertifiedSourceCount);
 
+/// <summary>The single, resolver-issued identity used at the Phase 7 narration-profile boundary.</summary>
+public sealed record Phase7CanonicalProfileIdentity(string EventFamily, string ProfileId, string ProfileVersion, string Language);
+
 public sealed record Phase7InputAuthorityRequest(string ExecutionRoot, string ExecutionId, string PlanId,
     string EventId, string Language, string ExpectedProfile, IReadOnlyList<string> ExpectedVariants)
 {
     public string ExpectedProfileVersion { get; init; } = "";
     public string EventType { get; init; } = "";
     public string ContentCategory { get; init; } = "";
+    public Phase7CanonicalProfileIdentity? CanonicalProfileIdentity { get; init; }
 }
 public sealed record Phase7CommittedInputAuthority(PublishedStoryFrameAuthority StoryFrameAuthority,
     string EventFamily, string EventType, string Language, string Profile, string ProfileVersion,

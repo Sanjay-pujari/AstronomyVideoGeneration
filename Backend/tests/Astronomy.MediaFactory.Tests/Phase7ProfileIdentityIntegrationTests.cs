@@ -26,7 +26,7 @@ public sealed class Phase7ProfileIdentityIntegrationTests
     }
 
     [Fact]
-    public void ValidOrionFixture_PassesProfileValidation()
+    public void LegacyStoryFrameProfile_IsNotTheCanonicalNarrationProfile()
     {
         const string phase4ProfileId = "orion-gold";
         const string phase4ProfileVersion = "1.0";
@@ -35,5 +35,7 @@ public sealed class Phase7ProfileIdentityIntegrationTests
 
         Assert.True(Phase7InputAuthorityEvaluator.ProfileIdentityMatches(
             phase4ProfileId, phase4ProfileVersion, publishedPhase6ProfileId, publishedPhase6ProfileVersion));
+        Assert.NotEqual(phase4ProfileId,
+            new FamilyNarrationProfileResolver().Resolve("CONSTELLATION", "en").Profile!.ProfileId);
     }
 }
