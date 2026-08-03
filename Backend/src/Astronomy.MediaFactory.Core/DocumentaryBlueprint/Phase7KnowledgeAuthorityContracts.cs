@@ -17,7 +17,11 @@ public sealed record Phase7KnowledgeAuthority(
     IReadOnlyList<Phase7KnowledgeMergeDecision> MergeDecisions, Phase7SourceAuditSummary SourceAuditSummary,
     IReadOnlyList<string> UnknownSections, IReadOnlyList<string> UnknownProperties,
     IReadOnlyList<string> Warnings, IReadOnlyList<string> BlockingIssues, string SemanticChecksum,
-    IReadOnlyDictionary<string, string> RuntimeCompatibilityEvidence);
+    IReadOnlyDictionary<string, string> RuntimeCompatibilityEvidence)
+{
+    public IReadOnlyList<string> MandatoryDomains { get; init; } = [];
+    public IReadOnlyList<string> OptionalDomains { get; init; } = [];
+}
 
 public sealed record PublishedPhase7KnowledgeAuthority(
     Phase7KnowledgeAuthority KnowledgeAuthority, IReadOnlyList<string> ArtifactPaths,
@@ -47,7 +51,11 @@ public sealed record Phase7KnowledgeDiagnostics(
     int AllSourceCount, int CertifiedSupportingSourceCount, int ReviewedNonCertifiedSourceCount,
     int RejectedSourceCount, int UnverifiedSourceCount, int UnknownSectionCount, int UnknownPropertyCount,
     int WarningCount, int BlockingIssueCount, IReadOnlyList<string> InputArtifactPaths,
-    IReadOnlyList<string> OutputArtifactPaths, string DeterministicChecksum);
+    IReadOnlyList<string> OutputArtifactPaths, string DeterministicChecksum)
+{
+    public int AcceptedRequiredCount { get; init; }
+    public int AcceptedOptionalCount { get; init; }
+}
 
 public enum Phase7KnowledgeValidationMode { InMemoryCandidate, StagedPhysical, CommittedPhysical }
 public sealed record Phase7KnowledgeValidationGate(string Name, bool Passed, IReadOnlyList<string> Errors,
@@ -109,15 +117,19 @@ public interface IPhase7KnowledgeExecutionLock { Task<IAsyncDisposable> AcquireA
 public sealed record Phase7KnowledgeTransactionPaths(string StableKnowledgeDirectory, string StableValidationPath,
     string StableManifestPath, string StagingKnowledgeDirectory, string CandidateValidationPath,
     string TransactionMarkerPath, string BackupKnowledgeDirectory, string BackupValidationPath,
-    string BackupManifestPath)
+    string BackupManifestPath, string StablePublicationEvidencePath, string CandidateManifestPath,
+    string CandidatePublicationEvidencePath, string BackupPublicationEvidencePath)
 {
     public static Phase7KnowledgeTransactionPaths Create(string executionRoot, string transactionId)
     {
         var root=Path.GetFullPath(executionRoot); var tx=$"phase-07-knowledge-{transactionId}";
+        var staging=Path.Combine(root,$".{tx}-staging"); var backup=Path.Combine(root,$".{tx}-backup");
         return new(Path.Combine(root,"07-narration","knowledge"),Path.Combine(root,"validation","phase-07-knowledge-validation.json"),
-            Path.Combine(root,"manifest.json"),Path.Combine(root,$".{tx}-staging","knowledge"),Path.Combine(root,$".{tx}-staging","validation.json"),
+            Path.Combine(root,"manifest.json"),Path.Combine(staging,"07-narration","knowledge"),Path.Combine(staging,"validation","phase-07-knowledge-validation.json"),
             Path.Combine(root,$".{tx}-transaction.json"),Path.Combine(root,$".{tx}-backup","knowledge"),
-            Path.Combine(root,$".{tx}-backup","validation.json"),Path.Combine(root,$".{tx}-backup","manifest.json"));
+            Path.Combine(backup,"validation","phase-07-knowledge-validation.json"),Path.Combine(backup,"manifest.json"),
+            Path.Combine(root,".phase-07-knowledge-publication.json"),Path.Combine(staging,"manifest.json"),
+            Path.Combine(staging,"publication.json"),Path.Combine(backup,"publication.json"));
     }
 }
 public enum Phase7KnowledgeTransactionState { Created, CandidateWritten, CandidateReadbackPassed, CandidateValidated,

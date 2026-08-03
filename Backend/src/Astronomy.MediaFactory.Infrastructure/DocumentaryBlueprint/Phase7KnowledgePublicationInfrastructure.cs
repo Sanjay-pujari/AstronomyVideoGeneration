@@ -40,6 +40,8 @@ public sealed class Phase7KnowledgePhysicalReadback(IPhase7KnowledgeFileSystem f
             var path=Path.Combine(dir,item.Name); var bytes=await fs.ReadAllBytesAsync(path,token);
             var value=JsonSerializer.Deserialize(bytes,item.Type,Json)??throw new InvalidDataException($"Empty artifact: {item.Name}");
             var semantic=Semantic(value); var relative="07-narration/knowledge/"+item.Name;
+            if(semantic=="INVALID")throw new InvalidDataException($"Invalid embedded semantic checksum: {item.Name}");
+            if(!Identity(value,a))throw new InvalidDataException($"Artifact identity or lineage mismatch: {item.Name}");
             entries.Add(new(relative,item.Type.Name,Phase7KnowledgeContract.Version,semantic,Sha(bytes),bytes.LongLength,
                 a.ExecutionId,a.PlanId,a.EventId,a.AuthorityId,a.SemanticChecksum,a.SourcePhase6AuthorityId,
                 a.SourcePhase6AuthorityChecksum,Phase7Determinism.Hash(new{a.SourcePhase4Checksum,a.SourcePhase5PublicationId,a.SourcePhase6AuthorityChecksum}),true));
@@ -77,6 +79,13 @@ public sealed class Phase7KnowledgePhysicalReadback(IPhase7KnowledgeFileSystem f
     }
     private static bool Safe(string p)=>!Path.IsPathRooted(p)&&!p.Contains('\\')&&!p.Split('/').Any(x=>x is "" or "." or "..");
     private static string Sha(byte[] b)=>Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
+    private static bool Identity(object value,Phase7KnowledgeAuthority a)=>value switch
+    {
+        Phase7KnowledgeAuthority x=>x.ContractVersion==Phase7KnowledgeContract.Version&&x.ExecutionId==a.ExecutionId&&x.PlanId==a.PlanId&&x.EventId==a.EventId&&x.AuthorityId==a.AuthorityId&&x.SourcePhase4Checksum==a.SourcePhase4Checksum&&x.SourcePhase5PublicationId==a.SourcePhase5PublicationId&&x.SourcePhase6AuthorityId==a.SourcePhase6AuthorityId&&x.SourcePhase6AuthorityChecksum==a.SourcePhase6AuthorityChecksum&&x.SourcePhase6IndexId==a.SourcePhase6IndexId&&x.SourcePhase6IndexChecksum==a.SourcePhase6IndexChecksum,
+        ResolvedNarrationKnowledge x=>x.PayloadId==a.EventKnowledgePayloadId&&x.PayloadChecksum==a.EventKnowledgeChecksum&&x.SourceRegistryId==a.SourceRegistryId&&x.SourceRegistryChecksum==a.SourceRegistryChecksum,
+        Phase7KnowledgeDiagnostics x=>x.ContractVersion==Phase7KnowledgeContract.Version&&x.ExecutionId==a.ExecutionId&&x.PlanId==a.PlanId&&x.EventId==a.EventId&&x.AuthorityId==a.AuthorityId,
+        _=>false
+    };
     private static string Semantic(object o)=>o switch{Phase7KnowledgeAuthority x when x.SemanticChecksum==Phase7Determinism.Hash(x with{SemanticChecksum=""})=>x.SemanticChecksum,
         ResolvedNarrationKnowledge x when x.DeterministicChecksum==Phase7Determinism.Hash(x with{DeterministicChecksum=""})=>x.DeterministicChecksum,
         Phase7KnowledgeDiagnostics x when x.DeterministicChecksum==Phase7Determinism.Hash(x with{DeterministicChecksum=""})=>x.DeterministicChecksum,_=>"INVALID"};
@@ -140,6 +149,7 @@ public sealed class Phase7KnowledgeService(IPhase7KnowledgeTransactionCoordinato
 public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecutionLock executionLock,
     IPhase7KnowledgeRecoveryService recovery, IPhase7KnowledgeCommittedStateEvaluator committed,
     IPhase7InputAuthorityEvaluator inputEvaluator, IPhase7CertifiedKnowledgeSource source,
+    IPhase7KnowledgeResolver knowledgeResolver,
     IPhase7KnowledgeAuthorityBuilder builder, IPhase7KnowledgeAuthorityValidator validator,
     IPhase7KnowledgePhysicalReadback readback, IPhase7KnowledgeFileSystem fs) : IPhase7KnowledgeTransactionCoordinator
 {
@@ -155,43 +165,69 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
         if(!input.IsValid||input.Authority is null)return Fail(request,input.ReasonCode,input.Errors,input.Warnings);
         var payload=await source.ResolveResultAsync(request.EventId,request.Language,token);
         if(!payload.IsValid||payload.Payload is null)return Fail(request,payload.ReasonCode,payload.Errors,payload.Warnings);
-        var a=builder.Build(input.Authority,payload.Payload,input.Authority.Knowledge,input.Authority.FamilyProfile,input.Authority.RuntimeProviderCompatibilityMetadata);
-        var d=Diagnostics(a,input.Authority.Knowledge,payload.Payload,input.Authority.InputArtifactPaths);
-        var memory=validator.Validate(a,input.Authority.Knowledge,d);
+        var resolvedKnowledge=knowledgeResolver.Resolve(payload.Payload,input.Authority.FamilyProfile);
+        var a=builder.Build(input.Authority,payload.Payload,resolvedKnowledge,input.Authority.FamilyProfile,input.Authority.RuntimeProviderCompatibilityMetadata);
+        var d=Diagnostics(a,resolvedKnowledge,payload.Payload,input.Authority.InputArtifactPaths);
+        var memory=validator.Validate(a,resolvedKnowledge,d);
         if(!memory.IsValid)return new(false,"Failed",memory.ReasonCode,request.ExecutionRoot,a.AuthorityId,false,false,false,memory,d,memory.Errors,memory.Warnings);
-        var tx=Guid.NewGuid().ToString("N");var stageRoot=Path.Combine(Path.GetFullPath(request.ExecutionRoot),$".phase-07-knowledge-{tx}-staging");
-        var stageKnowledge=Path.Combine(stageRoot,"07-narration","knowledge");var stageValidation=Path.Combine(stageRoot,"validation","phase-07-knowledge-validation.json");
-        var stableKnowledge=Path.Combine(Path.GetFullPath(request.ExecutionRoot),"07-narration","knowledge");var stableValidation=Path.Combine(Path.GetFullPath(request.ExecutionRoot),"validation","phase-07-knowledge-validation.json");
-        var backup=Path.Combine(Path.GetFullPath(request.ExecutionRoot),$".phase-07-knowledge-{tx}-backup");
+        var tx=Guid.NewGuid().ToString("N");var paths=Phase7KnowledgeTransactionPaths.Create(request.ExecutionRoot,tx);
+        var stageKnowledge=paths.StagingKnowledgeDirectory;var stageValidation=paths.CandidateValidationPath;
+        var stageRoot=Directory.GetParent(Directory.GetParent(stageKnowledge)!.FullName)!.FullName;
+        var stableKnowledge=paths.StableKnowledgeDirectory;var stableValidation=paths.StableValidationPath;
+        var backup=Directory.GetParent(paths.BackupKnowledgeDirectory)!.FullName;
+        var backedUp=false;var swapped=false;var evidenceBackedUp=false;
+        var marker=new Phase7KnowledgeTransactionMarker(Phase7KnowledgeContract.Version,tx,request.ExecutionId,request.PlanId,request.EventId,request.Language,
+            Phase7KnowledgeTransactionState.Created,DateTimeOffset.UtcNow,DateTimeOffset.UtcNow,stageKnowledge,stableKnowledge,paths.BackupKnowledgeDirectory,
+            stageValidation,stableValidation,paths.BackupValidationPath,paths.StableManifestPath,paths.BackupManifestPath,"",[],a.AuthorityId,prior.Authority?.KnowledgeAuthority.AuthorityId??"","");
+        async Task Mark(Phase7KnowledgeTransactionState state,CancellationToken ct)
+        {
+            marker=marker with{State=state,UpdatedUtc=DateTimeOffset.UtcNow,DeterministicChecksum=""};
+            marker=marker with{DeterministicChecksum=Phase7Determinism.Hash(marker)};
+            await Write(paths.TransactionMarkerPath,marker,ct);
+        }
         try
         {
+            await Mark(Phase7KnowledgeTransactionState.Created,token);
             fs.CreateDirectory(stageKnowledge);fs.CreateDirectory(Path.GetDirectoryName(stageValidation)!);
             await Write(Path.Combine(stageKnowledge,"knowledge-authority.json"),a,token);
-            await Write(Path.Combine(stageKnowledge,"knowledge-resolution-report.json"),input.Authority.Knowledge,token);
+            await Write(Path.Combine(stageKnowledge,"knowledge-resolution-report.json"),resolvedKnowledge,token);
             await Write(Path.Combine(stageKnowledge,"knowledge-diagnostics.json"),d,token);
+            await Mark(Phase7KnowledgeTransactionState.CandidateWritten,token);
             var inventory=await readback.CreateCandidateInventoryAsync(stageKnowledge,a,token);
             var seed=memory with{Mode=Phase7KnowledgeValidationMode.StagedPhysical,ArtifactInventory=inventory,DeterministicChecksum=""};seed=seed with{DeterministicChecksum=Phase7Determinism.Hash(seed)};
             await Write(stageValidation,seed,token);
             var rb=await readback.ValidateCandidateCompleteSetAsync(stageRoot,a,inventory,token);
-            var staged=validator.Validate(a,input.Authority.Knowledge,d,Phase7KnowledgeValidationMode.StagedPhysical,rb);
+            await Mark(Phase7KnowledgeTransactionState.CandidateReadbackPassed,token);
+            var staged=validator.Validate(a,resolvedKnowledge,d,Phase7KnowledgeValidationMode.StagedPhysical,rb);
             if(!staged.IsValid)throw new InvalidDataException(staged.ReasonCode);
             await Write(stageValidation,staged,token);
-            fs.CreateDirectory(backup);if(fs.DirectoryExists(stableKnowledge))fs.MoveDirectory(stableKnowledge,Path.Combine(backup,"knowledge"));
-            if(fs.FileExists(stableValidation)){fs.CreateDirectory(Path.GetDirectoryName(Path.Combine(backup,"validation.json"))!);fs.MoveFile(stableValidation,Path.Combine(backup,"validation.json"));}
+            await Mark(Phase7KnowledgeTransactionState.CandidateValidated,token);
+            fs.CreateDirectory(backup);if(fs.DirectoryExists(stableKnowledge))fs.MoveDirectory(stableKnowledge,paths.BackupKnowledgeDirectory);
+            if(fs.FileExists(stableValidation)){fs.CreateDirectory(Path.GetDirectoryName(paths.BackupValidationPath)!);fs.MoveFile(stableValidation,paths.BackupValidationPath);}
+            if(fs.FileExists(paths.StablePublicationEvidencePath)){fs.MoveFile(paths.StablePublicationEvidencePath,paths.BackupPublicationEvidencePath);evidenceBackedUp=true;}
+            backedUp=true;await Mark(Phase7KnowledgeTransactionState.PreviousStateBackedUp,token);
             fs.CreateDirectory(Path.GetDirectoryName(stableKnowledge)!);fs.MoveDirectory(stageKnowledge,stableKnowledge);
+            swapped=true;await Mark(Phase7KnowledgeTransactionState.AuthoritySwapped,token);
             fs.CreateDirectory(Path.GetDirectoryName(stableValidation)!);fs.MoveFile(stageValidation,stableValidation,true);
+            await Mark(Phase7KnowledgeTransactionState.ValidationPublished,token);
             var validationBytes=await fs.ReadAllBytesAsync(stableValidation,token);var evidence=new Phase7KnowledgeCommittedStateEvaluator.PublicationEvidence(
                 "p7kp-"+a.AuthorityId,a.AuthorityId,a.SemanticChecksum,Convert.ToHexString(SHA256.HashData(validationBytes)).ToLowerInvariant(),true,true,true);
-            await Write(Path.Combine(request.ExecutionRoot,".phase-07-knowledge-publication.json"),evidence,token);
+            await Write(paths.StablePublicationEvidencePath,evidence,token);
+            await Mark(Phase7KnowledgeTransactionState.ManifestPublished,token);
             var final=await committed.EvaluateAsync(new(request.ExecutionRoot,request.ExecutionId,request.PlanId,request.EventId,request.Language),token);
             if(!final.IsValid)throw new InvalidDataException(string.Join(';',final.Errors));
+            await Mark(Phase7KnowledgeTransactionState.CommittedReadbackPassed,token);
             fs.DeleteDirectory(backup);fs.DeleteDirectory(stageRoot);
+            await Mark(Phase7KnowledgeTransactionState.Completed,token);fs.DeleteFile(paths.TransactionMarkerPath);
             return new(true,"Succeeded","P7KNOWLEDGE_COMMITTED",request.ExecutionRoot,a.AuthorityId,false,true,true,staged,d,[],a.Warnings);
         }
-        catch(Exception ex) when(ex is IOException or InvalidDataException or JsonException)
+        catch(Exception ex) when(ex is IOException or InvalidDataException or JsonException or OperationCanceledException)
         {
-            try { if(fs.DirectoryExists(stableKnowledge))fs.DeleteDirectory(stableKnowledge);if(fs.DirectoryExists(Path.Combine(backup,"knowledge")))fs.MoveDirectory(Path.Combine(backup,"knowledge"),stableKnowledge);
-                if(fs.FileExists(stableValidation))fs.DeleteFile(stableValidation);if(fs.FileExists(Path.Combine(backup,"validation.json")))fs.MoveFile(Path.Combine(backup,"validation.json"),stableValidation,true); }
+            try { await Mark(Phase7KnowledgeTransactionState.RollingBack,CancellationToken.None);
+                if(swapped&&backedUp){if(fs.DirectoryExists(stableKnowledge))fs.DeleteDirectory(stableKnowledge);if(fs.DirectoryExists(paths.BackupKnowledgeDirectory))fs.MoveDirectory(paths.BackupKnowledgeDirectory,stableKnowledge);
+                    if(fs.FileExists(stableValidation))fs.DeleteFile(stableValidation);if(fs.FileExists(paths.BackupValidationPath))fs.MoveFile(paths.BackupValidationPath,stableValidation,true);
+                    if(fs.FileExists(paths.StablePublicationEvidencePath))fs.DeleteFile(paths.StablePublicationEvidencePath);if(evidenceBackedUp&&fs.FileExists(paths.BackupPublicationEvidencePath))fs.MoveFile(paths.BackupPublicationEvidencePath,paths.StablePublicationEvidencePath,true);}
+                fs.DeleteDirectory(stageRoot);fs.DeleteFile(paths.TransactionMarkerPath); }
             catch(Exception rollback){return new(false,"Failed","P7KNOWLEDGE_ROLLBACK_FAILED",request.ExecutionRoot,a.AuthorityId,false,false,false,null,d,[ex.Message,rollback.Message],a.Warnings);}
             return new(false,"Failed","P7KNOWLEDGE_TRANSACTION_FAILED",request.ExecutionRoot,a.AuthorityId,false,false,false,null,d,[ex.Message],a.Warnings);
         }
@@ -204,12 +240,17 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
         var draft=new Phase7KnowledgeDiagnostics(Phase7KnowledgeContract.Version,a.ExecutionId,a.PlanId,a.EventId,a.AuthorityId,a.EventFamily,a.Language,a.ProfileId,a.ProfileVersion,
             true,!string.IsNullOrEmpty(p.EvergreenPayloadId),p.VerificationStatus is "Verified" or "Certified",string.IsNullOrEmpty(p.EvergreenPayloadId)||!string.IsNullOrEmpty(p.EvergreenChecksum),
             !string.IsNullOrEmpty(a.SourceRegistryChecksum),ev.All(x=>x.SourceEligibility is not Phase7SourceEligibility.Rejected),a.AdapterDiagnostics.Count>0,
-            claims.Select(x=>x.ClaimId).Distinct().Count()==claims.Count,ev.All(x=>!string.IsNullOrEmpty(x.SourceId)),a.CanonicalDomains.All(x=>r.Domains.Any(y=>y.Domain==x&&y.Status==KnowledgeDomainStatus.Available)),
-            a.MergeDecisions.All(x=>x.BlockingIssues.Count==0),M(Phase7KnowledgeMergeClassification.Contradictory)==0,true,a.KnowledgeEntities.Count,a.AdapterDiagnostics.Sum(x=>x.ExtractedClaimCount),claims.Count,0,0,claims.Count,
+            claims.Select(x=>x.ClaimId).Distinct().Count()==claims.Count,ev.All(x=>!string.IsNullOrEmpty(x.SourceId)),a.MandatoryDomains.All(x=>r.Domains.Any(y=>y.Domain==x&&y.Status==KnowledgeDomainStatus.Available)),
+            a.MergeDecisions.All(x=>x.BlockingIssues.Count==0),M(Phase7KnowledgeMergeClassification.Contradictory)==0,false,a.KnowledgeEntities.Count,a.AdapterDiagnostics.Sum(x=>x.ExtractedClaimCount),claims.Count,claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Deferred),0,claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Required),
             ev.Count(x=>x.ProvenancePrecision==Phase7ProvenancePrecision.ExactClaim),ev.Count(x=>x.ProvenancePrecision==Phase7ProvenancePrecision.ExactKnowledgeEntity),ev.Count(x=>x.ProvenancePrecision==Phase7ProvenancePrecision.ExactApprovedField),a.AdapterDiagnostics.Sum(x=>x.UnsupportedClaimCount),
             M(Phase7KnowledgeMergeClassification.Equivalent),M(Phase7KnowledgeMergeClassification.EventSpecificSpecialization),M(Phase7KnowledgeMergeClassification.EventMorePrecise),M(Phase7KnowledgeMergeClassification.EvergreenMorePrecise),M(Phase7KnowledgeMergeClassification.Contradictory),M(Phase7KnowledgeMergeClassification.Incomparable),
             p.AllResolvedSources.Count,p.CertifiedSupportingSources.Count,p.AllResolvedSources.Count(x=>x.Reviewed&&!x.Certified),p.RejectedSources.Count,p.UnverifiedSources.Count,
             r.UnknownSections.Count,r.UnknownProperties.Count,a.Warnings.Count,a.BlockingIssues.Count,inputs,["07-narration/knowledge/knowledge-authority.json","07-narration/knowledge/knowledge-resolution-report.json","07-narration/knowledge/knowledge-diagnostics.json"],"");
+        draft=draft with{AcceptedRequiredCount=claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Required),AcceptedOptionalCount=claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Optional)};
+        var reconciled=draft.AcceptedClaimCount==claims.Count&&draft.RequiredClaimCount==draft.AcceptedRequiredCount&&
+            draft.DeferredClaimCount==claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Deferred)&&draft.WarningCount==a.Warnings.Count&&draft.BlockingIssueCount==a.BlockingIssues.Count&&
+            draft.KnowledgeEntityCount==a.KnowledgeEntities.Count&&draft.UnknownSectionCount==r.UnknownSections.Count&&draft.UnknownPropertyCount==r.UnknownProperties.Count;
+        draft=draft with{DiagnosticsReconciled=reconciled};
         return draft with{DeterministicChecksum=Phase7Determinism.Hash(draft)};
     }
 }

@@ -187,3 +187,17 @@ This batch remains limited to deterministic resolution; it does not publish a Kn
 31. **Remaining failures.** Governing-manifest integration, exhaustive rollback/recovery, the requested test files, real Orion certification, all-family certification, and full regressions remain outstanding.
 32. **P7.1B readiness.** Not ready; P7.1B must not consume this authority until the remaining certification work passes.
 33. **Final verdict.** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A B6 consolidation pass
+
+1. **Fresh ownership.** The transaction now invokes `IPhase7KnowledgeResolver` after loading the certified payload and uses that single result for authority construction, diagnostics, validation, serialization, and inventory expectations. The compatibility resolution carried by the broad input authority is no longer published.
+2. **Canonical sources.** Resolver and builder share `Phase7KnowledgeSourcePool`: non-empty `AllResolvedSources`, otherwise `ReviewedSources`. Support evidence remains rejected when its source is absent from the published pool.
+3. **Domain and claim governance.** Authority serialization separates mandatory and optional domains while retaining their canonical union. Claims have an immutable `Required`, `Optional`, `Deferred`, or `HumanReview` disposition, and source eligibility receives the actual disposition.
+4. **Evergreen state.** The certified source propagates the package's independent review state; the authority recognizes only `NotLoaded`, `Reviewed`, `Verified`, and `Certified` with payload-presence consistency.
+5. **Validation semantics.** In-memory artifact/readback gates are explicitly not applicable and do not claim physical success. Mandatory domains alone require availability. Location/time, cultural, and astrology gates now inspect claim metadata, qualification evidence, disposition, and domain separation rather than returning constants.
+6. **Diagnostics and inventory.** Required/optional/deferred counts are derived after selection, reconciliation is calculated, and candidate inventory construction throws on invalid embedded checksums or identity/Phase 4–6 lineage mismatches rather than recording `INVALID` as expected evidence.
+7. **Typed transaction progress.** Production construction uses `Phase7KnowledgeTransactionPaths`; transaction marker states are persisted through candidate, backup, swap, publication, readback, completion, and rollback. Pre-backup failures no longer delete stable authority. Prior publication evidence is included in backup and restoration.
+8. **Execution evidence.** `git diff --check` passed. The focused and regression .NET suites and real Orion publication/reuse could not be executed because `dotnet` is absent from this environment; no test totals, hashes, sizes, or certification are fabricated.
+9. **Remaining failures.** Full governed manifest append/readback, marker-driven recovery, committed-only validation finalization, complete cancellation/fault tests, orchestrator endpoint proof, and real Orion certification remain outstanding.
+10. **External calls.** Azure OpenAI calls: **0**. Azure Speech synthesis calls: **0**.
+11. **Final verdict.** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.

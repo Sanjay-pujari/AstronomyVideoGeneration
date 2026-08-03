@@ -16,11 +16,12 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
 
     public ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile)
     {
-        var issues = new List<string>(); var warnings = new List<string>(payload.Warnings.Concat(payload.AllResolvedSources.SelectMany(x => x.RegistryDiagnostics))); var candidates = new List<Phase7AdapterClaimCandidate>();
+        var sourcePool = Phase7KnowledgeSourcePool.Get(payload);
+        var issues = new List<string>(); var warnings = new List<string>(payload.Warnings.Concat(sourcePool.SelectMany(x => x.RegistryDiagnostics))); var candidates = new List<Phase7AdapterClaimCandidate>();
         var adapterDiagnostics=new List<Phase7KnowledgeAdapterDiagnostic>(); var unknownSections=new List<string>(); var unknownProperties=new List<string>(); var entities=new List<Phase7KnowledgeEntity>();
         if (!IsEventCertified(payload.VerificationStatus)) issues.Add("P7KNOWLEDGE_EVENT_NOT_CERTIFIED");
         if (!IsEvergreenCertified(payload.CertificationStatus)) issues.Add("P7KNOWLEDGE_EVERGREEN_NOT_CERTIFIED");
-        if (payload.ReviewedSources.Count == 0 || payload.ReviewedSources.Any(x=>!x.Certified)) issues.Add("P7KNOWLEDGE_SOURCE_REGISTRY_NOT_CERTIFIED");
+        if (sourcePool.Count == 0) issues.Add("P7KNOWLEDGE_SOURCE_REGISTRY_EMPTY");
         Read(payload.EvergreenJson, Phase7KnowledgeOrigin.Evergreen, payload.EvergreenPayloadId ?? payload.PayloadId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties,entities);
         Read(payload.RawDataJson, Phase7KnowledgeOrigin.Event, payload.EventId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties,entities);
 
@@ -61,7 +62,17 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             decisions.Add(new(candidate.SemanticIdentity,classified.Classification,evergreen,ev,[],classified.Reason,
                 evergreenScope,eventScope,ComparisonEvidence(evergreenComparison,eventComparison),classified.Warnings,classified.BlockingIssues));
         }
-        var claims = merged.Values.Select(x=>Claim(x,payload,issues)).OrderBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray();
+        var mandatoryNames=profile.MandatoryKnowledgeDomains.ToHashSet(StringComparer.Ordinal);
+        var optionalNames=profile.OptionalKnowledgeDomains.ToHashSet(StringComparer.Ordinal);
+        var claims = merged.Values.Select(x=>Claim(x,payload,issues)).Select(x=>
+        {
+            var disposition=x.RequiresHumanReview ? Phase7ClaimDisposition.HumanReview
+                : mandatoryNames.Contains(x.Domain) ? Phase7ClaimDisposition.Required
+                : optionalNames.Contains(x.Domain) ? Phase7ClaimDisposition.Optional : Phase7ClaimDisposition.Deferred;
+            var draft=x with { Disposition=disposition, Checksum="" };
+            return draft with { Checksum=Phase7Determinism.Hash(draft) };
+        })
+            .OrderBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray();
         var claimIdsBySemantic = claims.ToDictionary(x => x.SemanticIdentity, x => x.ClaimId, StringComparer.Ordinal);
         decisions = decisions.Select(d => d.Classification == Phase7KnowledgeMergeClassification.Contradictory
             ? d
@@ -79,11 +90,11 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         }).ToArray();
         issues.AddRange(domains.SelectMany(x=>x.Warnings));
         var result = new ResolvedNarrationKnowledge(payload.PayloadId,payload.PayloadChecksum,payload.SourceRegistryId,
-            Phase7Determinism.Hash(payload.ReviewedSources.OrderBy(x=>x.SourceId,StringComparer.Ordinal)),payload.Language,domains,
+            Phase7Determinism.Hash(sourcePool),payload.Language,domains,
             Localized(payload.EvergreenJson,payload.Language,"narrationVocabulary"),Localized(payload.EvergreenJson,payload.Language,"doNotBlindlyTranslate").Keys.ToArray(),
-            LocalizedScalar(payload.EvergreenJson,payload.Language,"pronunciation"),payload.ReviewedSources.Where(x=>x.Certified).Select(x=>x.SourceId).Order(StringComparer.Ordinal).ToArray(),
+            LocalizedScalar(payload.EvergreenJson,payload.Language,"pronunciation"),sourcePool.Select(x=>x.SourceId).Order(StringComparer.Ordinal).ToArray(),
             warnings.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),issues.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),"");
-        var all=payload.AllResolvedSources.Count>0?payload.AllResolvedSources:payload.ReviewedSources;
+        var all=sourcePool;
         var supportEvidence = claims.SelectMany(claim =>
         {
             var candidate = merged[claim.SemanticIdentity];
@@ -91,7 +102,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             return claim.SourceIds.Select(sourceId =>
             {
                 var source=all.Single(x=>x.SourceId==sourceId);
-                var eligibility=sourceEligibility.Classify(new(source,payload.Language,candidate.KnowledgeId,candidate.SemanticIdentity,candidate.ApprovedFieldPath,true,false,candidate.RequiresHumanReview));
+                var eligibility=sourceEligibility.Classify(new(source,payload.Language,candidate.KnowledgeId,candidate.SemanticIdentity,candidate.ApprovedFieldPath,claim.Disposition==Phase7ClaimDisposition.Required,claim.Disposition==Phase7ClaimDisposition.Optional,candidate.RequiresHumanReview));
                 return new Phase7ClaimSupportEvidence(claim.ClaimId, claim.SemanticIdentity,
                 sourceId, candidate.KnowledgeId, Phase7CanonicalFieldPathPolicy.Canonicalize(candidate.ApprovedFieldPath),
                 Enum.Parse<Phase7ProvenancePrecision>(claim.ProvenancePrecision), candidate.AdapterId, candidate.Origin,
@@ -133,7 +144,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             {
                 var adapter=registry.Find(section.Name);
                 if(adapter is null) { warnings.Add($"P7KNOWLEDGE_UNKNOWN_SECTION:{origin}:{section.Name}"); unknownSections.Add(section.Name); continue; }
-                var context=new Phase7KnowledgeSectionContext(origin,id,payload.EvergreenPayloadId??payload.PayloadId,payload.PayloadChecksum,payload.Language,section.Name,section.Value,payload.ReviewedSources,payload.EventFamily,payload.EventType);
+                var context=new Phase7KnowledgeSectionContext(origin,id,payload.EvergreenPayloadId??payload.PayloadId,payload.PayloadChecksum,payload.Language,section.Name,section.Value,Phase7KnowledgeSourcePool.Get(payload),payload.EventFamily,payload.EventType);
                 var extracted=adapter.Extract(context); output.AddRange(extracted.Claims); entities.AddRange(extracted.KnowledgeEntities); warnings.AddRange(extracted.Warnings); issues.AddRange(extracted.BlockingIssues); unknownProperties.AddRange(extracted.UnknownProperties);
                 diagnostics.Add(new(adapter.AdapterId,adapter.AdapterVersion,section.Name,origin,extracted.Claims.Count+extracted.UnknownProperties.Count,extracted.Claims.Count,extracted.UnknownProperties.Count,extracted.UnknownProperties,0,0,0,0,extracted.Claims.Count(x=>x.SourceIds.Count==0),new Dictionary<string,int>(),payload.RejectedSources.Count,payload.UnverifiedSources.Count));
             }
@@ -142,7 +153,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
     }
     private CertifiedNarrationClaim Claim(Phase7AdapterClaimCandidate c,CertifiedKnowledgePayload p,List<string> issues)
     {
-        var sourcePool=p.AllResolvedSources.Count>0?p.AllResolvedSources:p.ReviewedSources;
+        var sourcePool=Phase7KnowledgeSourcePool.Get(p);
         var evaluated=sourcePool.Select(x=>(Source:x,Result:sourceEligibility.Classify(new(x,p.Language,c.KnowledgeId,c.SemanticIdentity,c.ApprovedFieldPath,true,false,c.RequiresHumanReview))))
             .Where(x=>x.Result.Eligibility==Phase7SourceEligibility.EligibleForRequiredClaim).ToArray();
         var precision=evaluated.Select(x=>x.Result.Precision).DefaultIfEmpty(Phase7ProvenancePrecision.None).Min();
