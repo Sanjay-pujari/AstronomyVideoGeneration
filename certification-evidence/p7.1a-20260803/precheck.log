@@ -1,0 +1,14 @@
+=== certification precheck 2026-08-03 ===
+-- command availability --
+dotnet: NOT FOUND
+pg_isready: NOT FOUND
+psql: NOT FOUND
+/usr/bin/curl
+/root/.pyenv/shims/python3
+-- localhost postgres TCP --
+ConnectionRefusedError: [Errno 111] Connection refused
+-- plan-id references / candidate artifacts --
+./Backend/docs/operations-runbook.md
+-- writable repo/evidence --
+repository root writable: yes
+evidence directory writable: yes

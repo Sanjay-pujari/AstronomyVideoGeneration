@@ -430,3 +430,67 @@ Remaining certification failures are environmental absence of the .NET SDK and
 the resulting unexecuted mandatory suites and real API exercises. P7.1B is not
 ready and was not started. Since the mandatory evidence is unavailable, the final
 verdict remains `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A FINAL CERTIFICATION EVIDENCE — 2026-08-03 prerequisite-gated attempt
+
+This section is the authoritative current certification conclusion and supersedes
+older incomplete conclusions without erasing their historical batch evidence. The
+campaign followed the required prerequisite gate and stopped before restore,
+build, tests, API startup, or mutation of any production execution artifact. The
+container has neither the .NET command nor a reachable configured PostgreSQL
+endpoint, and the Orion plan is not available in a local execution package.
+Raw command output is retained in
+`certification-evidence/p7.1a-20260803/environment.log` and
+`certification-evidence/p7.1a-20260803/precheck.log`.
+
+| Required evidence | Executed result |
+|---|---|
+| 1. Environment and SDK | `dotnet --info`, `dotnet --list-sdks`, and `dotnet --list-runtimes` each exited 127 with `dotnet: command not found`. No installed required SDK or runtime can be verified. |
+| 2. Database, execution root, plan, configuration, writes | The checked-in API configuration targets PostgreSQL at `localhost:5432`; an actual TCP connection attempt returned `ConnectionRefusedError: [Errno 111] Connection refused`. Neither `psql` nor `pg_isready` is installed. A repository search found the Orion plan ID only in `Backend/docs/operations-runbook.md`, not in an execution package. Repository/evidence-directory write checks passed, but no configured production execution root could be established. |
+| 3. Restore | Not run: the mandatory environment prerequisite failed. No restore exit code, duration, package warning, or vulnerability result is claimed. |
+| 4. Build | Not run. No build exit code, duration, warning count, or error count is claimed. |
+| 5. Pipeline-isolation totals | Not run; total/passed/failed/skipped/duration unavailable. |
+| 6. Orchestrator integration totals | Not run; totals unavailable. |
+| 7. Endpoint aggregation totals | Not run; totals unavailable. |
+| 8. Legacy isolation totals | Not run; totals unavailable. |
+| 9. Production pipeline totals | Not run; totals unavailable. |
+| 10. All `Phase7Knowledge` totals | Not run; totals unavailable. |
+| 11. Full Phase 7 totals and classification | Not run; no new failures exist to classify, and the 14 historical failures were not re-executed or silently dismissed. |
+| 12. StoryFrame totals | Not run; totals unavailable. |
+| 13. Phase 6 totals | Not run; totals unavailable. |
+| 14. Phase 5 publication/committed-state totals | Not run; totals unavailable. |
+| 15. Phase 4 publication/committed-state totals | Not run; totals unavailable. |
+| 16. RC2 Phase 1–6 totals and cross-cutting regressions | Not run; totals unavailable. |
+| 17. Complete-project totals | Not run; totals unavailable. A green project is not claimed. |
+| 18. Orion forced-publication request | Not sent. The prescribed Phase 7-only body was not submitted because database, plan, committed Phase 1–6, SDK, and API prerequisites could not be validated. |
+| 19. Orion forced-publication response / Phase 7 result | None. No `Succeeded`/`P7KNOWLEDGE_COMMITTED` result is claimed. |
+| 20. Six governing artifact paths, sizes, hashes, timestamps | No execution root was located, so no honest pre/post snapshot or metadata exists for the three knowledge JSON files, validation, manifest, or publication evidence. |
+| 21. Authority semantic verification | Not performed; no real committed Orion authority was accessible. |
+| 22. Resolution verification | Not performed. |
+| 23. Diagnostics verification | Not performed. |
+| 24. Validation verification | Not performed; `CommittedPhysical` validity is not claimed. |
+| 25. Manifest verification | Not performed. |
+| 26. Publication-evidence verification | Not performed. |
+| 27. Phase 1–6 integrity | Not comparable because no execution package was located; unchanged status is not claimed. |
+| 28. Out-of-scope artifact integrity | Not comparable because no execution package was located. The campaign itself did not start the API or generation services. |
+| 29. Azure OpenAI invocation count | Unavailable from service counters/logs because the application could not run. Zero is deliberately not inferred from missing output. |
+| 30. Azure Speech synthesis invocation count | Unavailable from service counters/logs because the application could not run. Zero is deliberately not inferred from missing output. |
+| 31. No-write reuse request/response | Not sent; no response exists. |
+| 32. Six-file byte identity | Not performed; no before/after bytes, hashes, sizes, or timestamps are claimed. |
+| 33. `retryFailedOnly` reuse | Not run; knowledge-service invocation and governed reuse are unproven. |
+| 34. Failure-path smoke | Not run because the test host cannot execute. Atomicity is not newly certified. |
+| 35. Remaining failures/blockers | Missing .NET SDK/runtime; configured PostgreSQL refuses connections; no accessible Orion execution/plan prerequisites; every mandatory build/test/publication/reuse/smoke and artifact-verification item consequently remains unexecuted. |
+| 36. Production corrections | None. No executed test or endpoint exposed a concrete production defect, so frozen production code was not modified. |
+| 37. Documentation | This authoritative prerequisite-gated evidence section and its two raw logs are the only changes. |
+| 38. P7.1B readiness | **Not ready.** P7.1B was not begun. |
+| 39. Final verdict | `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`. |
+
+The exact unsent preferred forced-publication request remains the campaign body
+with `overwriteExisting=true`, `retryFailedOnly=false`, `startPhaseNo=7`,
+`endPhaseNo=7`, and plan ID `baa5af31-4ba9-4d1d-8ef3-0796210a9ed2`. The exact
+unsent reuse variants differ only as specified by the campaign:
+`overwriteExisting=false` for no-write reuse, then additionally
+`retryFailedOnly=true` for retry reuse. Recording these bodies is not represented
+as an endpoint execution.
+
+**Final verdict:** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
