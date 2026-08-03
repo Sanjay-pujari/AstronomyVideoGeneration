@@ -72,7 +72,9 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         var knowledge = JsonArray(s.EvidenceJson, "supportedKnowledgeIds");
         var claims = JsonArray(s.EvidenceJson, "supportedClaimIds");
         var domains = JsonArray(s.EvidenceJson, "supportedDomains");
-        var fields = JsonArray(s.EvidenceJson, "supportedApprovedFieldPaths");
+        var fields = JsonArray(s.EvidenceJson, "supportedApprovedFieldPaths")
+            .Select(x => Phase7CanonicalFieldPathPolicy.TryCanonicalize(x, out var canonical) ? canonical : "")
+            .Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var reviewStatus = EvidenceString(s.EvidenceJson,"reviewStatus");
         var certificationStatus = EvidenceString(s.EvidenceJson,"certificationStatus") ?? EvidenceString(s.EvidenceJson,"verificationStatus");
         var reviewed = reviewStatus is not null && reviewStatus.Equals("Reviewed",StringComparison.OrdinalIgnoreCase);
