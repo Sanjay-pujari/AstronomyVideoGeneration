@@ -219,3 +219,29 @@ This batch remains limited to deterministic resolution; it does not publish a Kn
 13. **External provider calls.** Azure OpenAI invocation count: **0**. Azure Speech invocation count: **0**.
 14. **Remaining failures.** The requested fault-injection suite, complete diagnostics reconciliation, cultural/astrology policy metadata, RC2 orchestrator integration, full regressions, and real Orion endpoint certification remain outstanding.
 15. **P7.1B readiness and verdict.** P7.1B must not begin. `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+# B8 final-certification completion status (2026-08-03)
+
+This change set corrects the resolver's ordering defect: it now determines the
+claim disposition before calling the source-eligibility policy, and constructs
+the claim and support evidence from one immutable selection. Required claims
+accept only required-eligible evidence; optional and human-review claims use the
+governed optional path; deferred claims receive no active evidence. The validator
+also enforces exact equality between claim source identifiers and support rows.
+
+Domain status is now resolved from the final disposition and selected evidence.
+A mandatory domain is `Available` only when it has a checksum-valid Required
+claim with required-eligible exact evidence. Human-review-only, deferred-only,
+and empty mandatory domains retain their distinct governed states.
+
+Diagnostics now expose the B8 disposition, provenance, domain, and safety fields,
+plus deterministic reconciliation differences. Reconciliation covers disposition
+and domain partitions as well as the existing entity, unknown-field, warning, and
+blocking totals. Validation rejects a false or internally inconsistent result.
+
+The certification environment used for this batch does not contain the .NET SDK
+(`dotnet: command not found`). Consequently no build, test totals, real Orion API
+publication, artifact hashes, reuse byte comparison, or provider invocation
+measurements can honestly be certified in this batch. Those checks remain required
+before freeze; P7.1B is not ready to begin.
+
+Current verdict: `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.

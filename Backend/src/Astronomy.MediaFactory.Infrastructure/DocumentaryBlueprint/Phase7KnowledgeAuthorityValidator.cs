@@ -34,7 +34,8 @@ public sealed class Phase7KnowledgeAuthorityValidator : IPhase7KnowledgeAuthorit
         Add("ClaimIdentityGate",claimIds.Distinct().Count()==claimIds.Length&&semantic.Distinct().Count()==semantic.Length,"P7KNOWLEDGE_CLAIM_IDENTITY_INVALID");
         Add("ClaimChecksumGate",a.Claims.All(x=>x.Checksum==Phase7Determinism.Hash(x with{Checksum=""})),"P7KNOWLEDGE_CLAIM_CHECKSUM_INVALID");
         Add("ClaimProvenanceGate",required.All(x=>evidence.Any(e=>e.ClaimId==x.ClaimId&&e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField)),"P7KNOWLEDGE_PROVENANCE_INVALID");
-        Add("ClaimSupportEvidenceGate",a.ClaimSupportEvidence.All(x=>claimIds.Contains(x.ClaimId)&&a.Sources.Any(s=>s.SourceId==x.SourceId)),"P7KNOWLEDGE_SUPPORT_EVIDENCE_INVALID");
+        Add("ClaimSupportEvidenceGate",a.ClaimSupportEvidence.All(x=>claimIds.Contains(x.ClaimId)&&a.Sources.Any(s=>s.SourceId==x.SourceId))&&
+            a.Claims.All(claim=>claim.SourceIds.Order(StringComparer.Ordinal).SequenceEqual(a.ClaimSupportEvidence.Where(e=>e.ClaimId==claim.ClaimId).Select(e=>e.SourceId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))),"P7KNOWLEDGE_SUPPORT_EVIDENCE_INVALID");
         bool AuthoritativeDomain(string domain)=>required.Where(x=>x.Domain==domain&&!x.RequiresHumanReview)
             .Any(x=>x.Checksum==Phase7Determinism.Hash(x with{Checksum=""})&&evidence.Any(e=>e.ClaimId==x.ClaimId&&
                 e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField)&&
@@ -54,7 +55,7 @@ public sealed class Phase7KnowledgeAuthorityValidator : IPhase7KnowledgeAuthorit
         Add("LocationTimeSafetyGate",a.Claims.Where(x=>x.IsLocationDependent||x.IsDateTimeDependent).All(x=>Scoped(x)||HasQualification(x)),"P7KNOWLEDGE_LOCATION_TIME_SAFETY_INVALID");
         Add("CulturalSafetyGate",a.Claims.Where(x=>x.IsCultural||x.IsMythological).All(x=>x.RequiresQualification&&Qualified(x)&&(!x.RequiresHumanReview||x.Disposition==Phase7ClaimDisposition.HumanReview)),"P7KNOWLEDGE_CULTURAL_SAFETY_INVALID");
         Add("AstrologySeparationGate",a.Claims.Where(x=>x.IsAstrologyRelated).All(x=>x.RequiresQualification&&Qualified(x)&&x.Domain.Contains("astrolog",StringComparison.OrdinalIgnoreCase)),"P7KNOWLEDGE_ASTROLOGY_SEPARATION_INVALID");
-        Add("DiagnosticsReconciliationGate",d.DiagnosticsReconciled&&d.AuthorityId==a.AuthorityId&&d.AcceptedClaimCount==a.Claims.Count&&d.RequiredClaimCount==required.Length&&d.DeferredClaimCount==a.Claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Deferred)&&d.BlockingIssueCount==a.BlockingIssues.Count&&d.WarningCount==a.Warnings.Count,"P7KNOWLEDGE_DIAGNOSTICS_INVALID");
+        Add("DiagnosticsReconciliationGate",d.DiagnosticsReconciled&&d.ReconciliationDifferences.Count==0&&d.AuthorityId==a.AuthorityId&&d.AcceptedClaimCount==a.Claims.Count&&d.RequiredClaimCount==required.Length&&d.DeferredClaimCount==a.Claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Deferred)&&d.BlockingIssueCount==a.BlockingIssues.Count&&d.WarningCount==a.Warnings.Count&&d.LocationTimeSafetyPassed&&d.CulturalSafetyPassed&&d.AstrologySeparationPassed,"P7KNOWLEDGE_DIAGNOSTICS_INVALID");
         if(mode==Phase7KnowledgeValidationMode.InMemoryCandidate)
         {
             gates.Add(new("ArtifactCompleteSetGate",false,[],["NotApplicable before physical writing."]));

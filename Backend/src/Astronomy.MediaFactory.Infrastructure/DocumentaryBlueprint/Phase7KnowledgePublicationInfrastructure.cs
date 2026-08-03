@@ -340,11 +340,33 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
             M(Phase7KnowledgeMergeClassification.Equivalent),M(Phase7KnowledgeMergeClassification.EventSpecificSpecialization),M(Phase7KnowledgeMergeClassification.EventMorePrecise),M(Phase7KnowledgeMergeClassification.EvergreenMorePrecise),M(Phase7KnowledgeMergeClassification.Contradictory),M(Phase7KnowledgeMergeClassification.Incomparable),
             p.AllResolvedSources.Count,p.CertifiedSupportingSources.Count,p.AllResolvedSources.Count(x=>x.Reviewed&&!x.Certified),p.RejectedSources.Count,p.UnverifiedSources.Count,
             r.UnknownSections.Count,r.UnknownProperties.Count,a.Warnings.Count,a.BlockingIssues.Count,inputs,["07-narration/knowledge/knowledge-authority.json","07-narration/knowledge/knowledge-resolution-report.json","07-narration/knowledge/knowledge-diagnostics.json"],"");
-        draft=draft with{AcceptedRequiredCount=claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Required),AcceptedOptionalCount=claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Optional)};
-        var reconciled=draft.AcceptedClaimCount==claims.Count&&draft.RequiredClaimCount==draft.AcceptedRequiredCount&&
-            draft.DeferredClaimCount==claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Deferred)&&draft.WarningCount==a.Warnings.Count&&draft.BlockingIssueCount==a.BlockingIssues.Count&&
-            draft.KnowledgeEntityCount==a.KnowledgeEntities.Count&&draft.UnknownSectionCount==r.UnknownSections.Count&&draft.UnknownPropertyCount==r.UnknownProperties.Count;
-        draft=draft with{DiagnosticsReconciled=reconciled};
+        int DomainCount(IEnumerable<string> names,KnowledgeDomainStatus status)=>names.Count(name=>r.Domains.Any(x=>x.Domain==name&&x.Status==status));
+        bool Qualified(CertifiedNarrationClaim x)=>!x.RequiresQualification||ev.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.QualificationReason));
+        bool Scoped(CertifiedNarrationClaim x)=>ev.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.AuthorityScope))||a.MergeDecisions.Any(m=>m.SelectedClaimIds.Contains(x.ClaimId)&&(m.EventScope.HasExplicitEvidence||m.EvergreenScope.HasExplicitEvidence));
+        var locationSafe=claims.Where(x=>x.IsLocationDependent||x.IsDateTimeDependent).All(x=>Scoped(x)||(x.RequiresQualification&&Qualified(x)));
+        var culturalSafe=claims.Where(x=>x.IsCultural||x.IsMythological).All(x=>(x.Domain is "CultureAndMythology" or "RegionalTraditions")&&Qualified(x)&&ev.Any(e=>e.ClaimId==x.ClaimId&&e.SourceEligibility is Phase7SourceEligibility.EligibleForRequiredClaim or Phase7SourceEligibility.EligibleForOptionalClaim));
+        var astrologySafe=claims.Where(x=>x.IsAstrologyRelated).All(x=>x.Domain=="AstrologyClarification"&&x.RequiresQualification&&Qualified(x));
+        draft=draft with{
+            AcceptedRequiredCount=claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Required),AcceptedOptionalCount=claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Optional),
+            HumanReviewClaimCount=claims.Count(x=>x.Disposition==Phase7ClaimDisposition.HumanReview),
+            RequiredExactClaimCount=ev.Count(x=>claims.Any(c=>c.ClaimId==x.ClaimId&&c.Disposition==Phase7ClaimDisposition.Required)&&x.ProvenancePrecision==Phase7ProvenancePrecision.ExactClaim),
+            RequiredExactEntityCount=ev.Count(x=>claims.Any(c=>c.ClaimId==x.ClaimId&&c.Disposition==Phase7ClaimDisposition.Required)&&x.ProvenancePrecision==Phase7ProvenancePrecision.ExactKnowledgeEntity),
+            RequiredExactFieldCount=ev.Count(x=>claims.Any(c=>c.ClaimId==x.ClaimId&&c.Disposition==Phase7ClaimDisposition.Required)&&x.ProvenancePrecision==Phase7ProvenancePrecision.ExactApprovedField),
+            OptionalAuthoritativeEvidenceCount=ev.Count(x=>claims.Any(c=>c.ClaimId==x.ClaimId&&c.Disposition==Phase7ClaimDisposition.Optional)&&x.SourceEligibility==Phase7SourceEligibility.EligibleForRequiredClaim),
+            OptionalReviewedEvidenceCount=ev.Count(x=>claims.Any(c=>c.ClaimId==x.ClaimId&&c.Disposition is Phase7ClaimDisposition.Optional or Phase7ClaimDisposition.HumanReview)&&x.SourceEligibility==Phase7SourceEligibility.EligibleForOptionalClaim),
+            NoProvenanceClaimCount=claims.Count(x=>x.ProvenancePrecision==nameof(Phase7ProvenancePrecision.None)),
+            MandatoryAvailableDomainCount=DomainCount(a.MandatoryDomains,KnowledgeDomainStatus.Available),MandatoryHumanReviewDomainCount=DomainCount(a.MandatoryDomains,KnowledgeDomainStatus.RequiresHumanReview),MandatoryDeferredDomainCount=DomainCount(a.MandatoryDomains,KnowledgeDomainStatus.Deferred),MandatoryMissingDomainCount=DomainCount(a.MandatoryDomains,KnowledgeDomainStatus.Missing),
+            OptionalAvailableDomainCount=DomainCount(a.OptionalDomains,KnowledgeDomainStatus.Available),OptionalHumanReviewDomainCount=DomainCount(a.OptionalDomains,KnowledgeDomainStatus.RequiresHumanReview),OptionalDeferredDomainCount=DomainCount(a.OptionalDomains,KnowledgeDomainStatus.Deferred),OptionalNotApplicableDomainCount=DomainCount(a.OptionalDomains,KnowledgeDomainStatus.NotApplicable),
+            LocationTimeSafetyPassed=locationSafe,CulturalSafetyPassed=culturalSafe,AstrologySeparationPassed=astrologySafe};
+        var differences=new List<string>();
+        void Match(string name,int actual,int expected){if(actual!=expected)differences.Add($"{name}: expected={expected}; actual={actual}");}
+        Match(nameof(draft.AcceptedClaimCount),draft.AcceptedClaimCount,claims.Count);Match(nameof(draft.RequiredClaimCount),draft.RequiredClaimCount,draft.AcceptedRequiredCount);
+        Match(nameof(draft.DeferredClaimCount),draft.DeferredClaimCount,claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Deferred));Match(nameof(draft.WarningCount),draft.WarningCount,a.Warnings.Count);Match(nameof(draft.BlockingIssueCount),draft.BlockingIssueCount,a.BlockingIssues.Count);
+        Match(nameof(draft.KnowledgeEntityCount),draft.KnowledgeEntityCount,a.KnowledgeEntities.Count);Match(nameof(draft.UnknownSectionCount),draft.UnknownSectionCount,r.UnknownSections.Count);Match(nameof(draft.UnknownPropertyCount),draft.UnknownPropertyCount,r.UnknownProperties.Count);
+        Match("DispositionTotal",draft.AcceptedRequiredCount+draft.AcceptedOptionalCount+draft.HumanReviewClaimCount+draft.DeferredClaimCount,claims.Count);
+        Match("MandatoryDomainTotal",draft.MandatoryAvailableDomainCount+draft.MandatoryHumanReviewDomainCount+draft.MandatoryDeferredDomainCount+draft.MandatoryMissingDomainCount,a.MandatoryDomains.Count);
+        Match("OptionalDomainTotal",draft.OptionalAvailableDomainCount+draft.OptionalHumanReviewDomainCount+draft.OptionalDeferredDomainCount+draft.OptionalNotApplicableDomainCount,a.OptionalDomains.Count);
+        draft=draft with{DiagnosticsReconciled=differences.Count==0,ReconciliationDifferences=differences};
         return draft with{DeterministicChecksum=Phase7Determinism.Hash(draft)};
     }
 }
