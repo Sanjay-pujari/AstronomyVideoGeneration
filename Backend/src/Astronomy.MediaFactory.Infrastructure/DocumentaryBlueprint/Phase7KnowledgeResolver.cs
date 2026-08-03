@@ -180,7 +180,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
     private static string QualificationReasons(Phase7AdapterClaimCandidate candidate,CertifiedNarrationClaim claim)
     {
         var reasons=new SortedSet<string>(StringComparer.Ordinal);
-        if(candidate.Approximate==true||claim.Approximate)reasons.Add("ApproximationQualification");
+        if(candidate.Approximate==true||claim.IsApproximate)reasons.Add("ApproximationQualification");
         if(claim.IsLocationDependent)reasons.Add("LocationQualification");
         if(claim.IsDateTimeDependent)reasons.Add("DateTimeQualification");
         if(claim.IsCultural||claim.IsMythological)reasons.Add("CulturalTraditionQualification");
