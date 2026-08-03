@@ -292,7 +292,13 @@ public sealed record Phase7ClaimResolutionDiagnostic(string Domain, bool Mandato
     Phase7ClaimDisposition Disposition, bool RequiresHumanReview, string HumanReviewReason,
     bool RequiresQualification, IReadOnlyList<string> QualificationReasons,
     IReadOnlyList<string> SelectedSourceIds, IReadOnlyDictionary<string,string> SourceEligibility,
-    Phase7ProvenancePrecision ProvenancePrecision, string ResolutionReason);
+    Phase7ProvenancePrecision ProvenancePrecision, string ResolutionReason)
+{
+    public string TraditionIdentity { get; init; } = "";
+    public Phase7KnowledgeOrigin Origin { get; init; }
+    public string MergeDecision { get; init; } = "NoMerge";
+    public bool EquivalentSafeCulturalCandidateExists { get; init; }
+}
 
 public sealed record Phase7LocationTimeSafetyResult(bool Passed, IReadOnlyList<string> Errors,
     IReadOnlyList<string> Warnings, IReadOnlyList<string> EvaluatedClaimIds);

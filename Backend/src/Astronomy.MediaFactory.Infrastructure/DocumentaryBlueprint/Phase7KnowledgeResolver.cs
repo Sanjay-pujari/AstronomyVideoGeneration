@@ -143,7 +143,17 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         }).ToList();
         result=result with { AdapterDiagnostics=adapterDiagnostics,MergeDecisions=decisions,UnknownSections=unknownSections.Distinct().Order().ToArray(),UnknownProperties=unknownProperties.Distinct().Order().ToArray(),
             SourceAuditSummary=new(all.Count,payload.RejectedSources.Count,payload.UnverifiedSources.Count,candidates.Count(x=>x.SourceIds.Count==0)),
-            ClaimResolutionDiagnostics=resolvedClaims.Select(x=>x.Diagnostic).OrderBy(x=>x.SemanticIdentity,StringComparer.Ordinal).ToArray(),
+            ClaimResolutionDiagnostics=resolvedClaims.Select(x=>
+            {
+                var decision=decisions.SingleOrDefault(d=>d.SelectedClaimIds.Contains(x.Claim.ClaimId));
+                var safeCulturalCandidate=claims.Any(c=>c.Domain==nameof(NarrationKnowledgeDomainKey.CultureAndMythology)
+                    && c.Disposition==Phase7ClaimDisposition.Required&&!c.RequiresHumanReview);
+                return x.Diagnostic with
+                {
+                    MergeDecision=decision?.Classification.ToString()??"NoMerge",
+                    EquivalentSafeCulturalCandidateExists=x.Claim.Domain==nameof(NarrationKnowledgeDomainKey.CultureAndMythology)&&safeCulturalCandidate
+                };
+            }).OrderBy(x=>x.SemanticIdentity,StringComparer.Ordinal).ToArray(),
             ClaimSupportEvidence=supportEvidence,KnowledgeEntities=entities.GroupBy(x=>x.KnowledgeId,StringComparer.Ordinal).Select(x=>x.First()).OrderBy(x=>x.KnowledgeId,StringComparer.Ordinal).ToArray() };
         return result with { DeterministicChecksum=Phase7Determinism.Hash(result with { DeterministicChecksum="" }) };
     }
@@ -179,7 +189,8 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         // Only a named tradition's bounded summary is an authority-bearing cultural
         // claim. Sensitive correspondences and uncategorised material are classified
         // by the adapter as review claims and never arrive here.
-        if(!candidate.ApprovedFieldPath.EndsWith(".summary",StringComparison.OrdinalIgnoreCase))
+        if(!candidate.RequiresQualification || string.IsNullOrEmpty(TraditionIdentity(candidate.ApprovedFieldPath))
+            || !candidate.ApprovedFieldPath.EndsWith(".summary",StringComparison.OrdinalIgnoreCase))
             return Phase7ClaimDisposition.Optional;
         var requiredEvidence=Phase7KnowledgeSourcePool.Get(payload)
             .Where(x=>candidate.SourceIds.Count==0||candidate.SourceIds.Contains(x.SourceId,StringComparer.Ordinal))
@@ -219,7 +230,13 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath),c.Text,disposition,c.RequiresHumanReview,c.HumanReviewReason,
             c.RequiresQualification,c.QualificationReasons,claim.SourceIds,
             allEvaluated.OrderBy(x=>x.Source.SourceId,StringComparer.Ordinal).ToDictionary(x=>x.Source.SourceId,x=>$"{x.Result.Eligibility}:{x.Result.ReasonCode}",StringComparer.Ordinal),precision,resolutionReason);
+        diagnostic=diagnostic with { TraditionIdentity=TraditionIdentity(c.ApprovedFieldPath),Origin=c.Origin };
         return new(claim,evidence,diagnostic);
+    }
+    private static string TraditionIdentity(string path)
+    {
+        var parts=Phase7CanonicalFieldPathPolicy.Canonicalize(path).Split('.',StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length>=3&&parts[0].Equals("cultureAndMythology",StringComparison.OrdinalIgnoreCase)?parts[1]:"";
     }
     private static string SelectionReason(Phase7ClaimDisposition disposition,Phase7SourceEligibility eligibility)=>
         disposition switch
