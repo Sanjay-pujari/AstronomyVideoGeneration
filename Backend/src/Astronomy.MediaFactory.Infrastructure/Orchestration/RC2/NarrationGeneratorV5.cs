@@ -3275,7 +3275,14 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     {
         var zhrElement = TryGetRootProperty(source, "zhr");
         var zhrText = zhrElement is { ValueKind: JsonValueKind.Object } obj ? GetString(obj, "value") : zhrElement?.ValueKind == JsonValueKind.Number ? zhrElement.Value.GetRawText() : null;
-        return int.TryParse(zhrText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var zhr) ? new MeteorActivityValue(null, null, null, zhr, null, null) : null;
+        var radiant = TryGetRootString(source, "radiant") ?? TryGetAllocatedFactString(source, "Radiant");
+        var peakWindow = TryGetRootString(source, "peakWindow") ?? TryGetAllocatedFactString(source, "PeakWindow");
+        var activityWindow = TryGetRootString(source, "eventDateOrWindow") ?? TryGetAllocatedFactString(source, "EventDateOrWindow");
+        var showerName = TryGetRootString(source, "name") ?? TryGetAllocatedFactString(source, "Name");
+        var hasZhr = int.TryParse(zhrText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var zhr);
+        if (!hasZhr && string.IsNullOrWhiteSpace(radiant) && string.IsNullOrWhiteSpace(peakWindow) && string.IsNullOrWhiteSpace(activityWindow) && string.IsNullOrWhiteSpace(showerName)) return null;
+        static EventWindowValue? Window(string? value) => string.IsNullOrWhiteSpace(value) ? null : new EventWindowValue(null, null, null, null, null, null, null, null, value);
+        return new MeteorActivityValue(radiant, Window(activityWindow), Window(peakWindow), hasZhr ? zhr : null, null, null, ShowerName: showerName, RadiantConstellation: radiant);
     }
 
     private static DomainScientificKnowledgeValue? ReadDomainKnowledge(JsonElement? source, string familyId)
@@ -3438,36 +3445,16 @@ public sealed class RequiredSemanticFactResolver : IRequiredSemanticFactResolver
     }
     private static IEnumerable<string> RequiredTypes(AstronomyFamilyProfile p, string role, string format)
     {
-        var beat = FindV1Beat(p, role, format);
-        if (beat is not null)
-            return beat.Requirements.Where(r => r.BlocksPhase7).Select(r => r.SemanticCapabilityId.Value).Distinct(StringComparer.OrdinalIgnoreCase);
         var narrationFacing = NarrationFacingProfile(p).RequiredFactTypes;
         if (!p.ContentNature.Contains("Event", StringComparison.OrdinalIgnoreCase)) return narrationFacing.Where(t => !Regex.IsMatch(t, "Date|Time|Peak|Window", RegexOptions.IgnoreCase));
         return narrationFacing.Distinct(StringComparer.OrdinalIgnoreCase);
     }
     private static IEnumerable<string> OptionalTypes(AstronomyFamilyProfile p, string role, string format)
     {
-        var beat = FindV1Beat(p, role, format);
-        if (beat is not null)
-            return beat.Requirements.Where(r => !r.BlocksPhase7).Select(r => r.SemanticCapabilityId.Value).Distinct(StringComparer.OrdinalIgnoreCase);
         return NarrationFacingProfile(p).OptionalFactTypes.Distinct(StringComparer.OrdinalIgnoreCase);
     }
-    private static FamilyNarrativeBeatV1? FindV1Beat(AstronomyFamilyProfile p, string role, string format)
-    {
-        var catalog = new AstronomyFamilyProfileCatalogV1();
-        if (!catalog.TryGet(p.FamilyId, out var v1)) return null;
-        var beats = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? v1.ShortFormStructure.Beats : v1.LongFormStructure.Beats;
-        return beats.FirstOrDefault(b => b.BeatRole.Equals(role, StringComparison.OrdinalIgnoreCase));
-    }
-
     private static AstronomyFamilyProfile NarrationFacingProfile(AstronomyFamilyProfile p)
-    {
-        var catalog = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.AstronomyFamilyProfileCatalogV1();
-        if (!catalog.TryGet(p.FamilyId, out var v1)) return p;
-        var converted = new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility.AstronomyFamilyProfileV1CompatibilityAdapter()
-            .Convert(v1, new Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Families.Compatibility.FamilyProfileCompatibilityContext(p.FamilyId, p.FamilyId, p.FamilyId, false));
-        return converted.Succeeded && converted.LegacyProfile is not null ? converted.LegacyProfile : p;
-    }
+        => p;
     [Obsolete("Legacy rollback-only path. Sprint 4B runtime conflict analysis is owned by SemanticResolutionEngineV1.")]
     private static IEnumerable<FactConflict> FindConflicts(IEnumerable<string> types, List<CandidateFact> all) => types.SelectMany(t => all.Where(c => Matches(t, c.Type)).GroupBy(c => c.Value.ToString(), StringComparer.OrdinalIgnoreCase).Count() > 1 ? [new FactConflict(t, all.Where(c => Matches(t, c.Type)).Select(c => c.Value).Distinct().ToArray(), all.Where(c => Matches(t, c.Type)).OrderByDescending(c => c.Confidence).First().SourceArtifact, false, $"Conflicting {t} values resolved by source precedence.")] : Array.Empty<FactConflict>()).DistinctBy(c => c.FactType);
     [Obsolete("Legacy rollback-only path. Sprint 4B runtime must not scan documentary JSON for facts.")]
