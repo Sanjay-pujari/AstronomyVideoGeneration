@@ -30,7 +30,8 @@ public sealed class Phase6CommittedAuthorityEvaluator : IPhase6CommittedAuthorit
             var published = new PublishedStoryFrameAuthority(authority, index, diagnostics, validation.SourcePhase4AggregateId,
                 validation.SourcePhase4Checksum, validation.SourceLongChecksum, validation.SourceShortChecksum,
                 validation.SourcePhase5PublicationId, Artifacts, ["phase-manifest.json"], ["validation/phase-06-validation.json"],
-                authority.AuthorityContractVersion, new Dictionary<string,string>{{"builderType",authority.BuilderType},{"builderVersion",authority.BuilderVersion},{"integrationServiceType",diagnostics.IntegrationServiceType},{"integrationServiceVersion",diagnostics.IntegrationServiceVersion}});
+                authority.AuthorityContractVersion, new Dictionary<string,string>{{"builderType",authority.BuilderType},{"builderVersion",authority.BuilderVersion},{"integrationServiceType",diagnostics.IntegrationServiceType},{"integrationServiceVersion",diagnostics.IntegrationServiceVersion}})
+            { ProfileId = validation.Profile, ProfileVersion = validation.ProfileVersion };
             return new(true, published, "P6COMMITTED_VALID", [], inspected);
         }
         catch (OperationCanceledException) { throw; }
@@ -50,6 +51,7 @@ public sealed class Phase6CommittedAuthorityEvaluator : IPhase6CommittedAuthorit
         Require(v.Errors.Count == 0, "Committed validation contains blocking errors.");
         Require(a.ExecutionId == request.ExecutionId && a.PlanId == request.PlanId && a.EventId == request.EventId && a.Language.Equals(request.Language, StringComparison.OrdinalIgnoreCase), "Committed authority identity does not match request.");
         Require(v.ExecutionId == a.ExecutionId && v.PlanId == a.PlanId && v.EventId == a.EventId && v.Language.Equals(a.Language, StringComparison.OrdinalIgnoreCase), "Validation identity does not match authority.");
+        Require(v.Profile == a.Profile && !string.IsNullOrWhiteSpace(v.ProfileVersion), "Validation profile identity does not match authority.");
         Require(StoryFrameContractCompatibility.IsSupported(a.AuthorityContractVersion) && StoryFrameContractCompatibility.IsSupported(i.IndexContractVersion) && StoryFrameContractCompatibility.IsSupported(d.DiagnosticsContractVersion), "Phase 6 runtime contract is unsupported.");
         Require(a.SemanticChecksum == StoryFrameAuthorityChecksum.Authority(a) && v.AuthorityChecksum == a.SemanticChecksum && v.StoryFrameAuthorityChecksum == a.SemanticChecksum && v.AuthorityId == a.AuthorityId && v.StoryFrameAuthorityId == a.AuthorityId, "Authority checksum or identity evidence is invalid.");
         Require(i.Checksum == StoryFrameAuthorityChecksum.Index(i) && v.IndexChecksum == i.Checksum && v.IndexId == i.IndexId && i.SourceStoryFramesAuthorityId == a.AuthorityId && i.SourceStoryFramesChecksum == a.SemanticChecksum, "Index checksum or lineage evidence is invalid.");
