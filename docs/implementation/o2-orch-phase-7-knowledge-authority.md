@@ -101,3 +101,25 @@ P7.1B must not start because P7.1A is not fully certified.
 
 ## 34. Final verdict
 `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`
+
+# P7.1A Batch 2 — Knowledge Core Certification
+
+This batch remains limited to deterministic resolution; it does not publish a Knowledge Authority.
+
+1. **Source-state policy.** Event authority accepts only `Verified` or `Certified`. Required event evidence must be certified and have an approved governed review state (`Approved`, `Reviewed`, `Verified`, or `Certified`). Evergreen sources accept `Reviewed`, `Verified`, or `Certified`. Rejected and unverified sources remain separate audit populations and cannot support required claims.
+2. **Canonical paths.** All emitted and matched paths use `Phase7CanonicalFieldPathPolicy`; array ordinals and governed snake/camel spelling normalize to one path, while invalid evidence is rejected.
+3. **Stable entity resolution.** Identity priority is `stableKnowledgeId`, `factId`, `objectId`, `externalId`, `catalogId`, certified-registry mapping, then deterministic anonymous content. Anonymous required values are review-required.
+4. **Exact evergreen provenance.** A supported evergreen section expands only through its owning registered adapter's closed approved-field list. Whole-domain support is not upgraded to exact-field evidence.
+5. **Typed merge metadata.** Candidates expose normalized value, type, unit, scope/location/time/reference/approximation/uncertainty/confidence metadata; bounded adapters populate only approved typed properties.
+6. **Merge outcomes.** Collision decisions remain auditable and contradictions publish neither candidate. Publication-grade completion of specialization and incomparable retention is still outstanding.
+7. **Claim support evidence.** Resolution emits claim/source/entity/path/precision/adapter/origin/selection/merge/confidence evidence for every selected exact source.
+8. **Diagnostics.** Provenance and merge counts are finalized after selection rather than left as extraction-time placeholders.
+9. **Family-generic result.** The resolver and adapters contain no subject-name branch or subject-specific identity map; complete family-profile execution was not available in this environment.
+10. **Orion result.** The fixture was not special-cased. Real end-to-end knowledge-only execution could not be run because the .NET SDK is absent.
+11. **Test totals.** No totals are claimed: `dotnet` is unavailable (`dotnet: command not found`).
+12. **Azure OpenAI calls:** **0**.
+13. **Azure Speech calls:** **0**.
+14. **Remaining publication infrastructure.** Artifact transaction, recovery, committed-state evaluation, reuse, manifests, and physical readback remain for a later publication batch.
+15. **Next-batch readiness.** The deterministic contracts are hardened, but certification remains blocked on full merge completion and executable focused/family/Orion evidence. P7.1A is not frozen.
+
+**Batch verdict:** `P7_1A_KNOWLEDGE_CORE_STILL_INCOMPLETE`
