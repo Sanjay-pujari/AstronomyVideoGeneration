@@ -67,6 +67,18 @@ public sealed record CertifiedNarrationSource(string SourceId, string SourceType
     public IReadOnlyList<string> SupportedApprovedFieldPaths { get; init; } = [];
     public string Disposition { get; init; } = "CertifiedSupporting";
     public IReadOnlyList<string> RegistryDiagnostics { get; init; } = [];
+    public string ReviewState { get; init; } = "";
+    public string AuthorityState { get; init; } = "";
+}
+public enum Phase7SourceEligibility { EligibleForRequiredClaim, EligibleForOptionalClaim, AuditOnly, Rejected }
+public sealed record Phase7SourceEligibilityRequest(CertifiedNarrationSource Source, string Language,
+    string KnowledgeId, string SemanticIdentity, string ApprovedFieldPath, bool Required,
+    bool OptionalReviewedEvidenceAllowed, bool RequiresHumanReview);
+public sealed record Phase7SourceEligibilityResult(Phase7SourceEligibility Eligibility, string ReasonCode,
+    bool Authoritative, Phase7ProvenancePrecision Precision);
+public interface IPhase7SourceEligibilityPolicy
+{
+    Phase7SourceEligibilityResult Classify(Phase7SourceEligibilityRequest request);
 }
 public sealed record NarrationKnowledgeDomain(string Domain, KnowledgeDomainStatus Status,
     IReadOnlyList<CertifiedNarrationClaim> Claims, IReadOnlyList<string> Warnings);
@@ -169,7 +181,14 @@ public interface IPhase7KnowledgeEntityIdentityResolver
 public sealed record Phase7ClaimSupportEvidence(string ClaimId, string SemanticIdentity, string SourceId,
     string KnowledgeId, string ApprovedFieldPath, Phase7ProvenancePrecision ProvenancePrecision,
     string AdapterId, Phase7KnowledgeOrigin Origin, string SelectionReason, string? MergeDecisionId,
-    decimal Confidence);
+    decimal Confidence)
+{
+    public string AdapterVersion { get; init; } = "";
+    public Phase7SourceEligibility SourceEligibility { get; init; } = Phase7SourceEligibility.AuditOnly;
+    public bool RequiresHumanReview { get; init; }
+    public string QualificationReason { get; init; } = "";
+    public string AuthorityScope { get; init; } = "";
+}
 public sealed record Phase7KnowledgeSectionAdapterResult(IReadOnlyList<Phase7AdapterClaimCandidate> Claims,
     IReadOnlyList<Phase7KnowledgeEntity> KnowledgeEntities, IReadOnlyList<string> Warnings,
     IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> UnknownProperties, string AdapterChecksum);
