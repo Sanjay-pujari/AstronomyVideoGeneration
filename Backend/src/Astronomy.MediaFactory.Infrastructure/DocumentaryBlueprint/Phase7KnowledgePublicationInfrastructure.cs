@@ -107,7 +107,7 @@ public sealed class Phase7KnowledgePhysicalReadback(IPhase7KnowledgeFileSystem f
         foreach(var expected in Types.Keys.Where(x=>!inventory.Artifacts.Any(y=>y.RelativePath==x)))errors.Add("P7KNOWLEDGE_ARTIFACT_MISSING");
         Phase7KnowledgeArtifactReadbackEvidence? validation=null;var vp=Path.Combine(root,"validation","phase-07-knowledge-validation.json");
         if(fs.FileExists(vp)){var b=await fs.ReadAllBytesAsync(vp,token);Phase7KnowledgeValidation? v=null;try{v=JsonSerializer.Deserialize<Phase7KnowledgeValidation>(b,Json);}catch(JsonException ex){errors.Add(ex.Message);}
-            var checksumValid=v is not null&&v.DeterministicChecksum==Phase7Determinism.Hash(v with{DeterministicChecksum=""});
+            var checksumValid=v is not null&&v.DeterministicChecksum==Phase7KnowledgeValidationCanonicalizer.ComputeChecksum(v);
             var ok=v?.AuthorityId==a.AuthorityId&&v.ArtifactInventory?.DeterministicChecksum==inventory.DeterministicChecksum&&checksumValid;
             if(v is not null&&!checksumValid)errors.Add("P7KNOWLEDGE_VALIDATION_CHECKSUM_INVALID");
             if(expectedValidationHash is not null&&Sha(b)!=expectedValidationHash){ok=false;errors.Add("P7KNOWLEDGE_VALIDATION_HASH_MISMATCH");}
@@ -167,7 +167,7 @@ public sealed class Phase7KnowledgeCommittedStateEvaluator(IPhase7KnowledgeFileS
             if(a.SemanticChecksum!=Phase7Determinism.Hash(a with{SemanticChecksum=""}))errors.Add("P7KNOWLEDGE_AUTHORITY_CHECKSUM_INVALID");
             if(v.ArtifactInventory is null||v.ArtifactInventory.Artifacts.Count!=3)errors.Add("P7KNOWLEDGE_INVENTORY_INVALID");
             if(!v.IsValid||v.Mode!=Phase7KnowledgeValidationMode.CommittedPhysical)errors.Add("P7KNOWLEDGE_VALIDATION_INVALID");
-            if(v.DeterministicChecksum!=Phase7Determinism.Hash(v with{DeterministicChecksum=""}))errors.Add("P7KNOWLEDGE_VALIDATION_CHECKSUM_INVALID");
+            if(v.DeterministicChecksum!=Phase7KnowledgeValidationCanonicalizer.ComputeChecksum(v))errors.Add("P7KNOWLEDGE_VALIDATION_CHECKSUM_INVALID");
             var evidenceChecksum=Phase7Determinism.Hash(e with{DeterministicChecksum=""});
             if(e.ContractVersion!=Phase7KnowledgeContract.Version||string.IsNullOrWhiteSpace(e.PublicationId)||e.ExecutionId!=request.ExecutionId||e.PlanId!=request.PlanId||e.EventId!=request.EventId||!string.Equals(e.Language,request.Language,StringComparison.OrdinalIgnoreCase)||e.AuthorityId!=a.AuthorityId||e.AuthorityChecksum!=a.SemanticChecksum||!e.PublicationCommitted||!e.CommittedStateValidationPassed||e.DeterministicChecksum!=evidenceChecksum)errors.Add("P7KNOWLEDGE_PUBLICATION_EVIDENCE_INVALID");
             if(me is null||me.ContractVersion!=Phase7KnowledgeContract.Version||me.Status!="Succeeded"||me.ReasonCode!="P7KNOWLEDGE_COMMITTED"||!me.PublicationCommitted||!me.CommittedStateValidationPassed||me.AuthorityId!=a.AuthorityId||me.AuthorityChecksum!=a.SemanticChecksum||me.PublicationId!=e.PublicationId||me.ValidationPhysicalSha256!=e.ValidationPhysicalSha256||me.DeterministicChecksum!=Phase7Determinism.Hash(me with{DeterministicChecksum=""})||e.ManifestEntryChecksum!=me.DeterministicChecksum)errors.Add("P7KNOWLEDGE_MANIFEST_INVALID");
@@ -176,7 +176,7 @@ public sealed class Phase7KnowledgeCommittedStateEvaluator(IPhase7KnowledgeFileS
             var physical=await readback.ValidateCommittedCompleteSetAsync(root,a,v.ArtifactInventory!,new(me!,e,e.ValidationPhysicalSha256,me!.DeterministicChecksum,manifestHash),token);
             if(!physical.IsValid)return new(false,null,"P7KNOWLEDGE_PHYSICAL_READBACK_INVALID",physical.Errors,[]);
             var recomputed=validator.Validate(a,resolution,diagnostics,Phase7KnowledgeValidationMode.CommittedPhysical,physical);
-            if(!Equivalent(v,recomputed))return new(false,null,"P7KNOWLEDGE_COMMITTED_SEMANTIC_MISMATCH",["Committed validation does not match recomputed semantic governance."],[]);
+            if(!Phase7KnowledgeValidationCanonicalizer.Equivalent(v,recomputed))return new(false,null,"P7KNOWLEDGE_COMMITTED_SEMANTIC_MISMATCH",["Committed validation does not match recomputed semantic governance."],[]);
             var paths=physical.Artifacts.Select(x=>x.RelativePath).Append("validation/phase-07-knowledge-validation.json").ToArray();
             var published=new PublishedPhase7KnowledgeAuthority(a,paths,
                 physical.Artifacts.ToDictionary(x=>x.RelativePath,x=>v.ArtifactInventory!.Artifacts.Single(y=>y.RelativePath==x.RelativePath).SemanticChecksum),
@@ -188,10 +188,6 @@ public sealed class Phase7KnowledgeCommittedStateEvaluator(IPhase7KnowledgeFileS
         catch(Exception ex) when(ex is JsonException or InvalidDataException or IOException)
         { return new(false,null,"P7KNOWLEDGE_PHYSICAL_READBACK_INVALID",[ex.Message],[]); }
     }
-    private static bool Equivalent(Phase7KnowledgeValidation left,Phase7KnowledgeValidation right)=>
-        left.IsValid==right.IsValid&&left.ReasonCode==right.ReasonCode&&left.AuthorityId==right.AuthorityId&&
-        left.Errors.SequenceEqual(right.Errors)&&left.Gates.Select(x=>(x.Name,x.Passed,string.Join('|',x.Errors))).SequenceEqual(right.Gates.Select(x=>(x.Name,x.Passed,string.Join('|',x.Errors))))&&
-        Equals(left.ArtifactInventory,right.ArtifactInventory)&&left.DeterministicChecksum==right.DeterministicChecksum;
     private static string Sha(byte[] b)=>Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
 }
 
@@ -330,7 +326,9 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
             await Write(Path.Combine(stageKnowledge,"knowledge-diagnostics.json"),d,token);
             await Mark(Phase7KnowledgeTransactionState.CandidateWritten,token);
             var inventory=await readback.CreateCandidateInventoryAsync(stageKnowledge,a,token);
-            var seed=memory with{Mode=Phase7KnowledgeValidationMode.StagedPhysical,ArtifactInventory=inventory,DeterministicChecksum=""};seed=seed with{DeterministicChecksum=Phase7Determinism.Hash(seed)};
+            var seed=memory with{Mode=Phase7KnowledgeValidationMode.StagedPhysical,ArtifactInventory=inventory,DeterministicChecksum=""};
+            seed=Phase7KnowledgeValidationCanonicalizer.Canonicalize(seed);
+            seed=seed with{DeterministicChecksum=Phase7KnowledgeValidationCanonicalizer.ComputeChecksum(seed)};
             await Write(stageValidation,seed,token);
             var rb=await readback.ValidateCandidateCompleteSetAsync(stageRoot,a,inventory,token);
             await Mark(Phase7KnowledgeTransactionState.CandidateReadbackPassed,token);
@@ -368,8 +366,12 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
             var committedReadback=await readback.ValidateStablePreCommitCompleteSetAsync(request.ExecutionRoot,a,inventory,evidenceInput,token);
             var committedValidation=validator.Validate(a,resolvedKnowledge,d,Phase7KnowledgeValidationMode.StablePreCommitPhysical,committedReadback);
             if(!committedValidation.IsValid)throw new InvalidDataException(committedValidation.ReasonCode);
+            // This is only the deterministic bootstrap candidate.  It is never
+            // returned as certification: final committed evidence is installed,
+            // reread, and the validator is invoked in CommittedPhysical mode below.
             committedValidation=committedValidation with{Mode=Phase7KnowledgeValidationMode.CommittedPhysical,DeterministicChecksum=""};
-            committedValidation=committedValidation with{DeterministicChecksum=Phase7Determinism.Hash(committedValidation)};
+            committedValidation=Phase7KnowledgeValidationCanonicalizer.Canonicalize(committedValidation);
+            committedValidation=committedValidation with{DeterministicChecksum=Phase7KnowledgeValidationCanonicalizer.ComputeChecksum(committedValidation)};
             await Write(stableValidation,committedValidation,token);
             var validationHash=Sha(await fs.ReadAllBytesAsync(stableValidation,token));
             var manifestEntry=new Phase7KnowledgeManifestEntry(7,"Knowledge Authority","Succeeded","P7KNOWLEDGE_COMMITTED",true,true,a.AuthorityId,a.SemanticChecksum,validationHash,publicationId,Phase7KnowledgeContract.Version,"");
@@ -380,6 +382,30 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
             var evidence=new Phase7KnowledgePublicationEvidence(Phase7KnowledgeContract.Version,publicationId,request.ExecutionId,request.PlanId,request.EventId,request.Language,a.AuthorityId,a.SemanticChecksum,validationHash,manifestEntry.DeterministicChecksum,true,true,DateTimeOffset.UtcNow,"");
             evidence=evidence with{DeterministicChecksum=Phase7Determinism.Hash(evidence)};await Write(paths.StablePublicationEvidencePath,evidence,token);
             await Mark(Phase7KnowledgeTransactionState.ManifestPublished,token);
+
+            // Certify the final six-file state.  Persist the result produced by
+            // the CommittedPhysical invocation (rather than relabelling the
+            // precommit result), refresh its external hash authorities, and
+            // require the second readback to converge.
+            var finalEvidence=new Phase7KnowledgeCommittedEvidence(manifestEntry,evidence,validationHash,manifestEntry.DeterministicChecksum,Sha(await fs.ReadAllBytesAsync(paths.StableManifestPath,token)));
+            var finalReadback=await readback.ValidateCommittedCompleteSetAsync(request.ExecutionRoot,a,inventory,finalEvidence,token);
+            committedValidation=validator.Validate(a,resolvedKnowledge,d,Phase7KnowledgeValidationMode.CommittedPhysical,finalReadback);
+            if(!committedValidation.IsValid)throw new InvalidDataException(committedValidation.ReasonCode);
+            await Write(stableValidation,committedValidation,token);
+            validationHash=Sha(await fs.ReadAllBytesAsync(stableValidation,token));
+            manifestEntry=manifestEntry with{ValidationPhysicalSha256=validationHash,DeterministicChecksum=""};
+            manifestEntry=manifestEntry with{DeterministicChecksum=Phase7Determinism.Hash(manifestEntry)};
+            manifest["phase7KnowledgeAuthorities"]=JsonSerializer.SerializeToNode(old.Where(x=>!SameIdentity(x)).Append(manifestEntry).ToArray(),Json);
+            await fs.WriteAllTextAsync(paths.StableManifestPath,manifest.ToJsonString(Json),token);
+            evidence=evidence with{ValidationPhysicalSha256=validationHash,ManifestEntryChecksum=manifestEntry.DeterministicChecksum,DeterministicChecksum=""};
+            evidence=evidence with{DeterministicChecksum=Phase7Determinism.Hash(evidence)};
+            await Write(paths.StablePublicationEvidencePath,evidence,token);
+            finalEvidence=new(manifestEntry,evidence,validationHash,manifestEntry.DeterministicChecksum,Sha(await fs.ReadAllBytesAsync(paths.StableManifestPath,token)));
+            finalReadback=await readback.ValidateCommittedCompleteSetAsync(request.ExecutionRoot,a,inventory,finalEvidence,token);
+            var convergence=validator.Validate(a,resolvedKnowledge,d,Phase7KnowledgeValidationMode.CommittedPhysical,finalReadback);
+            if(!finalReadback.IsValid||!Phase7KnowledgeValidationCanonicalizer.Equivalent(committedValidation,convergence))
+                throw new InvalidDataException("P7KNOWLEDGE_COMMITTED_VALIDATION_DID_NOT_CONVERGE");
+
             var final=await committed.EvaluateAsync(new(request.ExecutionRoot,request.ExecutionId,request.PlanId,request.EventId,request.Language),token);
             if(!final.IsValid)throw new InvalidDataException(string.Join(';',final.Errors));
             await Mark(Phase7KnowledgeTransactionState.CommittedReadbackPassed,token);
