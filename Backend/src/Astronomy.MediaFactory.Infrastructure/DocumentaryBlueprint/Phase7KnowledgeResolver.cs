@@ -8,9 +8,11 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
 {
     private readonly Phase7KnowledgeSectionAdapterRegistry registry;
     private readonly IPhase7KnowledgeMergeClassifier classifier;
-    public Phase7KnowledgeResolver() : this(new Phase7KnowledgeSectionAdapterRegistry(),new Phase7KnowledgeMergeClassifier()) { }
-    public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry) : this(registry,new Phase7KnowledgeMergeClassifier()) { }
-    public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry,IPhase7KnowledgeMergeClassifier classifier) { this.registry=registry;this.classifier=classifier; }
+    private readonly IPhase7SourceEligibilityPolicy sourceEligibility;
+    public Phase7KnowledgeResolver() : this(new Phase7KnowledgeSectionAdapterRegistry(),new Phase7KnowledgeMergeClassifier(),new Phase7SourceEligibilityPolicy()) { }
+    public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry) : this(registry,new Phase7KnowledgeMergeClassifier(),new Phase7SourceEligibilityPolicy()) { }
+    public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry,IPhase7KnowledgeMergeClassifier classifier) : this(registry,classifier,new Phase7SourceEligibilityPolicy()) { }
+    public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry,IPhase7KnowledgeMergeClassifier classifier,IPhase7SourceEligibilityPolicy sourceEligibility) { this.registry=registry;this.classifier=classifier;this.sourceEligibility=sourceEligibility; }
 
     public ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile)
     {
@@ -28,24 +30,40 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         {
             if (!merged.TryGetValue(candidate.SemanticIdentity,out var prior)) { merged.Add(candidate.SemanticIdentity,candidate); continue; }
             var evergreen=prior.Origin==Phase7KnowledgeOrigin.Evergreen?prior:candidate; var ev=prior.Origin==Phase7KnowledgeOrigin.Event?prior:candidate;
-            var classified=classifier.Classify(new(candidate.SemanticIdentity,candidate.Domain,candidate.ApprovedFieldPath,evergreen,ev,new Dictionary<string,string>(),new Dictionary<string,string>()));
-            var selected=classified.Classification switch { Phase7KnowledgeMergeClassification.EventMorePrecise=>ev, Phase7KnowledgeMergeClassification.EventSpecificSpecialization=>ev, _=>evergreen };
+            var dependency=Dependency(evergreen,ev);
+            var classified=classifier.Classify(new(candidate.SemanticIdentity,candidate.Domain,candidate.ApprovedFieldPath,evergreen,ev,dependency,new Dictionary<string,string>()));
+            var selected=classified.Classification switch { Phase7KnowledgeMergeClassification.EventMorePrecise=>ev, _=>evergreen };
             if (classified.Classification == Phase7KnowledgeMergeClassification.Equivalent)
                 selected = selected with { SourceIds = evergreen.SourceIds.Concat(ev.SourceIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() };
-            if(classified.Classification==Phase7KnowledgeMergeClassification.Contradictory)
+            if(classified.Classification==Phase7KnowledgeMergeClassification.EventSpecificSpecialization ||
+               classified.Classification==Phase7KnowledgeMergeClassification.Incomparable && dependency.Count>0)
+            {
+                merged.Remove(candidate.SemanticIdentity);
+                var general=evergreen with { SemanticIdentity=$"{candidate.SemanticIdentity}.general" };
+                var scoped=ev with { SemanticIdentity=$"{candidate.SemanticIdentity}.execution" };
+                merged[general.SemanticIdentity]=general; merged[scoped.SemanticIdentity]=scoped;
+            }
+            else if(classified.Classification==Phase7KnowledgeMergeClassification.Incomparable)
+            {
+                merged.Remove(candidate.SemanticIdentity);
+                warnings.Add($"P7KNOWLEDGE_INCOMPARABLE_DEFERRED:{candidate.SemanticIdentity}");
+            }
+            else if(classified.Classification==Phase7KnowledgeMergeClassification.Contradictory)
             {
                 // A contradiction is diagnostic authority only: neither candidate may leak into accepted claims.
                 merged.Remove(candidate.SemanticIdentity);
                 issues.Add($"P7KNOWLEDGE_CONTRADICTION:{candidate.SemanticIdentity}");
             }
             else merged[candidate.SemanticIdentity]=selected;
-            decisions.Add(new(candidate.SemanticIdentity,classified.Classification,evergreen,ev,[],classified.Reason,new Dictionary<string,string>(),classified.Warnings,classified.BlockingIssues));
+            decisions.Add(new(candidate.SemanticIdentity,classified.Classification,evergreen,ev,[],classified.Reason,dependency,classified.Warnings,classified.BlockingIssues));
         }
         var claims = merged.Values.Select(x=>Claim(x,payload,issues)).OrderBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray();
         var claimIdsBySemantic = claims.ToDictionary(x => x.SemanticIdentity, x => x.ClaimId, StringComparer.Ordinal);
         decisions = decisions.Select(d => d.Classification == Phase7KnowledgeMergeClassification.Contradictory
             ? d
-            : d with { SelectedClaimIds = claimIdsBySemantic.TryGetValue(d.SemanticIdentity, out var claimId) ? [claimId] : [] }).ToList();
+            : d with { SelectedClaimIds = d.Classification is Phase7KnowledgeMergeClassification.EventSpecificSpecialization or Phase7KnowledgeMergeClassification.Incomparable
+                ? claimIdsBySemantic.Where(x=>x.Key.StartsWith(d.SemanticIdentity+".",StringComparison.Ordinal)).Select(x=>x.Value).Order(StringComparer.Ordinal).ToArray()
+                : claimIdsBySemantic.TryGetValue(d.SemanticIdentity, out var claimId) ? [claimId] : [] }).ToList();
         if (claims.GroupBy(x=>x.ClaimId,StringComparer.Ordinal).Any(g=>g.Count()>1)) issues.Add("P7KNOWLEDGE_DUPLICATE_CLAIM_ID");
         if (claims.GroupBy(x=>x.SemanticIdentity,StringComparer.Ordinal).Any(g=>g.Count()>1)) issues.Add("P7KNOWLEDGE_DUPLICATE_SEMANTIC_IDENTITY");
         var required = profile.MandatoryKnowledgeDomains.Select(ParseDomain).ToHashSet();
@@ -66,12 +84,19 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         {
             var candidate = merged[claim.SemanticIdentity];
             var decision = decisions.FirstOrDefault(x => x.SelectedClaimIds.Contains(claim.ClaimId));
-            return claim.SourceIds.Select(sourceId => new Phase7ClaimSupportEvidence(claim.ClaimId, claim.SemanticIdentity,
+            return claim.SourceIds.Select(sourceId =>
+            {
+                var source=all.Single(x=>x.SourceId==sourceId);
+                var eligibility=sourceEligibility.Classify(new(source,payload.Language,candidate.KnowledgeId,candidate.SemanticIdentity,candidate.ApprovedFieldPath,true,false,candidate.RequiresHumanReview));
+                return new Phase7ClaimSupportEvidence(claim.ClaimId, claim.SemanticIdentity,
                 sourceId, candidate.KnowledgeId, Phase7CanonicalFieldPathPolicy.Canonicalize(candidate.ApprovedFieldPath),
                 Enum.Parse<Phase7ProvenancePrecision>(claim.ProvenancePrecision), candidate.AdapterId, candidate.Origin,
                 decision is null ? "CertifiedExactProvenance" : decision.Classification.ToString(),
                 decision is null ? null : $"merge-{Phase7Determinism.Hash(new { decision.SemanticIdentity, decision.Classification })[..20]}",
-                claim.Confidence));
+                claim.Confidence) { AdapterVersion=candidate.AdapterVersion, SourceEligibility=eligibility.Eligibility,
+                    RequiresHumanReview=candidate.RequiresHumanReview, QualificationReason=candidate.RequiresQualification?"GovernedQualificationRequired":"",
+                    AuthorityScope=candidate.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)?"GeneralAuthority":candidate.SemanticIdentity.EndsWith(".execution",StringComparison.Ordinal)?"ExecutionScopedAuthority":candidate.Origin.ToString() };
+            });
         }).OrderBy(x => x.ClaimId, StringComparer.Ordinal).ThenBy(x => x.SourceId, StringComparer.Ordinal).ToArray();
         adapterDiagnostics = adapterDiagnostics.Select(d =>
         {
@@ -111,16 +136,13 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         }
         catch(JsonException){issues.Add($"P7KNOWLEDGE_{origin.ToString().ToUpperInvariant()}_JSON_INVALID");}
     }
-    private static CertifiedNarrationClaim Claim(Phase7AdapterClaimCandidate c,CertifiedKnowledgePayload p,List<string> issues)
+    private CertifiedNarrationClaim Claim(Phase7AdapterClaimCandidate c,CertifiedKnowledgePayload p,List<string> issues)
     {
-        var certified=p.ReviewedSources.Where(x=>x.Certified&&x.Reviewed&&x.Language.Equals(p.Language,StringComparison.OrdinalIgnoreCase)).ToArray();
-        var exactClaim=certified.Where(x=>x.SupportedClaimIds.Contains(c.SemanticIdentity,StringComparer.OrdinalIgnoreCase)).ToArray();
-        var exactEntity=certified.Where(x=>x.SupportedKnowledgeIds.Contains(c.KnowledgeId,StringComparer.OrdinalIgnoreCase)).ToArray();
-        var canonicalField = Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath);
-        var exactField=certified.Where(x=>x.SupportedApprovedFieldPaths.Any(path =>
-            Phase7CanonicalFieldPathPolicy.TryCanonicalize(path, out var canonical) && canonical == canonicalField)).ToArray();
-        var chosen=exactClaim.Length>0?exactClaim:exactEntity.Length>0?exactEntity:exactField;
-        var precision=exactClaim.Length>0?Phase7ProvenancePrecision.ExactClaim:exactEntity.Length>0?Phase7ProvenancePrecision.ExactKnowledgeEntity:exactField.Length>0?Phase7ProvenancePrecision.ExactApprovedField:Phase7ProvenancePrecision.None;
+        var sourcePool=p.AllResolvedSources.Count>0?p.AllResolvedSources:p.ReviewedSources;
+        var evaluated=sourcePool.Select(x=>(Source:x,Result:sourceEligibility.Classify(new(x,p.Language,c.KnowledgeId,c.SemanticIdentity,c.ApprovedFieldPath,true,false,c.RequiresHumanReview))))
+            .Where(x=>x.Result.Eligibility==Phase7SourceEligibility.EligibleForRequiredClaim).ToArray();
+        var precision=evaluated.Select(x=>x.Result.Precision).DefaultIfEmpty(Phase7ProvenancePrecision.None).Min();
+        var chosen=evaluated.Where(x=>x.Result.Precision==precision).Select(x=>x.Source).ToArray();
         if(chosen.Length==0) issues.Add($"P7KNOWLEDGE_REQUIRED_CLAIM_UNSUPPORTED:{c.SemanticIdentity}");
         var id=Phase7Determinism.SemanticClaimId(c.KnowledgeId,c.SemanticIdentity,p.Language,p.EvergreenPayloadId??p.PayloadId);
         var cultural=c.Domain is NarrationKnowledgeDomainKey.CultureAndMythology or NarrationKnowledgeDomainKey.RegionalTraditions;
@@ -133,6 +155,13 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
     private static bool IsEvergreenCertified(string value)=>IsEventCertified(value)||value.Equals("Reviewed",StringComparison.OrdinalIgnoreCase);
     private static NarrationKnowledgeDomainKey ParseDomain(string value)=>NarrationKnowledgeDomains.TryParse(value,out var key)?key:throw new InvalidOperationException($"P7DOMAIN_UNKNOWN:{value}");
     private static bool Has(string value,params string[] terms)=>terms.Any(t=>value.Contains(t,StringComparison.OrdinalIgnoreCase));
+    private static IReadOnlyDictionary<string,string> Dependency(Phase7AdapterClaimCandidate evergreen,Phase7AdapterClaimCandidate ev)
+    {
+        var result=new SortedDictionary<string,string>(StringComparer.Ordinal);
+        static string Scope(Phase7AdapterClaimCandidate c)=>string.Join("|",new[]{c.ScopeType,c.Location,c.Latitude?.ToString(),c.Longitude?.ToString(),c.StartUtc?.ToString("O"),c.EndUtc?.ToString("O"),c.ReferenceDate?.ToString("O"),c.Unit,c.NormalizedValue,c.Approximate?.ToString(),c.Uncertainty?.ToString(),c.Confidence?.ToString()}.Where(x=>!string.IsNullOrWhiteSpace(x)));
+        var a=Scope(evergreen);var b=Scope(ev); if(a.Length>0)result["evergreenScope"]=a;if(b.Length>0)result["eventScope"]=b;
+        return result;
+    }
     private static IReadOnlyDictionary<string,string> Localized(string? json,string language,string key){var m=new SortedDictionary<string,string>();if(string.IsNullOrWhiteSpace(json))return m;using var d=JsonDocument.Parse(json);if(!d.RootElement.TryGetProperty("localizedContent",out var l)||!l.TryGetProperty(language.Split('-','_')[0],out var c)||!c.TryGetProperty(key,out var v)||v.ValueKind!=JsonValueKind.Array)return m;foreach(var x in v.EnumerateArray().Where(x=>x.ValueKind==JsonValueKind.String)){var s=x.GetString()!;m[s]=s;}return m;}
     private static IReadOnlyDictionary<string,string> LocalizedScalar(string? json,string language,string key){var m=new SortedDictionary<string,string>();if(string.IsNullOrWhiteSpace(json))return m;using var d=JsonDocument.Parse(json);if(d.RootElement.TryGetProperty("localizedContent",out var l)&&l.TryGetProperty(language.Split('-','_')[0],out var c)&&c.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.String)m["subject"]=v.GetString()!;return m;}
 }

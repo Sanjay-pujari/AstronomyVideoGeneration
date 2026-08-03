@@ -14,7 +14,9 @@ public sealed class Phase7KnowledgeMergeClassifier : IPhase7KnowledgeMergeClassi
     {
         var evergreen=Normalize(request.EvergreenCandidate.Text); var @event=Normalize(request.EventCandidate.Text);
         if (evergreen==@event) return Result(Phase7KnowledgeMergeClassification.Equivalent,"Normalized certified values are equal.");
-        if (HasExplicitDifferentScope(request)) return Result(Phase7KnowledgeMergeClassification.Incomparable,"Candidates have distinct explicit scopes.");
+        if (HasExplicitDifferentScope(request)) return Result(Phase7KnowledgeMergeClassification.Incomparable,"Candidates have distinct explicit, non-conflicting scopes.");
+        if (HasExecutionScope(request.EventCandidate) && !HasExecutionScope(request.EvergreenCandidate))
+            return Result(Phase7KnowledgeMergeClassification.EventSpecificSpecialization,"Typed event metadata establishes execution-specific scope.");
         if ((@event.Contains(evergreen,StringComparison.Ordinal) || SharesCore(evergreen,@event)) && ScopeWords.Any(@event.Contains))
             return Result(Phase7KnowledgeMergeClassification.EventSpecificSpecialization,"Event authority adds execution-specific timing, location, geometry, or visibility scope.");
         var en=Numeric(evergreen); var ev=Numeric(@event);
@@ -26,7 +28,9 @@ public sealed class Phase7KnowledgeMergeClassifier : IPhase7KnowledgeMergeClassi
         }
         if (IsGeneric(evergreen) && !IsGeneric(@event)) return Result(Phase7KnowledgeMergeClassification.EventMorePrecise,"Event value is more specific than general evergreen authority.");
         if (IsGeneric(@event) && !IsGeneric(evergreen)) return Result(Phase7KnowledgeMergeClassification.EvergreenMorePrecise,"Evergreen value is more specific than generic event data.");
-        return Block("Candidates cannot both be accepted under the same semantic identity and scope.");
+        return new(Phase7KnowledgeMergeClassification.Incomparable,
+            "No typed evidence establishes equivalence, precedence, specialization, or contradiction; human review is required.",
+            ["P7KNOWLEDGE_INCOMPARABLE_REQUIRES_HUMAN_REVIEW"], []);
     }
 
     private static Phase7KnowledgeMergeResult Result(Phase7KnowledgeMergeClassification c,string reason)=>new(c,reason,[],[]);
@@ -34,6 +38,10 @@ public sealed class Phase7KnowledgeMergeClassifier : IPhase7KnowledgeMergeClassi
     private static string Normalize(string value)=>Regex.Replace(value.Trim().ToLowerInvariant(),@"\s+"," ").TrimEnd('.');
     private static bool SharesCore(string a,string b)=>a.Split(' ',StringSplitOptions.RemoveEmptyEntries).Intersect(b.Split(' ',StringSplitOptions.RemoveEmptyEntries)).Count()>=Math.Min(4,a.Split(' ').Length);
     private static bool HasExplicitDifferentScope(Phase7KnowledgeMergeRequest r)=>r.DependencyMetadata.TryGetValue("evergreenScope",out var a)&&r.DependencyMetadata.TryGetValue("eventScope",out var b)&&!string.Equals(a,b,StringComparison.OrdinalIgnoreCase);
+    private static bool HasExecutionScope(Phase7AdapterClaimCandidate candidate) =>
+        !string.IsNullOrWhiteSpace(candidate.ScopeType) || !string.IsNullOrWhiteSpace(candidate.Location) ||
+        candidate.Latitude.HasValue || candidate.Longitude.HasValue || candidate.StartUtc.HasValue ||
+        candidate.EndUtc.HasValue || candidate.ReferenceDate.HasValue;
     private static bool IsGeneric(string value)=>new[]{"general","typically","usually","approximately","varies","may be"}.Any(value.Contains);
     private static (decimal Value,int Decimals)? Numeric(string value){var m=Number.Match(value);if(!m.Success||!decimal.TryParse(m.Value,NumberStyles.Number,CultureInfo.InvariantCulture,out var n))return null;var dot=m.Value.IndexOf('.');return(n,dot<0?0:m.Value.Length-dot-1);}
 }

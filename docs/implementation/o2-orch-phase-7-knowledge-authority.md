@@ -123,3 +123,16 @@ This batch remains limited to deterministic resolution; it does not publish a Kn
 15. **Next-batch readiness.** The deterministic contracts are hardened, but certification remains blocked on full merge completion and executable focused/family/Orion evidence. P7.1A is not frozen.
 
 **Batch verdict:** `P7_1A_KNOWLEDGE_CORE_STILL_INCOMPLETE`
+
+## P7.1A Batch 3 — governed eligibility and non-destructive merge correction
+
+1. **Shared source policy.** `IPhase7SourceEligibilityPolicy` and `Phase7SourceEligibilityPolicy` now classify required, optional, audit-only, and rejected evidence. The policy evaluates governed review/authority states, language, exact claim/entity/field evidence, confidence, disposition, and the human-review requirement for non-authoritative optional evidence.
+2. **Source audit fidelity.** Certified source records retain their original review and authority states instead of collapsing all governed states into the `Reviewed` boolean. Evergreen field support remains derived only from the registered adapter that owns the source-supported section.
+3. **Resolver integration.** Required-claim selection and emitted claim-support evidence use the shared policy. Evidence now includes adapter version, eligibility, human-review and qualification state, and general versus execution-scoped authority.
+4. **Merge correction.** Equivalent claims still union source lineage; precision outcomes select the proven authority; contradiction removes both candidates; specialization retains separate general and execution-scoped claims; scoped incomparable facts retain both; and unscoped incomparable facts are deferred for review rather than silently selecting evergreen.
+5. **Typed scope.** Merge requests and decisions now carry deterministic scope strings assembled from adapter metadata. Typed execution scope is evaluated before prose heuristics.
+6. **Testing added.** `Phase7KnowledgeSourceEligibilityPolicyTests.cs` covers governed certified/verified states, required rejection of reviewed-only sources, rejected/unverified exclusion, and optional human-review behavior.
+7. **Publication status.** The dedicated authority contract, validator, atomic artifact transaction, rollback/recovery matrix, physical readback, committed evaluator, reuse, manifest certification, real Orion publication, and all-family execution remain outstanding.
+8. **Environment evidence.** The .NET SDK remains unavailable in this container, so no current build or test totals are claimed.
+9. **External calls.** Azure OpenAI invocation count: **0**. Azure Speech synthesis invocation count: **0**.
+10. **Readiness and verdict.** P7.1B is not ready and must not begin. `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.

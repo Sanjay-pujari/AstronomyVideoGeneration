@@ -86,7 +86,7 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         var draft = new CertifiedNarrationSource(s.Id.ToString(), s.SourceType, s.SourceName, s.SourceName,
             s.SourceUrl ?? s.Citation ?? "", reviewed, certified, knowledge, claims, domains, language,
             Math.Clamp(s.ConfidenceScore ?? .8m, 0m, 1m), "");
-        draft=draft with { SupportedApprovedFieldPaths=fields,RegistryDiagnostics=invalidFields,Disposition=certified&&reviewed?"CertifiedSupporting":reviewStatus?.Equals("Rejected",StringComparison.OrdinalIgnoreCase)==true?"Rejected":certified?"RejectedReviewState":"Unverified" };
+        draft=draft with { SupportedApprovedFieldPaths=fields,RegistryDiagnostics=invalidFields, ReviewState=reviewStatus ?? "", AuthorityState=certificationStatus ?? "", Disposition=certified&&reviewed?"CertifiedSupporting":reviewStatus?.Equals("Rejected",StringComparison.OrdinalIgnoreCase)==true?"Rejected":certified?"RejectedReviewState":"Unverified" };
         return draft with { Checksum = Phase7Determinism.Hash(draft with { Checksum = "" }) };
     }
     private static CertifiedNarrationSource EvergreenSource(EvergreenKnowledgeSource s, EvergreenAstronomyKnowledgePackage p, string language)
@@ -101,7 +101,7 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         var draft = new CertifiedNarrationSource(s.SourceId, s.SourceType, s.Title, s.Authority, s.Reference,
             accepted, accepted,
             supportedKnowledge, [], s.SupportedSections.Select(CanonicalDomain).Distinct().ToArray(), language, confidence, "");
-        draft = draft with { SupportedApprovedFieldPaths = supportedFields, Disposition = accepted ? "CertifiedSupporting" : "RejectedReviewState" };
+        draft = draft with { SupportedApprovedFieldPaths = supportedFields, ReviewState=s.ReviewStatus, AuthorityState=accepted?"Certified":"", Disposition = accepted ? "CertifiedSupporting" : "RejectedReviewState" };
         return draft with { Checksum = Phase7Determinism.Hash(draft with { Checksum = "" }) };
     }
     private static string ResolveAuthoritativeFamily(string eventType, string category)
