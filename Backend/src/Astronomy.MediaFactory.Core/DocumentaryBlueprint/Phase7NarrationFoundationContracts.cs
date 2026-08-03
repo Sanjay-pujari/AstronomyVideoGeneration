@@ -18,7 +18,11 @@ public sealed record PublishedStoryFrameAuthority(
     string SourcePhase4AggregateId, string SourcePhase4Checksum, string SourceLongChecksum, string SourceShortChecksum,
     string SourcePhase5PublicationId, IReadOnlyList<string> ArtifactPaths,
     IReadOnlyList<string> ManifestEvidence, IReadOnlyList<string> ValidationEvidence,
-    string ContractVersion, IReadOnlyDictionary<string, string> RuntimeCompatibilityEvidence);
+    string ContractVersion, IReadOnlyDictionary<string, string> RuntimeCompatibilityEvidence)
+{
+    public string ProfileId { get; init; } = "";
+    public string ProfileVersion { get; init; } = "";
+}
 public sealed record Phase6CommittedAuthorityRequest(string ExecutionRoot, string ExecutionId, string PlanId, string EventId, string Language);
 public sealed record Phase6CommittedAuthorityEvaluation(bool IsValid, PublishedStoryFrameAuthority? Authority,
     string ReasonCode, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings);
@@ -314,7 +318,12 @@ public sealed record Phase7KnowledgeAdapterDiagnostic(string AdapterId, string A
     IReadOnlyDictionary<string,int> MergeDecisionCounts, int RejectedSourceCount, int UncertifiedSourceCount);
 
 public sealed record Phase7InputAuthorityRequest(string ExecutionRoot, string ExecutionId, string PlanId,
-    string EventId, string Language, string ExpectedProfile, IReadOnlyList<string> ExpectedVariants);
+    string EventId, string Language, string ExpectedProfile, IReadOnlyList<string> ExpectedVariants)
+{
+    public string ExpectedProfileVersion { get; init; } = "";
+    public string EventType { get; init; } = "";
+    public string ContentCategory { get; init; } = "";
+}
 public sealed record Phase7CommittedInputAuthority(PublishedStoryFrameAuthority StoryFrameAuthority,
     string EventFamily, string EventType, string Language, string Profile, string ProfileVersion,
     string SourceEventIntelligenceId, string KnowledgePayloadId, string KnowledgePayloadChecksum,

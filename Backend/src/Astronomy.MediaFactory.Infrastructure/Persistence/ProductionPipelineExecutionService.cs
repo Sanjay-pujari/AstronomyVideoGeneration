@@ -866,7 +866,12 @@ public sealed partial class ProductionPipelineExecutionService(
         }
         var phase4=context.ExecutionContext.PublishedDocumentaryBlueprintAggregate;
         var request=new Phase7InputAuthorityRequest(context.OutputRoot,context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),
-            context.EventId,context.Request.Language,phase4?.ProfileId??"",["Long","Short"]);
+            context.EventId,context.Request.Language,phase4?.ProfileId??"",["Long","Short"])
+        {
+            ExpectedProfileVersion = phase4?.ProfileVersion ?? "",
+            EventType = context.Request.EventType,
+            ContentCategory = context.ExecutionContext.ContentCategory
+        };
         var result=await _phase7KnowledgeService.ExecuteAsync(request,context.OverwriteExisting,cancellationToken);
         var finishedUtc=DateTimeOffset.UtcNow;
         var status=result.IsValid?(result.AlreadyPublished?ProductionPhaseStatus.Skipped:ProductionPhaseStatus.Succeeded):ProductionPhaseStatus.Failed;
@@ -919,7 +924,7 @@ public sealed partial class ProductionPipelineExecutionService(
             ValidationStatus = "Valid", PublicationCommitted = true, CommittedStateValidationPassed = true,
             AlreadyPublished = outcome.Kind == StoryFramePhase6ExecutionKind.Reused,
             ExecutionId = authority.ExecutionId, PlanId = authority.PlanId, EventId = authority.EventId, Language = authority.Language, Profile = authority.Profile,
-            ProfileVersion = authority.AuthorityContractVersion,
+            ProfileVersion = committed.ProfileVersion,
             RequestedVariants = authority.RequestedVariants,
             SourcePhase4AggregateId = committed.AggregateId, SourcePhase4Checksum = committed.AggregateChecksum,
             SourceLongChecksum = committed.LongProjectionChecksum, SourceShortChecksum = committed.ShortProjectionChecksum,
@@ -1291,7 +1296,7 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new Phase6InputAuthorityException(input.ReasonCode, input.Errors);
         var compatibility = _storyFrameRuntimeIdentityProvider.GetCompatibilityContext();
         var request=new StoryFrameIntegrationRequest(identity,identity,context.EventId, context.Request.Language,
-            context.Request.PlannedFormat??context.Request.Category,input.Authority, compatibility.CurrentBuilderType,
+            input.Authority.ProfileId,input.Authority, compatibility.CurrentBuilderType,
             compatibility.CurrentBuilderVersion, compatibility.CurrentIntegrationServiceType, compatibility.CurrentIntegrationServiceVersion);
         cancellationToken.ThrowIfCancellationRequested();
         var root=Path.Combine(context.OutputRoot,"06-story-frames");

@@ -1,10 +1,11 @@
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
 public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvaluator phase6Evaluator,
     IPhase7CertifiedKnowledgeSource knowledgeSource, IFamilyNarrationProfileResolver profileResolver,
-    IPhase7KnowledgeResolver knowledgeResolver) : IPhase7InputAuthorityEvaluator
+    IPhase7KnowledgeResolver knowledgeResolver, ILogger<Phase7InputAuthorityEvaluator> logger) : IPhase7InputAuthorityEvaluator
 {
     private static readonly HashSet<string> Variants = new(["Long","Short"], StringComparer.OrdinalIgnoreCase);
     public async Task<Phase7InputAuthorityEvaluation> EvaluateAsync(Phase7InputAuthorityRequest request, CancellationToken token = default)
@@ -42,10 +43,13 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
         if (!profileResult.IsValid || profileResult.Profile is null)
             return Bad(profileResult.ReasonCode, profileResult.Errors.FirstOrDefault() ?? "Narration profile resolution failed.");
         var profile = profileResult.Profile;
-        if (!string.IsNullOrWhiteSpace(request.ExpectedProfile)
-            && !string.Equals(request.ExpectedProfile, profile.ProfileId, StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(request.ExpectedProfile, authority.Profile, StringComparison.OrdinalIgnoreCase))
-            return Bad("P7INPUT_PROFILE_INVALID", "Expected profile does not match published or family profile authority.");
+        logger.LogInformation("Phase7ProfileIdentityComparison ExpectedProfileId={ExpectedProfileId} ExpectedProfileVersion={ExpectedProfileVersion} ResolvedFamilyProfileId={ResolvedFamilyProfileId} ResolvedFamilyProfileVersion={ResolvedFamilyProfileVersion} PublishedProfileId={PublishedProfileId} PublishedProfileVersion={PublishedProfileVersion} Phase6AuthorityProfileId={Phase6AuthorityProfileId} Phase6AuthorityProfileVersion={Phase6AuthorityProfileVersion} Phase4AuthorityProfileId={Phase4AuthorityProfileId} Phase4AuthorityProfileVersion={Phase4AuthorityProfileVersion} ProductionPipelineRequestEventType={ProductionPipelineRequestEventType} ProductionPipelineRequestContentCategory={ProductionPipelineRequestContentCategory}",
+            request.ExpectedProfile, request.ExpectedProfileVersion, profile.ProfileId, profile.ContractVersion,
+            published.ProfileId, published.ProfileVersion, authority.Profile, published.ProfileVersion,
+            request.ExpectedProfile, request.ExpectedProfileVersion, request.EventType, request.ContentCategory);
+        if (!ProfileIdentityMatches(request.ExpectedProfile, request.ExpectedProfileVersion,
+                published.ProfileId, published.ProfileVersion))
+            return Bad("P7INPUT_PROFILE_INVALID", "Expected profile does not match canonical published profile authority.");
         var knowledge = knowledgeResolver.Resolve(payload, profile);
         if (knowledge.BlockingIssues.Count > 0) return Bad("P7INPUT_KNOWLEDGE_PAYLOAD_INVALID", string.Join("; ", knowledge.BlockingIssues));
         var longFrames = authority.Frames.Where(x => x.Variant.Equals("Long", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SceneNumber).ThenBy(x => x.FrameNumber).ToArray();
@@ -63,6 +67,12 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
             published.RuntimeCompatibilityEvidence, knowledge);
         return new(true, committed, "P7INPUT_VALID", [], p6.Warnings);
     }
+    public static bool ProfileIdentityMatches(string expectedProfileId, string expectedProfileVersion,
+        string publishedProfileId, string publishedProfileVersion) =>
+        !string.IsNullOrWhiteSpace(expectedProfileId)
+        && !string.IsNullOrWhiteSpace(expectedProfileVersion)
+        && string.Equals(expectedProfileId, publishedProfileId, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(expectedProfileVersion, publishedProfileVersion, StringComparison.OrdinalIgnoreCase);
     private static bool SafePath(string path) => !string.IsNullOrWhiteSpace(path) && !Path.IsPathRooted(path) && !path.Contains('\\')
         && !path.Split('/').Any(x => x is "" or "." or "..") && !path.Contains("staging", StringComparison.OrdinalIgnoreCase)
         && !path.Contains("backup", StringComparison.OrdinalIgnoreCase);
