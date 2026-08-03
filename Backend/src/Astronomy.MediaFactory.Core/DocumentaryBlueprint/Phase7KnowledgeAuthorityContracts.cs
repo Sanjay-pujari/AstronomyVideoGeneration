@@ -141,6 +141,16 @@ public interface IPhase7KnowledgeAuthorityValidator
         Phase7KnowledgeDiagnostics diagnostics, Phase7KnowledgeValidationMode mode = Phase7KnowledgeValidationMode.InMemoryCandidate,
         Phase7KnowledgeCompleteSetReadback? readback = null);
 }
+public sealed record Phase7KnowledgeDiagnosticsReconciliation(bool IsValid,
+    IReadOnlyList<string> Differences, IReadOnlyDictionary<string,string> ExpectedValues,
+    IReadOnlyDictionary<string,string> ActualValues);
+public interface IPhase7KnowledgeDiagnosticsReconciler
+{
+    Phase7KnowledgeDiagnosticsReconciliation Reconcile(Phase7KnowledgeAuthority authority,
+        ResolvedNarrationKnowledge resolution, Phase7KnowledgeDiagnostics diagnostics,
+        Phase7LocationTimeSafetyResult locationTime, Phase7CulturalKnowledgeSafetyResult cultural,
+        Phase7AstrologySeparationResult astrology);
+}
 public interface IPhase7KnowledgeFileSystem
 {
     bool FileExists(string path); bool DirectoryExists(string path); void CreateDirectory(string path);
@@ -175,6 +185,8 @@ public sealed record Phase7KnowledgeTransactionPaths(string StableKnowledgeDirec
     string BackupManifestPath, string StablePublicationEvidencePath, string CandidateManifestPath,
     string CandidatePublicationEvidencePath, string BackupPublicationEvidencePath)
 {
+    public string StagingRoot { get; init; } = "";
+    public string BackupRoot { get; init; } = "";
     public static Phase7KnowledgeTransactionPaths Create(string executionRoot, string transactionId)
     {
         var root=Path.GetFullPath(executionRoot); var tx=$"phase-07-knowledge-{transactionId}";
@@ -184,7 +196,8 @@ public sealed record Phase7KnowledgeTransactionPaths(string StableKnowledgeDirec
             Path.Combine(root,$".{tx}-transaction.json"),Path.Combine(root,$".{tx}-backup","knowledge"),
             Path.Combine(backup,"validation","phase-07-knowledge-validation.json"),Path.Combine(backup,"manifest.json"),
             Path.Combine(root,".phase-07-knowledge-publication.json"),Path.Combine(staging,"manifest.json"),
-            Path.Combine(staging,"publication.json"),Path.Combine(backup,"publication.json"));
+            Path.Combine(staging,"publication.json"),Path.Combine(backup,"publication.json"))
+            { StagingRoot=staging, BackupRoot=backup };
     }
 }
 public enum Phase7KnowledgeTransactionState { Created, CandidateWritten, CandidateReadbackPassed, CandidateValidated,
@@ -208,6 +221,8 @@ public sealed record Phase7KnowledgeTransactionMarker(string ContractVersion, st
     public string PreviousValidationPhysicalSha256 { get; init; } = "";
     public string PreviousManifestPhysicalSha256 { get; init; } = "";
     public string PreviousPublicationEvidencePhysicalSha256 { get; init; } = "";
+    public string StagingRoot { get; init; } = "";
+    public string BackupRoot { get; init; } = "";
 }
 
 public sealed record Phase7KnowledgeCommittedStateRequest(string ExecutionRoot, string ExecutionId,

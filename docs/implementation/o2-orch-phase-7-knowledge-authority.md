@@ -330,3 +330,62 @@ all unexecuted regression and Orion certification requirements. P7.1B is not rea
 and must not begin.
 
 Final verdict: `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A FINAL RUNTIME CERTIFICATION
+
+This final-close pass implemented the remaining production seams without starting
+P7.1B. It added an independent, all-field diagnostics reconciler; family-profile
+location/time, cultural, and astrology policies; truthful and separate source and
+merge selection reasons; the `GovernedQualification` fallback and deterministic
+generic-reason warning; and typed staging/backup ownership roots. The validator,
+transaction coordinator, and committed-state path now recompute governance rather
+than trusting stored safety or reconciliation booleans.
+
+The RC2 production pipeline now dispatches Phase 7 to `IPhase7KnowledgeService`
+exactly once, forwards `overwriteExisting`, maps committed/reused/failed outcomes,
+and does not dispatch the legacy narration/foundation action. Phase 7 owns only the
+three Knowledge Authority artifacts plus its validation, manifest, and publication
+evidence. The manifest updater continues the frozen current-state rule: replace the
+matching Phase/component/execution/plan/event/language identity while preserving
+all unrelated entries; reuse performs no write. Validation hashes and comparisons
+continue to use `Phase7KnowledgeValidationCanonicalizer` exclusively.
+
+Files added in this pass:
+
+* `Backend/src/Astronomy.MediaFactory.Infrastructure/DocumentaryBlueprint/Phase7KnowledgeGovernancePolicies.cs`.
+
+Files modified in this pass:
+
+* `Backend/src/Astronomy.MediaFactory.Core/ContentPlanBatchGeneration.cs`;
+* `Backend/src/Astronomy.MediaFactory.Core/DocumentaryBlueprint/Phase7KnowledgeAuthorityContracts.cs`;
+* `Backend/src/Astronomy.MediaFactory.Core/DocumentaryBlueprint/Phase7NarrationFoundationContracts.cs`;
+* `Backend/src/Astronomy.MediaFactory.Infrastructure/DocumentaryBlueprint/Phase7KnowledgeAuthorityValidator.cs`;
+* `Backend/src/Astronomy.MediaFactory.Infrastructure/DocumentaryBlueprint/Phase7KnowledgePublicationInfrastructure.cs`;
+* `Backend/src/Astronomy.MediaFactory.Infrastructure/DocumentaryBlueprint/Phase7KnowledgeResolver.cs`;
+* `Backend/src/Astronomy.MediaFactory.Infrastructure/Extensions/ServiceCollectionExtensions.cs`;
+* `Backend/src/Astronomy.MediaFactory.Infrastructure/Persistence/ProductionPipelineExecutionService.cs`;
+* this implementation record.
+
+No new test file was added in this bounded pass. The exact executed evidence is:
+
+* restore: succeeded with two package warnings (an unnecessary package reference
+  and a known high-severity vulnerability in `SQLitePCLRaw.lib.e_sqlite3` 2.1.11);
+* solution build: succeeded, 0 errors and 249 warnings, duration 2:22.91;
+* focused `Phase7Knowledge` tests: total 35, passed 35, failed 0, skipped 0,
+  duration 100 ms.
+* full name-filtered Phase 7 tests: total 110, passed 96, failed 14, skipped 0,
+  duration 3 s. Failures remain in legacy semantic/narration characterization and
+  aggregation tests, so this is not a certified Phase 7 result.
+
+The StoryFrame suite, Phase 4–6 regression suites,
+production-pipeline suite, RC2 Phase 1–6 certification suite, and complete test
+project were not executed. Consequently no totals for those suites are claimed.
+The real Orion forced-publication and no-write-reuse endpoint calls were also not
+executed; artifact hashes/sizes, committed validation, manifest and publication
+evidence, reuse response, and six-file byte identity therefore remain uncertified.
+No Azure OpenAI call and no Azure Speech synthesis call was made during this pass.
+
+Remaining failures are the unexecuted required test files/suites, transaction fault
+matrix, and Orion publication/reuse proof. P7.1B is not ready and must not begin.
+The only defensible final verdict is
+`P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.

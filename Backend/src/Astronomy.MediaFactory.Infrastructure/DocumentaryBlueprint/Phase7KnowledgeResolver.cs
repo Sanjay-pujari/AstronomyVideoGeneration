@@ -72,7 +72,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             var disposition=candidate.RequiresHumanReview ? Phase7ClaimDisposition.HumanReview
                 : mandatoryNames.Contains(domain) ? Phase7ClaimDisposition.Required
                 : optionalNames.Contains(domain) ? Phase7ClaimDisposition.Optional : Phase7ClaimDisposition.Deferred;
-            return ResolveClaim(candidate, disposition, payload, issues);
+            return ResolveClaim(candidate, disposition, payload, issues, warnings);
         }).OrderBy(x=>x.Claim.ClaimId,StringComparer.Ordinal).ToArray();
         var claims=resolvedClaims.Select(x=>x.Claim).ToArray();
         var claimIdsBySemantic = claims.ToDictionary(x => x.SemanticIdentity, x => x.ClaimId, StringComparer.Ordinal);
@@ -103,7 +103,24 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             warnings.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),issues.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),"");
         var all=sourcePool;
         // Evidence is materialized from the exact selection used to build SourceIds.
-        var supportEvidence = resolvedClaims.SelectMany(x=>x.Evidence).OrderBy(x => x.ClaimId, StringComparer.Ordinal).ThenBy(x => x.SourceId, StringComparer.Ordinal).ToArray();
+        var supportEvidence = resolvedClaims.SelectMany(x=>x.Evidence).Select(e=>
+        {
+            var decision=decisions.SingleOrDefault(d=>d.SelectedClaimIds.Contains(e.ClaimId));
+            if(decision is null)return e with{SourceSelectionReason=e.SelectionReason,MergeSelectionReason="NoMerge"};
+            var decisionId="p7merge-"+Phase7Determinism.Hash(new{decision.SemanticIdentity,classification=decision.Classification.ToString(),decision.SelectedClaimIds})[..24];
+            var reason=decision.Classification switch
+            {
+                Phase7KnowledgeMergeClassification.Equivalent=>"EquivalentCombinedEvidence",
+                Phase7KnowledgeMergeClassification.EventSpecificSpecialization when e.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)=>"SpecializationGeneralEvidence",
+                Phase7KnowledgeMergeClassification.EventSpecificSpecialization=>"SpecializationExecutionEvidence",
+                Phase7KnowledgeMergeClassification.EventMorePrecise=>"EventMorePreciseSelected",
+                Phase7KnowledgeMergeClassification.EvergreenMorePrecise=>"EvergreenMorePreciseSelected",
+                Phase7KnowledgeMergeClassification.Incomparable when e.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)=>"ScopedIncomparableGeneral",
+                Phase7KnowledgeMergeClassification.Incomparable=>"ScopedIncomparableExecution",
+                _=>"NoMerge"
+            };
+            return e with{SourceSelectionReason=e.SelectionReason,MergeSelectionReason=reason,MergeDecisionId=decisionId};
+        }).OrderBy(x => x.ClaimId, StringComparer.Ordinal).ThenBy(x => x.SourceId, StringComparer.Ordinal).ToArray();
         adapterDiagnostics = adapterDiagnostics.Select(d =>
         {
             var adapterClaims = claims.Where(c => merged.TryGetValue(c.SemanticIdentity, out var candidate)
@@ -143,7 +160,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         catch(JsonException){issues.Add($"P7KNOWLEDGE_{origin.ToString().ToUpperInvariant()}_JSON_INVALID");}
     }
     private sealed record ResolvedClaim(CertifiedNarrationClaim Claim,IReadOnlyList<Phase7ClaimSupportEvidence> Evidence);
-    private ResolvedClaim ResolveClaim(Phase7AdapterClaimCandidate c,Phase7ClaimDisposition disposition,CertifiedKnowledgePayload p,List<string> issues)
+    private ResolvedClaim ResolveClaim(Phase7AdapterClaimCandidate c,Phase7ClaimDisposition disposition,CertifiedKnowledgePayload p,List<string> issues,List<string> warnings)
     {
         var sourcePool=Phase7KnowledgeSourcePool.Get(p);
         var required=disposition==Phase7ClaimDisposition.Required;
@@ -166,7 +183,8 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         var evidence=chosen.Select(x=>new Phase7ClaimSupportEvidence(id,c.SemanticIdentity,x.Source.SourceId,c.KnowledgeId,
             Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath),x.Result.Precision,c.AdapterId,c.Origin,SelectionReason(disposition,x.Result.Eligibility),null,claim.Confidence)
             { AdapterVersion=c.AdapterVersion,SourceEligibility=x.Result.Eligibility,RequiresHumanReview=disposition==Phase7ClaimDisposition.HumanReview,
-              QualificationReason=c.RequiresQualification?QualificationReasons(c,claim):"",AuthorityScope=c.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)?"GeneralAuthority":c.SemanticIdentity.EndsWith(".execution",StringComparison.Ordinal)?"ExecutionScopedAuthority":c.Origin.ToString() }).ToArray();
+              QualificationReason=c.RequiresQualification?QualificationReasons(c,claim,warnings):"",AuthorityScope=c.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)?"GeneralAuthority":c.SemanticIdentity.EndsWith(".execution",StringComparison.Ordinal)?"ExecutionScopedAuthority":c.Origin.ToString(),
+              SourceSelectionReason=SelectionReason(disposition,x.Result.Eligibility) }).ToArray();
         return new(claim,evidence);
     }
     private static string SelectionReason(Phase7ClaimDisposition disposition,Phase7SourceEligibility eligibility)=>
@@ -177,7 +195,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             Phase7ClaimDisposition.Deferred=>"DeferredAuditEvidence",
             _=>"CertifiedOptionalEvidence"
         };
-    private static string QualificationReasons(Phase7AdapterClaimCandidate candidate,CertifiedNarrationClaim claim)
+    private static string QualificationReasons(Phase7AdapterClaimCandidate candidate,CertifiedNarrationClaim claim,List<string> warnings)
     {
         var reasons=new SortedSet<string>(StringComparer.Ordinal);
         if(candidate.Approximate==true||claim.IsApproximate)reasons.Add("ApproximationQualification");
@@ -187,7 +205,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         if(claim.IsAstrologyRelated)reasons.Add("AstrologyClarificationQualification");
         if(candidate.Uncertainty.HasValue||claim.Uncertain)reasons.Add("UncertaintyQualification");
         if(claim.RequiresHumanReview)reasons.Add("HumanReviewQualification");
-        if(reasons.Count==0)reasons.Add("UncertaintyQualification");
+        if(reasons.Count==0){reasons.Add("GovernedQualification");warnings.Add($"P7KNOWLEDGE_QUALIFICATION_REASON_GENERIC:{candidate.SemanticIdentity}");}
         return string.Join('|',reasons);
     }
     private static bool IsEventCertified(string value)=>value.Equals("Certified",StringComparison.OrdinalIgnoreCase)||value.Equals("Verified",StringComparison.OrdinalIgnoreCase);
