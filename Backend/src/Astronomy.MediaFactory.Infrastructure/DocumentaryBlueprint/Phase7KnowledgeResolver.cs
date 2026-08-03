@@ -17,12 +17,12 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
     public ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile)
     {
         var issues = new List<string>(); var warnings = new List<string>(payload.Warnings.Concat(payload.AllResolvedSources.SelectMany(x => x.RegistryDiagnostics))); var candidates = new List<Phase7AdapterClaimCandidate>();
-        var adapterDiagnostics=new List<Phase7KnowledgeAdapterDiagnostic>(); var unknownSections=new List<string>(); var unknownProperties=new List<string>();
+        var adapterDiagnostics=new List<Phase7KnowledgeAdapterDiagnostic>(); var unknownSections=new List<string>(); var unknownProperties=new List<string>(); var entities=new List<Phase7KnowledgeEntity>();
         if (!IsEventCertified(payload.VerificationStatus)) issues.Add("P7KNOWLEDGE_EVENT_NOT_CERTIFIED");
         if (!IsEvergreenCertified(payload.CertificationStatus)) issues.Add("P7KNOWLEDGE_EVERGREEN_NOT_CERTIFIED");
         if (payload.ReviewedSources.Count == 0 || payload.ReviewedSources.Any(x=>!x.Certified)) issues.Add("P7KNOWLEDGE_SOURCE_REGISTRY_NOT_CERTIFIED");
-        Read(payload.EvergreenJson, Phase7KnowledgeOrigin.Evergreen, payload.EvergreenPayloadId ?? payload.PayloadId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties);
-        Read(payload.RawDataJson, Phase7KnowledgeOrigin.Event, payload.EventId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties);
+        Read(payload.EvergreenJson, Phase7KnowledgeOrigin.Evergreen, payload.EvergreenPayloadId ?? payload.PayloadId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties,entities);
+        Read(payload.RawDataJson, Phase7KnowledgeOrigin.Event, payload.EventId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties,entities);
 
         var merged = new Dictionary<string,Phase7AdapterClaimCandidate>(StringComparer.Ordinal);
         var decisions=new List<Phase7KnowledgeMergeDecision>();
@@ -118,11 +118,11 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         }).ToList();
         result=result with { AdapterDiagnostics=adapterDiagnostics,MergeDecisions=decisions,UnknownSections=unknownSections.Distinct().Order().ToArray(),UnknownProperties=unknownProperties.Distinct().Order().ToArray(),
             SourceAuditSummary=new(all.Count,payload.RejectedSources.Count,payload.UnverifiedSources.Count,candidates.Count(x=>x.SourceIds.Count==0)),
-            ClaimSupportEvidence=supportEvidence };
+            ClaimSupportEvidence=supportEvidence,KnowledgeEntities=entities.GroupBy(x=>x.KnowledgeId,StringComparer.Ordinal).Select(x=>x.First()).OrderBy(x=>x.KnowledgeId,StringComparer.Ordinal).ToArray() };
         return result with { DeterministicChecksum=Phase7Determinism.Hash(result with { DeterministicChecksum="" }) };
     }
 
-    private void Read(string? json,Phase7KnowledgeOrigin origin,string id,CertifiedKnowledgePayload payload,List<Phase7AdapterClaimCandidate> output,List<string> warnings,List<string> issues,List<Phase7KnowledgeAdapterDiagnostic> diagnostics,List<string> unknownSections,List<string> unknownProperties)
+    private void Read(string? json,Phase7KnowledgeOrigin origin,string id,CertifiedKnowledgePayload payload,List<Phase7AdapterClaimCandidate> output,List<string> warnings,List<string> issues,List<Phase7KnowledgeAdapterDiagnostic> diagnostics,List<string> unknownSections,List<string> unknownProperties,List<Phase7KnowledgeEntity> entities)
     {
         if(string.IsNullOrWhiteSpace(json)) return;
         try
@@ -134,7 +134,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
                 var adapter=registry.Find(section.Name);
                 if(adapter is null) { warnings.Add($"P7KNOWLEDGE_UNKNOWN_SECTION:{origin}:{section.Name}"); unknownSections.Add(section.Name); continue; }
                 var context=new Phase7KnowledgeSectionContext(origin,id,payload.EvergreenPayloadId??payload.PayloadId,payload.PayloadChecksum,payload.Language,section.Name,section.Value,payload.ReviewedSources,payload.EventFamily,payload.EventType);
-                var extracted=adapter.Extract(context); output.AddRange(extracted.Claims); warnings.AddRange(extracted.Warnings); issues.AddRange(extracted.BlockingIssues); unknownProperties.AddRange(extracted.UnknownProperties);
+                var extracted=adapter.Extract(context); output.AddRange(extracted.Claims); entities.AddRange(extracted.KnowledgeEntities); warnings.AddRange(extracted.Warnings); issues.AddRange(extracted.BlockingIssues); unknownProperties.AddRange(extracted.UnknownProperties);
                 diagnostics.Add(new(adapter.AdapterId,adapter.AdapterVersion,section.Name,origin,extracted.Claims.Count+extracted.UnknownProperties.Count,extracted.Claims.Count,extracted.UnknownProperties.Count,extracted.UnknownProperties,0,0,0,0,extracted.Claims.Count(x=>x.SourceIds.Count==0),new Dictionary<string,int>(),payload.RejectedSources.Count,payload.UnverifiedSources.Count));
             }
         }

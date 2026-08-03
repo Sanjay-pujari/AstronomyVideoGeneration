@@ -94,6 +94,7 @@ public sealed record ResolvedNarrationKnowledge(string PayloadId, string Payload
     public IReadOnlyList<string> UnknownSections { get; init; } = [];
     public IReadOnlyList<string> UnknownProperties { get; init; } = [];
     public IReadOnlyList<Phase7ClaimSupportEvidence> ClaimSupportEvidence { get; init; } = [];
+    public IReadOnlyList<Phase7KnowledgeEntity> KnowledgeEntities { get; init; } = [];
 }
 public sealed record CertifiedKnowledgePayload(string PayloadId, string EventId, string EventFamily, string EventType,
     string Language, string RawDataJson, string? MetadataJson, string? EvergreenJson,

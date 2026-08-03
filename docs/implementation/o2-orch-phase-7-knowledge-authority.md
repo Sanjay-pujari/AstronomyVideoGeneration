@@ -151,3 +151,39 @@ This batch remains limited to deterministic resolution; it does not publish a Kn
 10. **External calls.** Azure OpenAI invocation count: **0**. Azure Speech synthesis invocation count: **0**.
 11. **P7.1B readiness.** Not ready. P7.1A must not be frozen until the outstanding publication infrastructure and full regression matrix pass.
 12. **Final verdict.** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A Batch 5 — publication infrastructure implementation
+
+1. **Dedicated contract version.** `Phase7KnowledgeContract.Version` is `rc2-phase7-knowledge.v1` and is independent of the foundation contract.
+2. **Knowledge Authority contract.** The immutable authority binds execution, Phase 4–6 lineage, event/evergreen payloads, registry, domains, entities, claims, evidence, diagnostics, merge results, warnings, compatibility evidence, and a semantic checksum.
+3. **Published authority contract.** Only the committed evaluator constructs `PublishedPhase7KnowledgeAuthority`, after byte readback and external publication-evidence validation.
+4. **Artifact set.** Publication owns exactly the three files below `07-narration/knowledge` plus `validation/phase-07-knowledge-validation.json`.
+5. **Diagnostics.** Counts and flags are derived from the resolved claims, evidence, adapters, sources, merge decisions, and issues.
+6. **Validation gates.** The validator implements the named input, certification, identity, provenance, merge, safety, reconciliation, readback, lineage, and compatibility gates with P7 Knowledge reason codes.
+7. **Inventory design.** The embedded inventory has exactly three entries. It deliberately excludes the validation document.
+8. **Physical readback.** Candidate and committed readback deserialize typed contracts and verify safe paths, identities, semantic checksums, SHA-256 hashes, and byte sizes.
+9. **Transaction paths.** `Phase7KnowledgeTransactionPaths` supplies deterministic stable, staging, backup, validation, manifest, and marker locations under the execution root.
+10. **Transaction state machine.** The typed marker declares all states from `Created` through `Completed`, including rollback states.
+11. **Rollback.** The coordinator retains the old knowledge directory and validation until committed evaluation succeeds and restores both after a post-backup failure.
+12. **Recovery.** Recovery only removes exact knowledge staging directories; complete marker-state recovery and restoration verification still require the requested fault-matrix tests.
+13. **Manifest behavior.** External publication evidence certifies the validation hash without self-reference. Governing-manifest history append/preservation is not yet implemented.
+14. **Committed evaluator.** The evaluator reads the complete set, checks expected identity and authority checksum, validates the three-entry inventory, external validation hash, and physical readback, and is the only publisher of the typed committed authority.
+15. **Reuse.** Valid committed state is evaluated before input/knowledge resolution and returns `P7KNOWLEDGE_REUSE_VALID` without writes.
+16. **DI registration.** Builder, validator, filesystem, readback, execution lock, recovery, coordinator, committed evaluator, and service are registered once.
+17. **Orion execution.** Not executed because the required .NET 10 SDK is absent.
+18. **All-family result.** Not executed for the same environment limitation.
+19. **Artifact paths.** `07-narration/knowledge/knowledge-authority.json`, `knowledge-resolution-report.json`, `knowledge-diagnostics.json`, and `validation/phase-07-knowledge-validation.json`.
+20. **Physical hashes and sizes.** No real committed run was performed, so none are claimed.
+21. **Validation summary.** No runtime validation result is claimed.
+22. **Files added.** Knowledge contracts, builder, validator, and publication infrastructure.
+23. **Files modified.** The resolved contract now carries extracted entities, the resolver preserves them, and DI includes the knowledge publication services.
+24. **Tests added.** None in this batch; the complete required fault-injection suite remains outstanding.
+25. **Focused test totals.** Unavailable; `dotnet` is not installed.
+26. **Full Phase 7 totals.** Unavailable; no totals are fabricated.
+27. **Phase 4–6 regression totals.** Unavailable; no totals are fabricated.
+28. **Complete-project totals.** Unavailable; no totals are fabricated.
+29. **Azure OpenAI invocation count.** **0**.
+30. **Azure Speech invocation count.** **0**.
+31. **Remaining failures.** Governing-manifest integration, exhaustive rollback/recovery, the requested test files, real Orion certification, all-family certification, and full regressions remain outstanding.
+32. **P7.1B readiness.** Not ready; P7.1B must not consume this authority until the remaining certification work passes.
+33. **Final verdict.** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
