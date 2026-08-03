@@ -23,6 +23,9 @@ public sealed class Phase7FoundationPhysicalReadback
 
     public async Task<Phase7FoundationCompleteSetReadback> ReadAsync(string executionRoot,
         Phase7CommittedInputAuthority expectedIdentity, CancellationToken token = default)
+        =>await ReadAsync(executionRoot,expectedIdentity,null,token);
+    public async Task<Phase7FoundationCompleteSetReadback> ReadAsync(string executionRoot,
+        Phase7CommittedInputAuthority expectedIdentity, Phase7FoundationArtifactInventory? expectedInventory, CancellationToken token = default)
     {
         var root=Path.GetFullPath(executionRoot); var evidence=new List<Phase7FoundationPhysicalReadbackEvidence>();
         foreach(var item in Expected)
@@ -41,10 +44,18 @@ public sealed class Phase7FoundationPhysicalReadback
             if(value is not null&&!identity)errors.Add("P7READBACK_IDENTITY_MISMATCH");
             if(value is not null&&!semantic)errors.Add("P7READBACK_SEMANTIC_CHECKSUM_MISMATCH");
             if(value is not null&&!lineage)errors.Add("P7READBACK_LINEAGE_MISMATCH");
+            var expectedArtifact=expectedInventory?.Artifacts.SingleOrDefault(x=>x.RelativePath==item.Path);
+            if(expectedInventory is null) errors.Add("P7READBACK_EXPECTED_INVENTORY_MISSING");
+            else if(expectedArtifact is null) errors.Add("P7READBACK_EXPECTED_ARTIFACT_MISSING");
+            else
+            {
+                if(!string.Equals(hash,expectedArtifact.PhysicalSha256,StringComparison.OrdinalIgnoreCase))errors.Add("P7READBACK_PHYSICAL_HASH_MISMATCH");
+                if(size!=expectedArtifact.SizeBytes)errors.Add("P7READBACK_SIZE_MISMATCH");
+            }
             evidence.Add(new(item.Path,exists,size,hash,value is not null,item.Contract.Name,Phase7FoundationContract.Version,identity,semantic,lineage,safe,errors));
         }
         var allErrors=evidence.SelectMany(x=>x.Errors.Select(e=>$"{x.ArtifactPath}:{e}")).ToArray();
-        return new(evidence,allErrors.Length==0&&evidence.Count==Expected.Length,allErrors);
+        return new(evidence,allErrors.Length==0&&evidence.Count==Expected.Length,allErrors){ExpectedInventory=expectedInventory};
     }
     private static bool Identity(object value,Phase7CommittedInputAuthority expected)=>value switch
     {

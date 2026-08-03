@@ -9,14 +9,18 @@ public sealed class Phase7FoundationValidator : IPhase7FoundationValidator
     private static readonly Regex Unsafe = new(@"Global's sky|\b\d{1,2}:\d{2}\s*(AM|PM)?\s*India Standard Time\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     public Phase7FoundationValidation Validate(Phase7CommittedInputAuthority input, IReadOnlyList<SceneKnowledgePacket> longPackets,
         IReadOnlyList<SceneKnowledgePacket> shortPackets, VariantNarrationPlan longPlan, VariantNarrationPlan shortPlan, IReadOnlyList<string> paths)
-        => ValidateCore(input,longPackets,shortPackets,longPlan,shortPlan,paths,null);
+        => ValidateCore(input,longPackets,shortPackets,longPlan,shortPlan,paths,Phase7FoundationValidationMode.InMemoryCandidate,null);
     public Phase7FoundationValidation Validate(Phase7CommittedInputAuthority input, IReadOnlyList<SceneKnowledgePacket> longPackets,
         IReadOnlyList<SceneKnowledgePacket> shortPackets, VariantNarrationPlan longPlan, VariantNarrationPlan shortPlan, IReadOnlyList<string> paths,
         Phase7FoundationCompleteSetReadback physicalReadback)
-        => ValidateCore(input,longPackets,shortPackets,longPlan,shortPlan,paths,physicalReadback);
+        => ValidateCore(input,longPackets,shortPackets,longPlan,shortPlan,paths,Phase7FoundationValidationMode.StagedPhysical,physicalReadback);
+    public Phase7FoundationValidation Validate(Phase7CommittedInputAuthority input,IReadOnlyList<SceneKnowledgePacket> longPackets,
+        IReadOnlyList<SceneKnowledgePacket> shortPackets,VariantNarrationPlan longPlan,VariantNarrationPlan shortPlan,
+        IReadOnlyList<string> paths,Phase7FoundationValidationMode mode,Phase7FoundationCompleteSetReadback? physicalReadback=null)
+        =>ValidateCore(input,longPackets,shortPackets,longPlan,shortPlan,paths,mode,physicalReadback);
     private static Phase7FoundationValidation ValidateCore(Phase7CommittedInputAuthority input, IReadOnlyList<SceneKnowledgePacket> longPackets,
         IReadOnlyList<SceneKnowledgePacket> shortPackets, VariantNarrationPlan longPlan, VariantNarrationPlan shortPlan, IReadOnlyList<string> paths,
-        Phase7FoundationCompleteSetReadback? physicalReadback)
+        Phase7FoundationValidationMode mode, Phase7FoundationCompleteSetReadback? physicalReadback)
     {
         var gates = new List<Phase7FoundationValidationGate>();
         Add("CommittedInputGate", input.StoryFrameAuthority is not null, "Committed Phase 6 authority is absent.");
@@ -27,16 +31,21 @@ public sealed class Phase7FoundationValidator : IPhase7FoundationValidator
         Add("VariantGate", longPackets.All(x=>x.Variant=="Long") && shortPackets.All(x=>x.Variant=="Short"), "Packet variants are invalid.");
         Add("ScenePacketCoverageGate", Coverage(input.LongStoryFrames,longPackets) && Coverage(input.ShortStoryFrames,shortPackets), "Story Frame packet coverage is not exactly one-to-one.");
         Add("ScenePacketOrderGate", Ordered(longPackets) && Ordered(shortPackets), "Packet order is not canonical.");
-        var claims = longPackets.Concat(shortPackets).SelectMany(x=>x.RequiredClaims).ToArray();
+        var packets=longPackets.Concat(shortPackets).ToArray();
+        var claims = packets.SelectMany(x=>x.RequiredClaims).ToArray();
         Add("SourceProvenanceGate", claims.All(x=>x.ProvenancePrecision is "Exact" or "ExactClaim" or "ExactKnowledgeEntity" or "ExactApprovedField"), "A required claim lacks exact source provenance.");
         Add("CanonicalDomainGate", input.Knowledge.Domains.All(x=>NarrationKnowledgeDomains.TryParse(x.Domain,out _)), "A non-canonical knowledge domain exists.");
         Add("MandatoryDomainGate", input.FamilyProfile.MandatoryKnowledgeDomains.All(m=>input.Knowledge.Domains.Any(d=>d.Domain==m&&d.Status==KnowledgeDomainStatus.Available)), "A mandatory family domain is missing.");
         Add("ClaimGroundingGate", claims.All(x=>!string.IsNullOrWhiteSpace(x.ClaimId)), "A ClaimId is blank.");
-        var uniqueClaims=claims.DistinctBy(x=>x.ClaimId).ToArray();
-        Add("ClaimIdentityGate", claims.Select(x=>x.ClaimId).Distinct(StringComparer.Ordinal).Count()==claims.Length
-            && claims.All(x=>!string.IsNullOrWhiteSpace(x.SemanticIdentity))
-            && uniqueClaims.Select(x=>x.SemanticIdentity).Distinct(StringComparer.Ordinal).Count()==uniqueClaims.Length
-            && uniqueClaims.All(x=>x.Checksum==Phase7Determinism.Hash(x with { Checksum="" })), "A claim identity is blank, duplicated, or has an invalid checksum.");
+        var allClaims=packets.SelectMany(x=>x.RequiredClaims.Concat(x.OptionalClaims).Concat(x.DeferredClaims)).ToArray();
+        var byId=allClaims.GroupBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray();
+        var canonical=byId.ToDictionary(g=>g.Key,g=>g.First(),StringComparer.Ordinal);
+        var insideValid=packets.All(p=>Distinct(p.RequiredClaims)&&Distinct(p.OptionalClaims)&&Distinct(p.DeferredClaims)
+            && !p.RequiredClaims.Select(x=>x.ClaimId).Intersect(p.OptionalClaims.Select(x=>x.ClaimId),StringComparer.Ordinal).Any());
+        var reuseValid=byId.All(g=>g.All(x=>CanonicalEqual(g.First(),x)))
+            && canonical.Values.GroupBy(x=>x.SemanticIdentity,StringComparer.Ordinal).All(g=>g.Select(x=>x.ClaimId).Distinct(StringComparer.Ordinal).Count()==1);
+        Add("ClaimIdentityGate",insideValid&&reuseValid&&allClaims.All(x=>!string.IsNullOrWhiteSpace(x.SemanticIdentity))
+            && canonical.Values.All(x=>x.Checksum==Phase7Determinism.Hash(x with { Checksum="" })), "Claim reuse is inconsistent, duplicated inside a packet, or has an invalid checksum.");
         Add("ConfidenceGate", claims.All(x=>x.Confidence is >= 0m and <= 1m && (x.Confidence>=.8m||x.RequiresHumanReview)), "Claim confidence is invalid or unqualified.");
         Add("ClaimSourceGate", claims.All(x=>x.SourceIds.Count>0 && x.SourceIds.All(s=>!string.IsNullOrWhiteSpace(s))), "A required factual claim has no source.");
         Add("PlaceholderResolutionGate", longPackets.Concat(shortPackets).All(x=>!x.BlockingIssues.Any(i=>i.Contains("placeholder",StringComparison.OrdinalIgnoreCase))), "A blocking placeholder remains unresolved.");
@@ -52,16 +61,19 @@ public sealed class Phase7FoundationValidator : IPhase7FoundationValidator
         Add("LongShortIndependenceGate", !ReferenceEquals(longPlan.Scenes,shortPlan.Scenes) && !longPackets.Select(x=>x.PacketId).Intersect(shortPackets.Select(x=>x.PacketId)).Any(), "Long and Short plans are dependent.");
         Add("ChecksumGate", ValidChecksums(longPackets,shortPackets,longPlan,shortPlan), "A deterministic checksum is invalid.");
         Add("ArtifactCompleteSetGate", paths.Order(StringComparer.Ordinal).SequenceEqual(CompleteSet.Order(StringComparer.Ordinal)), "The P7.1 artifact complete set is incomplete or contains extras.");
-        Add("PhysicalReadbackGate", physicalReadback?.IsValid ?? paths.Count==CompleteSet.Length,
+        Add("PhysicalReadbackGate", mode!=Phase7FoundationValidationMode.InMemoryCandidate && physicalReadback is { IsValid:true },
             "Every artifact must have typed physical readback evidence for existence, size, JSON contract, identity, checksum, lineage, and path safety.");
         Add("ArtifactPathGate", paths.All(Safe), "An artifact path is unsafe.");
         var errors = gates.SelectMany(x=>x.Errors).ToArray();
         var code = errors.Length == 0 ? "P7FOUNDATION_VALID" : Reason(gates.First(x=>!x.Passed).Name);
-        var draft = new Phase7FoundationValidation(errors.Length==0,code,gates,errors,"");
+        var draft = new Phase7FoundationValidation(errors.Length==0,code,gates,errors,"") { Mode=mode,ArtifactInventory=physicalReadback?.ExpectedInventory };
         return draft with { DeterministicChecksum=Phase7Determinism.Hash(draft with { DeterministicChecksum="" }) };
 
         void Add(string name,bool passed,string error)=>gates.Add(new(name,passed,passed?[]:[error]));
     }
+    private static bool Distinct(IEnumerable<CertifiedNarrationClaim> claims){var a=claims.Select(x=>x.ClaimId).ToArray();return a.Distinct(StringComparer.Ordinal).Count()==a.Length;}
+    private static bool CanonicalEqual(CertifiedNarrationClaim a,CertifiedNarrationClaim b)=>a.SemanticIdentity==b.SemanticIdentity&&a.Checksum==b.Checksum&&a.Text==b.Text
+        && a.SourceIds.Order().SequenceEqual(b.SourceIds.Order())&&a.KnowledgeReferenceIds.Order().SequenceEqual(b.KnowledgeReferenceIds.Order());
     private static bool Coverage(IReadOnlyList<StoryFrameAuthorityFrame> frames,IReadOnlyList<SceneKnowledgePacket> packets)
         => frames.Count==packets.Count && frames.Select(x=>x.FrameId).Order().SequenceEqual(packets.Select(x=>x.StoryFrameId).Order());
     private static bool Ordered(IReadOnlyList<SceneKnowledgePacket> packets)=>packets.SequenceEqual(packets.OrderBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber));

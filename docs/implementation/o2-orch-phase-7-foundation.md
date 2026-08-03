@@ -78,3 +78,16 @@ P7.2 must not start. This checkout has meaningful hardening but lacks the mandat
 
 ## 30. Final verdict
 PHASE7_FOUNDATION_STILL_INCOMPLETE
+# O2.ORCH.7.1.H3 targeted hardening status (2026-08-03)
+
+The foundation contracts now separate a fact's stable identity from its value: a scalar uses the canonical knowledge ID and approved field path, while only genuinely multi-valued primitive collections use a canonical content suffix. Claim IDs remain derived from semantic identity, language, certified payload version, and the foundation contract version.
+
+The merge boundary exposes six classifications (`Equivalent`, `EventSpecificSpecialization`, `EventMorePrecise`, `EvergreenMorePrecise`, `Contradictory`, and `Incomparable`) and records every collision decision. Packet validation builds a canonical ClaimId dictionary, permits identical reuse across Long and Short packets, and rejects duplicates within a packet or conflicting canonical bodies.
+
+Physical validation has explicit in-memory, staged-physical, and committed-physical modes. In-memory validation cannot pass the physical-readback gate. The readback contract accepts an expected nine-entry artifact inventory and compares both SHA-256 and byte size rather than treating a newly calculated digest as evidence.
+
+Event certification accepts only `Verified` and `Certified`; evergreen acceptance remains separately capable of accepting `Reviewed`. Source loading retains all, rejected, unverified, and certified-supporting source views. Exact approved-field provenance requires `SupportedApprovedFieldPaths`; domain membership alone is not promoted to exact provenance. Knowledge reports publish adapter diagnostics, merge decisions, source-audit counts, unknown sections, and unknown properties.
+
+Executable Orion and regression certification could not be completed in this environment because the .NET SDK is unavailable (`dotnet: command not found`). Consequently artifact hashes/sizes, 12/4 publication counts, and test totals are not claimed here. Azure OpenAI calls: 0. Azure Speech synthesis calls: 0. Remaining gap: run the complete requested build, Orion publication, physical inventory verification, and Phase 4–7 regression matrix in a .NET-enabled environment. P7.2 is not ready.
+
+Final verdict: `PHASE7_FOUNDATION_STILL_INCOMPLETE`.
