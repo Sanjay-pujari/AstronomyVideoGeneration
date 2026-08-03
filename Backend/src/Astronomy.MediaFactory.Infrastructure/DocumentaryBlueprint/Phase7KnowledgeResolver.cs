@@ -164,10 +164,31 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             cultural,cultural,c.Domain==NarrationKnowledgeDomainKey.AstrologyClarification,c.RequiresQualification,c.RequiresHumanReview,p.Language,"") { SemanticIdentity=c.SemanticIdentity,Disposition=disposition,ProvenancePrecision=precision.ToString(),Uncertain=chosen.Length==0 };
         var claim=draft with { Checksum=Phase7Determinism.Hash(draft with { Checksum="" }) };
         var evidence=chosen.Select(x=>new Phase7ClaimSupportEvidence(id,c.SemanticIdentity,x.Source.SourceId,c.KnowledgeId,
-            Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath),x.Result.Precision,c.AdapterId,c.Origin,"CertifiedExactProvenance",null,claim.Confidence)
+            Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath),x.Result.Precision,c.AdapterId,c.Origin,SelectionReason(disposition,x.Result.Eligibility),null,claim.Confidence)
             { AdapterVersion=c.AdapterVersion,SourceEligibility=x.Result.Eligibility,RequiresHumanReview=disposition==Phase7ClaimDisposition.HumanReview,
-              QualificationReason=c.RequiresQualification?"GovernedQualificationRequired":"",AuthorityScope=c.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)?"GeneralAuthority":c.SemanticIdentity.EndsWith(".execution",StringComparison.Ordinal)?"ExecutionScopedAuthority":c.Origin.ToString() }).ToArray();
+              QualificationReason=c.RequiresQualification?QualificationReasons(c,claim):"",AuthorityScope=c.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)?"GeneralAuthority":c.SemanticIdentity.EndsWith(".execution",StringComparison.Ordinal)?"ExecutionScopedAuthority":c.Origin.ToString() }).ToArray();
         return new(claim,evidence);
+    }
+    private static string SelectionReason(Phase7ClaimDisposition disposition,Phase7SourceEligibility eligibility)=>
+        disposition switch
+        {
+            Phase7ClaimDisposition.Required=>"CertifiedRequiredEvidence",
+            Phase7ClaimDisposition.HumanReview when eligibility==Phase7SourceEligibility.EligibleForOptionalClaim=>"ReviewedOptionalHumanReviewEvidence",
+            Phase7ClaimDisposition.Deferred=>"DeferredAuditEvidence",
+            _=>"CertifiedOptionalEvidence"
+        };
+    private static string QualificationReasons(Phase7AdapterClaimCandidate candidate,CertifiedNarrationClaim claim)
+    {
+        var reasons=new SortedSet<string>(StringComparer.Ordinal);
+        if(candidate.Approximate==true||claim.Approximate)reasons.Add("ApproximationQualification");
+        if(claim.IsLocationDependent)reasons.Add("LocationQualification");
+        if(claim.IsDateTimeDependent)reasons.Add("DateTimeQualification");
+        if(claim.IsCultural||claim.IsMythological)reasons.Add("CulturalTraditionQualification");
+        if(claim.IsAstrologyRelated)reasons.Add("AstrologyClarificationQualification");
+        if(candidate.Uncertainty.HasValue||claim.Uncertain)reasons.Add("UncertaintyQualification");
+        if(claim.RequiresHumanReview)reasons.Add("HumanReviewQualification");
+        if(reasons.Count==0)reasons.Add("UncertaintyQualification");
+        return string.Join('|',reasons);
     }
     private static bool IsEventCertified(string value)=>value.Equals("Certified",StringComparison.OrdinalIgnoreCase)||value.Equals("Verified",StringComparison.OrdinalIgnoreCase);
     private static bool IsEvergreenCertified(string value)=>IsEventCertified(value)||value.Equals("Reviewed",StringComparison.OrdinalIgnoreCase);
