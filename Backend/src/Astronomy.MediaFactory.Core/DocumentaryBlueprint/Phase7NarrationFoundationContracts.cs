@@ -27,6 +27,67 @@ public interface IPhase6CommittedAuthorityEvaluator
     Task<Phase6CommittedAuthorityEvaluation> EvaluateAsync(Phase6CommittedAuthorityRequest request, CancellationToken cancellationToken = default);
 }
 
+/// <summary>The single serialized contract for evidence that Phase 6 has committed its authority.</summary>
+public sealed record Phase6CommittedValidation
+{
+    public int PhaseNo { get; init; }
+    public string PhaseName { get; init; } = "";
+    public string Status { get; init; } = "";
+    public string ReasonCode { get; init; } = "";
+    public string Reason { get; init; } = "";
+    public string ValidationStatus { get; init; } = "";
+    public bool PublicationCommitted { get; init; }
+    public bool CommittedStateValidationPassed { get; init; }
+    public bool AlreadyPublished { get; init; }
+    public string ExecutionId { get; init; } = "";
+    public string PlanId { get; init; } = "";
+    public string EventId { get; init; } = "";
+    public string Language { get; init; } = "";
+    public string Profile { get; init; } = "";
+    public string ProfileVersion { get; init; } = "";
+    public IReadOnlyList<string> RequestedVariants { get; init; } = [];
+    public string SourcePhase4AggregateId { get; init; } = "";
+    public string SourcePhase4Checksum { get; init; } = "";
+    public string SourceLongChecksum { get; init; } = "";
+    public string SourceShortChecksum { get; init; } = "";
+    public string SourceCertificationId { get; init; } = "";
+    public string SourceCertificationChecksum { get; init; } = "";
+    public string SourceEditorialContractId { get; init; } = "";
+    public string SourceEditorialContractChecksum { get; init; } = "";
+    public string SourcePhase5PublicationId { get; init; } = "";
+    public string AuthorityId { get; init; } = "";
+    public string StoryFrameAuthorityId { get; init; } = "";
+    public string AuthorityChecksum { get; init; } = "";
+    public string StoryFrameAuthorityChecksum { get; init; } = "";
+    public string IndexId { get; init; } = "";
+    public string IndexChecksum { get; init; } = "";
+    public string DiagnosticsContractVersion { get; init; } = "";
+    public bool LongStoryFramesRequested { get; init; }
+    public bool ShortStoryFramesRequested { get; init; }
+    public bool LongStoryFramesGenerated { get; init; }
+    public bool ShortStoryFramesGenerated { get; init; }
+    public int LongStoryFrameCount { get; init; }
+    public int ShortStoryFrameCount { get; init; }
+    public int TotalFrameCount { get; init; }
+    public bool SemanticValidationPassed { get; init; }
+    public bool ChecksumValidationPassed { get; init; }
+    public bool PhysicalChecksumValidationPassed { get; init; }
+    public bool ManifestValidationPassed { get; init; }
+    public bool LineageValidationPassed { get; init; }
+    public bool RelationshipValidationPassed { get; init; }
+    public bool NarrationOwnershipValidationPassed { get; init; }
+    public bool VariantCoverageValidationPassed { get; init; }
+    public bool CanonicalOrderingValidationPassed { get; init; }
+    public bool RuntimeCompatibilityValidationPassed { get; init; }
+    public IReadOnlyList<string> ArtifactPaths { get; init; } = [];
+    public IReadOnlyList<string> Errors { get; init; } = [];
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+    public IReadOnlyList<string> InputFiles { get; init; } = [];
+    public IReadOnlyList<string> OutputFiles { get; init; } = [];
+    public DateTimeOffset StartedUtc { get; init; }
+    public DateTimeOffset FinishedUtc { get; init; }
+}
+
 public sealed record DurationRange(int MinimumSeconds, int PreferredSeconds, int MaximumSeconds);
 public sealed record LongNarrationProfile(int MinimumScenes, int PreferredScenes, int MaximumScenes,
     DurationRange Duration, IReadOnlyList<string> MandatorySectionKeys, IReadOnlyList<string> OptionalSectionKeys,

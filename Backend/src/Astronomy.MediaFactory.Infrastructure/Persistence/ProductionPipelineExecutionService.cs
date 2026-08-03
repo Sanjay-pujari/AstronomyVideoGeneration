@@ -910,38 +910,38 @@ public sealed partial class ProductionPipelineExecutionService(
         var finished = DateTimeOffset.UtcNow;
         var relativeOutputs = new[] { "06-story-frames/story-frames.json", "06-story-frames/story-frame-index.json", "06-story-frames/story-frame-diagnostics.json" };
         Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new Phase6CommittedValidation
         {
-            phaseNo = 6, phaseName = "Story Frames Authority", status = status.ToString(), reasonCode,
-            reason = outcome.Kind == StoryFramePhase6ExecutionKind.Reused
+            PhaseNo = 6, PhaseName = "Story Frames Authority", Status = status.ToString(), ReasonCode = reasonCode,
+            Reason = outcome.Kind == StoryFramePhase6ExecutionKind.Reused
                 ? "Valid committed Phase 6 Story Frame authority was reused."
                 : "Phase 6 Story Frame authority committed.",
-            validationStatus = "Valid", publicationCommitted = true, committedStateValidationPassed = true,
-            alreadyPublished = outcome.Kind == StoryFramePhase6ExecutionKind.Reused,
-            authority.ExecutionId, authority.PlanId, authority.EventId, authority.Language, authority.Profile,
-            profileVersion = authority.AuthorityContractVersion,
-            authority.RequestedVariants,
-            sourcePhase4AggregateId = committed.AggregateId, sourcePhase4Checksum = committed.AggregateChecksum,
-            sourceLongChecksum = committed.LongProjectionChecksum, sourceShortChecksum = committed.ShortProjectionChecksum,
-            sourceCertificationId = committed.CertificationId, sourceCertificationChecksum = committed.CertificationChecksum,
-            sourceEditorialContractId = committed.EditorialContractId,
-            sourceEditorialContractChecksum = committed.EditorialContractChecksum,
-            sourcePhase5PublicationId = committed.Phase5PublicationId,
-            authority.AuthorityId, storyFrameAuthorityId = authority.AuthorityId,
-            authorityChecksum = authority.SemanticChecksum, storyFrameAuthorityChecksum = authority.SemanticChecksum, index.IndexId,
-            indexChecksum = index.Checksum, diagnostics.DiagnosticsContractVersion,
-            longStoryFramesRequested = authority.RequestedVariants.Contains("Long", StringComparer.OrdinalIgnoreCase),
-            shortStoryFramesRequested = authority.RequestedVariants.Contains("Short", StringComparer.OrdinalIgnoreCase),
-            longStoryFramesGenerated = longCount > 0, shortStoryFramesGenerated = shortCount > 0,
-            longStoryFrameCount = longCount, shortStoryFrameCount = shortCount, totalFrameCount = authority.Frames.Count,
-            semanticValidationPassed = true, checksumValidationPassed = true,
-            physicalChecksumValidationPassed = true, manifestValidationPassed = true,
-            lineageValidationPassed = true, relationshipValidationPassed = true,
-            narrationOwnershipValidationPassed = true, variantCoverageValidationPassed = true,
-            canonicalOrderingValidationPassed = true, runtimeCompatibilityValidationPassed = true,
-            artifactPaths = relativeOutputs, errors = Array.Empty<string>(), warnings = outcome.Warnings,
-            inputFiles = StoryFrameCommittedInputDiagnostics.ArtifactPaths(committed), outputFiles = relativeOutputs,
-            startedUtc = started, finishedUtc = finished
+            ValidationStatus = "Valid", PublicationCommitted = true, CommittedStateValidationPassed = true,
+            AlreadyPublished = outcome.Kind == StoryFramePhase6ExecutionKind.Reused,
+            ExecutionId = authority.ExecutionId, PlanId = authority.PlanId, EventId = authority.EventId, Language = authority.Language, Profile = authority.Profile,
+            ProfileVersion = authority.AuthorityContractVersion,
+            RequestedVariants = authority.RequestedVariants,
+            SourcePhase4AggregateId = committed.AggregateId, SourcePhase4Checksum = committed.AggregateChecksum,
+            SourceLongChecksum = committed.LongProjectionChecksum, SourceShortChecksum = committed.ShortProjectionChecksum,
+            SourceCertificationId = committed.CertificationId, SourceCertificationChecksum = committed.CertificationChecksum,
+            SourceEditorialContractId = committed.EditorialContractId,
+            SourceEditorialContractChecksum = committed.EditorialContractChecksum,
+            SourcePhase5PublicationId = committed.Phase5PublicationId,
+            AuthorityId = authority.AuthorityId, StoryFrameAuthorityId = authority.AuthorityId,
+            AuthorityChecksum = authority.SemanticChecksum, StoryFrameAuthorityChecksum = authority.SemanticChecksum, IndexId = index.IndexId,
+            IndexChecksum = index.Checksum, DiagnosticsContractVersion = diagnostics.DiagnosticsContractVersion,
+            LongStoryFramesRequested = authority.RequestedVariants.Contains("Long", StringComparer.OrdinalIgnoreCase),
+            ShortStoryFramesRequested = authority.RequestedVariants.Contains("Short", StringComparer.OrdinalIgnoreCase),
+            LongStoryFramesGenerated = longCount > 0, ShortStoryFramesGenerated = shortCount > 0,
+            LongStoryFrameCount = longCount, ShortStoryFrameCount = shortCount, TotalFrameCount = authority.Frames.Count,
+            SemanticValidationPassed = true, ChecksumValidationPassed = true,
+            PhysicalChecksumValidationPassed = true, ManifestValidationPassed = true,
+            LineageValidationPassed = true, RelationshipValidationPassed = true,
+            NarrationOwnershipValidationPassed = true, VariantCoverageValidationPassed = true,
+            CanonicalOrderingValidationPassed = true, RuntimeCompatibilityValidationPassed = true,
+            ArtifactPaths = relativeOutputs, Errors = Array.Empty<string>(), Warnings = outcome.Warnings,
+            InputFiles = StoryFrameCommittedInputDiagnostics.ArtifactPaths(committed), OutputFiles = relativeOutputs,
+            StartedUtc = started, FinishedUtc = finished
         }, JsonOptions), cancellationToken);
 
         return new ProductionPhaseResult(6, "Story Frames Authority", status, started, finished,
