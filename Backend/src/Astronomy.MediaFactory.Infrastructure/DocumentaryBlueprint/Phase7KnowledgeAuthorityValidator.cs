@@ -2,7 +2,11 @@ using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
-public sealed class Phase7KnowledgeAuthorityValidator : IPhase7KnowledgeAuthorityValidator
+public sealed class Phase7KnowledgeAuthorityValidator(IFamilyNarrationProfileResolver profiles,
+    IPhase7LocationTimeSafetyPolicy locationTimePolicy,
+    IPhase7CulturalKnowledgeSafetyPolicy culturalPolicy,
+    IPhase7AstrologySeparationPolicy astrologyPolicy,
+    IPhase7KnowledgeDiagnosticsReconciler diagnosticsReconciler) : IPhase7KnowledgeAuthorityValidator
 {
     public Phase7KnowledgeValidation Validate(Phase7KnowledgeAuthority a, ResolvedNarrationKnowledge r,
         Phase7KnowledgeDiagnostics d, Phase7KnowledgeValidationMode mode=Phase7KnowledgeValidationMode.InMemoryCandidate,
@@ -48,14 +52,16 @@ public sealed class Phase7KnowledgeAuthorityValidator : IPhase7KnowledgeAuthorit
         Add("ContradictionGate",contradictions.Length==0,"P7KNOWLEDGE_CONTRADICTION_PRESENT");
         Add("IncomparableGate",incomparable.All(x=>x.SelectedClaimIds.Count==0||x.EventScope.HasExplicitEvidence||x.EvergreenScope.HasExplicitEvidence),"P7KNOWLEDGE_INCOMPARABLE_INVALID");
         Add("QualificationGate",required.Where(x=>x.RequiresQualification).All(x=>a.ClaimSupportEvidence.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.QualificationReason))),"P7KNOWLEDGE_QUALIFICATION_INVALID");
-        bool Qualified(CertifiedNarrationClaim x)=>!x.RequiresQualification||a.ClaimSupportEvidence.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.QualificationReason));
-        bool HasQualification(CertifiedNarrationClaim x)=>x.RequiresQualification&&a.ClaimSupportEvidence.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.QualificationReason));
-        bool Scoped(CertifiedNarrationClaim x)=>a.ClaimSupportEvidence.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.AuthorityScope))||
-            a.MergeDecisions.Any(m=>m.SelectedClaimIds.Contains(x.ClaimId)&&(m.EventScope.HasExplicitEvidence||m.EvergreenScope.HasExplicitEvidence));
-        Add("LocationTimeSafetyGate",a.Claims.Where(x=>x.IsLocationDependent||x.IsDateTimeDependent).All(x=>Scoped(x)||HasQualification(x)),"P7KNOWLEDGE_LOCATION_TIME_SAFETY_INVALID");
-        Add("CulturalSafetyGate",a.Claims.Where(x=>x.IsCultural||x.IsMythological).All(x=>x.RequiresQualification&&Qualified(x)&&(!x.RequiresHumanReview||x.Disposition==Phase7ClaimDisposition.HumanReview)),"P7KNOWLEDGE_CULTURAL_SAFETY_INVALID");
-        Add("AstrologySeparationGate",a.Claims.Where(x=>x.IsAstrologyRelated).All(x=>x.RequiresQualification&&Qualified(x)&&x.Domain.Contains("astrolog",StringComparison.OrdinalIgnoreCase)),"P7KNOWLEDGE_ASTROLOGY_SEPARATION_INVALID");
-        Add("DiagnosticsReconciliationGate",d.DiagnosticsReconciled&&d.ReconciliationDifferences.Count==0&&d.AuthorityId==a.AuthorityId&&d.AcceptedClaimCount==a.Claims.Count&&d.RequiredClaimCount==required.Length&&d.DeferredClaimCount==a.Claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Deferred)&&d.BlockingIssueCount==a.BlockingIssues.Count&&d.WarningCount==a.Warnings.Count&&d.LocationTimeSafetyPassed&&d.CulturalSafetyPassed&&d.AstrologySeparationPassed,"P7KNOWLEDGE_DIAGNOSTICS_INVALID");
+        var profileResolution=profiles.Resolve(a.EventFamily,a.Language);
+        var profile=profileResolution.Profile;
+        var location=profile is null?new Phase7LocationTimeSafetyResult(false,[profileResolution.ReasonCode],[],[]):locationTimePolicy.Evaluate(a,r,profile);
+        var cultural=profile is null?new Phase7CulturalKnowledgeSafetyResult(false,[profileResolution.ReasonCode],[],[],new Dictionary<string,string>()):culturalPolicy.Evaluate(a,r,profile);
+        var astrology=profile is null?new Phase7AstrologySeparationResult(false,[profileResolution.ReasonCode],[],[],new Dictionary<string,string>()):astrologyPolicy.Evaluate(a,r,profile);
+        var reconciliation=diagnosticsReconciler.Reconcile(a,r,d,location,cultural,astrology);
+        gates.Add(new("LocationTimeSafetyGate",location.Passed,location.Errors,location.Warnings));
+        gates.Add(new("CulturalSafetyGate",cultural.Passed,cultural.Errors,cultural.Warnings));
+        gates.Add(new("AstrologySeparationGate",astrology.Passed,astrology.Errors,astrology.Warnings));
+        Add("DiagnosticsReconciliationGate",d.DiagnosticsReconciled&&d.ReconciliationDifferences.Count==0&&reconciliation.IsValid,"P7KNOWLEDGE_DIAGNOSTICS_INVALID");
         if(mode==Phase7KnowledgeValidationMode.InMemoryCandidate)
         {
             gates.Add(new("ArtifactCompleteSetGate",false,[],["NotApplicable before physical writing."]));

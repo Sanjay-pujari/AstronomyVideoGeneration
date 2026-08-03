@@ -775,6 +775,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7FoundationRecoveryService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7FoundationRecoveryService>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7FoundationCommittedStateEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7FoundationCommittedStateEvaluator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeAuthorityBuilder, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeAuthorityBuilder>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7LocationTimeSafetyPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7LocationTimeSafetyPolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7CulturalKnowledgeSafetyPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7CulturalKnowledgeSafetyPolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7AstrologySeparationPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7AstrologySeparationPolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeDiagnosticsReconciler, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeDiagnosticsReconciler>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeAuthorityValidator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeAuthorityValidator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeFileSystem, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeFileSystem>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgePhysicalReadback, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgePhysicalReadback>();

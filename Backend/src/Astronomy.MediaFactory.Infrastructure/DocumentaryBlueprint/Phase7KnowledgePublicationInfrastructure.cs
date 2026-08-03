@@ -257,8 +257,8 @@ public sealed class Phase7KnowledgeRecoveryService(IPhase7KnowledgeFileSystem fs
     private void Verify(Phase7KnowledgeTransactionMarker m,List<string> errors)
     { var authorityPath=Path.Combine(m.StableKnowledgeDirectory,"knowledge-authority.json");Check(m.PreviousKnowledgeDirectoryExisted,m.StableKnowledgeDirectory,"",authorityPath,errors);if(m.PreviousKnowledgeDirectoryExisted&&!string.IsNullOrEmpty(m.PreviousAuthorityChecksum)){try{var a=JsonSerializer.Deserialize<Phase7KnowledgeAuthority>(fs.ReadAllTextAsync(authorityPath).GetAwaiter().GetResult(),Json);if(a?.AuthorityId!=m.PreviousAuthorityId||a.SemanticChecksum!=m.PreviousAuthorityChecksum)errors.Add("Restored authority identity or checksum mismatch.");}catch(Exception e){errors.Add(e.Message);}}Check(m.PreviousValidationExisted,m.StableValidationPath,m.PreviousValidationPhysicalSha256,m.StableValidationPath,errors);Check(m.PreviousManifestExisted,m.StableManifestPath,m.PreviousManifestPhysicalSha256,m.StableManifestPath,errors);Check(m.PreviousPublicationEvidenceExisted,m.StablePublicationEvidencePath,m.PreviousPublicationEvidencePhysicalSha256,m.StablePublicationEvidencePath,errors); }
     private void Check(bool existed,string component,string hash,string file,List<string> errors){var present=fs.FileExists(file)||fs.DirectoryExists(component);if(present!=existed){errors.Add($"Restoration existence mismatch: {component}");return;}if(existed&&!string.IsNullOrEmpty(hash)&&fs.FileExists(file)){var actual=Sha(fs.ReadAllBytesAsync(file).GetAwaiter().GetResult());if(actual!=hash)errors.Add($"Restoration checksum mismatch: {file}");}}
-    private void CleanupCandidate(Phase7KnowledgeTransactionMarker m){var root=Directory.GetParent(Directory.GetParent(m.StagingKnowledgeDirectory)!.FullName)!.FullName;if(fs.DirectoryExists(root))fs.DeleteDirectory(root);}
-    private void DeleteBackup(Phase7KnowledgeTransactionMarker m){var root=Directory.GetParent(m.BackupKnowledgeDirectory)!.FullName;if(fs.DirectoryExists(root))fs.DeleteDirectory(root);}
+    private void CleanupCandidate(Phase7KnowledgeTransactionMarker m){if(!string.IsNullOrWhiteSpace(m.StagingRoot)&&fs.DirectoryExists(m.StagingRoot))fs.DeleteDirectory(m.StagingRoot);}
+    private void DeleteBackup(Phase7KnowledgeTransactionMarker m){if(!string.IsNullOrWhiteSpace(m.BackupRoot)&&fs.DirectoryExists(m.BackupRoot))fs.DeleteDirectory(m.BackupRoot);}
     private static bool Inside(string root,string path){var full=Path.GetFullPath(path);return full==root||full.StartsWith(root+Path.DirectorySeparatorChar,StringComparison.Ordinal);}
     private static string Sha(byte[] b)=>Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
     private static Phase7KnowledgeExecutionResult Block(string marker,string tx,string error)=>new(false,"Failed",error.StartsWith("P7KNOWLEDGE_ROLLBACK_FAILED",StringComparison.Ordinal)?"P7KNOWLEDGE_ROLLBACK_FAILED":error.StartsWith("P7KNOWLEDGE_",StringComparison.Ordinal)?error:"P7KNOWLEDGE_RECOVERY_FAILED",Path.GetDirectoryName(marker)??"","",false,false,false,null,null,[error,$"MarkerPath={marker}",$"TransactionId={tx}"],[]);
@@ -275,7 +275,9 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
     IPhase7InputAuthorityEvaluator inputEvaluator, IPhase7CertifiedKnowledgeSource source,
     IPhase7KnowledgeResolver knowledgeResolver,
     IPhase7KnowledgeAuthorityBuilder builder, IPhase7KnowledgeAuthorityValidator validator,
-    IPhase7KnowledgePhysicalReadback readback, IPhase7KnowledgeFileSystem fs) : IPhase7KnowledgeTransactionCoordinator
+    IPhase7KnowledgePhysicalReadback readback, IPhase7KnowledgeFileSystem fs,
+    IPhase7LocationTimeSafetyPolicy locationTimePolicy, IPhase7CulturalKnowledgeSafetyPolicy culturalPolicy,
+    IPhase7AstrologySeparationPolicy astrologyPolicy, IPhase7KnowledgeDiagnosticsReconciler diagnosticsReconciler) : IPhase7KnowledgeTransactionCoordinator
 {
     private static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web){WriteIndented=true};
     public async Task<Phase7KnowledgeExecutionResult> ExecuteAsync(Phase7InputAuthorityRequest request,bool overwriteExisting,CancellationToken token=default)
@@ -293,13 +295,20 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
         var resolvedKnowledge=knowledgeResolver.Resolve(payload.Payload,input.Authority.FamilyProfile);
         var a=builder.Build(input.Authority,payload.Payload,resolvedKnowledge,input.Authority.FamilyProfile,input.Authority.RuntimeProviderCompatibilityMetadata);
         var d=Diagnostics(a,resolvedKnowledge,payload.Payload,input.Authority.InputArtifactPaths);
+        var location=locationTimePolicy.Evaluate(a,resolvedKnowledge,input.Authority.FamilyProfile);
+        var cultural=culturalPolicy.Evaluate(a,resolvedKnowledge,input.Authority.FamilyProfile);
+        var astrology=astrologyPolicy.Evaluate(a,resolvedKnowledge,input.Authority.FamilyProfile);
+        d=d with{LocationTimeSafetyPassed=location.Passed,CulturalSafetyPassed=cultural.Passed,AstrologySeparationPassed=astrology.Passed,DiagnosticsReconciled=false,ReconciliationDifferences=[]};
+        var reconciliation=diagnosticsReconciler.Reconcile(a,resolvedKnowledge,d,location,cultural,astrology);
+        d=d with{DiagnosticsReconciled=reconciliation.IsValid,ReconciliationDifferences=reconciliation.Differences,DeterministicChecksum=""};
+        d=d with{DeterministicChecksum=Phase7Determinism.Hash(d)};
         var memory=validator.Validate(a,resolvedKnowledge,d);
         if(!memory.IsValid)return new(false,"Failed",memory.ReasonCode,request.ExecutionRoot,a.AuthorityId,false,false,false,memory,d,memory.Errors,memory.Warnings);
         var tx=Guid.NewGuid().ToString("N");var paths=Phase7KnowledgeTransactionPaths.Create(request.ExecutionRoot,tx);
         var stageKnowledge=paths.StagingKnowledgeDirectory;var stageValidation=paths.CandidateValidationPath;
-        var stageRoot=Directory.GetParent(Directory.GetParent(stageKnowledge)!.FullName)!.FullName;
+        var stageRoot=paths.StagingRoot;
         var stableKnowledge=paths.StableKnowledgeDirectory;var stableValidation=paths.StableValidationPath;
-        var backup=Directory.GetParent(paths.BackupKnowledgeDirectory)!.FullName;
+        var backup=paths.BackupRoot;
         var previousKnowledge=fs.DirectoryExists(stableKnowledge);var previousValidation=fs.FileExists(stableValidation);
         var previousManifest=fs.FileExists(paths.StableManifestPath);var previousEvidence=fs.FileExists(paths.StablePublicationEvidencePath);
         var marker=new Phase7KnowledgeTransactionMarker(Phase7KnowledgeContract.Version,tx,request.ExecutionId,request.PlanId,request.EventId,request.Language,
@@ -311,6 +320,7 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
           PreviousValidationPhysicalSha256=previousValidation?Sha(await fs.ReadAllBytesAsync(stableValidation,token)):"",
           PreviousManifestPhysicalSha256=previousManifest?Sha(await fs.ReadAllBytesAsync(paths.StableManifestPath,token)):"",
           PreviousPublicationEvidencePhysicalSha256=previousEvidence?Sha(await fs.ReadAllBytesAsync(paths.StablePublicationEvidencePath,token)):"" };
+        marker=marker with{StagingRoot=paths.StagingRoot,BackupRoot=paths.BackupRoot,DeterministicChecksum=""};
         async Task Mark(Phase7KnowledgeTransactionState state,CancellationToken ct)
         {
             marker=marker with{State=state,UpdatedUtc=DateTimeOffset.UtcNow,DeterministicChecksum=""};

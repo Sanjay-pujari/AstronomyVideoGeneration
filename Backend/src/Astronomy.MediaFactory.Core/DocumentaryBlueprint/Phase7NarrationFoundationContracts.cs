@@ -213,7 +213,27 @@ public sealed record Phase7ClaimSupportEvidence(string ClaimId, string SemanticI
     public bool RequiresHumanReview { get; init; }
     public string QualificationReason { get; init; } = "";
     public string AuthorityScope { get; init; } = "";
+    /// <summary>The source-governance decision, kept separate from merge semantics.</summary>
+    public string SourceSelectionReason { get; init; } = SelectionReason;
+    /// <summary>The finalized merge decision that selected this claim.</summary>
+    public string MergeSelectionReason { get; init; } = "NoMerge";
 }
+
+public sealed record Phase7LocationTimeSafetyResult(bool Passed, IReadOnlyList<string> Errors,
+    IReadOnlyList<string> Warnings, IReadOnlyList<string> EvaluatedClaimIds);
+public sealed record Phase7CulturalKnowledgeSafetyResult(bool Passed, IReadOnlyList<string> Errors,
+    IReadOnlyList<string> Warnings, IReadOnlyList<string> EvaluatedClaimIds,
+    IReadOnlyDictionary<string,string> TraditionIdentities);
+public sealed record Phase7AstrologySeparationResult(bool Passed, IReadOnlyList<string> Errors,
+    IReadOnlyList<string> Warnings, IReadOnlyList<string> EvaluatedClaimIds,
+    IReadOnlyDictionary<string,string> SystemIdentities);
+
+public interface IPhase7LocationTimeSafetyPolicy
+{ Phase7LocationTimeSafetyResult Evaluate(Phase7KnowledgeAuthority authority, ResolvedNarrationKnowledge resolution, FamilyNarrationProfile profile); }
+public interface IPhase7CulturalKnowledgeSafetyPolicy
+{ Phase7CulturalKnowledgeSafetyResult Evaluate(Phase7KnowledgeAuthority authority, ResolvedNarrationKnowledge resolution, FamilyNarrationProfile profile); }
+public interface IPhase7AstrologySeparationPolicy
+{ Phase7AstrologySeparationResult Evaluate(Phase7KnowledgeAuthority authority, ResolvedNarrationKnowledge resolution, FamilyNarrationProfile profile); }
 public sealed record Phase7KnowledgeSectionAdapterResult(IReadOnlyList<Phase7AdapterClaimCandidate> Claims,
     IReadOnlyList<Phase7KnowledgeEntity> KnowledgeEntities, IReadOnlyList<string> Warnings,
     IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> UnknownProperties, string AdapterChecksum);

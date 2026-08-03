@@ -427,6 +427,9 @@ public sealed record ProductionPhaseResult(
 {
     /// <summary>Stable machine-readable outcome code; Reason is operator text only.</summary>
     public string? ReasonCode { get; init; }
+    public bool AlreadyPublished { get; init; }
+    public bool PublicationCommitted { get; init; }
+    public bool CommittedStateValidationPassed { get; init; }
 }
 
 /// <summary>Canonical classification for completion of a requested production-phase range.</summary>
@@ -446,7 +449,8 @@ public static class ProductionPhaseSatisfaction
         "P4PUB_ALREADY_PUBLISHED",
         "P5REUSE_VALID",
         "P5PUB_ALREADY_PUBLISHED",
-        "P6REUSE_VALID"
+        "P6REUSE_VALID",
+        "P7KNOWLEDGE_REUSE_VALID"
     };
 
     public static bool IsSatisfied(ProductionPhaseResult result) =>
