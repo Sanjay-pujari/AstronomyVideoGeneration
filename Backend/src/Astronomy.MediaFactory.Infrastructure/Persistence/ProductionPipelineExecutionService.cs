@@ -16833,6 +16833,7 @@ public sealed partial class ProductionPipelineExecutionService(
             // exclusively owns their backup, replacement, rollback, recovery, and mutation.
             PreservePhase7DiagnosticEvidenceForOverwrite(context);
             DeleteProductionSubtree(BuildNarrationV5Root(context), deletedFiles, deletedDirectories);
+            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "07-narration", "narration-v5"), deletedFiles, deletedDirectories);
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), deletedFiles);
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"), deletedFiles);
         }
