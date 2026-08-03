@@ -54,7 +54,10 @@ public sealed class Phase7FoundationValidator : IPhase7FoundationValidator
         Add("ViewerQuestionResolutionGate", longPackets.Concat(shortPackets).All(x=>!string.IsNullOrWhiteSpace(x.ResolvedViewerQuestionText)&&!string.IsNullOrWhiteSpace(x.ViewerQuestionResolutionChecksum)), "A resolved viewer question is missing.");
         Add("VisualEvidenceGate", longPackets.Concat(shortPackets).SelectMany(x=>x.VisualEvidenceIds).All(x=>Regex.IsMatch(x,@"^[a-z0-9]+\.[a-z0-9.-]+$",RegexOptions.IgnoreCase)), "Visual evidence contains free-form planning text.");
         Add("LocationTimeSafetyGate", longPackets.Concat(shortPackets).SelectMany(x=>x.RequiredClaims.Concat(x.OptionalClaims)).All(x=>!Unsafe.IsMatch(x.Text)), "Unsafe universal location/time claim exists.");
-        Add("CulturalSafetyGate", claims.Where(x=>x.IsCultural).All(x=>x.RequiresQualification&&x.RequiresHumanReview), "A cultural claim is unqualified.");
+        // Qualification and review are independent governance dimensions. A safe,
+        // tradition-scoped cultural authority remains qualified without being forced
+        // into HumanReview merely because its subject matter is cultural.
+        Add("CulturalSafetyGate", claims.Where(x=>x.IsCultural).All(x=>x.RequiresQualification), "A cultural claim is unqualified.");
         Add("AstrologySeparationGate", claims.Where(x=>x.IsAstrologyRelated).All(x=>x.RequiresQualification), "An astrology relationship is presented without qualification.");
         Add("LocalizationGate", input.Language is "en" or "hi" && input.FamilyProfile.SupportedLanguages.Contains(input.Language), "Localization is invalid.");
         Add("PlanningCoverageGate", PlanCovers(longPlan,longPackets,"Long") && PlanCovers(shortPlan,shortPackets,"Short"), "Narration planning coverage is invalid.");
