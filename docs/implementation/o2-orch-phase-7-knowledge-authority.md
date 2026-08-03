@@ -245,3 +245,41 @@ measurements can honestly be certified in this batch. Those checks remain requir
 before freeze; P7.1B is not ready to begin.
 
 Current verdict: `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A FINAL CERTIFICATION
+
+1. **Precommit mode:** `StablePreCommitPhysical` now certifies stable artifact bytes only while the manifest and publication evidence are pending.
+2. **Publication order:** staged validation is followed by pending stable evidence, precommit readback, final committed validation, and committed manifest/evidence.
+3. **Recovery finalization:** `ManifestPublished` and `CommittedReadbackPassed` markers are reevaluated; valid publications are finalized and invalid publications are restored.
+4. **Filesystem recovery abstraction:** transaction-marker enumeration is performed through `IPhase7KnowledgeFileSystem`, preserving fault-injection control.
+5. **Diagnostics reconciler:** not complete as a standalone governed service.
+6. **Cultural policy:** not complete as a standalone family-driven policy.
+7. **Astrology policy:** not complete as a standalone family-driven policy.
+8. **Location/time policy:** current claim/scope validation exists; the requested standalone policy remains incomplete.
+9. **Merge-aware evidence reasons:** incomplete.
+10. **Qualification reasons:** incomplete.
+11. **Manifest governance:** unrelated JSON properties and unrelated knowledge entries are preserved; full frozen-history proof remains outstanding.
+12. **Committed evaluator:** final evidence must be succeeded/committed and pending evidence is rejected from committed readback.
+13. **RC2 orchestrator integration:** not certified.
+14. **API aggregation:** not certified.
+15. **Legacy isolation:** not certified.
+16. **Files added:** none in this pass.
+17. **Files modified:** knowledge contracts, publication infrastructure, and this implementation record.
+18. **Tests added:** none; the requested focused files remain outstanding.
+19. **Focused totals:** unavailable because the .NET SDK is absent.
+20. **Phase 7 totals:** unavailable for the same reason.
+21. **Phase 4–6 regression totals:** unavailable for the same reason.
+22. **Complete project totals:** unavailable for the same reason.
+23. **Orion API response:** not executed.
+24. **Artifact paths:** the governed three knowledge files, validation file, phase manifest, and publication evidence remain the six committed files.
+25. **Hashes and sizes:** unavailable because no real publication was executed.
+26. **Validation result:** not runtime-certified.
+27. **Manifest result:** not runtime-certified.
+28. **Publication evidence result:** not runtime-certified.
+29. **Reuse response:** not executed.
+30. **Byte identity:** not measured.
+31. **Azure OpenAI count:** 0 calls made by this work session.
+32. **Azure Speech count:** 0 calls made by this work session.
+33. **Remaining failures:** standalone reconciler/policies, required tests, endpoint proof, regressions, and real Orion publication/reuse.
+34. **P7.1B readiness:** not ready; P7.1B must not begin.
+35. **Final verdict:** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
