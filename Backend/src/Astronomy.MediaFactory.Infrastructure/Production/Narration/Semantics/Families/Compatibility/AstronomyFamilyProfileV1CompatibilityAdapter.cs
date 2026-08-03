@@ -65,6 +65,7 @@ public sealed class AstronomyFamilyProfileV1CompatibilityAdapter : IAstronomyFam
             ("Occultation", SemanticCapabilityVocabularyV1.EventWindow) => ["StartTime"],
             ("Occultation", SemanticCapabilityVocabularyV1.OccultationContacts) => ["HiddenObject", "VisibilityRegion", "Mechanism"],
             ("PlanetPairing" or "PlanetGrouping", SemanticCapabilityVocabularyV1.EventWindow) => ["ObservationTiming"],
+            ("Constellation", SemanticCapabilityVocabularyV1.ObjectKnowledge) => ["Name", "ScientificIdentity"],
             (_, SemanticCapabilityVocabularyV1.ObjectKnowledge) => [SemanticCapabilityVocabularyV1.ObjectKnowledge],
             (_, SemanticCapabilityVocabularyV1.DomainScientificKnowledge) => [SemanticCapabilityVocabularyV1.DomainScientificKnowledge],
             (_, SemanticCapabilityVocabularyV1.CulturalContext) => ["CulturalNameContext"],
