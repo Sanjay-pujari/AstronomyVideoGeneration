@@ -870,7 +870,7 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             ExpectedProfileVersion = phase4?.ProfileVersion ?? "",
             EventType = context.Request.EventType,
-            ContentCategory = context.ExecutionContext.ContentCategory
+            ContentCategory = context.ExecutionContext.Category
         };
         var result=await _phase7KnowledgeService.ExecuteAsync(request,context.OverwriteExisting,cancellationToken);
         var finishedUtc=DateTimeOffset.UtcNow;
