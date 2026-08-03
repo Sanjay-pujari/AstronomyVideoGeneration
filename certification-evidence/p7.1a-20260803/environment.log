@@ -1,0 +1,9 @@
+=== dotnet --info ===
+bash: line 1: dotnet: command not found
+exit_code=127
+=== dotnet --list-sdks ===
+bash: line 1: dotnet: command not found
+exit_code=127
+=== dotnet --list-runtimes ===
+bash: line 1: dotnet: command not found
+exit_code=127
