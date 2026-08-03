@@ -114,16 +114,21 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
                 : new Phase7KnowledgeEntityIdentity(entityId, "StableKnowledgeId", false);
             var item = collection ? $".{resolved.KnowledgeId}" : "";
             var semantic = $"{entityId.ToLowerInvariant()}.{fieldPath}{item}";
-            claims.Add(new(entityId, fieldPath, domain, text.Trim(), sources, Qualified, HumanReview, semantic)
+            var reviewReason = ReviewReason(fieldPath, text);
+            claims.Add(new(entityId, fieldPath, domain, text.Trim(), sources, Qualified, reviewReason.Length > 0, semantic)
             {
                 AdapterId=AdapterId, AdapterVersion=AdapterVersion, IdentityPrecision=resolved.IdentityPrecision,
-                RequiresHumanReview=HumanReview || resolved.RequiresHumanReview,
+                RequiresHumanReview=reviewReason.Length > 0 || resolved.RequiresHumanReview,
+                HumanReviewReason=resolved.RequiresHumanReview ? "UnstableKnowledgeIdentity" : reviewReason,
+                QualificationReasons=Qualified ? QualificationReasons(fieldPath) : [],
                 NormalizedValue=NormalizeValue(text), ValueType=TypedValueType(fieldPath), Unit=TypedUnit(fieldPath),
                 StartUtc=fieldPath.EndsWith("startUtc",StringComparison.Ordinal) && DateTimeOffset.TryParse(text,out var start) ? start : null,
                 EndUtc=fieldPath.EndsWith("endUtc",StringComparison.Ordinal) && DateTimeOffset.TryParse(text,out var end) ? end : null
             });
         }
     }
+    protected virtual string ReviewReason(string fieldPath, string text) => HumanReview ? "GovernedSensitiveClaim" : "";
+    protected virtual IReadOnlyList<string> QualificationReasons(string fieldPath) => Qualified ? ["TraditionScopedAttribution"] : [];
     private static string? TypedValueType(string path) => path.EndsWith("Utc",StringComparison.Ordinal) ? "DateTimeOffset"
         : path.EndsWith("areaSquareDegrees",StringComparison.Ordinal) || path.EndsWith("altitude",StringComparison.Ordinal)
           || path.EndsWith("separation",StringComparison.Ordinal) || path.EndsWith("peakRate",StringComparison.Ordinal) ? "Decimal" : null;
@@ -146,9 +151,25 @@ public sealed class AstronomicalObjectKnowledgeAdapter() : ApprovedFieldKnowledg
 public sealed class ObservationKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.observation.v1","observation",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.Observation,"northernHemisphere","southernHemisphere","seasonalVisibility","nakedEyeRecognition","orionBeltIdentification","urbanGuidance","darkSkyGuidance","binocularGuidance","telescopeGuidance","locationDependentWarning"));
 public sealed class AstrophotographyKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.astrophotography.v1","astrophotography",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.Astrophotography,"wideFieldSuitability","beltAndSwordFraming","orionNebulaFraming","equipmentCategories","seasonalPlanning","lightPollution","exposureCaution"));
 public sealed class HistoryKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.history.v1","history",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.History,"ancientRecognition","historicalCataloguing","navigationSeasonalImportance","modernInterpretation"));
-public sealed class CultureAndMythologyKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.culture.v1","cultureAndMythology",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.CultureAndMythology,"summary","rashiNote","nakshatraNote","uncertaintyNote")) { protected override bool AllowsContainer(string name)=>name is "greek" or "roman" or "indianHindu" or "chinese" or "arabic" or "other"; }
+public sealed class CultureAndMythologyKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.culture.v1","cultureAndMythology",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.CultureAndMythology,"summary","rashiNote","nakshatraNote","uncertaintyNote"))
+{
+    protected override bool AllowsContainer(string name)=>name is "greek" or "roman" or "indianHindu" or "chinese" or "arabic" or "other";
+    protected override string ReviewReason(string path,string text) =>
+        path.Split('.').Length < 3 ? "MissingTraditionIdentity" :
+        path.EndsWith("uncertaintyNote",StringComparison.OrdinalIgnoreCase) ? "UnresolvedCulturalUncertainty" : "";
+}
 public sealed class RegionalTraditionKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.regional.v1","regionalTraditions",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.RegionalTraditions,"summary","qualification","tradition"));
-public sealed class AstrologyClarificationKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.astrology.v1","astrologyRelationships",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.AstrologyClarification,"westernZodiacNotes","indianRashiNotes","nakshatraNotes","disclaimer"));
+public sealed class AstrologyClarificationKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.astrology.v1","astrologyRelationships",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.AstrologyClarification,"westernZodiacNotes","indianRashiNotes","nakshatraNotes","disclaimer"))
+{
+    protected override string ReviewReason(string path,string text)
+    {
+        if (path.EndsWith("disclaimer",StringComparison.OrdinalIgnoreCase)) return Unsafe(text) ? "UnsafeAstrologyEquivalenceOrCausation" : "";
+        var scoped=path.EndsWith("westernZodiacNotes",StringComparison.OrdinalIgnoreCase)||path.EndsWith("indianRashiNotes",StringComparison.OrdinalIgnoreCase)||path.EndsWith("nakshatraNotes",StringComparison.OrdinalIgnoreCase);
+        return scoped&&!Unsafe(text) ? "" : scoped ? "UnsafeAstrologyEquivalenceOrCausation" : "MissingAstrologySystemIdentity";
+    }
+    protected override IReadOnlyList<string> QualificationReasons(string path) => ["AstronomyAstrologySeparation", "TraditionOrSystemScopedAttribution"];
+    private static bool Unsafe(string text) => new[]{" is the same as "," equals "," causes "," scientifically causes ","scientific influence"}.Any(x=>$" {text.ToLowerInvariant()} ".Contains(x,StringComparison.Ordinal));
+}
 public sealed class EditorialSafetyKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.safety.v1","editorialSafety",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.EditorialSafety,"sourceConflicts","aiAssistedEditorialText"));
 public sealed class LocalizedContentKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.localized.v1","localizedContent",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.LocalizedContent,"summary","keyMessages")) { protected override bool AllowsContainer(string name)=>name.Length is 2 or 5; }
 public sealed class InterestingFactsKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.facts.v1","interestingFacts",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.InterestingFacts,"text"));

@@ -92,8 +92,12 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             var status=mandatory
                 ? authoritative?KnowledgeDomainStatus.Available:selected.Any(x=>x.Disposition==Phase7ClaimDisposition.HumanReview)?KnowledgeDomainStatus.RequiresHumanReview:selected.Any(x=>x.Disposition==Phase7ClaimDisposition.Deferred)?KnowledgeDomainStatus.Deferred:KnowledgeDomainStatus.Missing
                 : selected.Any(x=>x.Disposition is Phase7ClaimDisposition.Required or Phase7ClaimDisposition.Optional)?KnowledgeDomainStatus.Available:selected.Any(x=>x.Disposition==Phase7ClaimDisposition.HumanReview)?KnowledgeDomainStatus.RequiresHumanReview:selected.Any(x=>x.Disposition==Phase7ClaimDisposition.Deferred)?KnowledgeDomainStatus.Deferred:KnowledgeDomainStatus.NotApplicable;
-            return new NarrationKnowledgeDomain(key.ToString(),status,selected,
-                mandatory&&status!=KnowledgeDomainStatus.Available?[$"P7KNOWLEDGE_MANDATORY_DOMAIN_{status.ToString().ToUpperInvariant()}:{key}"]:[]);
+            var domainIssues=mandatory&&status!=KnowledgeDomainStatus.Available
+                ? new List<string> {$"P7KNOWLEDGE_MANDATORY_DOMAIN_{status.ToString().ToUpperInvariant()}:{key}"} : [];
+            if(mandatory&&status==KnowledgeDomainStatus.RequiresHumanReview)
+                domainIssues.AddRange(resolvedClaims.Where(x=>x.Claim.Domain==key.ToString()&&x.Claim.Disposition==Phase7ClaimDisposition.HumanReview)
+                    .Select(x=>$"P7KNOWLEDGE_MANDATORY_DOMAIN_CLAIM_REQUIRESHUMANREVIEW:{key}:{x.Claim.ClaimId}:{x.Diagnostic.HumanReviewReason}"));
+            return new NarrationKnowledgeDomain(key.ToString(),status,selected,domainIssues);
         }).ToArray();
         issues.AddRange(domains.SelectMany(x=>x.Warnings));
         var result = new ResolvedNarrationKnowledge(payload.PayloadId,payload.PayloadChecksum,payload.SourceRegistryId,
@@ -137,6 +141,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         }).ToList();
         result=result with { AdapterDiagnostics=adapterDiagnostics,MergeDecisions=decisions,UnknownSections=unknownSections.Distinct().Order().ToArray(),UnknownProperties=unknownProperties.Distinct().Order().ToArray(),
             SourceAuditSummary=new(all.Count,payload.RejectedSources.Count,payload.UnverifiedSources.Count,candidates.Count(x=>x.SourceIds.Count==0)),
+            ClaimResolutionDiagnostics=resolvedClaims.Select(x=>x.Diagnostic).OrderBy(x=>x.SemanticIdentity,StringComparer.Ordinal).ToArray(),
             ClaimSupportEvidence=supportEvidence,KnowledgeEntities=entities.GroupBy(x=>x.KnowledgeId,StringComparer.Ordinal).Select(x=>x.First()).OrderBy(x=>x.KnowledgeId,StringComparer.Ordinal).ToArray() };
         return result with { DeterministicChecksum=Phase7Determinism.Hash(result with { DeterministicChecksum="" }) };
     }
@@ -159,17 +164,19 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         }
         catch(JsonException){issues.Add($"P7KNOWLEDGE_{origin.ToString().ToUpperInvariant()}_JSON_INVALID");}
     }
-    private sealed record ResolvedClaim(CertifiedNarrationClaim Claim,IReadOnlyList<Phase7ClaimSupportEvidence> Evidence);
+    private sealed record ResolvedClaim(CertifiedNarrationClaim Claim,IReadOnlyList<Phase7ClaimSupportEvidence> Evidence,
+        Phase7ClaimResolutionDiagnostic Diagnostic);
     private ResolvedClaim ResolveClaim(Phase7AdapterClaimCandidate c,Phase7ClaimDisposition disposition,CertifiedKnowledgePayload p,List<string> issues,List<string> warnings)
     {
         var sourcePool=Phase7KnowledgeSourcePool.Get(p);
         var required=disposition==Phase7ClaimDisposition.Required;
         var reviewedAllowed=disposition is Phase7ClaimDisposition.Optional or Phase7ClaimDisposition.HumanReview;
-        var evaluated=disposition==Phase7ClaimDisposition.Deferred
+        var allEvaluated=disposition==Phase7ClaimDisposition.Deferred
             ? Array.Empty<(CertifiedNarrationSource Source,Phase7SourceEligibilityResult Result)>()
             : sourcePool
             .Where(x=>c.SourceIds.Count==0||c.SourceIds.Contains(x.SourceId,StringComparer.Ordinal))
-            .Select(x=>(Source:x,Result:sourceEligibility.Classify(new(x,p.Language,c.KnowledgeId,c.SemanticIdentity,c.ApprovedFieldPath,required,reviewedAllowed,disposition==Phase7ClaimDisposition.HumanReview))))
+            .Select(x=>(Source:x,Result:sourceEligibility.Classify(new(x,p.Language,c.KnowledgeId,c.SemanticIdentity,c.ApprovedFieldPath,required,reviewedAllowed,disposition==Phase7ClaimDisposition.HumanReview)))).ToArray();
+        var evaluated=allEvaluated
             .Where(x=>required?x.Result.Eligibility==Phase7SourceEligibility.EligibleForRequiredClaim:x.Result.Eligibility is Phase7SourceEligibility.EligibleForRequiredClaim or Phase7SourceEligibility.EligibleForOptionalClaim).ToArray();
         var precision=evaluated.Select(x=>x.Result.Precision).DefaultIfEmpty(Phase7ProvenancePrecision.None).Min();
         var chosen=evaluated.Where(x=>x.Result.Precision==precision).ToArray();
@@ -185,7 +192,12 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             { AdapterVersion=c.AdapterVersion,SourceEligibility=x.Result.Eligibility,RequiresHumanReview=disposition==Phase7ClaimDisposition.HumanReview,
               QualificationReason=c.RequiresQualification?QualificationReasons(c,claim,warnings):"",AuthorityScope=c.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)?"GeneralAuthority":c.SemanticIdentity.EndsWith(".execution",StringComparison.Ordinal)?"ExecutionScopedAuthority":c.Origin.ToString(),
               SourceSelectionReason=SelectionReason(disposition,x.Result.Eligibility) }).ToArray();
-        return new(claim,evidence);
+        var resolutionReason=c.RequiresHumanReview?c.HumanReviewReason:chosen.Length==0?"NoEligibleExactEvidence":"AcceptedExactEligibleEvidence";
+        var diagnostic=new Phase7ClaimResolutionDiagnostic(c.Domain.ToString(),required,c.KnowledgeId,c.SemanticIdentity,
+            Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath),c.Text,disposition,c.RequiresHumanReview,c.HumanReviewReason,
+            c.RequiresQualification,c.QualificationReasons,claim.SourceIds,
+            allEvaluated.OrderBy(x=>x.Source.SourceId,StringComparer.Ordinal).ToDictionary(x=>x.Source.SourceId,x=>$"{x.Result.Eligibility}:{x.Result.ReasonCode}",StringComparer.Ordinal),precision,resolutionReason);
+        return new(claim,evidence,diagnostic);
     }
     private static string SelectionReason(Phase7ClaimDisposition disposition,Phase7SourceEligibility eligibility)=>
         disposition switch

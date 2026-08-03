@@ -162,6 +162,7 @@ public sealed record ResolvedNarrationKnowledge(string PayloadId, string Payload
     public IReadOnlyList<string> UnknownProperties { get; init; } = [];
     public IReadOnlyList<Phase7ClaimSupportEvidence> ClaimSupportEvidence { get; init; } = [];
     public IReadOnlyList<Phase7KnowledgeEntity> KnowledgeEntities { get; init; } = [];
+    public IReadOnlyList<Phase7ClaimResolutionDiagnostic> ClaimResolutionDiagnostics { get; init; } = [];
 }
 public sealed record CertifiedKnowledgePayload(string PayloadId, string EventId, string EventFamily, string EventType,
     string Language, string RawDataJson, string? MetadataJson, string? EvergreenJson,
@@ -261,6 +262,8 @@ public sealed record Phase7AdapterClaimCandidate(string KnowledgeId, string Appr
     public bool? Approximate { get; init; }
     public decimal? Uncertainty { get; init; }
     public decimal? Confidence { get; init; }
+    public string HumanReviewReason { get; init; } = "";
+    public IReadOnlyList<string> QualificationReasons { get; init; } = [];
 }
 public sealed record Phase7KnowledgeEntityIdentity(string KnowledgeId, string IdentityPrecision, bool RequiresHumanReview);
 public interface IPhase7KnowledgeEntityIdentityResolver
@@ -283,6 +286,13 @@ public sealed record Phase7ClaimSupportEvidence(string ClaimId, string SemanticI
     /// <summary>The finalized merge decision that selected this claim.</summary>
     public string MergeSelectionReason { get; init; } = "NoMerge";
 }
+
+public sealed record Phase7ClaimResolutionDiagnostic(string Domain, bool Mandatory, string CandidateId,
+    string SemanticIdentity, string ApprovedFieldPath, string RenderedValue,
+    Phase7ClaimDisposition Disposition, bool RequiresHumanReview, string HumanReviewReason,
+    bool RequiresQualification, IReadOnlyList<string> QualificationReasons,
+    IReadOnlyList<string> SelectedSourceIds, IReadOnlyDictionary<string,string> SourceEligibility,
+    Phase7ProvenancePrecision ProvenancePrecision, string ResolutionReason);
 
 public sealed record Phase7LocationTimeSafetyResult(bool Passed, IReadOnlyList<string> Errors,
     IReadOnlyList<string> Warnings, IReadOnlyList<string> EvaluatedClaimIds);
