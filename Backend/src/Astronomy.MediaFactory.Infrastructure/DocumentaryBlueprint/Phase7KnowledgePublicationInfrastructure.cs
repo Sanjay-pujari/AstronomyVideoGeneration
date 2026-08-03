@@ -20,6 +20,8 @@ public sealed class Phase7KnowledgeFileSystem : IPhase7KnowledgeFileSystem
     public void MoveDirectory(string s,string d)=>Directory.Move(s,d); public void MoveFile(string s,string d,bool o=false)=>File.Move(s,d,o);
     public void CopyFile(string s,string d,bool o=false)=>File.Copy(s,d,o);
     public IReadOnlyList<string> EnumerateOwnedPaths(string p)=>Directory.Exists(p)?Directory.EnumerateFileSystemEntries(p).Order().ToArray():[];
+    public IReadOnlyList<string> EnumerateFiles(string directory,string searchPattern,SearchOption searchOption)
+        =>Directory.Exists(directory)?Directory.EnumerateFiles(directory,searchPattern,searchOption).Order(StringComparer.Ordinal).ToArray():[];
 }
 
 public sealed class Phase7KnowledgeExecutionLock : IPhase7KnowledgeExecutionLock
@@ -54,7 +56,11 @@ public sealed class Phase7KnowledgePhysicalReadback(IPhase7KnowledgeFileSystem f
     }
     public Task<Phase7KnowledgeCompleteSetReadback> ValidateCandidateCompleteSetAsync(string root,Phase7KnowledgeAuthority a,Phase7KnowledgeArtifactInventory i,CancellationToken token=default)
         =>Validate(root,a,i,null,true,token);
-    public async Task<Phase7KnowledgeCompleteSetReadback> ValidateCommittedCompleteSetAsync(string root,Phase7KnowledgeAuthority a,Phase7KnowledgeArtifactInventory i,Phase7KnowledgeCommittedEvidence evidence,CancellationToken token=default)
+    public Task<Phase7KnowledgeCompleteSetReadback> ValidateStablePreCommitCompleteSetAsync(string root,Phase7KnowledgeAuthority a,Phase7KnowledgeArtifactInventory i,Phase7KnowledgeCommittedEvidence evidence,CancellationToken token=default)
+        =>ValidatePublishedCompleteSetAsync(root,a,i,evidence,false,token);
+    public Task<Phase7KnowledgeCompleteSetReadback> ValidateCommittedCompleteSetAsync(string root,Phase7KnowledgeAuthority a,Phase7KnowledgeArtifactInventory i,Phase7KnowledgeCommittedEvidence evidence,CancellationToken token=default)
+        =>ValidatePublishedCompleteSetAsync(root,a,i,evidence,true,token);
+    private async Task<Phase7KnowledgeCompleteSetReadback> ValidatePublishedCompleteSetAsync(string root,Phase7KnowledgeAuthority a,Phase7KnowledgeArtifactInventory i,Phase7KnowledgeCommittedEvidence evidence,bool committed,CancellationToken token)
     {
         root=Path.GetFullPath(root);var errors=new List<string>();
         var manifestPath=Path.Combine(root,"phase-manifest.json");var publicationPath=Path.Combine(root,".phase-07-knowledge-publication.json");
@@ -67,7 +73,10 @@ public sealed class Phase7KnowledgePhysicalReadback(IPhase7KnowledgeFileSystem f
             var matches=entries.Where(x=>x.PhaseNo==7&&x.PhaseComponent=="Knowledge Authority"&&x.ExecutionId==a.ExecutionId&&x.PlanId==a.PlanId&&x.EventId==a.EventId&&string.Equals(x.Language,a.Language,StringComparison.OrdinalIgnoreCase)&&x.AuthorityId==a.AuthorityId).ToArray();
             var publication=JsonSerializer.Deserialize<Phase7KnowledgePublicationEvidence>(await fs.ReadAllBytesAsync(publicationPath,token),Json)??throw new JsonException("Publication evidence missing.");
             var entry=matches.Length==1?matches[0]:null;
-            if(entry is null||entry!=evidence.ManifestEntry||publication!=evidence.PublicationEvidence||Sha(manifestBytes)!=evidence.ManifestDocumentChecksum||entry.DeterministicChecksum!=evidence.ManifestEntryChecksum||publication.ManifestEntryChecksum!=entry.DeterministicChecksum||publication.ValidationPhysicalSha256!=evidence.ValidationPhysicalSha256)
+            var stateValid=committed
+                ? entry is {Status:"Succeeded",ReasonCode:"P7KNOWLEDGE_COMMITTED",PublicationCommitted:true,CommittedStateValidationPassed:true}&&publication is {PublicationCommitted:true,CommittedStateValidationPassed:true}
+                : entry is {Status:"Publishing",ReasonCode:"P7KNOWLEDGE_PENDING",PublicationCommitted:false,CommittedStateValidationPassed:false}&&publication is {PublicationCommitted:false,CommittedStateValidationPassed:false};
+            if(entry is null||entry!=evidence.ManifestEntry||publication!=evidence.PublicationEvidence||!stateValid||Sha(manifestBytes)!=evidence.ManifestDocumentChecksum||entry.DeterministicChecksum!=evidence.ManifestEntryChecksum||publication.ManifestEntryChecksum!=entry.DeterministicChecksum||publication.ValidationPhysicalSha256!=evidence.ValidationPhysicalSha256)
                 errors.Add("P7KNOWLEDGE_MANIFEST_EVIDENCE_INVALID");
         }
         catch(JsonException){errors.Add("P7KNOWLEDGE_MANIFEST_EVIDENCE_INVALID");}
@@ -186,14 +195,15 @@ public sealed class Phase7KnowledgeCommittedStateEvaluator(IPhase7KnowledgeFileS
     private static string Sha(byte[] b)=>Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
 }
 
-public sealed class Phase7KnowledgeRecoveryService(IPhase7KnowledgeFileSystem fs) : IPhase7KnowledgeRecoveryService
+public sealed class Phase7KnowledgeRecoveryService(IPhase7KnowledgeFileSystem fs,
+    IPhase7KnowledgeCommittedStateEvaluator committed) : IPhase7KnowledgeRecoveryService
 {
     private static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web){WriteIndented=true};
     public async Task<Phase7KnowledgeExecutionResult?> RecoverAsync(string root,CancellationToken token=default)
     {
         token.ThrowIfCancellationRequested();root=Path.GetFullPath(root);
         if(!fs.DirectoryExists(root))return null;
-        foreach(var markerPath in Directory.EnumerateFiles(root,".phase-07-knowledge-*-transaction.json",SearchOption.TopDirectoryOnly).Order(StringComparer.Ordinal))
+        foreach(var markerPath in fs.EnumerateFiles(root,".phase-07-knowledge-*-transaction.json",SearchOption.TopDirectoryOnly))
         {
             Phase7KnowledgeTransactionMarker marker;
             try
@@ -206,7 +216,19 @@ public sealed class Phase7KnowledgeRecoveryService(IPhase7KnowledgeFileSystem fs
                 if(marker.State==Phase7KnowledgeTransactionState.RollbackFailed)return Block(markerPath,marker.TransactionId,"P7KNOWLEDGE_ROLLBACK_FAILED");
                 if(marker.State is Phase7KnowledgeTransactionState.Created or Phase7KnowledgeTransactionState.CandidateWritten or Phase7KnowledgeTransactionState.CandidateReadbackPassed or Phase7KnowledgeTransactionState.CandidateValidated)
                 { CleanupCandidate(marker);fs.DeleteFile(markerPath);continue; }
-                if(marker.State is Phase7KnowledgeTransactionState.CommittedReadbackPassed or Phase7KnowledgeTransactionState.Completed)
+                if(marker.State is Phase7KnowledgeTransactionState.ManifestPublished or Phase7KnowledgeTransactionState.CommittedReadbackPassed)
+                {
+                    var evaluation=await committed.EvaluateAsync(new(root,marker.ExecutionId,marker.PlanId,marker.EventId,marker.Language),token);
+                    if(evaluation.IsValid)
+                    {
+                        await UpdateMarker(markerPath,marker,Phase7KnowledgeTransactionState.CommittedReadbackPassed,token);
+                        CleanupCandidate(marker);DeleteBackup(marker);
+                        await UpdateMarker(markerPath,marker,Phase7KnowledgeTransactionState.Completed,token);
+                        fs.DeleteFile(markerPath);continue;
+                    }
+                    await Rollback(marker,markerPath,token);fs.DeleteFile(markerPath);continue;
+                }
+                if(marker.State==Phase7KnowledgeTransactionState.Completed)
                 { CleanupCandidate(marker);DeleteBackup(marker);fs.DeleteFile(markerPath);continue; }
                 await Rollback(marker,markerPath,token);fs.DeleteFile(markerPath);
             }
@@ -214,6 +236,12 @@ public sealed class Phase7KnowledgeRecoveryService(IPhase7KnowledgeFileSystem fs
             { var failed=fs.FileExists(markerPath)&&(await fs.ReadAllTextAsync(markerPath,token)).Contains("rollbackFailed",StringComparison.OrdinalIgnoreCase);return Block(markerPath,"",failed?"P7KNOWLEDGE_ROLLBACK_FAILED: "+ex.Message:ex.Message); }
         }
         return null;
+    }
+    private async Task UpdateMarker(string path,Phase7KnowledgeTransactionMarker marker,Phase7KnowledgeTransactionState state,CancellationToken token)
+    {
+        marker=marker with{State=state,UpdatedUtc=DateTimeOffset.UtcNow,DeterministicChecksum=""};
+        marker=marker with{DeterministicChecksum=Phase7Determinism.Hash(marker)};
+        await fs.WriteAllTextAsync(path,JsonSerializer.Serialize(marker,Json),token);
     }
     private async Task Rollback(Phase7KnowledgeTransactionMarker m,string markerPath,CancellationToken token)
     {
@@ -337,9 +365,11 @@ public sealed class Phase7KnowledgeTransactionCoordinator(IPhase7KnowledgeExecut
             var provisionalEvidence=new Phase7KnowledgePublicationEvidence(Phase7KnowledgeContract.Version,publicationId,request.ExecutionId,request.PlanId,request.EventId,request.Language,a.AuthorityId,a.SemanticChecksum,provisionalHash,provisionalEntry.DeterministicChecksum,false,false,DateTimeOffset.UtcNow,"");
             provisionalEvidence=provisionalEvidence with{DeterministicChecksum=Phase7Determinism.Hash(provisionalEvidence)};await Write(paths.StablePublicationEvidencePath,provisionalEvidence,token);
             var evidenceInput=new Phase7KnowledgeCommittedEvidence(provisionalEntry,provisionalEvidence,provisionalHash,provisionalEntry.DeterministicChecksum,Sha(await fs.ReadAllBytesAsync(paths.StableManifestPath,token)));
-            var committedReadback=await readback.ValidateCommittedCompleteSetAsync(request.ExecutionRoot,a,inventory,evidenceInput,token);
-            var committedValidation=validator.Validate(a,resolvedKnowledge,d,Phase7KnowledgeValidationMode.CommittedPhysical,committedReadback);
+            var committedReadback=await readback.ValidateStablePreCommitCompleteSetAsync(request.ExecutionRoot,a,inventory,evidenceInput,token);
+            var committedValidation=validator.Validate(a,resolvedKnowledge,d,Phase7KnowledgeValidationMode.StablePreCommitPhysical,committedReadback);
             if(!committedValidation.IsValid)throw new InvalidDataException(committedValidation.ReasonCode);
+            committedValidation=committedValidation with{Mode=Phase7KnowledgeValidationMode.CommittedPhysical,DeterministicChecksum=""};
+            committedValidation=committedValidation with{DeterministicChecksum=Phase7Determinism.Hash(committedValidation)};
             await Write(stableValidation,committedValidation,token);
             var validationHash=Sha(await fs.ReadAllBytesAsync(stableValidation,token));
             var manifestEntry=new Phase7KnowledgeManifestEntry(7,"Knowledge Authority","Succeeded","P7KNOWLEDGE_COMMITTED",true,true,a.AuthorityId,a.SemanticChecksum,validationHash,publicationId,Phase7KnowledgeContract.Version,"");

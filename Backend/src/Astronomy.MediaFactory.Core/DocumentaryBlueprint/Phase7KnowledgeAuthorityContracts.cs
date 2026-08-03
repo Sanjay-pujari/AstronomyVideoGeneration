@@ -76,7 +76,13 @@ public sealed record Phase7KnowledgeDiagnostics(
     public IReadOnlyList<string> ReconciliationDifferences { get; init; } = [];
 }
 
-public enum Phase7KnowledgeValidationMode { InMemoryCandidate, StagedPhysical, CommittedPhysical }
+public enum Phase7KnowledgeValidationMode
+{
+    InMemoryCandidate,
+    StagedPhysical,
+    StablePreCommitPhysical,
+    CommittedPhysical
+}
 public sealed record Phase7KnowledgeValidationGate(string Name, bool Passed, IReadOnlyList<string> Errors,
     IReadOnlyList<string> Warnings);
 public sealed record Phase7KnowledgeValidation(string ContractVersion, string ExecutionId, string PlanId,
@@ -144,7 +150,9 @@ public interface IPhase7KnowledgeFileSystem
     Task WriteAllBytesAsync(string path, byte[] content, CancellationToken token = default);
     void DeleteFile(string path); void DeleteDirectory(string path, bool recursive = true);
     void MoveDirectory(string source, string destination); void MoveFile(string source, string destination, bool overwrite = false);
-    void CopyFile(string source, string destination, bool overwrite = false); IReadOnlyList<string> EnumerateOwnedPaths(string path);
+    void CopyFile(string source, string destination, bool overwrite = false);
+    IReadOnlyList<string> EnumerateOwnedPaths(string path);
+    IReadOnlyList<string> EnumerateFiles(string directory, string searchPattern, SearchOption searchOption);
 }
 public interface IPhase7KnowledgePhysicalReadback
 {
@@ -152,6 +160,9 @@ public interface IPhase7KnowledgePhysicalReadback
         Phase7KnowledgeAuthority authority, CancellationToken token = default);
     Task<Phase7KnowledgeCompleteSetReadback> ValidateCandidateCompleteSetAsync(string executionRoot,
         Phase7KnowledgeAuthority authority, Phase7KnowledgeArtifactInventory inventory, CancellationToken token = default);
+    Task<Phase7KnowledgeCompleteSetReadback> ValidateStablePreCommitCompleteSetAsync(string executionRoot,
+        Phase7KnowledgeAuthority authority, Phase7KnowledgeArtifactInventory inventory,
+        Phase7KnowledgeCommittedEvidence evidence, CancellationToken token = default);
     Task<Phase7KnowledgeCompleteSetReadback> ValidateCommittedCompleteSetAsync(string executionRoot,
         Phase7KnowledgeAuthority authority, Phase7KnowledgeArtifactInventory inventory,
         Phase7KnowledgeCommittedEvidence evidence, CancellationToken token = default);
