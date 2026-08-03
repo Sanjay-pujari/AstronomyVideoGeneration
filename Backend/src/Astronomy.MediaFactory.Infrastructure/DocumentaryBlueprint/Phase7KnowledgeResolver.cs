@@ -14,7 +14,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
 
     public ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile)
     {
-        var issues = new List<string>(); var warnings = new List<string>(payload.Warnings); var candidates = new List<Phase7AdapterClaimCandidate>();
+        var issues = new List<string>(); var warnings = new List<string>(payload.Warnings.Concat(payload.AllResolvedSources.SelectMany(x => x.RegistryDiagnostics))); var candidates = new List<Phase7AdapterClaimCandidate>();
         var adapterDiagnostics=new List<Phase7KnowledgeAdapterDiagnostic>(); var unknownSections=new List<string>(); var unknownProperties=new List<string>();
         if (!IsEventCertified(payload.VerificationStatus)) issues.Add("P7KNOWLEDGE_EVENT_NOT_CERTIFIED");
         if (!IsEvergreenCertified(payload.CertificationStatus)) issues.Add("P7KNOWLEDGE_EVERGREEN_NOT_CERTIFIED");
@@ -62,8 +62,34 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             LocalizedScalar(payload.EvergreenJson,payload.Language,"pronunciation"),payload.ReviewedSources.Where(x=>x.Certified).Select(x=>x.SourceId).Order(StringComparer.Ordinal).ToArray(),
             warnings.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),issues.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),"");
         var all=payload.AllResolvedSources.Count>0?payload.AllResolvedSources:payload.ReviewedSources;
+        var supportEvidence = claims.SelectMany(claim =>
+        {
+            var candidate = merged[claim.SemanticIdentity];
+            var decision = decisions.FirstOrDefault(x => x.SelectedClaimIds.Contains(claim.ClaimId));
+            return claim.SourceIds.Select(sourceId => new Phase7ClaimSupportEvidence(claim.ClaimId, claim.SemanticIdentity,
+                sourceId, candidate.KnowledgeId, Phase7CanonicalFieldPathPolicy.Canonicalize(candidate.ApprovedFieldPath),
+                Enum.Parse<Phase7ProvenancePrecision>(claim.ProvenancePrecision), candidate.AdapterId, candidate.Origin,
+                decision is null ? "CertifiedExactProvenance" : decision.Classification.ToString(),
+                decision is null ? null : $"merge-{Phase7Determinism.Hash(new { decision.SemanticIdentity, decision.Classification })[..20]}",
+                claim.Confidence));
+        }).OrderBy(x => x.ClaimId, StringComparer.Ordinal).ThenBy(x => x.SourceId, StringComparer.Ordinal).ToArray();
+        adapterDiagnostics = adapterDiagnostics.Select(d =>
+        {
+            var adapterClaims = claims.Where(c => merged.TryGetValue(c.SemanticIdentity, out var candidate)
+                && candidate.AdapterId == d.AdapterId && candidate.Origin == d.Origin).ToArray();
+            var counts = decisions.Where(x => x.EvergreenClaimCandidate.AdapterId == d.AdapterId || x.EventClaimCandidate.AdapterId == d.AdapterId)
+                .GroupBy(x => x.Classification.ToString()).ToDictionary(x => x.Key, x => x.Count());
+            return d with {
+                ExactClaimProvenanceCount = adapterClaims.Count(x => x.ProvenancePrecision == nameof(Phase7ProvenancePrecision.ExactClaim)),
+                ExactEntityProvenanceCount = adapterClaims.Count(x => x.ProvenancePrecision == nameof(Phase7ProvenancePrecision.ExactKnowledgeEntity)),
+                ExactFieldProvenanceCount = adapterClaims.Count(x => x.ProvenancePrecision == nameof(Phase7ProvenancePrecision.ExactApprovedField)),
+                UnsupportedClaimCount = adapterClaims.Count(x => x.ProvenancePrecision == nameof(Phase7ProvenancePrecision.None)),
+                MergeDecisionCounts = counts
+            };
+        }).ToList();
         result=result with { AdapterDiagnostics=adapterDiagnostics,MergeDecisions=decisions,UnknownSections=unknownSections.Distinct().Order().ToArray(),UnknownProperties=unknownProperties.Distinct().Order().ToArray(),
-            SourceAuditSummary=new(all.Count,payload.RejectedSources.Count,payload.UnverifiedSources.Count,candidates.Count(x=>x.SourceIds.Count==0)) };
+            SourceAuditSummary=new(all.Count,payload.RejectedSources.Count,payload.UnverifiedSources.Count,candidates.Count(x=>x.SourceIds.Count==0)),
+            ClaimSupportEvidence=supportEvidence };
         return result with { DeterministicChecksum=Phase7Determinism.Hash(result with { DeterministicChecksum="" }) };
     }
 

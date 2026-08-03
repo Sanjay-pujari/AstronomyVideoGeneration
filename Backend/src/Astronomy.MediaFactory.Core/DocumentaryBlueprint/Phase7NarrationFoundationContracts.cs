@@ -66,6 +66,7 @@ public sealed record CertifiedNarrationSource(string SourceId, string SourceType
 {
     public IReadOnlyList<string> SupportedApprovedFieldPaths { get; init; } = [];
     public string Disposition { get; init; } = "CertifiedSupporting";
+    public IReadOnlyList<string> RegistryDiagnostics { get; init; } = [];
 }
 public sealed record NarrationKnowledgeDomain(string Domain, KnowledgeDomainStatus Status,
     IReadOnlyList<CertifiedNarrationClaim> Claims, IReadOnlyList<string> Warnings);
@@ -80,6 +81,7 @@ public sealed record ResolvedNarrationKnowledge(string PayloadId, string Payload
     public Phase7SourceAuditSummary SourceAuditSummary { get; init; } = new(0,0,0,0);
     public IReadOnlyList<string> UnknownSections { get; init; } = [];
     public IReadOnlyList<string> UnknownProperties { get; init; } = [];
+    public IReadOnlyList<Phase7ClaimSupportEvidence> ClaimSupportEvidence { get; init; } = [];
 }
 public sealed record CertifiedKnowledgePayload(string PayloadId, string EventId, string EventFamily, string EventType,
     string Language, string RawDataJson, string? MetadataJson, string? EvergreenJson,
@@ -139,7 +141,35 @@ public sealed record Phase7KnowledgeEntity(string KnowledgeId, string EntityType
 public sealed record Phase7AdapterClaimCandidate(string KnowledgeId, string ApprovedFieldPath,
     NarrationKnowledgeDomainKey Domain, string Text, IReadOnlyList<string> SourceIds,
     bool RequiresQualification, bool RequiresHumanReview, string SemanticIdentity)
-{ public Phase7KnowledgeOrigin Origin { get; init; } public string AdapterId { get; init; } = ""; public string AdapterVersion { get; init; } = ""; }
+{
+    public Phase7KnowledgeOrigin Origin { get; init; }
+    public string AdapterId { get; init; } = "";
+    public string AdapterVersion { get; init; } = "";
+    public string IdentityPrecision { get; init; } = "StableKnowledgeId";
+    public string? NormalizedValue { get; init; }
+    public string? ValueType { get; init; }
+    public string? Unit { get; init; }
+    public string? ScopeType { get; init; }
+    public string? Location { get; init; }
+    public decimal? Latitude { get; init; }
+    public decimal? Longitude { get; init; }
+    public DateTimeOffset? StartUtc { get; init; }
+    public DateTimeOffset? EndUtc { get; init; }
+    public DateOnly? ReferenceDate { get; init; }
+    public bool? Approximate { get; init; }
+    public decimal? Uncertainty { get; init; }
+    public decimal? Confidence { get; init; }
+}
+public sealed record Phase7KnowledgeEntityIdentity(string KnowledgeId, string IdentityPrecision, bool RequiresHumanReview);
+public interface IPhase7KnowledgeEntityIdentityResolver
+{
+    Phase7KnowledgeEntityIdentity Resolve(JsonElement item, string fallbackKnowledgeId,
+        IReadOnlyList<CertifiedNarrationSource> certifiedObjectRegistry, bool required);
+}
+public sealed record Phase7ClaimSupportEvidence(string ClaimId, string SemanticIdentity, string SourceId,
+    string KnowledgeId, string ApprovedFieldPath, Phase7ProvenancePrecision ProvenancePrecision,
+    string AdapterId, Phase7KnowledgeOrigin Origin, string SelectionReason, string? MergeDecisionId,
+    decimal Confidence);
 public sealed record Phase7KnowledgeSectionAdapterResult(IReadOnlyList<Phase7AdapterClaimCandidate> Claims,
     IReadOnlyList<Phase7KnowledgeEntity> KnowledgeEntities, IReadOnlyList<string> Warnings,
     IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> UnknownProperties, string AdapterChecksum);
@@ -149,6 +179,7 @@ public interface IPhase7KnowledgeSectionAdapter
     string AdapterVersion { get; }
     IReadOnlySet<string> SupportedSectionNames { get; }
     IReadOnlySet<NarrationKnowledgeDomainKey> ProducedDomains { get; }
+    IReadOnlySet<string> ApprovedFieldPaths => new HashSet<string>();
     Phase7KnowledgeSectionAdapterResult Extract(Phase7KnowledgeSectionContext context);
 }
 public sealed record Phase7KnowledgeAdapterDiagnostic(string AdapterId, string AdapterVersion, string SectionName,

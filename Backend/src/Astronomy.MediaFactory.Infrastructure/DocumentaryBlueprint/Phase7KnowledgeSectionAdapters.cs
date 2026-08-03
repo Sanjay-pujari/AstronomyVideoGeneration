@@ -31,17 +31,23 @@ public sealed class Phase7KnowledgeSectionAdapterRegistry
 public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
     IReadOnlyDictionary<string, NarrationKnowledgeDomainKey> fields) : IPhase7KnowledgeSectionAdapter
 {
+    private readonly IPhase7KnowledgeEntityIdentityResolver identityResolver = new Phase7KnowledgeEntityIdentityResolver();
+    private IReadOnlyList<CertifiedNarrationSource> sourceRegistry = [];
     private static readonly HashSet<string> Metadata = new(StringComparer.OrdinalIgnoreCase)
         { "sourceIds", "stableKnowledgeId", "factId", "objectId", "externalId", "catalogId", "canonicalName", "objectType", "objectRole", "useCases", "notes", "confidence", "reviewStatus" };
     public string AdapterId => id;
     public string AdapterVersion => "phase7-section-adapter.v1";
     public IReadOnlySet<string> SupportedSectionNames { get; } = new HashSet<string>([section], StringComparer.OrdinalIgnoreCase);
     public IReadOnlySet<NarrationKnowledgeDomainKey> ProducedDomains { get; } = fields.Values.ToHashSet();
+    public IReadOnlySet<string> ApprovedFieldPaths { get; } = fields.Keys
+        .Select(x => Phase7CanonicalFieldPathPolicy.Canonicalize($"{section}.{x}"))
+        .ToHashSet(StringComparer.Ordinal);
     protected virtual bool Qualified => section is "cultureAndMythology" or "regionalTraditions" or "astrologyRelationships";
     protected virtual bool HumanReview => Qualified;
 
     public Phase7KnowledgeSectionAdapterResult Extract(Phase7KnowledgeSectionContext context)
     {
+        sourceRegistry = context.SourceRegistry;
         var claims = new List<Phase7AdapterClaimCandidate>(); var entities = new List<Phase7KnowledgeEntity>();
         var unknown = new SortedSet<string>(StringComparer.Ordinal); var blocking = new List<string>();
         Visit(context.SectionJson, context.SectionName, context.PayloadId, [], claims, entities, unknown, blocking);
@@ -60,7 +66,7 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
         {
             foreach (var item in value.EnumerateArray())
             {
-                var identity = SemanticId(item, inheritedId);
+                var identity = identityResolver.Resolve(item, inheritedId, sourceRegistry, false).KnowledgeId;
                 Visit(item, path, identity, inheritedSources, claims, entities, unknown, blocking);
             }
             return;
@@ -68,7 +74,7 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
         if (value.ValueKind != JsonValueKind.Object) return;
         var sources = Strings(value, "sourceIds");
         if (sources.Length == 0) sources = inheritedSources;
-        var entityId = SemanticId(value, inheritedId);
+        var entityId = identityResolver.Resolve(value, inheritedId, sourceRegistry, false).KnowledgeId;
         var name = Scalar(value, "objectName") ?? Scalar(value, "canonicalName") ?? entityId;
         if (value.TryGetProperty("objectId", out _) || value.TryGetProperty("stableKnowledgeId", out _))
         {
@@ -103,18 +109,28 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
         {
             // Scalar identity describes the certified fact, never its current rendering/value.
             // Content fallback is reserved for genuinely multi-valued primitive collections.
-            var item = collection ? $".{Phase7Determinism.Hash(text.Trim().ToLowerInvariant())[..12]}" : "";
+            var resolved = collection
+                ? identityResolver.Resolve(JsonDocument.Parse(JsonSerializer.Serialize(text)).RootElement, entityId, sourceRegistry, false)
+                : new Phase7KnowledgeEntityIdentity(entityId, "StableKnowledgeId", false);
+            var item = collection ? $".{resolved.KnowledgeId}" : "";
             var semantic = $"{entityId.ToLowerInvariant()}.{fieldPath}{item}";
             claims.Add(new(entityId, fieldPath, domain, text.Trim(), sources, Qualified, HumanReview, semantic)
-            { AdapterId=AdapterId, AdapterVersion=AdapterVersion });
+            {
+                AdapterId=AdapterId, AdapterVersion=AdapterVersion, IdentityPrecision=resolved.IdentityPrecision,
+                RequiresHumanReview=HumanReview || resolved.RequiresHumanReview,
+                NormalizedValue=NormalizeValue(text), ValueType=TypedValueType(fieldPath), Unit=TypedUnit(fieldPath),
+                StartUtc=fieldPath.EndsWith("startUtc",StringComparison.Ordinal) && DateTimeOffset.TryParse(text,out var start) ? start : null,
+                EndUtc=fieldPath.EndsWith("endUtc",StringComparison.Ordinal) && DateTimeOffset.TryParse(text,out var end) ? end : null
+            });
         }
     }
-    private static string SemanticId(JsonElement item, string fallback)
-    {
-        foreach (var key in new[] { "stableKnowledgeId", "factId", "objectId", "externalId", "catalogId" })
-            if (item.ValueKind == JsonValueKind.Object && Scalar(item,key) is { Length: > 0 } id) return id.Trim().ToLowerInvariant();
-        return item.ValueKind == JsonValueKind.Object ? $"{fallback}.{Phase7Determinism.Hash(JsonSerializer.Serialize(item))[..16]}" : fallback;
-    }
+    private static string? TypedValueType(string path) => path.EndsWith("Utc",StringComparison.Ordinal) ? "DateTimeOffset"
+        : path.EndsWith("areaSquareDegrees",StringComparison.Ordinal) || path.EndsWith("altitude",StringComparison.Ordinal)
+          || path.EndsWith("separation",StringComparison.Ordinal) || path.EndsWith("peakRate",StringComparison.Ordinal) ? "Decimal" : null;
+    private static string? TypedUnit(string path) => path.EndsWith("areaSquareDegrees",StringComparison.Ordinal) ? "squareDegree"
+        : path.EndsWith("altitude",StringComparison.Ordinal) || path.EndsWith("separation",StringComparison.Ordinal) ? "degree"
+        : path.EndsWith("peakRate",StringComparison.Ordinal) ? "perHour" : null;
+    private static string NormalizeValue(string value) => value.Trim().ToLowerInvariant();
     private static string? Scalar(JsonElement o,string key)=>o.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString():null;
     private static string[] Strings(JsonElement o,string key)=>o.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.Array?v.EnumerateArray().Where(x=>x.ValueKind==JsonValueKind.String).Select(x=>x.GetString()!).ToArray():[];
 }

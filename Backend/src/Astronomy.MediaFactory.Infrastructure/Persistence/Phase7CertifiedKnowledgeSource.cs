@@ -2,6 +2,7 @@ using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Microsoft.EntityFrameworkCore;
+using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -72,17 +73,20 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         var knowledge = JsonArray(s.EvidenceJson, "supportedKnowledgeIds");
         var claims = JsonArray(s.EvidenceJson, "supportedClaimIds");
         var domains = JsonArray(s.EvidenceJson, "supportedDomains");
-        var fields = JsonArray(s.EvidenceJson, "supportedApprovedFieldPaths")
+        var rawFields = JsonArray(s.EvidenceJson, "supportedApprovedFieldPaths");
+        var invalidFields = rawFields.Where(x => !Phase7CanonicalFieldPathPolicy.TryCanonicalize(x, out _))
+            .Select(x => $"P7KNOWLEDGE_SOURCE_FIELD_PATH_INVALID:{x}").Order(StringComparer.Ordinal).ToArray();
+        var fields = rawFields
             .Select(x => Phase7CanonicalFieldPathPolicy.TryCanonicalize(x, out var canonical) ? canonical : "")
             .Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var reviewStatus = EvidenceString(s.EvidenceJson,"reviewStatus");
         var certificationStatus = EvidenceString(s.EvidenceJson,"certificationStatus") ?? EvidenceString(s.EvidenceJson,"verificationStatus");
-        var reviewed = reviewStatus is not null && reviewStatus.Equals("Reviewed",StringComparison.OrdinalIgnoreCase);
+        var reviewed = ApprovedReviewState(reviewStatus);
         var certified = certificationStatus is not null && (certificationStatus.Equals("Certified",StringComparison.OrdinalIgnoreCase)||certificationStatus.Equals("Verified",StringComparison.OrdinalIgnoreCase));
         var draft = new CertifiedNarrationSource(s.Id.ToString(), s.SourceType, s.SourceName, s.SourceName,
             s.SourceUrl ?? s.Citation ?? "", reviewed, certified, knowledge, claims, domains, language,
             Math.Clamp(s.ConfidenceScore ?? .8m, 0m, 1m), "");
-        draft=draft with { SupportedApprovedFieldPaths=fields,Disposition=certified?"CertifiedSupporting":reviewStatus?.Equals("Rejected",StringComparison.OrdinalIgnoreCase)==true?"Rejected":"Unverified" };
+        draft=draft with { SupportedApprovedFieldPaths=fields,RegistryDiagnostics=invalidFields,Disposition=certified&&reviewed?"CertifiedSupporting":reviewStatus?.Equals("Rejected",StringComparison.OrdinalIgnoreCase)==true?"Rejected":certified?"RejectedReviewState":"Unverified" };
         return draft with { Checksum = Phase7Determinism.Hash(draft with { Checksum = "" }) };
     }
     private static CertifiedNarrationSource EvergreenSource(EvergreenKnowledgeSource s, EvergreenAstronomyKnowledgePackage p, string language)
@@ -90,9 +94,14 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         var supportedKnowledge = p.Objects.Where(o => o.SourceIds.Contains(s.SourceId, StringComparer.OrdinalIgnoreCase)).Select(o => o.ObjectId)
             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
         var confidence = s.Confidence.Equals("High", StringComparison.OrdinalIgnoreCase) ? .98m : .85m;
+        var accepted = ApprovedEvergreenState(s.ReviewStatus);
+        var supportedFields = new Phase7KnowledgeSectionAdapterRegistry().Adapters
+            .Where(a => a.SupportedSectionNames.Any(section => s.SupportedSections.Contains(section, StringComparer.OrdinalIgnoreCase)))
+            .SelectMany(a => a.ApprovedFieldPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var draft = new CertifiedNarrationSource(s.SourceId, s.SourceType, s.Title, s.Authority, s.Reference,
-            s.ReviewStatus.Equals("Reviewed", StringComparison.OrdinalIgnoreCase), s.ReviewStatus.Equals("Reviewed", StringComparison.OrdinalIgnoreCase),
+            accepted, accepted,
             supportedKnowledge, [], s.SupportedSections.Select(CanonicalDomain).Distinct().ToArray(), language, confidence, "");
+        draft = draft with { SupportedApprovedFieldPaths = supportedFields, Disposition = accepted ? "CertifiedSupporting" : "RejectedReviewState" };
         return draft with { Checksum = Phase7Determinism.Hash(draft with { Checksum = "" }) };
     }
     private static string ResolveAuthoritativeFamily(string eventType, string category)
@@ -105,6 +114,8 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
     }
     private static string NormalizeFamily(string value) => value.Trim().Replace('-', '_').Replace(' ', '_').ToUpperInvariant();
     private static bool Certified(string value) => value.Equals("Certified", StringComparison.OrdinalIgnoreCase) || value.Equals("Verified", StringComparison.OrdinalIgnoreCase);
+    private static bool ApprovedReviewState(string? value) => value is not null && new[] { "Approved", "Reviewed", "Verified", "Certified" }.Contains(value, StringComparer.OrdinalIgnoreCase);
+    private static bool ApprovedEvergreenState(string? value) => value is not null && new[] { "Reviewed", "Verified", "Certified" }.Contains(value, StringComparer.OrdinalIgnoreCase);
     private static string? MetadataString(string? json, string key) { if (string.IsNullOrWhiteSpace(json)) return null; using var d = JsonDocument.Parse(json); return d.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null; }
     private static string[] JsonArray(string? json, string key) { if (string.IsNullOrWhiteSpace(json)) return []; try { using var d=JsonDocument.Parse(json); return d.RootElement.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.Array ? v.EnumerateArray().Where(x=>x.ValueKind==JsonValueKind.String).Select(x=>x.GetString()!).ToArray() : []; } catch(JsonException) { return []; } }
     private static string? EvidenceString(string? json,string key){if(string.IsNullOrWhiteSpace(json))return null;using var d=JsonDocument.Parse(json);return d.RootElement.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString():null;}
