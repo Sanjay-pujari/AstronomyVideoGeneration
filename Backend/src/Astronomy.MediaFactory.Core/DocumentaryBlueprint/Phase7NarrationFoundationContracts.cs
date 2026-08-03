@@ -133,15 +133,34 @@ public interface IPhase7KnowledgeResolver
 public enum Phase7KnowledgeOrigin { Event, Evergreen }
 public enum Phase7ProvenancePrecision { ExactClaim, ExactKnowledgeEntity, ExactApprovedField, CoarseDomain, None }
 public enum Phase7KnowledgeMergeClassification { Equivalent, EventSpecificSpecialization, EventMorePrecise, EvergreenMorePrecise, Contradictory, Incomparable }
+public sealed record Phase7KnowledgeAuthorityScope(
+    string? ScopeType = null, string? Location = null, decimal? Latitude = null, decimal? Longitude = null,
+    DateTimeOffset? StartUtc = null, DateTimeOffset? EndUtc = null, DateOnly? ReferenceDate = null,
+    string? EventInstanceId = null, string? ObservationWindowId = null)
+{
+    public bool HasExplicitEvidence => !string.IsNullOrWhiteSpace(ScopeType) || !string.IsNullOrWhiteSpace(Location)
+        || Latitude.HasValue || Longitude.HasValue || StartUtc.HasValue || EndUtc.HasValue || ReferenceDate.HasValue
+        || !string.IsNullOrWhiteSpace(EventInstanceId) || !string.IsNullOrWhiteSpace(ObservationWindowId);
+}
+public sealed record Phase7KnowledgeComparisonMetadata(string? NormalizedValue = null, string? ValueType = null,
+    string? Unit = null, bool? Approximation = null, decimal? Uncertainty = null, decimal? Confidence = null);
+public enum Phase7KnowledgeScopeComparison { SameScope, EventIsSpecialization, DistinctNonConflictingScopes, InsufficientScopeEvidence, ConflictingScope }
+public interface IPhase7KnowledgeScopeComparer
+{
+    Phase7KnowledgeScopeComparison Compare(Phase7KnowledgeAuthorityScope evergreen, Phase7KnowledgeAuthorityScope @event);
+}
 public sealed record Phase7KnowledgeMergeRequest(string SemanticIdentity, NarrationKnowledgeDomainKey Domain,
     string ApprovedFieldPath, Phase7AdapterClaimCandidate EvergreenCandidate, Phase7AdapterClaimCandidate EventCandidate,
-    IReadOnlyDictionary<string,string> DependencyMetadata, IReadOnlyDictionary<string,string> EventExecutionContext);
+    Phase7KnowledgeAuthorityScope EvergreenScope, Phase7KnowledgeAuthorityScope EventScope,
+    Phase7KnowledgeComparisonMetadata EvergreenComparisonMetadata, Phase7KnowledgeComparisonMetadata EventComparisonMetadata,
+    IReadOnlyDictionary<string,string> EventExecutionContext);
 public sealed record Phase7KnowledgeMergeResult(Phase7KnowledgeMergeClassification Classification, string Reason,
     IReadOnlyList<string> Warnings, IReadOnlyList<string> BlockingIssues);
 public interface IPhase7KnowledgeMergeClassifier { Phase7KnowledgeMergeResult Classify(Phase7KnowledgeMergeRequest request); }
 public sealed record Phase7KnowledgeMergeDecision(string SemanticIdentity, Phase7KnowledgeMergeClassification Classification,
     Phase7AdapterClaimCandidate EvergreenClaimCandidate, Phase7AdapterClaimCandidate EventClaimCandidate,
-    IReadOnlyList<string> SelectedClaimIds, string Reason, IReadOnlyDictionary<string,string> DependencyScope,
+    IReadOnlyList<string> SelectedClaimIds, string Reason, Phase7KnowledgeAuthorityScope EvergreenScope,
+    Phase7KnowledgeAuthorityScope EventScope, IReadOnlyDictionary<string,string> ComparisonEvidence,
     IReadOnlyList<string> Warnings, IReadOnlyList<string> BlockingIssues);
 public sealed record Phase7SourceAuditSummary(int AllResolvedSourceCount, int RejectedSourceCount,
     int UncertifiedSourceCount, int UnsupportedSourceCount);
@@ -168,6 +187,8 @@ public sealed record Phase7AdapterClaimCandidate(string KnowledgeId, string Appr
     public DateTimeOffset? StartUtc { get; init; }
     public DateTimeOffset? EndUtc { get; init; }
     public DateOnly? ReferenceDate { get; init; }
+    public string? EventInstanceId { get; init; }
+    public string? ObservationWindowId { get; init; }
     public bool? Approximate { get; init; }
     public decimal? Uncertainty { get; init; }
     public decimal? Confidence { get; init; }

@@ -30,13 +30,16 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         {
             if (!merged.TryGetValue(candidate.SemanticIdentity,out var prior)) { merged.Add(candidate.SemanticIdentity,candidate); continue; }
             var evergreen=prior.Origin==Phase7KnowledgeOrigin.Evergreen?prior:candidate; var ev=prior.Origin==Phase7KnowledgeOrigin.Event?prior:candidate;
-            var dependency=Dependency(evergreen,ev);
-            var classified=classifier.Classify(new(candidate.SemanticIdentity,candidate.Domain,candidate.ApprovedFieldPath,evergreen,ev,dependency,new Dictionary<string,string>()));
+            var evergreenScope=Scope(evergreen); var eventScope=Scope(ev);
+            var evergreenComparison=Comparison(evergreen); var eventComparison=Comparison(ev);
+            var classified=classifier.Classify(new(candidate.SemanticIdentity,candidate.Domain,candidate.ApprovedFieldPath,evergreen,ev,
+                evergreenScope,eventScope,evergreenComparison,eventComparison,new Dictionary<string,string>()));
+            var scopeOutcome=new Phase7KnowledgeScopeComparer().Compare(evergreenScope,eventScope);
             var selected=classified.Classification switch { Phase7KnowledgeMergeClassification.EventMorePrecise=>ev, _=>evergreen };
             if (classified.Classification == Phase7KnowledgeMergeClassification.Equivalent)
                 selected = selected with { SourceIds = evergreen.SourceIds.Concat(ev.SourceIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() };
             if(classified.Classification==Phase7KnowledgeMergeClassification.EventSpecificSpecialization ||
-               classified.Classification==Phase7KnowledgeMergeClassification.Incomparable && dependency.Count>0)
+               classified.Classification==Phase7KnowledgeMergeClassification.Incomparable && scopeOutcome==Phase7KnowledgeScopeComparison.DistinctNonConflictingScopes)
             {
                 merged.Remove(candidate.SemanticIdentity);
                 var general=evergreen with { SemanticIdentity=$"{candidate.SemanticIdentity}.general" };
@@ -55,7 +58,8 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
                 issues.Add($"P7KNOWLEDGE_CONTRADICTION:{candidate.SemanticIdentity}");
             }
             else merged[candidate.SemanticIdentity]=selected;
-            decisions.Add(new(candidate.SemanticIdentity,classified.Classification,evergreen,ev,[],classified.Reason,dependency,classified.Warnings,classified.BlockingIssues));
+            decisions.Add(new(candidate.SemanticIdentity,classified.Classification,evergreen,ev,[],classified.Reason,
+                evergreenScope,eventScope,ComparisonEvidence(evergreenComparison,eventComparison),classified.Warnings,classified.BlockingIssues));
         }
         var claims = merged.Values.Select(x=>Claim(x,payload,issues)).OrderBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray();
         var claimIdsBySemantic = claims.ToDictionary(x => x.SemanticIdentity, x => x.ClaimId, StringComparer.Ordinal);
@@ -155,12 +159,23 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
     private static bool IsEvergreenCertified(string value)=>IsEventCertified(value)||value.Equals("Reviewed",StringComparison.OrdinalIgnoreCase);
     private static NarrationKnowledgeDomainKey ParseDomain(string value)=>NarrationKnowledgeDomains.TryParse(value,out var key)?key:throw new InvalidOperationException($"P7DOMAIN_UNKNOWN:{value}");
     private static bool Has(string value,params string[] terms)=>terms.Any(t=>value.Contains(t,StringComparison.OrdinalIgnoreCase));
-    private static IReadOnlyDictionary<string,string> Dependency(Phase7AdapterClaimCandidate evergreen,Phase7AdapterClaimCandidate ev)
+    private static Phase7KnowledgeAuthorityScope Scope(Phase7AdapterClaimCandidate c) => new(c.ScopeType,c.Location,c.Latitude,c.Longitude,
+        c.StartUtc,c.EndUtc,c.ReferenceDate,c.EventInstanceId,c.ObservationWindowId);
+    private static Phase7KnowledgeComparisonMetadata Comparison(Phase7AdapterClaimCandidate c) => new(c.NormalizedValue,c.ValueType,c.Unit,
+        c.Approximate,c.Uncertainty,c.Confidence);
+    private static IReadOnlyDictionary<string,string> ComparisonEvidence(Phase7KnowledgeComparisonMetadata evergreen,Phase7KnowledgeComparisonMetadata ev)
     {
         var result=new SortedDictionary<string,string>(StringComparer.Ordinal);
-        static string Scope(Phase7AdapterClaimCandidate c)=>string.Join("|",new[]{c.ScopeType,c.Location,c.Latitude?.ToString(),c.Longitude?.ToString(),c.StartUtc?.ToString("O"),c.EndUtc?.ToString("O"),c.ReferenceDate?.ToString("O"),c.Unit,c.NormalizedValue,c.Approximate?.ToString(),c.Uncertainty?.ToString(),c.Confidence?.ToString()}.Where(x=>!string.IsNullOrWhiteSpace(x)));
-        var a=Scope(evergreen);var b=Scope(ev); if(a.Length>0)result["evergreenScope"]=a;if(b.Length>0)result["eventScope"]=b;
-        return result;
+        static void Add(SortedDictionary<string,string> target,string prefix,Phase7KnowledgeComparisonMetadata value)
+        {
+            if(value.NormalizedValue is not null)target[$"{prefix}.normalizedValue"]=value.NormalizedValue;
+            if(value.ValueType is not null)target[$"{prefix}.valueType"]=value.ValueType;
+            if(value.Unit is not null)target[$"{prefix}.unit"]=value.Unit;
+            if(value.Approximation.HasValue)target[$"{prefix}.approximation"]=value.Approximation.Value.ToString();
+            if(value.Uncertainty.HasValue)target[$"{prefix}.uncertainty"]=value.Uncertainty.Value.ToString();
+            if(value.Confidence.HasValue)target[$"{prefix}.confidence"]=value.Confidence.Value.ToString();
+        }
+        Add(result,"evergreen",evergreen);Add(result,"event",ev);return result;
     }
     private static IReadOnlyDictionary<string,string> Localized(string? json,string language,string key){var m=new SortedDictionary<string,string>();if(string.IsNullOrWhiteSpace(json))return m;using var d=JsonDocument.Parse(json);if(!d.RootElement.TryGetProperty("localizedContent",out var l)||!l.TryGetProperty(language.Split('-','_')[0],out var c)||!c.TryGetProperty(key,out var v)||v.ValueKind!=JsonValueKind.Array)return m;foreach(var x in v.EnumerateArray().Where(x=>x.ValueKind==JsonValueKind.String)){var s=x.GetString()!;m[s]=s;}return m;}
     private static IReadOnlyDictionary<string,string> LocalizedScalar(string? json,string language,string key){var m=new SortedDictionary<string,string>();if(string.IsNullOrWhiteSpace(json))return m;using var d=JsonDocument.Parse(json);if(d.RootElement.TryGetProperty("localizedContent",out var l)&&l.TryGetProperty(language.Split('-','_')[0],out var c)&&c.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.String)m["subject"]=v.GetString()!;return m;}

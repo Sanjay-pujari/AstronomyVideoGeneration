@@ -136,3 +136,18 @@ This batch remains limited to deterministic resolution; it does not publish a Kn
 8. **Environment evidence.** The .NET SDK remains unavailable in this container, so no current build or test totals are claimed.
 9. **External calls.** Azure OpenAI invocation count: **0**. Azure Speech synthesis invocation count: **0**.
 10. **Readiness and verdict.** P7.1B is not ready and must not begin. `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A Batch 4 — true-scope separation and merge safety
+
+1. **True scope contract.** `Phase7KnowledgeAuthorityScope` is now the only merge input that can establish distinct authority scopes. It contains scope type, location, coordinates, time bounds, reference date, event instance, and observation window identifiers.
+2. **Comparison metadata contract.** `Phase7KnowledgeComparisonMetadata` separately contains normalized value, value type, unit, approximation, uncertainty, and confidence. None of those fields participates in scope comparison.
+3. **Scope comparer.** `Phase7KnowledgeScopeComparer` deterministically returns `SameScope`, `EventIsSpecialization`, `DistinctNonConflictingScopes`, `InsufficientScopeEvidence`, or `ConflictingScope`. Unscoped facts remain same-scope regardless of differing values, units, confidence, or approximation.
+4. **Merge order.** The classifier first verifies semantic identity/domain/approved path, then invokes the true-scope comparer, then compares typed normalized values and units, then governed precision, with normalized prose equality as the final conservative fallback.
+5. **Safe outcomes.** A specialization is possible only with narrower true event scope. A same-scope typed conflict blocks both candidates. Distinct retention is possible only after the comparer explicitly establishes non-conflicting scopes. Unscoped incomparable candidates publish neither and no `.general`/`.execution` identities are generated.
+6. **Decision evidence.** Merge decisions carry both typed scopes and a separate comparison-evidence dictionary; the former mixed dependency dictionary has been removed.
+7. **Tests.** Dedicated scope-comparer and classifier tests cover unscoped values, explicit location/time specialization, explicit different locations, incompatible same-scope values, units, confidence, and the true-scope specialization prerequisite.
+8. **Publication status.** The dedicated Knowledge Authority contract, artifact publication, validation, inventory/readback, transaction/rollback/recovery, committed evaluator, reuse, manifest integration, Orion publication, and all-family certification requested for the complete batch are not implemented by this change.
+9. **Test evidence.** The environment has no .NET SDK, so build and test totals remain unavailable and are not fabricated. `git diff --check` passes.
+10. **External calls.** Azure OpenAI invocation count: **0**. Azure Speech synthesis invocation count: **0**.
+11. **P7.1B readiness.** Not ready. P7.1A must not be frozen until the outstanding publication infrastructure and full regression matrix pass.
+12. **Final verdict.** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.

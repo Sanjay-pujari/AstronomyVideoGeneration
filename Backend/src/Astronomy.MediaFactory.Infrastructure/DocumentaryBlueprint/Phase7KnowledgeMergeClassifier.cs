@@ -4,44 +4,75 @@ using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
-/// <summary>Conservative, deterministic classifier. It never treats mere difference as authority precedence.</summary>
+/// <summary>Scope-first conservative classifier. Comparison metadata can compare facts but cannot establish scope.</summary>
 public sealed class Phase7KnowledgeMergeClassifier : IPhase7KnowledgeMergeClassifier
 {
     private static readonly Regex Number = new(@"[-+]?\d+(?:\.\d+)?", RegexOptions.Compiled);
-    private static readonly string[] ScopeWords = ["utc", "date", "time", "location", "latitude", "longitude", "altitude", "visibility", "from ", "on "];
+    private readonly IPhase7KnowledgeScopeComparer scopeComparer;
+    public Phase7KnowledgeMergeClassifier() : this(new Phase7KnowledgeScopeComparer()) { }
+    public Phase7KnowledgeMergeClassifier(IPhase7KnowledgeScopeComparer scopeComparer) => this.scopeComparer = scopeComparer;
 
     public Phase7KnowledgeMergeResult Classify(Phase7KnowledgeMergeRequest request)
     {
-        var evergreen=Normalize(request.EvergreenCandidate.Text); var @event=Normalize(request.EventCandidate.Text);
-        if (evergreen==@event) return Result(Phase7KnowledgeMergeClassification.Equivalent,"Normalized certified values are equal.");
-        if (HasExplicitDifferentScope(request)) return Result(Phase7KnowledgeMergeClassification.Incomparable,"Candidates have distinct explicit, non-conflicting scopes.");
-        if (HasExecutionScope(request.EventCandidate) && !HasExecutionScope(request.EvergreenCandidate))
-            return Result(Phase7KnowledgeMergeClassification.EventSpecificSpecialization,"Typed event metadata establishes execution-specific scope.");
-        if ((@event.Contains(evergreen,StringComparison.Ordinal) || SharesCore(evergreen,@event)) && ScopeWords.Any(@event.Contains))
-            return Result(Phase7KnowledgeMergeClassification.EventSpecificSpecialization,"Event authority adds execution-specific timing, location, geometry, or visibility scope.");
-        var en=Numeric(evergreen); var ev=Numeric(@event);
-        if (en is not null && ev is not null)
-        {
-            if (en.Value.Value != ev.Value.Value) return Block("Numeric values conflict under the same approved-field scope.");
-            if (ev.Value.Decimals>en.Value.Decimals) return Result(Phase7KnowledgeMergeClassification.EventMorePrecise,"Event value expresses greater numeric precision.");
-            if (en.Value.Decimals>ev.Value.Decimals) return Result(Phase7KnowledgeMergeClassification.EvergreenMorePrecise,"Evergreen value expresses greater numeric precision.");
-        }
-        if (IsGeneric(evergreen) && !IsGeneric(@event)) return Result(Phase7KnowledgeMergeClassification.EventMorePrecise,"Event value is more specific than general evergreen authority.");
-        if (IsGeneric(@event) && !IsGeneric(evergreen)) return Result(Phase7KnowledgeMergeClassification.EvergreenMorePrecise,"Evergreen value is more specific than generic event data.");
-        return new(Phase7KnowledgeMergeClassification.Incomparable,
-            "No typed evidence establishes equivalence, precedence, specialization, or contradiction; human review is required.",
-            ["P7KNOWLEDGE_INCOMPARABLE_REQUIRES_HUMAN_REVIEW"], []);
+        if (!string.Equals(request.EvergreenCandidate.SemanticIdentity, request.EventCandidate.SemanticIdentity, StringComparison.Ordinal)
+            || request.EvergreenCandidate.Domain != request.EventCandidate.Domain
+            || !string.Equals(Phase7CanonicalFieldPathPolicy.Canonicalize(request.EvergreenCandidate.ApprovedFieldPath),
+                Phase7CanonicalFieldPathPolicy.Canonicalize(request.EventCandidate.ApprovedFieldPath), StringComparison.Ordinal))
+            return Incomparable("Semantic identity, domain, and approved field must match before merge classification.");
+
+        var scope = scopeComparer.Compare(request.EvergreenScope, request.EventScope);
+        if (scope == Phase7KnowledgeScopeComparison.DistinctNonConflictingScopes)
+            return Incomparable("The scope comparer established distinct non-conflicting authority scopes.");
+        if (scope == Phase7KnowledgeScopeComparison.ConflictingScope)
+            return Block("The candidates assert conflicting authority scopes.");
+
+        var fact = CompareValues(request.EvergreenComparisonMetadata, request.EventComparisonMetadata);
+        if (scope == Phase7KnowledgeScopeComparison.EventIsSpecialization)
+            return fact == ValueComparison.Conflict
+                ? Block("The execution-scoped value contradicts the general fact.")
+                : Result(Phase7KnowledgeMergeClassification.EventSpecificSpecialization, "True authority fields establish a narrower event scope.");
+        if (fact == ValueComparison.Equal)
+            return Precision(request.EvergreenComparisonMetadata, request.EventComparisonMetadata);
+        if (fact == ValueComparison.Conflict && scope == Phase7KnowledgeScopeComparison.SameScope)
+            return Block("Typed normalized values conflict under the same authority scope.");
+
+        // Prose is intentionally only a conservative equality fallback. It cannot create scope.
+        if (Normalize(request.EvergreenCandidate.Text) == Normalize(request.EventCandidate.Text))
+            return Result(Phase7KnowledgeMergeClassification.Equivalent, "Conservative normalized prose comparison is equal.");
+        return Incomparable("No governed evidence establishes equivalence, precision, or contradiction; human review is required.");
     }
 
-    private static Phase7KnowledgeMergeResult Result(Phase7KnowledgeMergeClassification c,string reason)=>new(c,reason,[],[]);
-    private static Phase7KnowledgeMergeResult Block(string reason)=>new(Phase7KnowledgeMergeClassification.Contradictory,reason,[],["P7KNOWLEDGE_CONTRADICTION"]);
-    private static string Normalize(string value)=>Regex.Replace(value.Trim().ToLowerInvariant(),@"\s+"," ").TrimEnd('.');
-    private static bool SharesCore(string a,string b)=>a.Split(' ',StringSplitOptions.RemoveEmptyEntries).Intersect(b.Split(' ',StringSplitOptions.RemoveEmptyEntries)).Count()>=Math.Min(4,a.Split(' ').Length);
-    private static bool HasExplicitDifferentScope(Phase7KnowledgeMergeRequest r)=>r.DependencyMetadata.TryGetValue("evergreenScope",out var a)&&r.DependencyMetadata.TryGetValue("eventScope",out var b)&&!string.Equals(a,b,StringComparison.OrdinalIgnoreCase);
-    private static bool HasExecutionScope(Phase7AdapterClaimCandidate candidate) =>
-        !string.IsNullOrWhiteSpace(candidate.ScopeType) || !string.IsNullOrWhiteSpace(candidate.Location) ||
-        candidate.Latitude.HasValue || candidate.Longitude.HasValue || candidate.StartUtc.HasValue ||
-        candidate.EndUtc.HasValue || candidate.ReferenceDate.HasValue;
-    private static bool IsGeneric(string value)=>new[]{"general","typically","usually","approximately","varies","may be"}.Any(value.Contains);
-    private static (decimal Value,int Decimals)? Numeric(string value){var m=Number.Match(value);if(!m.Success||!decimal.TryParse(m.Value,NumberStyles.Number,CultureInfo.InvariantCulture,out var n))return null;var dot=m.Value.IndexOf('.');return(n,dot<0?0:m.Value.Length-dot-1);}
+    private static Phase7KnowledgeMergeResult Precision(Phase7KnowledgeComparisonMetadata evergreen, Phase7KnowledgeComparisonMetadata @event)
+    {
+        var en = Numeric(evergreen.NormalizedValue); var ev = Numeric(@event.NormalizedValue);
+        var eventBetter = evergreen.Approximation == true && @event.Approximation != true
+            || evergreen.Uncertainty.HasValue && @event.Uncertainty.HasValue && @event.Uncertainty < evergreen.Uncertainty
+            || en.HasValue && ev.HasValue && ev.Value.Decimals > en.Value.Decimals
+            || evergreen.Confidence.HasValue && @event.Confidence.HasValue && @event.Confidence > evergreen.Confidence;
+        var evergreenBetter = @event.Approximation == true && evergreen.Approximation != true
+            || evergreen.Uncertainty.HasValue && @event.Uncertainty.HasValue && evergreen.Uncertainty < @event.Uncertainty
+            || en.HasValue && ev.HasValue && en.Value.Decimals > ev.Value.Decimals
+            || evergreen.Confidence.HasValue && @event.Confidence.HasValue && evergreen.Confidence > @event.Confidence;
+        if (eventBetter && !evergreenBetter) return Result(Phase7KnowledgeMergeClassification.EventMorePrecise, "The event expresses greater governed precision.");
+        if (evergreenBetter && !eventBetter) return Result(Phase7KnowledgeMergeClassification.EvergreenMorePrecise, "The evergreen authority expresses greater governed precision.");
+        return Result(Phase7KnowledgeMergeClassification.Equivalent, "Typed normalized facts and units are equivalent.");
+    }
+
+    private static ValueComparison CompareValues(Phase7KnowledgeComparisonMetadata a, Phase7KnowledgeComparisonMetadata b)
+    {
+        if (string.IsNullOrWhiteSpace(a.NormalizedValue) || string.IsNullOrWhiteSpace(b.NormalizedValue)) return ValueComparison.Unknown;
+        if (!string.IsNullOrWhiteSpace(a.ValueType) && !string.IsNullOrWhiteSpace(b.ValueType)
+            && !string.Equals(a.ValueType, b.ValueType, StringComparison.OrdinalIgnoreCase)) return ValueComparison.Conflict;
+        if (!string.IsNullOrWhiteSpace(a.Unit) && !string.IsNullOrWhiteSpace(b.Unit)
+            && !string.Equals(a.Unit, b.Unit, StringComparison.OrdinalIgnoreCase)) return ValueComparison.Unknown;
+        return string.Equals(Normalize(a.NormalizedValue), Normalize(b.NormalizedValue), StringComparison.Ordinal)
+            || Numeric(a.NormalizedValue)?.Value == Numeric(b.NormalizedValue)?.Value
+            ? ValueComparison.Equal : ValueComparison.Conflict;
+    }
+    private enum ValueComparison { Equal, Conflict, Unknown }
+    private static Phase7KnowledgeMergeResult Result(Phase7KnowledgeMergeClassification c, string reason) => new(c, reason, [], []);
+    private static Phase7KnowledgeMergeResult Block(string reason) => new(Phase7KnowledgeMergeClassification.Contradictory, reason, [], ["P7KNOWLEDGE_CONTRADICTION"]);
+    private static Phase7KnowledgeMergeResult Incomparable(string reason) => new(Phase7KnowledgeMergeClassification.Incomparable, reason, ["P7KNOWLEDGE_INCOMPARABLE_REQUIRES_HUMAN_REVIEW"], []);
+    private static string Normalize(string value) => Regex.Replace(value.Trim().ToLowerInvariant(), @"\s+", " ").TrimEnd('.');
+    private static (decimal Value, int Decimals)? Numeric(string? value) { if (value is null) return null; var m=Number.Match(value); if (!m.Success || !decimal.TryParse(m.Value, NumberStyles.Number, CultureInfo.InvariantCulture, out var n)) return null; var dot=m.Value.IndexOf('.'); return (n, dot < 0 ? 0 : m.Value.Length-dot-1); }
 }
