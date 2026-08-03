@@ -41,6 +41,7 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         {
             CertifiedEventFamily = family, EvergreenRelativePath = evergreen?.RelativePath,
             EvergreenPayloadId = evergreen?.Package.KnowledgeId, EvergreenChecksum = evergreen?.Checksum,
+            EvergreenReviewStatus = evergreen?.Package.ReviewStatus ?? "NotLoaded",
             ReviewedSources = sources, AllResolvedSources=allSources, CertifiedSupportingSources=sources,
             RejectedSources=allSources.Where(s=>s.Disposition=="Rejected").ToArray(),
             UnverifiedSources=allSources.Where(s=>!s.Certified&&s.Disposition!="Rejected").ToArray(),

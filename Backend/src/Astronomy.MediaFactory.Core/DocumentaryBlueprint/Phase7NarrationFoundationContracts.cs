@@ -52,6 +52,7 @@ public sealed record CertifiedNarrationClaim(string ClaimId, string Domain, stri
     bool IsMythological, bool IsAstrologyRelated, bool RequiresQualification, bool RequiresHumanReview,
     string Language, string Checksum)
 {
+    public Phase7ClaimDisposition Disposition { get; init; } = Phase7ClaimDisposition.Required;
     public string SemanticIdentity { get; init; } = ClaimId;
     public string ProvenancePrecision { get; init; } = "Exact";
     public string SelectionReason { get; init; } = "CertifiedKnowledge";
@@ -59,6 +60,7 @@ public sealed record CertifiedNarrationClaim(string ClaimId, string Domain, stri
     public bool MoonDependent { get; init; }
     public bool Uncertain { get; init; }
 }
+public enum Phase7ClaimDisposition { Required, Optional, Deferred, HumanReview }
 public sealed record CertifiedNarrationSource(string SourceId, string SourceType, string Title,
     string PublisherOrAuthority, string UrlOrReference, bool Reviewed, bool Certified,
     IReadOnlyList<string> SupportedKnowledgeIds, IReadOnlyList<string> SupportedClaimIds,
@@ -100,6 +102,7 @@ public sealed record CertifiedKnowledgePayload(string PayloadId, string EventId,
     string Language, string RawDataJson, string? MetadataJson, string? EvergreenJson,
     string SourceRegistryId, IReadOnlyList<string> ReviewedSourceIds, string VerificationStatus)
 {
+    public string EvergreenReviewStatus { get; init; } = "NotLoaded";
     public string CertifiedEventFamily { get; init; } = EventFamily;
     public string? EvergreenRelativePath { get; init; }
     public string? EvergreenPayloadId { get; init; }
