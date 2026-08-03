@@ -26,8 +26,10 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
             || Variants.Any(x => !request.ExpectedVariants.Contains(x, StringComparer.OrdinalIgnoreCase))
             || Variants.Any(x => !authority.RequestedVariants.Contains(x, StringComparer.OrdinalIgnoreCase)))
             return Bad("P7INPUT_VARIANT_INVALID", "Independent Long and Short authority variants are required.");
-        var payload = await knowledgeSource.ResolveAsync(request.EventId, request.Language, token);
+        var sourceResult = await knowledgeSource.ResolveResultAsync(request.EventId, request.Language, token);
         token.ThrowIfCancellationRequested();
+        if (!sourceResult.IsValid) return new(false,null,sourceResult.ReasonCode,sourceResult.Errors,sourceResult.Warnings);
+        var payload = sourceResult.Payload;
         if (payload is null) return Bad("P7INPUT_EVENT_INTELLIGENCE_MISSING", "Certified event intelligence was not resolved.");
         if (string.IsNullOrWhiteSpace(payload.RawDataJson) || string.IsNullOrWhiteSpace(payload.EvergreenJson))
             return Bad("P7INPUT_KNOWLEDGE_PAYLOAD_MISSING", "Both certified raw event and evergreen knowledge are required.");

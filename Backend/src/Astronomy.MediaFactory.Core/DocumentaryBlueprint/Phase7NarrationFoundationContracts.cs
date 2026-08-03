@@ -86,11 +86,48 @@ public sealed record CertifiedKnowledgePayload(string PayloadId, string EventId,
 public interface IPhase7CertifiedKnowledgeSource
 {
     Task<CertifiedKnowledgePayload?> ResolveAsync(string eventId, string language, CancellationToken cancellationToken = default);
+    async Task<Phase7CertifiedKnowledgeSourceResult> ResolveResultAsync(string eventId, string language, CancellationToken cancellationToken = default)
+    {
+        var payload = await ResolveAsync(eventId, language, cancellationToken);
+        return payload is null
+            ? new(false, null, "P7KNOWLEDGE_EVENT_MISSING", ["Certified event intelligence was not found."], [])
+            : new(true, payload, "P7KNOWLEDGE_VALID", [], payload.Warnings);
+    }
 }
+public sealed record Phase7CertifiedKnowledgeSourceResult(bool IsValid, CertifiedKnowledgePayload? Payload,
+    string ReasonCode, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings);
 public interface IPhase7KnowledgeResolver
 {
     ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile);
 }
+
+public enum Phase7KnowledgeOrigin { Event, Evergreen }
+public enum Phase7ProvenancePrecision { ExactClaim, ExactKnowledgeEntity, ExactApprovedField, CoarseDomain, None }
+public enum Phase7KnowledgeMergeClassification { Equivalent, EventSpecificSpecialization, EventMorePrecise, EvergreenMorePrecise, Contradictory, Incomparable }
+public sealed record Phase7KnowledgeSectionContext(Phase7KnowledgeOrigin Origin, string PayloadId,
+    string PayloadVersion, string PayloadChecksum, string Language, string SectionName, JsonElement SectionJson,
+    IReadOnlyList<CertifiedNarrationSource> SourceRegistry, string EventFamily, string EventType);
+public sealed record Phase7KnowledgeEntity(string KnowledgeId, string EntityType, string DisplayName,
+    IReadOnlyList<string> SourceIds, string Checksum);
+public sealed record Phase7AdapterClaimCandidate(string KnowledgeId, string ApprovedFieldPath,
+    NarrationKnowledgeDomainKey Domain, string Text, IReadOnlyList<string> SourceIds,
+    bool RequiresQualification, bool RequiresHumanReview, string SemanticIdentity);
+public sealed record Phase7KnowledgeSectionAdapterResult(IReadOnlyList<Phase7AdapterClaimCandidate> Claims,
+    IReadOnlyList<Phase7KnowledgeEntity> KnowledgeEntities, IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> BlockingIssues, IReadOnlyList<string> UnknownProperties, string AdapterChecksum);
+public interface IPhase7KnowledgeSectionAdapter
+{
+    string AdapterId { get; }
+    string AdapterVersion { get; }
+    IReadOnlySet<string> SupportedSectionNames { get; }
+    IReadOnlySet<NarrationKnowledgeDomainKey> ProducedDomains { get; }
+    Phase7KnowledgeSectionAdapterResult Extract(Phase7KnowledgeSectionContext context);
+}
+public sealed record Phase7KnowledgeAdapterDiagnostic(string AdapterId, string AdapterVersion, string SectionName,
+    Phase7KnowledgeOrigin Origin, int ApprovedPropertyCount, int ExtractedClaimCount, int UnknownPropertyCount,
+    IReadOnlyList<string> UnknownProperties, int ExactClaimProvenanceCount, int ExactEntityProvenanceCount,
+    int ExactFieldProvenanceCount, int CoarseProvenanceCount, int UnsupportedClaimCount,
+    IReadOnlyDictionary<string,int> MergeDecisionCounts, int RejectedSourceCount, int UncertifiedSourceCount);
 
 public sealed record Phase7InputAuthorityRequest(string ExecutionRoot, string ExecutionId, string PlanId,
     string EventId, string Language, string ExpectedProfile, IReadOnlyList<string> ExpectedVariants);
@@ -166,7 +203,17 @@ public interface IPhase7FoundationValidator
     Phase7FoundationValidation Validate(Phase7CommittedInputAuthority input, IReadOnlyList<SceneKnowledgePacket> longPackets,
         IReadOnlyList<SceneKnowledgePacket> shortPackets, VariantNarrationPlan longPlan, VariantNarrationPlan shortPlan,
         IReadOnlyList<string> artifactPaths);
+    Phase7FoundationValidation Validate(Phase7CommittedInputAuthority input, IReadOnlyList<SceneKnowledgePacket> longPackets,
+        IReadOnlyList<SceneKnowledgePacket> shortPackets, VariantNarrationPlan longPlan, VariantNarrationPlan shortPlan,
+        IReadOnlyList<string> artifactPaths, Phase7FoundationCompleteSetReadback physicalReadback);
 }
+
+public sealed record Phase7FoundationPhysicalReadbackEvidence(string ArtifactPath, bool Exists, long SizeBytes,
+    string PhysicalSha256, bool DeserializationSucceeded, string ContractType, string ContractVersion,
+    bool IdentityMatched, bool SemanticChecksumMatched, bool LineageMatched, bool SafePath,
+    IReadOnlyList<string> Errors);
+public sealed record Phase7FoundationCompleteSetReadback(IReadOnlyList<Phase7FoundationPhysicalReadbackEvidence> Artifacts,
+    bool IsValid, IReadOnlyList<string> Errors);
 
 public sealed class Phase7NarrationOptions
 {
