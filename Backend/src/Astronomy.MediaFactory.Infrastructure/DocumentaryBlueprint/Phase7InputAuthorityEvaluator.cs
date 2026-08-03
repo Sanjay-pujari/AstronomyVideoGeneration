@@ -29,8 +29,8 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
         var payload = await knowledgeSource.ResolveAsync(request.EventId, request.Language, token);
         token.ThrowIfCancellationRequested();
         if (payload is null) return Bad("P7INPUT_EVENT_INTELLIGENCE_MISSING", "Certified event intelligence was not resolved.");
-        if (string.IsNullOrWhiteSpace(payload.RawDataJson) && string.IsNullOrWhiteSpace(payload.EvergreenJson))
-            return Bad("P7INPUT_KNOWLEDGE_PAYLOAD_MISSING", "Certified raw or evergreen knowledge is missing.");
+        if (string.IsNullOrWhiteSpace(payload.RawDataJson) || string.IsNullOrWhiteSpace(payload.EvergreenJson))
+            return Bad("P7INPUT_KNOWLEDGE_PAYLOAD_MISSING", "Both certified raw event and evergreen knowledge are required.");
         if (string.IsNullOrWhiteSpace(payload.SourceRegistryId) || payload.ReviewedSourceIds.Count == 0)
             return Bad("P7INPUT_SOURCE_REGISTRY_INVALID", "A certified reviewed source registry is required.");
         var profileResult = profileResolver.Resolve(payload.EventFamily, request.Language);
@@ -50,8 +50,8 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
         if (paths.Length != published.ArtifactPaths.Count) return Bad("P7INPUT_PHASE6_LINEAGE_MISMATCH", "Phase 6 supplied an unsafe artifact path.");
         var committed = new Phase7CommittedInputAuthority(published, payload.EventFamily, payload.EventType, request.Language,
             profile.ProfileId, profile.ContractVersion, payload.EventId, knowledge.PayloadId, knowledge.PayloadChecksum,
-            knowledge.SourceRegistryId, knowledge.SourceRegistryChecksum, string.IsNullOrWhiteSpace(payload.EvergreenJson) ? null : $"evergreen-{payload.PayloadId}",
-            string.IsNullOrWhiteSpace(payload.EvergreenJson) ? null : Phase7Determinism.Hash(payload.EvergreenJson), profile, longFrames, shortFrames,
+            knowledge.SourceRegistryId, knowledge.SourceRegistryChecksum, payload.EvergreenPayloadId,
+            payload.EvergreenChecksum, profile, longFrames, shortFrames,
             published.Index.Scenes.Where(x => x.Variant.Equals("Long", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SceneNumber).ToArray(),
             published.Index.Scenes.Where(x => x.Variant.Equals("Short", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SceneNumber).ToArray(),
             published.ManifestEvidence.Concat(published.ValidationEvidence).Distinct(StringComparer.Ordinal).ToArray(), paths,

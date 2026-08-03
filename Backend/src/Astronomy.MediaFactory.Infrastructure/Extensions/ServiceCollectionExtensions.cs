@@ -759,6 +759,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IFamilyNarrationProfileResolver, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.FamilyNarrationProfileResolver>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7CertifiedKnowledgeSource, Astronomy.MediaFactory.Infrastructure.Persistence.Phase7CertifiedKnowledgeSource>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeResolver, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeResolver>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeReferenceResolver, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeReferenceResolver>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7InputAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7InputAuthorityEvaluator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7SceneKnowledgePacketBuilder, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7SceneKnowledgePacketBuilder>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningBuilder>(sp =>
@@ -769,6 +770,10 @@ public static class ServiceCollectionExtensions
         });
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7FoundationValidator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7FoundationValidator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7FoundationService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7FoundationService>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7FoundationFileSystem, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7FoundationFileSystem>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7FoundationExecutionLock, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7FoundationExecutionLock>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7FoundationRecoveryService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7FoundationRecoveryService>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7FoundationCommittedStateEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7FoundationCommittedStateEvaluator>();
         services.Configure<Astronomy.MediaFactory.Core.DocumentaryBlueprint.Phase7NarrationOptions>(configuration.GetSection(Astronomy.MediaFactory.Core.DocumentaryBlueprint.Phase7NarrationOptions.SectionName));
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase5PublicationFileSystem, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase5PublicationFileSystem>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase5PublicationRecoveryService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase5PublicationRecoveryService>();

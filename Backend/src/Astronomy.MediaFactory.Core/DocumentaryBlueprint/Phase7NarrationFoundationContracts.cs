@@ -6,6 +6,12 @@ namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 public static class Phase7FoundationContract { public const string Version = "rc2-phase7-foundation.v1"; }
 public enum KnowledgeDomainStatus { Available, Missing, NotApplicable, Deferred, RequiresHumanReview }
+public enum NarrationKnowledgeDomainKey { Identity, Appearance, Recognition, RecognitionGeometry, ScientificStructure, PhysicalCharacteristics, KeyObjects, DeepSkyObjects, Orbit, Rotation, Atmosphere, Surface, Moons, Rings, Exploration, Lifecycle, Variability, Multiplicity, Distance, Scale, Formation, Evolution, StarFormation, History, CultureAndMythology, RegionalTraditions, AstrologyClarification, Observation, Timing, Visibility, LocationDependence, WeatherDependence, MoonInterference, Safety, Equipment, Astrophotography, ImagingAppearance, ScientificSignificance, Geometry, ContactTimeline, VisibilityFootprint, ParentBody, Radiant, ActivityRate, Uncertainty, OrbitalMotion, ArtificialNaturalDistinction, LocalizedContent, EditorialSafety, InterestingFacts }
+public static class NarrationKnowledgeDomains
+{
+    public static string Id(NarrationKnowledgeDomainKey key) => key.ToString();
+    public static bool TryParse(string value, out NarrationKnowledgeDomainKey key) => Enum.TryParse(value.Replace("-", "").Replace("_", "").Replace(" ", ""), true, out key);
+}
 
 public sealed record PublishedStoryFrameAuthority(
     StoryFramesAuthority Authority, StoryFrameIndex Index, StoryFrameDiagnostics Diagnostics,
@@ -44,7 +50,19 @@ public sealed record CertifiedNarrationClaim(string ClaimId, string Domain, stri
     IReadOnlyList<string> SourceIds, IReadOnlyList<string> KnowledgeReferenceIds, decimal Confidence,
     bool IsApproximate, bool IsLocationDependent, bool IsDateTimeDependent, bool IsCultural,
     bool IsMythological, bool IsAstrologyRelated, bool RequiresQualification, bool RequiresHumanReview,
-    string Language, string Checksum);
+    string Language, string Checksum)
+{
+    public string SemanticIdentity { get; init; } = ClaimId;
+    public string ProvenancePrecision { get; init; } = "Exact";
+    public string SelectionReason { get; init; } = "CertifiedKnowledge";
+    public bool WeatherDependent { get; init; }
+    public bool MoonDependent { get; init; }
+    public bool Uncertain { get; init; }
+}
+public sealed record CertifiedNarrationSource(string SourceId, string SourceType, string Title,
+    string PublisherOrAuthority, string UrlOrReference, bool Reviewed, bool Certified,
+    IReadOnlyList<string> SupportedKnowledgeIds, IReadOnlyList<string> SupportedClaimIds,
+    IReadOnlyList<string> SupportedDomains, string Language, decimal Confidence, string Checksum);
 public sealed record NarrationKnowledgeDomain(string Domain, KnowledgeDomainStatus Status,
     IReadOnlyList<CertifiedNarrationClaim> Claims, IReadOnlyList<string> Warnings);
 public sealed record ResolvedNarrationKnowledge(string PayloadId, string PayloadChecksum, string SourceRegistryId,
@@ -54,7 +72,17 @@ public sealed record ResolvedNarrationKnowledge(string PayloadId, string Payload
     IReadOnlyList<string> Warnings, IReadOnlyList<string> BlockingIssues, string DeterministicChecksum);
 public sealed record CertifiedKnowledgePayload(string PayloadId, string EventId, string EventFamily, string EventType,
     string Language, string RawDataJson, string? MetadataJson, string? EvergreenJson,
-    string SourceRegistryId, IReadOnlyList<string> ReviewedSourceIds, string VerificationStatus);
+    string SourceRegistryId, IReadOnlyList<string> ReviewedSourceIds, string VerificationStatus)
+{
+    public string CertifiedEventFamily { get; init; } = EventFamily;
+    public string? EvergreenRelativePath { get; init; }
+    public string? EvergreenPayloadId { get; init; }
+    public string? EvergreenChecksum { get; init; }
+    public IReadOnlyList<CertifiedNarrationSource> ReviewedSources { get; init; } = [];
+    public string CertificationStatus { get; init; } = VerificationStatus;
+    public string PayloadChecksum { get; init; } = "";
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+}
 public interface IPhase7CertifiedKnowledgeSource
 {
     Task<CertifiedKnowledgePayload?> ResolveAsync(string eventId, string language, CancellationToken cancellationToken = default);
@@ -96,7 +124,21 @@ public sealed record SceneKnowledgePacket(string PacketId, string ExecutionId, s
     int MinimumDurationSeconds, int MaximumDurationSeconds, bool LocationDependence, bool DateTimeDependence,
     IReadOnlyList<string> ApproximationWarnings, bool HumanReviewRequired, IReadOnlyList<string> Warnings,
     IReadOnlyList<string> BlockingIssues, IReadOnlyDictionary<string, string> UpstreamSemanticLineage,
-    string DeterministicChecksum);
+    string DeterministicChecksum)
+{
+    public string SourceViewerQuestionId { get; init; } = ViewerQuestionId;
+    public string ResolvedViewerQuestionText { get; init; } = ViewerQuestionText ?? "";
+    public string ViewerQuestionResolutionReason { get; init; } = "CertifiedClaimAndSceneRole";
+    public string ViewerQuestionResolutionChecksum { get; init; } = "";
+    public IReadOnlyList<string> VisualPlanningLineage { get; init; } = [];
+}
+public enum Phase7KnowledgeReferenceStatus { Resolved, Deferred, Missing, Ambiguous, CrossVariantInvalid, Unsupported }
+public sealed record Phase7KnowledgeReferenceResolution(string ReferenceId, Phase7KnowledgeReferenceStatus Status,
+    IReadOnlyList<CertifiedNarrationClaim> Claims, string ReasonCode);
+public interface IPhase7KnowledgeReferenceResolver
+{
+    IReadOnlyList<Phase7KnowledgeReferenceResolution> Resolve(IReadOnlyList<string> referenceIds, ResolvedNarrationKnowledge knowledge, bool optional = false);
+}
 public interface IPhase7SceneKnowledgePacketBuilder
 {
     IReadOnlyList<SceneKnowledgePacket> Build(Phase7CommittedInputAuthority authority, string variant);
@@ -153,12 +195,53 @@ public sealed record Phase7FoundationDiagnostics(string ExecutionId, string Plan
     IReadOnlyList<string> DeferredKnowledgeDomains, int PlaceholderFieldsDetected, int PlaceholderFieldsResolved,
     IReadOnlyList<string> UnresolvedPlaceholders, int LocationDependentClaimCount, int DateTimeDependentClaimCount,
     int ApproximateClaimCount, int HumanReviewClaimCount, int WarningCount, int BlockingIssueCount,
-    IReadOnlyList<string> InputArtifactPaths, IReadOnlyList<string> OutputArtifactPaths, string DeterministicChecksum);
+    IReadOnlyList<string> InputArtifactPaths, IReadOnlyList<string> OutputArtifactPaths, string DeterministicChecksum)
+{
+    public bool RawPayloadLoaded { get; init; }
+    public bool EvergreenPayloadLoaded { get; init; }
+    public bool KnowledgeMergeSucceeded { get; init; }
+    public bool FamilyAuthorityCertified { get; init; }
+    public bool ClaimProvenanceValid { get; init; }
+    public bool MandatoryDomainsSatisfied { get; init; }
+    public bool KnowledgeReferencesResolved { get; init; }
+    public bool LongSemanticEnrichmentComplete { get; init; }
+    public bool ShortSemanticEnrichmentComplete { get; init; }
+    public bool LocationTimeSafetyPassed { get; init; }
+    public bool CulturalSafetyPassed { get; init; }
+    public bool PhysicalReadbackPassed { get; init; }
+    public int RawClaimCount { get; init; }
+    public int EvergreenClaimCount { get; init; }
+    public int MergedClaimCount { get; init; }
+    public int ExactSourceMappedClaimCount { get; init; }
+    public int CoarseSourceMappedClaimCount { get; init; }
+    public int ResolvedReferenceCount { get; init; }
+    public int DeferredReferenceCount { get; init; }
+    public int MissingReferenceCount { get; init; }
+    public int UnresolvedPlaceholderCount { get; init; }
+}
 public sealed record Phase7FoundationExecutionResult(bool IsValid, string ReasonCode, string OutputDirectory,
     Phase7FoundationValidation Validation, Phase7FoundationDiagnostics Diagnostics);
 public interface IPhase7FoundationService
 {
     Task<Phase7FoundationExecutionResult> ExecuteAsync(Phase7InputAuthorityRequest request, CancellationToken cancellationToken = default);
+}
+public interface IPhase7FoundationFileSystem { }
+public interface IPhase7FoundationExecutionLock { Task<IAsyncDisposable> AcquireAsync(string executionRoot, CancellationToken cancellationToken); }
+public interface IPhase7FoundationRecoveryService { Task RecoverAsync(string executionRoot, CancellationToken cancellationToken = default); }
+public interface IPhase7FoundationTransactionCoordinator { Task<Phase7FoundationExecutionResult> ExecuteAsync(Phase7InputAuthorityRequest request, CancellationToken cancellationToken = default); }
+public sealed record PublishedPhase7FoundationAuthority(Phase7CommittedInputAuthority Phase7CommittedInputAuthority,
+    FamilyNarrationProfile FamilyNarrationProfile, ResolvedNarrationKnowledge ResolvedNarrationKnowledge,
+    IReadOnlyList<SceneKnowledgePacket> LongSceneKnowledgePackets, IReadOnlyList<SceneKnowledgePacket> ShortSceneKnowledgePackets,
+    VariantNarrationPlan LongVariantNarrationPlan, VariantNarrationPlan ShortVariantNarrationPlan,
+    Phase7FoundationDiagnostics FoundationDiagnostics, Phase7FoundationValidation FoundationValidation,
+    IReadOnlyList<string> ArtifactPaths, IReadOnlyDictionary<string,string> SemanticChecksums,
+    IReadOnlyDictionary<string,string> PhysicalHashes, IReadOnlyDictionary<string,string> ContractVersions,
+    IReadOnlyDictionary<string,string> RuntimeCompatibilityEvidence);
+public sealed record Phase7FoundationCommittedStateEvaluation(bool IsValid, PublishedPhase7FoundationAuthority? Authority,
+    string ReasonCode, IReadOnlyList<string> Errors);
+public interface IPhase7FoundationCommittedStateEvaluator
+{
+    Task<Phase7FoundationCommittedStateEvaluation> EvaluateAsync(string executionRoot, CancellationToken cancellationToken = default);
 }
 
 public static class Phase7Determinism
@@ -166,4 +249,6 @@ public static class Phase7Determinism
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
     public static string Hash(object value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value, Options)))).ToLowerInvariant();
     public static string ClaimId(string payloadId, string domain, int ordinal) => $"claim-{Hash(new { payloadId, domain, ordinal })[..20]}";
+    public static string SemanticClaimId(string knowledgeId, string claimPath, string language, string version)
+        => $"claim-{Hash(new { knowledgeId = knowledgeId.ToLowerInvariant(), claimPath = claimPath.ToLowerInvariant(), language = language.ToLowerInvariant(), version })[..24]}";
 }
