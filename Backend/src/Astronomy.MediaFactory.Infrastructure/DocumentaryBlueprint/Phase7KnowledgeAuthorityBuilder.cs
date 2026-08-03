@@ -20,6 +20,8 @@ public sealed class Phase7KnowledgeAuthorityBuilder : IPhase7KnowledgeAuthorityB
         var mandatory=profile.MandatoryKnowledgeDomains.Distinct(StringComparer.Ordinal).Order().ToArray();
         var optional=profile.OptionalKnowledgeDomains.Except(mandatory,StringComparer.Ordinal).Distinct(StringComparer.Ordinal).Order().ToArray();
         var sources=Phase7KnowledgeSourcePool.Get(payload);
+        var compatibilityEvidence=new SortedDictionary<string,string>(StringComparer.Ordinal);
+        foreach(var (key,value) in runtimeCompatibilityEvidence) compatibilityEvidence.Add(key,value);
         var draft=new Phase7KnowledgeAuthority(Phase7KnowledgeContract.Version,authorityId,
             phase6.Authority.ExecutionId,phase6.Authority.PlanId,phase6.Authority.EventId,input.EventFamily,input.EventType,
             input.Language,profile.ProfileId,profile.ContractVersion,phase6.Authority.AuthorityId,
@@ -31,7 +33,7 @@ public sealed class Phase7KnowledgeAuthorityBuilder : IPhase7KnowledgeAuthorityB
             mandatory.Concat(optional).Order().ToArray(), knowledge.KnowledgeEntities,claims,sources,
             knowledge.ClaimSupportEvidence,knowledge.AdapterDiagnostics,knowledge.MergeDecisions,knowledge.SourceAuditSummary,
             knowledge.UnknownSections,knowledge.UnknownProperties,knowledge.Warnings,knowledge.BlockingIssues,"",
-            new SortedDictionary<string,string>(runtimeCompatibilityEvidence,StringComparer.Ordinal));
+            compatibilityEvidence);
         draft=draft with { MandatoryDomains=mandatory, OptionalDomains=optional };
         return draft with { SemanticChecksum=Phase7Determinism.Hash(draft) };
     }
