@@ -30,7 +30,8 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
             throw new InvalidDataException("P7KNOWLEDGE_SUBJECT_FAMILY_MISMATCH");
         var eventSources = item.ReferenceSources.Select(s => EventSource(s, language)).ToList();
         if (evergreen is not null) eventSources.AddRange(evergreen.Package.Sources.Select(s => EvergreenSource(s, evergreen.Package, language)));
-        var sources = eventSources.Where(s => s.Reviewed && s.Certified).DistinctBy(s => s.SourceId).OrderBy(s => s.SourceId, StringComparer.Ordinal).ToArray();
+        var allSources = eventSources.DistinctBy(s => s.SourceId).OrderBy(s => s.SourceId, StringComparer.Ordinal).ToArray();
+        var sources = allSources.Where(s => s.Reviewed && s.Certified).ToArray();
         var raw = item.RawDataJson ?? "";
         var evergreenJson = evergreen is null ? null : JsonSerializer.Serialize(evergreen.Package, Json);
         var registryId = $"event-source-registry-{item.Id:N}";
@@ -39,7 +40,10 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         {
             CertifiedEventFamily = family, EvergreenRelativePath = evergreen?.RelativePath,
             EvergreenPayloadId = evergreen?.Package.KnowledgeId, EvergreenChecksum = evergreen?.Checksum,
-            ReviewedSources = sources, CertificationStatus = evergreen is null ? item.VerificationStatus : evergreen.Package.ReviewStatus
+            ReviewedSources = sources, AllResolvedSources=allSources, CertifiedSupportingSources=sources,
+            RejectedSources=allSources.Where(s=>s.Disposition=="Rejected").ToArray(),
+            UnverifiedSources=allSources.Where(s=>!s.Certified&&s.Disposition!="Rejected").ToArray(),
+            CertificationStatus = evergreen is null ? item.VerificationStatus : evergreen.Package.ReviewStatus
         };
         return draft with { PayloadChecksum = Phase7Determinism.Hash(new { draft.PayloadId, draft.EventId, draft.CertifiedEventFamily, draft.Language, draft.RawDataJson, draft.MetadataJson, draft.EvergreenChecksum, sources }) };
     }
@@ -68,6 +72,7 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         var knowledge = JsonArray(s.EvidenceJson, "supportedKnowledgeIds");
         var claims = JsonArray(s.EvidenceJson, "supportedClaimIds");
         var domains = JsonArray(s.EvidenceJson, "supportedDomains");
+        var fields = JsonArray(s.EvidenceJson, "supportedApprovedFieldPaths");
         var reviewStatus = EvidenceString(s.EvidenceJson,"reviewStatus");
         var certificationStatus = EvidenceString(s.EvidenceJson,"certificationStatus") ?? EvidenceString(s.EvidenceJson,"verificationStatus");
         var reviewed = reviewStatus is not null && reviewStatus.Equals("Reviewed",StringComparison.OrdinalIgnoreCase);
@@ -75,6 +80,7 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         var draft = new CertifiedNarrationSource(s.Id.ToString(), s.SourceType, s.SourceName, s.SourceName,
             s.SourceUrl ?? s.Citation ?? "", reviewed, certified, knowledge, claims, domains, language,
             Math.Clamp(s.ConfidenceScore ?? .8m, 0m, 1m), "");
+        draft=draft with { SupportedApprovedFieldPaths=fields,Disposition=certified?"CertifiedSupporting":reviewStatus?.Equals("Rejected",StringComparison.OrdinalIgnoreCase)==true?"Rejected":"Unverified" };
         return draft with { Checksum = Phase7Determinism.Hash(draft with { Checksum = "" }) };
     }
     private static CertifiedNarrationSource EvergreenSource(EvergreenKnowledgeSource s, EvergreenAstronomyKnowledgePackage p, string language)
@@ -96,7 +102,7 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         return resolved switch { "PLANETGROUPING" => "GROUPING", "DEEPSKYOBJECT" => "DEEP_SKY_OBJECT", "METEORSHOWER" => "METEOR_SHOWER", _ => resolved };
     }
     private static string NormalizeFamily(string value) => value.Trim().Replace('-', '_').Replace(' ', '_').ToUpperInvariant();
-    private static bool Certified(string value) => value.Equals("Certified", StringComparison.OrdinalIgnoreCase) || value.Equals("Verified", StringComparison.OrdinalIgnoreCase) || value.Equals("Reviewed", StringComparison.OrdinalIgnoreCase);
+    private static bool Certified(string value) => value.Equals("Certified", StringComparison.OrdinalIgnoreCase) || value.Equals("Verified", StringComparison.OrdinalIgnoreCase);
     private static string? MetadataString(string? json, string key) { if (string.IsNullOrWhiteSpace(json)) return null; using var d = JsonDocument.Parse(json); return d.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null; }
     private static string[] JsonArray(string? json, string key) { if (string.IsNullOrWhiteSpace(json)) return []; try { using var d=JsonDocument.Parse(json); return d.RootElement.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.Array ? v.EnumerateArray().Where(x=>x.ValueKind==JsonValueKind.String).Select(x=>x.GetString()!).ToArray() : []; } catch(JsonException) { return []; } }
     private static string? EvidenceString(string? json,string key){if(string.IsNullOrWhiteSpace(json))return null;using var d=JsonDocument.Parse(json);return d.RootElement.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString():null;}

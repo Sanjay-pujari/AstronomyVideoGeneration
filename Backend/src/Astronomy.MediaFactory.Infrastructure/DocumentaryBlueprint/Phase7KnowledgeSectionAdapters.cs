@@ -45,6 +45,7 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
         var claims = new List<Phase7AdapterClaimCandidate>(); var entities = new List<Phase7KnowledgeEntity>();
         var unknown = new SortedSet<string>(StringComparer.Ordinal); var blocking = new List<string>();
         Visit(context.SectionJson, context.SectionName, context.PayloadId, [], claims, entities, unknown, blocking);
+        for (var i=0;i<claims.Count;i++) claims[i]=claims[i] with { Origin=context.Origin };
         var duplicate = claims.GroupBy(x => x.SemanticIdentity, StringComparer.Ordinal).FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null) blocking.Add($"P7KNOWLEDGE_DUPLICATE_SEMANTIC_IDENTITY:{duplicate.Key}");
         var warnings = unknown.Select(x => $"P7KNOWLEDGE_UNKNOWN_PROPERTY:{x}").ToArray();
@@ -80,7 +81,7 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
             var relative = path == section ? property.Name : $"{path[(section.Length + 1)..]}.{property.Name}";
             if (fields.TryGetValue(relative, out var domain) || fields.TryGetValue(property.Name, out domain))
             {
-                Emit(property.Value, entityId, $"{section}.{relative}", domain, sources, claims);
+                Emit(property.Value, entityId, $"{section}.{relative}", domain, sources, claims, context: null);
             }
             else if (property.Value.ValueKind == JsonValueKind.Object && AllowsContainer(property.Name))
                 Visit(property.Value, $"{path}.{property.Name}", entityId, sources, claims, entities, unknown, blocking);
@@ -88,7 +89,7 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
         }
     }
     protected virtual bool AllowsContainer(string name) => false;
-    private void Emit(JsonElement value, string entityId, string fieldPath, NarrationKnowledgeDomainKey domain, string[] sources, List<Phase7AdapterClaimCandidate> claims)
+    private void Emit(JsonElement value, string entityId, string fieldPath, NarrationKnowledgeDomainKey domain, string[] sources, List<Phase7AdapterClaimCandidate> claims, Phase7KnowledgeSectionContext? context)
     {
         IEnumerable<string> texts = value.ValueKind switch
         {
@@ -97,11 +98,15 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
             JsonValueKind.Number when fieldPath.EndsWith("areaSquareDegrees",StringComparison.Ordinal) => [$"Constellation area: {value.GetRawText()} square degrees."],
             _ => []
         };
+        var collection = value.ValueKind == JsonValueKind.Array;
         foreach (var text in texts.Where(x=>!string.IsNullOrWhiteSpace(x)))
         {
-            var suffix = Phase7Determinism.Hash(text.Trim())[..12];
-            var semantic = $"{entityId}.{fieldPath}.{suffix}".ToLowerInvariant();
-            claims.Add(new(entityId, fieldPath, domain, text.Trim(), sources, Qualified, HumanReview, semantic));
+            // Scalar identity describes the certified fact, never its current rendering/value.
+            // Content fallback is reserved for genuinely multi-valued primitive collections.
+            var item = collection ? $".{Phase7Determinism.Hash(text.Trim().ToLowerInvariant())[..12]}" : "";
+            var semantic = $"{entityId}.{fieldPath}{item}".ToLowerInvariant();
+            claims.Add(new(entityId, fieldPath, domain, text.Trim(), sources, Qualified, HumanReview, semantic)
+            { AdapterId=AdapterId, AdapterVersion=AdapterVersion });
         }
     }
     private static string SemanticId(JsonElement item, string fallback)
