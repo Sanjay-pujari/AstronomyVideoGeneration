@@ -27,6 +27,8 @@ public sealed class Phase7KnowledgeMergeClassifier : IPhase7KnowledgeMergeClassi
             return Block("The candidates assert conflicting authority scopes.");
 
         var fact = CompareValues(request.EvergreenComparisonMetadata, request.EventComparisonMetadata);
+        if (fact == ValueComparison.UnitMismatch)
+            return Incomparable("The values cannot be compared authoritatively because their governed units differ.");
         if (scope == Phase7KnowledgeScopeComparison.EventIsSpecialization)
             return fact == ValueComparison.Conflict
                 ? Block("The execution-scoped value contradicts the general fact.")
@@ -60,16 +62,23 @@ public sealed class Phase7KnowledgeMergeClassifier : IPhase7KnowledgeMergeClassi
 
     private static ValueComparison CompareValues(Phase7KnowledgeComparisonMetadata a, Phase7KnowledgeComparisonMetadata b)
     {
-        if (string.IsNullOrWhiteSpace(a.NormalizedValue) || string.IsNullOrWhiteSpace(b.NormalizedValue)) return ValueComparison.Unknown;
+        if (string.IsNullOrWhiteSpace(a.NormalizedValue) || string.IsNullOrWhiteSpace(b.NormalizedValue)) return ValueComparison.InsufficientEvidence;
         if (!string.IsNullOrWhiteSpace(a.ValueType) && !string.IsNullOrWhiteSpace(b.ValueType)
             && !string.Equals(a.ValueType, b.ValueType, StringComparison.OrdinalIgnoreCase)) return ValueComparison.Conflict;
         if (!string.IsNullOrWhiteSpace(a.Unit) && !string.IsNullOrWhiteSpace(b.Unit)
-            && !string.Equals(a.Unit, b.Unit, StringComparison.OrdinalIgnoreCase)) return ValueComparison.Unknown;
-        return string.Equals(Normalize(a.NormalizedValue), Normalize(b.NormalizedValue), StringComparison.Ordinal)
-            || Numeric(a.NormalizedValue)?.Value == Numeric(b.NormalizedValue)?.Value
-            ? ValueComparison.Equal : ValueComparison.Conflict;
+            && !string.Equals(a.Unit, b.Unit, StringComparison.OrdinalIgnoreCase)) return ValueComparison.UnitMismatch;
+
+        if (string.Equals(Normalize(a.NormalizedValue), Normalize(b.NormalizedValue), StringComparison.Ordinal))
+            return ValueComparison.Equal;
+
+        var numericA = Numeric(a.NormalizedValue);
+        var numericB = Numeric(b.NormalizedValue);
+        if (numericA.HasValue && numericB.HasValue)
+            return numericA.Value.Value == numericB.Value.Value ? ValueComparison.Equal : ValueComparison.Conflict;
+
+        return ValueComparison.Conflict;
     }
-    private enum ValueComparison { Equal, Conflict, Unknown }
+    private enum ValueComparison { Equal, Conflict, UnitMismatch, InsufficientEvidence }
     private static Phase7KnowledgeMergeResult Result(Phase7KnowledgeMergeClassification c, string reason) => new(c, reason, [], []);
     private static Phase7KnowledgeMergeResult Block(string reason) => new(Phase7KnowledgeMergeClassification.Contradictory, reason, [], ["P7KNOWLEDGE_CONTRADICTION"]);
     private static Phase7KnowledgeMergeResult Incomparable(string reason) => new(Phase7KnowledgeMergeClassification.Incomparable, reason, ["P7KNOWLEDGE_INCOMPARABLE_REQUIRES_HUMAN_REVIEW"], []);
