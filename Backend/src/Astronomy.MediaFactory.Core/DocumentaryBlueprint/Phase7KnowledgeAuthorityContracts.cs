@@ -79,6 +79,17 @@ public sealed record Phase7KnowledgeCompleteSetReadback(IReadOnlyList<Phase7Know
     Phase7KnowledgeArtifactReadbackEvidence? ValidationReadback, bool ManifestEvidenceValid, bool IsValid,
     IReadOnlyList<string> Errors, Phase7KnowledgeArtifactInventory? ExpectedInventory);
 
+public sealed record Phase7KnowledgeManifestEntry(int PhaseNo, string PhaseComponent, string Status,
+    string ReasonCode, bool PublicationCommitted, bool CommittedStateValidationPassed, string AuthorityId,
+    string AuthorityChecksum, string ValidationPhysicalSha256, string PublicationId, string ContractVersion,
+    string DeterministicChecksum);
+
+public sealed record Phase7KnowledgePublicationEvidence(string ContractVersion, string PublicationId,
+    string ExecutionId, string PlanId, string EventId, string Language, string AuthorityId,
+    string AuthorityChecksum, string ValidationPhysicalSha256, string ManifestEntryChecksum,
+    bool PublicationCommitted, bool CommittedStateValidationPassed, DateTimeOffset CreatedUtc,
+    string DeterministicChecksum);
+
 public interface IPhase7KnowledgeAuthorityBuilder
 {
     Phase7KnowledgeAuthority Build(Phase7CommittedInputAuthority input, CertifiedKnowledgePayload payload,
@@ -125,7 +136,7 @@ public sealed record Phase7KnowledgeTransactionPaths(string StableKnowledgeDirec
         var root=Path.GetFullPath(executionRoot); var tx=$"phase-07-knowledge-{transactionId}";
         var staging=Path.Combine(root,$".{tx}-staging"); var backup=Path.Combine(root,$".{tx}-backup");
         return new(Path.Combine(root,"07-narration","knowledge"),Path.Combine(root,"validation","phase-07-knowledge-validation.json"),
-            Path.Combine(root,"manifest.json"),Path.Combine(staging,"07-narration","knowledge"),Path.Combine(staging,"validation","phase-07-knowledge-validation.json"),
+            Path.Combine(root,"phase-manifest.json"),Path.Combine(staging,"07-narration","knowledge"),Path.Combine(staging,"validation","phase-07-knowledge-validation.json"),
             Path.Combine(root,$".{tx}-transaction.json"),Path.Combine(root,$".{tx}-backup","knowledge"),
             Path.Combine(backup,"validation","phase-07-knowledge-validation.json"),Path.Combine(backup,"manifest.json"),
             Path.Combine(root,".phase-07-knowledge-publication.json"),Path.Combine(staging,"manifest.json"),
@@ -141,7 +152,19 @@ public sealed record Phase7KnowledgeTransactionMarker(string ContractVersion, st
     string StableKnowledgeDirectory, string BackupKnowledgeDirectory, string CandidateValidationPath,
     string StableValidationPath, string BackupValidationPath, string StableManifestPath, string BackupManifestPath,
     string OriginalError, IReadOnlyList<string> RollbackErrors, string CandidateAuthorityId,
-    string PreviousAuthorityId, string DeterministicChecksum);
+    string PreviousAuthorityId, string DeterministicChecksum)
+{
+    public bool PreviousKnowledgeDirectoryExisted { get; init; }
+    public bool PreviousValidationExisted { get; init; }
+    public bool PreviousManifestExisted { get; init; }
+    public bool PreviousPublicationEvidenceExisted { get; init; }
+    public string StablePublicationEvidencePath { get; init; } = "";
+    public string BackupPublicationEvidencePath { get; init; } = "";
+    public string PreviousAuthorityChecksum { get; init; } = "";
+    public string PreviousValidationPhysicalSha256 { get; init; } = "";
+    public string PreviousManifestPhysicalSha256 { get; init; } = "";
+    public string PreviousPublicationEvidencePhysicalSha256 { get; init; } = "";
+}
 
 public sealed record Phase7KnowledgeCommittedStateRequest(string ExecutionRoot, string ExecutionId,
     string PlanId, string EventId, string Language);

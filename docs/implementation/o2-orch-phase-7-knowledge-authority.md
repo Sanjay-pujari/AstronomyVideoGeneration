@@ -201,3 +201,21 @@ This batch remains limited to deterministic resolution; it does not publish a Kn
 9. **Remaining failures.** Full governed manifest append/readback, marker-driven recovery, committed-only validation finalization, complete cancellation/fault tests, orchestrator endpoint proof, and real Orion certification remain outstanding.
 10. **External calls.** Azure OpenAI calls: **0**. Azure Speech synthesis calls: **0**.
 11. **Final verdict.** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A B7 transactional hardening pass
+
+1. **Post-backup rollback and prior existence.** Backups are copied before stable mutation, the marker records prior existence for knowledge, validation, the governed phase manifest, and publication evidence, and rollback restoration no longer depends on an authority-swap Boolean.
+2. **Durable failure evidence.** The full original exception is persisted before rollback. Restoration errors transition the checksummed marker to `RollbackFailed`; the marker, backup, staging evidence, transaction ID, and marker path remain available for intervention.
+3. **Marker-driven recovery.** Recovery enumerates only exact transaction-marker names, validates contract/checksum and root-contained paths, handles pre-backup cleanup, state-aware restoration, completed cleanup, and blocks rather than deleting `RollbackFailed` evidence. Unmarked similarly named directories are untouched.
+4. **Governed manifest.** P7.1A now reads and preserves `phase-manifest.json`, appends only `phase7KnowledgeAuthorities`, and cross-validates its identity, authority checksum, validation hash, publication ID, success flags, contract version, and entry checksum. It does not declare all of Phase 7 complete.
+5. **Publication evidence.** The external evidence now carries the complete execution identity, authority identity/checksum, validation hash, manifest-entry checksum, publication flags, creation time, contract version, and deterministic checksum.
+6. **Committed physical validation.** Candidate validation remains staged; after authority publication the validator emits `CommittedPhysical`, the external validation hash is recomputed, and the committed evaluator rejects staged validation.
+7. **Inventory and lineage.** Inventory lookup is dictionary-based with typed missing, duplicate, and unexpected-artifact diagnostics. Readback now calculates authority, payload, registry, diagnostics, and inventory lineage rather than hard-coding success.
+8. **Claim/domain safety.** Mandatory domains require an accepted required claim with required-grade exact evidence and a valid checksum. Explicit location/time scope can satisfy safety without redundant qualification; an unscoped dependent claim requires actual qualification evidence.
+9. **Restoration verification.** Rollback checks prior existence, authority identity/semantic checksum, and the physical hashes of validation, manifest, and publication evidence before reporting the original transaction failure.
+10. **Endpoint integration.** Not certified in this pass; the existing broad Phase 7 production path has not yet been replaced with proven RC2 endpoint invocation of `IPhase7KnowledgeService`.
+11. **Focused and regression totals.** Not available because `dotnet` is not installed in this container (`dotnet: command not found`). No totals are fabricated.
+12. **Real Orion forced publication and reuse.** Not executed for the same environment limitation. Consequently no artifact hashes/sizes or no-write byte-identity evidence are claimed.
+13. **External provider calls.** Azure OpenAI invocation count: **0**. Azure Speech invocation count: **0**.
+14. **Remaining failures.** The requested fault-injection suite, complete diagnostics reconciliation, cultural/astrology policy metadata, RC2 orchestrator integration, full regressions, and real Orion endpoint certification remain outstanding.
+15. **P7.1B readiness and verdict.** P7.1B must not begin. `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
