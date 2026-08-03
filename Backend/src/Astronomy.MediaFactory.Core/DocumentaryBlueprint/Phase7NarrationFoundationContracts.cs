@@ -294,8 +294,18 @@ public sealed record Phase7ClaimResolutionDiagnostic(string Domain, bool Mandato
     IReadOnlyList<string> SelectedSourceIds, IReadOnlyDictionary<string,string> SourceEligibility,
     Phase7ProvenancePrecision ProvenancePrecision, string ResolutionReason)
 {
+    public string ClaimId { get; init; } = "";
+    public string KnowledgeEntityId { get; init; } = "";
     public string TraditionIdentity { get; init; } = "";
     public Phase7KnowledgeOrigin Origin { get; init; }
+    public bool InitialRequiresHumanReview { get; init; }
+    public string AdapterHumanReviewReason { get; init; } = "";
+    public string PolicyHumanReviewReason { get; init; } = "";
+    public Phase7ClaimDisposition IntendedDisposition { get; init; }
+    public Phase7ClaimDisposition FinalDisposition { get; init; }
+    public string AcceptanceOrRejectionReason { get; init; } = "";
+    public string MergeDecisionId { get; init; } = "";
+    public IReadOnlyList<string> SelectedClaimIds { get; init; } = [];
     public string MergeDecision { get; init; } = "NoMerge";
     public bool EquivalentSafeCulturalCandidateExists { get; init; }
 }

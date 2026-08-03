@@ -151,6 +151,8 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
                 return x.Diagnostic with
                 {
                     MergeDecision=decision?.Classification.ToString()??"NoMerge",
+                    MergeDecisionId=decision is null?"":"p7merge-"+Phase7Determinism.Hash(new{decision.SemanticIdentity,classification=decision.Classification.ToString(),decision.SelectedClaimIds})[..24],
+                    SelectedClaimIds=decision?.SelectedClaimIds??[x.Claim.ClaimId],
                     EquivalentSafeCulturalCandidateExists=x.Claim.Domain==nameof(NarrationKnowledgeDomainKey.CultureAndMythology)&&safeCulturalCandidate
                 };
             }).OrderBy(x=>x.SemanticIdentity,StringComparer.Ordinal).ToArray(),
@@ -189,11 +191,13 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         // Only a named tradition's bounded summary is an authority-bearing cultural
         // claim. Sensitive correspondences and uncategorised material are classified
         // by the adapter as review claims and never arrive here.
-        if(!candidate.RequiresQualification || string.IsNullOrEmpty(TraditionIdentity(candidate.ApprovedFieldPath))
+        if(!candidate.RequiresQualification || string.IsNullOrEmpty(Phase7CulturalClaimPolicy.ResolveCulturalTradition(candidate.ApprovedFieldPath))
             || !candidate.ApprovedFieldPath.EndsWith(".summary",StringComparison.OrdinalIgnoreCase))
             return Phase7ClaimDisposition.Optional;
         var requiredEvidence=Phase7KnowledgeSourcePool.Get(payload)
-            .Where(x=>candidate.SourceIds.Count==0||candidate.SourceIds.Contains(x.SourceId,StringComparer.Ordinal))
+            // Required cultural authority must be explicit claim provenance. An empty
+            // candidate source list must never borrow an otherwise eligible registry entry.
+            .Where(x=>candidate.SourceIds.Contains(x.SourceId,StringComparer.Ordinal))
             .Any(source=>sourceEligibility.Classify(new(source,payload.Language,candidate.KnowledgeId,candidate.SemanticIdentity,
                 candidate.ApprovedFieldPath,true,false,false)).Eligibility==Phase7SourceEligibility.EligibleForRequiredClaim);
         return requiredEvidence?Phase7ClaimDisposition.Required:Phase7ClaimDisposition.Optional;
@@ -230,13 +234,16 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath),c.Text,disposition,c.RequiresHumanReview,c.HumanReviewReason,
             c.RequiresQualification,c.QualificationReasons,claim.SourceIds,
             allEvaluated.OrderBy(x=>x.Source.SourceId,StringComparer.Ordinal).ToDictionary(x=>x.Source.SourceId,x=>$"{x.Result.Eligibility}:{x.Result.ReasonCode}",StringComparer.Ordinal),precision,resolutionReason);
-        diagnostic=diagnostic with { TraditionIdentity=TraditionIdentity(c.ApprovedFieldPath),Origin=c.Origin };
+        diagnostic=diagnostic with {
+            CandidateId="p7candidate-"+Phase7Determinism.Hash(new{c.KnowledgeId,c.SemanticIdentity,c.Origin,c.ApprovedFieldPath})[..24],
+            ClaimId=claim.ClaimId, KnowledgeEntityId=c.KnowledgeId,
+            TraditionIdentity=Phase7CulturalClaimPolicy.ResolveCulturalTradition(c.ApprovedFieldPath),Origin=c.Origin,
+            InitialRequiresHumanReview=c.RequiresHumanReview,AdapterHumanReviewReason=c.HumanReviewReason,
+            PolicyHumanReviewReason=c.RequiresHumanReview?c.HumanReviewReason:"",
+            IntendedDisposition=disposition,FinalDisposition=claim.Disposition,
+            AcceptanceOrRejectionReason=resolutionReason,SelectedClaimIds=[claim.ClaimId]
+        };
         return new(claim,evidence,diagnostic);
-    }
-    private static string TraditionIdentity(string path)
-    {
-        var parts=Phase7CanonicalFieldPathPolicy.Canonicalize(path).Split('.',StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length>=3&&parts[0].Equals("cultureAndMythology",StringComparison.OrdinalIgnoreCase)?parts[1]:"";
     }
     private static string SelectionReason(Phase7ClaimDisposition disposition,Phase7SourceEligibility eligibility)=>
         disposition switch
