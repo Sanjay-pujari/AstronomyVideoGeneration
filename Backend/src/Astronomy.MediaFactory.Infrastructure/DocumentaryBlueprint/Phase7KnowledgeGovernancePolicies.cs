@@ -70,7 +70,7 @@ public sealed class Phase7CulturalKnowledgeSafetyPolicy : IPhase7CulturalKnowled
         foreach(var claim in claims)
         {
             if(!approved.Contains(claim.Domain))errors.Add($"P7KNOWLEDGE_CULTURAL_DOMAIN_INVALID:{claim.ClaimId}");
-            var identity=Phase7KnowledgePolicyFacts.Identity(authority,claim,["tradition-","culture-","mythology-"]);
+            var identity=Phase7KnowledgePolicyFacts.Identity(authority,claim,["tradition-","culture-","mythology-","greek","roman","indianhindu","chinese","arabic"]);
             if(identity is null)errors.Add($"P7KNOWLEDGE_TRADITION_IDENTITY_REQUIRED:{claim.ClaimId}");else identities[claim.ClaimId]=identity;
             var evidence=authority.ClaimSupportEvidence.Where(x=>x.ClaimId==claim.ClaimId).ToArray();
             if(evidence.Length==0||evidence.Any(x=>!Phase7KnowledgePolicyFacts.Eligible(x)))errors.Add($"P7KNOWLEDGE_CULTURAL_EVIDENCE_INELIGIBLE:{claim.ClaimId}");
@@ -93,10 +93,11 @@ public sealed class Phase7AstrologySeparationPolicy : IPhase7AstrologySeparation
         foreach(var claim in claims)
         {
             if(claim.Domain!="AstrologyClarification")errors.Add($"P7KNOWLEDGE_ASTROLOGY_DOMAIN_INVALID:{claim.ClaimId}");
-            var identity=Phase7KnowledgePolicyFacts.Identity(authority,claim,Systems);
-            if(identity is null)errors.Add($"P7KNOWLEDGE_ASTROLOGY_SYSTEM_REQUIRED:{claim.ClaimId}");else identities[claim.ClaimId]=identity;
-            if(!Phase7KnowledgePolicyFacts.Qualified(authority,claim))errors.Add($"P7KNOWLEDGE_ASTROLOGY_QUALIFICATION_REQUIRED:{claim.ClaimId}");
             var evidence=authority.ClaimSupportEvidence.Where(x=>x.ClaimId==claim.ClaimId).ToArray();
+            var clarificationOnly=evidence.Any(x=>x.ApprovedFieldPath.EndsWith(".disclaimer",StringComparison.OrdinalIgnoreCase));
+            var identity=Phase7KnowledgePolicyFacts.Identity(authority,claim,Systems.Concat(["westernzodiac","indianrashi","nakshatra"]).ToArray());
+            if(identity is null&&!clarificationOnly)errors.Add($"P7KNOWLEDGE_ASTROLOGY_SYSTEM_REQUIRED:{claim.ClaimId}");else if(identity is not null)identities[claim.ClaimId]=identity;
+            if(!Phase7KnowledgePolicyFacts.Qualified(authority,claim))errors.Add($"P7KNOWLEDGE_ASTROLOGY_QUALIFICATION_REQUIRED:{claim.ClaimId}");
             if(evidence.Length==0||evidence.Any(x=>!Phase7KnowledgePolicyFacts.Eligible(x)))errors.Add($"P7KNOWLEDGE_ASTROLOGY_EVIDENCE_INELIGIBLE:{claim.ClaimId}");
             if((claim.SemanticIdentity.Contains("equivalent",StringComparison.OrdinalIgnoreCase)||claim.SemanticIdentity.Contains("equals",StringComparison.OrdinalIgnoreCase))&&!Phase7KnowledgePolicyFacts.Qualified(authority,claim))
                 errors.Add($"P7KNOWLEDGE_ASTROLOGY_EQUIVALENCE_UNQUALIFIED:{claim.ClaimId}");
