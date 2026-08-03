@@ -1,3 +1,5 @@
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
 /// <summary>Canonical, schema-based cultural tradition resolution.</summary>
