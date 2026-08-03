@@ -35,7 +35,11 @@ public sealed class Phase7KnowledgeAuthorityValidator : IPhase7KnowledgeAuthorit
         Add("ClaimChecksumGate",a.Claims.All(x=>x.Checksum==Phase7Determinism.Hash(x with{Checksum=""})),"P7KNOWLEDGE_CLAIM_CHECKSUM_INVALID");
         Add("ClaimProvenanceGate",required.All(x=>evidence.Any(e=>e.ClaimId==x.ClaimId&&e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField)),"P7KNOWLEDGE_PROVENANCE_INVALID");
         Add("ClaimSupportEvidenceGate",a.ClaimSupportEvidence.All(x=>claimIds.Contains(x.ClaimId)&&a.Sources.Any(s=>s.SourceId==x.SourceId)),"P7KNOWLEDGE_SUPPORT_EVIDENCE_INVALID");
-        Add("MandatoryDomainGate",a.MandatoryDomains.All(x=>r.Domains.Any(y=>y.Domain==x&&y.Status==KnowledgeDomainStatus.Available)),"P7KNOWLEDGE_MANDATORY_DOMAIN_MISSING");
+        bool AuthoritativeDomain(string domain)=>required.Where(x=>x.Domain==domain&&!x.RequiresHumanReview)
+            .Any(x=>x.Checksum==Phase7Determinism.Hash(x with{Checksum=""})&&evidence.Any(e=>e.ClaimId==x.ClaimId&&
+                e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField)&&
+                !contradictions.Any(m=>m.SelectedClaimIds.Contains(x.ClaimId)));
+        Add("MandatoryDomainGate",a.MandatoryDomains.All(AuthoritativeDomain),"P7KNOWLEDGE_MANDATORY_DOMAIN_MISSING");
         Add("OptionalDomainGate",a.OptionalDomains.All(x=>r.Domains.Any(y=>y.Domain==x&&y.Status is KnowledgeDomainStatus.Available or KnowledgeDomainStatus.NotApplicable or KnowledgeDomainStatus.Deferred or KnowledgeDomainStatus.RequiresHumanReview)),"P7KNOWLEDGE_OPTIONAL_DOMAIN_INVALID");
         Add("MergeDecisionGate",a.MergeDecisions.All(x=>x.Classification==Phase7KnowledgeMergeClassification.Contradictory?x.SelectedClaimIds.Count==0:x.SelectedClaimIds.All(claimIds.Contains)),"P7KNOWLEDGE_MERGE_INVALID");
         Add("TrueScopeGate",special.All(x=>x.EventScope.HasExplicitEvidence),"P7KNOWLEDGE_TRUE_SCOPE_INVALID");
@@ -44,7 +48,10 @@ public sealed class Phase7KnowledgeAuthorityValidator : IPhase7KnowledgeAuthorit
         Add("IncomparableGate",incomparable.All(x=>x.SelectedClaimIds.Count==0||x.EventScope.HasExplicitEvidence||x.EvergreenScope.HasExplicitEvidence),"P7KNOWLEDGE_INCOMPARABLE_INVALID");
         Add("QualificationGate",required.Where(x=>x.RequiresQualification).All(x=>a.ClaimSupportEvidence.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.QualificationReason))),"P7KNOWLEDGE_QUALIFICATION_INVALID");
         bool Qualified(CertifiedNarrationClaim x)=>!x.RequiresQualification||a.ClaimSupportEvidence.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.QualificationReason));
-        Add("LocationTimeSafetyGate",a.Claims.Where(x=>x.IsLocationDependent||x.IsDateTimeDependent).All(x=>x.RequiresQualification&&Qualified(x)),"P7KNOWLEDGE_LOCATION_TIME_SAFETY_INVALID");
+        bool HasQualification(CertifiedNarrationClaim x)=>x.RequiresQualification&&a.ClaimSupportEvidence.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.QualificationReason));
+        bool Scoped(CertifiedNarrationClaim x)=>a.ClaimSupportEvidence.Any(e=>e.ClaimId==x.ClaimId&&!string.IsNullOrWhiteSpace(e.AuthorityScope))||
+            a.MergeDecisions.Any(m=>m.SelectedClaimIds.Contains(x.ClaimId)&&(m.EventScope.HasExplicitEvidence||m.EvergreenScope.HasExplicitEvidence));
+        Add("LocationTimeSafetyGate",a.Claims.Where(x=>x.IsLocationDependent||x.IsDateTimeDependent).All(x=>Scoped(x)||HasQualification(x)),"P7KNOWLEDGE_LOCATION_TIME_SAFETY_INVALID");
         Add("CulturalSafetyGate",a.Claims.Where(x=>x.IsCultural||x.IsMythological).All(x=>x.RequiresQualification&&Qualified(x)&&(!x.RequiresHumanReview||x.Disposition==Phase7ClaimDisposition.HumanReview)),"P7KNOWLEDGE_CULTURAL_SAFETY_INVALID");
         Add("AstrologySeparationGate",a.Claims.Where(x=>x.IsAstrologyRelated).All(x=>x.RequiresQualification&&Qualified(x)&&x.Domain.Contains("astrolog",StringComparison.OrdinalIgnoreCase)),"P7KNOWLEDGE_ASTROLOGY_SEPARATION_INVALID");
         Add("DiagnosticsReconciliationGate",d.DiagnosticsReconciled&&d.AuthorityId==a.AuthorityId&&d.AcceptedClaimCount==a.Claims.Count&&d.RequiredClaimCount==required.Length&&d.DeferredClaimCount==a.Claims.Count(x=>x.Disposition==Phase7ClaimDisposition.Deferred)&&d.BlockingIssueCount==a.BlockingIssues.Count&&d.WarningCount==a.Warnings.Count,"P7KNOWLEDGE_DIAGNOSTICS_INVALID");
