@@ -389,3 +389,44 @@ Remaining failures are the unexecuted required test files/suites, transaction fa
 matrix, and Orion publication/reuse proof. P7.1B is not ready and must not begin.
 The only defensible final verdict is
 `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A FINAL RUNTIME CERTIFICATION — 2026-08-03 execution
+
+This certification pass replaced the source-text-only pipeline isolation checks
+with runtime boundary tests against `ProductionPipelineExecutionService`. The
+tests execute its production Phase 7 dispatcher and overwrite cleanup with a
+recording `IPhase7KnowledgeService`. They cover retry and legacy-artifact
+isolation, selected-range gating, exact single invocation, overwrite forwarding,
+committed/reuse/failure aggregation, exact error and warning preservation, and
+absence of narration, Scene Knowledge Packet, Azure OpenAI, and Azure Speech
+activity. The recording fake captures its request, overwrite flag, cancellation
+token, invocation count, configured result, and committed-file state at the exact
+service boundary.
+
+The overwrite sentinel matrix creates distinct content for all six transaction-
+owned paths and records bytes, SHA-256, length, and `LastWriteTimeUtc`. It runs the
+real generic Phase 7 cleanup, proves retired `narration-v5` cleanup still occurs,
+and compares all six files again from inside the fake service. No production file
+was changed in this pass; the only modified test file is
+`Backend/tests/Astronomy.MediaFactory.Tests/Phase7KnowledgePipelineIsolationTests.cs`.
+
+Executed environment evidence:
+
+* `dotnet build Backend/Astronomy.MediaFactory.slnx --no-restore --verbosity normal`
+  could not start: `/bin/bash: dotnet: command not found` (exit 127).
+* Consequently the focused pipeline-isolation, orchestrator integration, endpoint
+  aggregation, legacy isolation, production-pipeline, all-`Phase7Knowledge`, full
+  Phase 7, StoryFrame, Phase 6, Phase 5, Phase 4, RC2 Phase 1–6, and complete-project
+  suites have no honest executed totals in this container.
+* The API could not be started without the .NET runtime. Therefore no real Orion
+  forced-publication, reuse, or `retryFailedOnly` response exists, and no six-file
+  production artifact hashes, sizes, timestamps, semantic validation, manifest
+  validation, publication-evidence validation, or reuse byte-identity result is
+  claimed.
+* Azure OpenAI invocation count: **0**. Azure Speech synthesis invocation count:
+  **0**. No narration prose, Scene Knowledge Packets, TTS, or audio were generated.
+
+Remaining certification failures are environmental absence of the .NET SDK and
+the resulting unexecuted mandatory suites and real API exercises. P7.1B is not
+ready and was not started. Since the mandatory evidence is unavailable, the final
+verdict remains `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
