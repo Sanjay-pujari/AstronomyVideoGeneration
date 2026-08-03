@@ -283,3 +283,50 @@ Current verdict: `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
 33. **Remaining failures:** standalone reconciler/policies, required tests, endpoint proof, regressions, and real Orion publication/reuse.
 34. **P7.1B readiness:** not ready; P7.1B must not begin.
 35. **Final verdict:** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A FINAL EXECUTED CERTIFICATION
+
+This section supersedes earlier status sections. The governing Phase 7 contracts,
+publication infrastructure, resolver, validator, builder, family profiles, frozen
+Phase 4–6 publication code, production pipeline service, legacy Phase 7 services,
+and existing knowledge tests were reviewed for this close pass.
+
+The frozen architecture and `rc2-phase7-knowledge.v1` contract remain unchanged.
+The publication coordinator now treats the relabelled precommit validation only as
+a bootstrap candidate. After publishing succeeded manifest and committed evidence,
+it physically rereads the committed set, invokes the validator with
+`CommittedPhysical`, stores that actual result, updates the external validation
+hash in manifest and evidence, and performs one final committed readback and
+canonical comparison. Failure to converge is blocking.
+
+`Phase7KnowledgeValidationCanonicalizer` is the sole validation checksum and
+comparison projection. It ordinally sorts gates, gate diagnostics, top-level
+diagnostics, and inventory paths, and it canonicalizes the inventory checksum.
+The validator, physical readback, transaction seed, and committed evaluator use
+that projection. Focused contract tests cover ordering, equivalence, changed gate
+state, and checksum stability.
+
+No standalone diagnostics reconciler or family-driven location/time, cultural, or
+astrology policy was completed in this close pass. Merge-aware evidence reasons,
+qualification reason completion, full fault matrix, RC2 endpoint integration and
+legacy isolation also remain outstanding. Manifest/recovery behavior was not
+redesigned.
+
+Files added: `Phase7KnowledgeValidationCanonicalizer.cs` and
+`Phase7KnowledgeValidationCanonicalizationTests.cs`. Files modified:
+`Phase7KnowledgeAuthorityValidator.cs`,
+`Phase7KnowledgePublicationInfrastructure.cs`, and this implementation record.
+
+Build and runtime evidence could not be produced because this environment has no
+.NET SDK (`dotnet: command not found`). Therefore focused, Phase 7, Phase 4–6, and
+complete-project totals are unavailable rather than fabricated. Real Orion forced
+publication and no-write reuse were not run; no API response, artifact hashes,
+sizes, validation/manifest/evidence runtime summaries, or byte-identity proof is
+claimed. This work made zero Azure OpenAI calls and zero Azure Speech synthesis
+calls.
+
+Remaining failures are the unimplemented governed services and suites above plus
+all unexecuted regression and Orion certification requirements. P7.1B is not ready
+and must not begin.
+
+Final verdict: `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.

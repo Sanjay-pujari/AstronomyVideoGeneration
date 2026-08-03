@@ -74,6 +74,7 @@ public sealed class Phase7KnowledgeAuthorityValidator : IPhase7KnowledgeAuthorit
         var code=errors.Length==0?"P7KNOWLEDGE_VALID":errors[0];
         var draft=new Phase7KnowledgeValidation(Phase7KnowledgeContract.Version,a.ExecutionId,a.PlanId,a.EventId,a.AuthorityId,
             errors.Length==0,code,mode,gates,errors,a.Warnings,readback?.ExpectedInventory,"");
-        return draft with{DeterministicChecksum=Phase7Determinism.Hash(draft)};
+        draft=Phase7KnowledgeValidationCanonicalizer.Canonicalize(draft);
+        return draft with{DeterministicChecksum=Phase7KnowledgeValidationCanonicalizer.ComputeChecksum(draft)};
     }
 }
