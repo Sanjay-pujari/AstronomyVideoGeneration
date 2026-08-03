@@ -55,6 +55,25 @@ public sealed record Phase7KnowledgeDiagnostics(
 {
     public int AcceptedRequiredCount { get; init; }
     public int AcceptedOptionalCount { get; init; }
+    public int HumanReviewClaimCount { get; init; }
+    public int RequiredExactClaimCount { get; init; }
+    public int RequiredExactEntityCount { get; init; }
+    public int RequiredExactFieldCount { get; init; }
+    public int OptionalAuthoritativeEvidenceCount { get; init; }
+    public int OptionalReviewedEvidenceCount { get; init; }
+    public int NoProvenanceClaimCount { get; init; }
+    public int MandatoryAvailableDomainCount { get; init; }
+    public int MandatoryHumanReviewDomainCount { get; init; }
+    public int MandatoryDeferredDomainCount { get; init; }
+    public int MandatoryMissingDomainCount { get; init; }
+    public int OptionalAvailableDomainCount { get; init; }
+    public int OptionalHumanReviewDomainCount { get; init; }
+    public int OptionalDeferredDomainCount { get; init; }
+    public int OptionalNotApplicableDomainCount { get; init; }
+    public bool LocationTimeSafetyPassed { get; init; }
+    public bool CulturalSafetyPassed { get; init; }
+    public bool AstrologySeparationPassed { get; init; }
+    public IReadOnlyList<string> ReconciliationDifferences { get; init; } = [];
 }
 
 public enum Phase7KnowledgeValidationMode { InMemoryCandidate, StagedPhysical, CommittedPhysical }

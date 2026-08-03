@@ -64,15 +64,17 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         }
         var mandatoryNames=profile.MandatoryKnowledgeDomains.ToHashSet(StringComparer.Ordinal);
         var optionalNames=profile.OptionalKnowledgeDomains.ToHashSet(StringComparer.Ordinal);
-        var claims = merged.Values.Select(x=>Claim(x,payload,issues)).Select(x=>
+        // Disposition is governance input to source eligibility, not a property that can be
+        // patched onto a claim after required-grade source selection has already happened.
+        var resolvedClaims = merged.Values.Select(candidate =>
         {
-            var disposition=x.RequiresHumanReview ? Phase7ClaimDisposition.HumanReview
-                : mandatoryNames.Contains(x.Domain) ? Phase7ClaimDisposition.Required
-                : optionalNames.Contains(x.Domain) ? Phase7ClaimDisposition.Optional : Phase7ClaimDisposition.Deferred;
-            var draft=x with { Disposition=disposition, Checksum="" };
-            return draft with { Checksum=Phase7Determinism.Hash(draft) };
-        })
-            .OrderBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray();
+            var domain=candidate.Domain.ToString();
+            var disposition=candidate.RequiresHumanReview ? Phase7ClaimDisposition.HumanReview
+                : mandatoryNames.Contains(domain) ? Phase7ClaimDisposition.Required
+                : optionalNames.Contains(domain) ? Phase7ClaimDisposition.Optional : Phase7ClaimDisposition.Deferred;
+            return ResolveClaim(candidate, disposition, payload, issues);
+        }).OrderBy(x=>x.Claim.ClaimId,StringComparer.Ordinal).ToArray();
+        var claims=resolvedClaims.Select(x=>x.Claim).ToArray();
         var claimIdsBySemantic = claims.ToDictionary(x => x.SemanticIdentity, x => x.ClaimId, StringComparer.Ordinal);
         decisions = decisions.Select(d => d.Classification == Phase7KnowledgeMergeClassification.Contradictory
             ? d
@@ -85,8 +87,13 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         var domains = Enum.GetValues<NarrationKnowledgeDomainKey>().Select(key =>
         {
             var selected=claims.Where(x=>x.Domain==key.ToString()).ToArray(); var mandatory=required.Contains(key);
-            return new NarrationKnowledgeDomain(key.ToString(),selected.Length>0?KnowledgeDomainStatus.Available:mandatory?KnowledgeDomainStatus.Missing:KnowledgeDomainStatus.NotApplicable,selected,
-                mandatory&&selected.Length==0?[$"P7KNOWLEDGE_MANDATORY_DOMAIN_MISSING:{key}"]:[]);
+            var authoritative=selected.Where(x=>x.Disposition==Phase7ClaimDisposition.Required&&!x.RequiresHumanReview)
+                .Any(x=>x.Checksum==Phase7Determinism.Hash(x with{Checksum=""})&&resolvedClaims.Any(rc=>rc.Claim.ClaimId==x.ClaimId&&rc.Evidence.Any(e=>e.SourceEligibility==Phase7SourceEligibility.EligibleForRequiredClaim)));
+            var status=mandatory
+                ? authoritative?KnowledgeDomainStatus.Available:selected.Any(x=>x.Disposition==Phase7ClaimDisposition.HumanReview)?KnowledgeDomainStatus.RequiresHumanReview:selected.Any(x=>x.Disposition==Phase7ClaimDisposition.Deferred)?KnowledgeDomainStatus.Deferred:KnowledgeDomainStatus.Missing
+                : selected.Any(x=>x.Disposition is Phase7ClaimDisposition.Required or Phase7ClaimDisposition.Optional)?KnowledgeDomainStatus.Available:selected.Any(x=>x.Disposition==Phase7ClaimDisposition.HumanReview)?KnowledgeDomainStatus.RequiresHumanReview:selected.Any(x=>x.Disposition==Phase7ClaimDisposition.Deferred)?KnowledgeDomainStatus.Deferred:KnowledgeDomainStatus.NotApplicable;
+            return new NarrationKnowledgeDomain(key.ToString(),status,selected,
+                mandatory&&status!=KnowledgeDomainStatus.Available?[$"P7KNOWLEDGE_MANDATORY_DOMAIN_{status.ToString().ToUpperInvariant()}:{key}"]:[]);
         }).ToArray();
         issues.AddRange(domains.SelectMany(x=>x.Warnings));
         var result = new ResolvedNarrationKnowledge(payload.PayloadId,payload.PayloadChecksum,payload.SourceRegistryId,
@@ -95,24 +102,8 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             LocalizedScalar(payload.EvergreenJson,payload.Language,"pronunciation"),sourcePool.Select(x=>x.SourceId).Order(StringComparer.Ordinal).ToArray(),
             warnings.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),issues.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),"");
         var all=sourcePool;
-        var supportEvidence = claims.SelectMany(claim =>
-        {
-            var candidate = merged[claim.SemanticIdentity];
-            var decision = decisions.FirstOrDefault(x => x.SelectedClaimIds.Contains(claim.ClaimId));
-            return claim.SourceIds.Select(sourceId =>
-            {
-                var source=all.Single(x=>x.SourceId==sourceId);
-                var eligibility=sourceEligibility.Classify(new(source,payload.Language,candidate.KnowledgeId,candidate.SemanticIdentity,candidate.ApprovedFieldPath,claim.Disposition==Phase7ClaimDisposition.Required,claim.Disposition==Phase7ClaimDisposition.Optional,candidate.RequiresHumanReview));
-                return new Phase7ClaimSupportEvidence(claim.ClaimId, claim.SemanticIdentity,
-                sourceId, candidate.KnowledgeId, Phase7CanonicalFieldPathPolicy.Canonicalize(candidate.ApprovedFieldPath),
-                Enum.Parse<Phase7ProvenancePrecision>(claim.ProvenancePrecision), candidate.AdapterId, candidate.Origin,
-                decision is null ? "CertifiedExactProvenance" : decision.Classification.ToString(),
-                decision is null ? null : $"merge-{Phase7Determinism.Hash(new { decision.SemanticIdentity, decision.Classification })[..20]}",
-                claim.Confidence) { AdapterVersion=candidate.AdapterVersion, SourceEligibility=eligibility.Eligibility,
-                    RequiresHumanReview=candidate.RequiresHumanReview, QualificationReason=candidate.RequiresQualification?"GovernedQualificationRequired":"",
-                    AuthorityScope=candidate.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)?"GeneralAuthority":candidate.SemanticIdentity.EndsWith(".execution",StringComparison.Ordinal)?"ExecutionScopedAuthority":candidate.Origin.ToString() };
-            });
-        }).OrderBy(x => x.ClaimId, StringComparer.Ordinal).ThenBy(x => x.SourceId, StringComparer.Ordinal).ToArray();
+        // Evidence is materialized from the exact selection used to build SourceIds.
+        var supportEvidence = resolvedClaims.SelectMany(x=>x.Evidence).OrderBy(x => x.ClaimId, StringComparer.Ordinal).ThenBy(x => x.SourceId, StringComparer.Ordinal).ToArray();
         adapterDiagnostics = adapterDiagnostics.Select(d =>
         {
             var adapterClaims = claims.Where(c => merged.TryGetValue(c.SemanticIdentity, out var candidate)
@@ -151,20 +142,32 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         }
         catch(JsonException){issues.Add($"P7KNOWLEDGE_{origin.ToString().ToUpperInvariant()}_JSON_INVALID");}
     }
-    private CertifiedNarrationClaim Claim(Phase7AdapterClaimCandidate c,CertifiedKnowledgePayload p,List<string> issues)
+    private sealed record ResolvedClaim(CertifiedNarrationClaim Claim,IReadOnlyList<Phase7ClaimSupportEvidence> Evidence);
+    private ResolvedClaim ResolveClaim(Phase7AdapterClaimCandidate c,Phase7ClaimDisposition disposition,CertifiedKnowledgePayload p,List<string> issues)
     {
         var sourcePool=Phase7KnowledgeSourcePool.Get(p);
-        var evaluated=sourcePool.Select(x=>(Source:x,Result:sourceEligibility.Classify(new(x,p.Language,c.KnowledgeId,c.SemanticIdentity,c.ApprovedFieldPath,true,false,c.RequiresHumanReview))))
-            .Where(x=>x.Result.Eligibility==Phase7SourceEligibility.EligibleForRequiredClaim).ToArray();
+        var required=disposition==Phase7ClaimDisposition.Required;
+        var reviewedAllowed=disposition is Phase7ClaimDisposition.Optional or Phase7ClaimDisposition.HumanReview;
+        var evaluated=disposition==Phase7ClaimDisposition.Deferred
+            ? Array.Empty<(CertifiedNarrationSource Source,Phase7SourceEligibilityResult Result)>()
+            : sourcePool
+            .Where(x=>c.SourceIds.Count==0||c.SourceIds.Contains(x.SourceId,StringComparer.Ordinal))
+            .Select(x=>(Source:x,Result:sourceEligibility.Classify(new(x,p.Language,c.KnowledgeId,c.SemanticIdentity,c.ApprovedFieldPath,required,reviewedAllowed,disposition==Phase7ClaimDisposition.HumanReview))))
+            .Where(x=>required?x.Result.Eligibility==Phase7SourceEligibility.EligibleForRequiredClaim:x.Result.Eligibility is Phase7SourceEligibility.EligibleForRequiredClaim or Phase7SourceEligibility.EligibleForOptionalClaim).ToArray();
         var precision=evaluated.Select(x=>x.Result.Precision).DefaultIfEmpty(Phase7ProvenancePrecision.None).Min();
-        var chosen=evaluated.Where(x=>x.Result.Precision==precision).Select(x=>x.Source).ToArray();
-        if(chosen.Length==0) issues.Add($"P7KNOWLEDGE_REQUIRED_CLAIM_UNSUPPORTED:{c.SemanticIdentity}");
+        var chosen=evaluated.Where(x=>x.Result.Precision==precision).ToArray();
+        if(required&&chosen.Length==0) issues.Add($"P7KNOWLEDGE_REQUIRED_CLAIM_UNSUPPORTED:{c.SemanticIdentity}");
         var id=Phase7Determinism.SemanticClaimId(c.KnowledgeId,c.SemanticIdentity,p.Language,p.EvergreenPayloadId??p.PayloadId);
         var cultural=c.Domain is NarrationKnowledgeDomainKey.CultureAndMythology or NarrationKnowledgeDomainKey.RegionalTraditions;
-        var draft=new CertifiedNarrationClaim(id,c.Domain.ToString(),c.Text,chosen.Select(x=>x.SourceId).Distinct().Order(StringComparer.Ordinal).ToArray(),[c.KnowledgeId,c.SemanticIdentity],chosen.Length==0?.5m:chosen.Min(x=>x.Confidence),
+        var draft=new CertifiedNarrationClaim(id,c.Domain.ToString(),c.Text,chosen.Select(x=>x.Source.SourceId).Distinct().Order(StringComparer.Ordinal).ToArray(),[c.KnowledgeId,c.SemanticIdentity],chosen.Length==0?.5m:chosen.Min(x=>x.Source.Confidence),
             Has(c.Text,"approximately","roughly","generally","typically"),c.Domain is NarrationKnowledgeDomainKey.Observation or NarrationKnowledgeDomainKey.Visibility, c.Domain==NarrationKnowledgeDomainKey.Timing,
-            cultural,cultural,c.Domain==NarrationKnowledgeDomainKey.AstrologyClarification,c.RequiresQualification,c.RequiresHumanReview,p.Language,"") { SemanticIdentity=c.SemanticIdentity,ProvenancePrecision=precision.ToString(),Uncertain=chosen.Length==0 };
-        return draft with { Checksum=Phase7Determinism.Hash(draft with { Checksum="" }) };
+            cultural,cultural,c.Domain==NarrationKnowledgeDomainKey.AstrologyClarification,c.RequiresQualification,c.RequiresHumanReview,p.Language,"") { SemanticIdentity=c.SemanticIdentity,Disposition=disposition,ProvenancePrecision=precision.ToString(),Uncertain=chosen.Length==0 };
+        var claim=draft with { Checksum=Phase7Determinism.Hash(draft with { Checksum="" }) };
+        var evidence=chosen.Select(x=>new Phase7ClaimSupportEvidence(id,c.SemanticIdentity,x.Source.SourceId,c.KnowledgeId,
+            Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath),x.Result.Precision,c.AdapterId,c.Origin,"CertifiedExactProvenance",null,claim.Confidence)
+            { AdapterVersion=c.AdapterVersion,SourceEligibility=x.Result.Eligibility,RequiresHumanReview=disposition==Phase7ClaimDisposition.HumanReview,
+              QualificationReason=c.RequiresQualification?"GovernedQualificationRequired":"",AuthorityScope=c.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)?"GeneralAuthority":c.SemanticIdentity.EndsWith(".execution",StringComparison.Ordinal)?"ExecutionScopedAuthority":c.Origin.ToString() }).ToArray();
+        return new(claim,evidence);
     }
     private static bool IsEventCertified(string value)=>value.Equals("Certified",StringComparison.OrdinalIgnoreCase)||value.Equals("Verified",StringComparison.OrdinalIgnoreCase);
     private static bool IsEvergreenCertified(string value)=>IsEventCertified(value)||value.Equals("Reviewed",StringComparison.OrdinalIgnoreCase);
