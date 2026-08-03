@@ -317,28 +317,29 @@ public sealed class ContentPlanProductionExecutionService(
     {
         var requestedStartPhase = request.StartPhaseNo.HasValue ? Math.Clamp(request.StartPhaseNo.Value, 1, 20) : (int?)null;
         var requestedEndPhase = request.EndPhaseNo.HasValue ? Math.Clamp(request.EndPhaseNo.Value, requestedStartPhase ?? 1, 20) : (int?)null;
-        var inRange = (phaseResults ?? [])
-            .Where(result => (!requestedStartPhase.HasValue || result.PhaseNo >= requestedStartPhase) &&
-                             (!requestedEndPhase.HasValue || result.PhaseNo <= requestedEndPhase))
+        // PhaseResults is the authoritative record of what the pipeline actually observed.
+        // Dependency expansion and prerequisite execution can legitimately place results
+        // outside the caller's requested range, and those results must still affect success.
+        var observedResults = (phaseResults ?? [])
             .OrderBy(result => result.PhaseNo)
             .ToArray();
-        var reusedResults = inRange.Where(ProductionPhaseSatisfaction.IsRecognizedReuse).ToArray();
-        var satisfiedResults = inRange.Where(ProductionPhaseSatisfaction.IsSatisfied).ToArray();
+        var reusedResults = observedResults.Where(ProductionPhaseSatisfaction.IsRecognizedReuse).ToArray();
+        var satisfiedResults = observedResults.Where(ProductionPhaseSatisfaction.IsSatisfied).ToArray();
         // Executed means the production body ran; reuse is reported separately even when a
         // legacy phase convention represents reuse with Succeeded rather than Skipped.
-        var executed = inRange
+        var executed = observedResults
             .Where(result => !ProductionPhaseSatisfaction.IsRecognizedReuse(result) && result.Status != ProductionPhaseStatus.Skipped)
             .Select(result => result.PhaseNo)
             .Distinct()
             .OrderBy(phaseNo => phaseNo)
             .ToArray();
-        var failed = inRange
+        var failed = observedResults
             .Where(result => result.Status == ProductionPhaseStatus.Failed)
             .Select(result => result.PhaseNo)
             .Distinct()
             .OrderBy(phaseNo => phaseNo)
             .ToArray();
-        var allSucceeded = inRange.Length > 0 && inRange.All(ProductionPhaseSatisfaction.IsSatisfied);
+        var allSucceeded = observedResults.Length > 0 && observedResults.All(ProductionPhaseSatisfaction.IsSatisfied);
         var outOfScope = (requestedOutputCompletion ?? [])
             .Where(output => string.Equals(output.Status, "OutOfScope", StringComparison.OrdinalIgnoreCase) || string.Equals(output.Status, "NotRun", StringComparison.OrdinalIgnoreCase))
             .Select(output => output.OutputType)
