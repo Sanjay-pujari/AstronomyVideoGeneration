@@ -44,14 +44,36 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         return draft with { PayloadChecksum = Phase7Determinism.Hash(new { draft.PayloadId, draft.EventId, draft.CertifiedEventFamily, draft.Language, draft.RawDataJson, draft.MetadataJson, draft.EvergreenChecksum, sources }) };
     }
 
+    public async Task<Phase7CertifiedKnowledgeSourceResult> ResolveResultAsync(string eventId, string language, CancellationToken token = default)
+    {
+        try
+        {
+            var payload=await ResolveAsync(eventId,language,token);
+            return payload is null ? Failure("P7KNOWLEDGE_EVENT_MISSING","Certified event intelligence was not found.")
+                : new(true,payload,"P7KNOWLEDGE_VALID",[],payload.Warnings);
+        }
+        catch(OperationCanceledException) when(token.IsCancellationRequested){throw;}
+        catch(JsonException ex){return Failure("P7KNOWLEDGE_METADATA_INVALID",ex.Message);}
+        catch(InvalidDataException ex)
+        {
+            var code=ex.Message.Split(':',2)[0];
+            return Failure(code.StartsWith("P7KNOWLEDGE_",StringComparison.Ordinal)?code:"P7KNOWLEDGE_EVERGREEN_LOAD_FAILED",ex.Message);
+        }
+        catch(IOException ex){return Failure("P7KNOWLEDGE_EVERGREEN_LOAD_FAILED",ex.Message);}
+        static Phase7CertifiedKnowledgeSourceResult Failure(string code,string error)=>new(false,null,code,[error],[]);
+    }
+
     private static CertifiedNarrationSource EventSource(AstronomyReferenceSource s, string language)
     {
         var knowledge = JsonArray(s.EvidenceJson, "supportedKnowledgeIds");
         var claims = JsonArray(s.EvidenceJson, "supportedClaimIds");
         var domains = JsonArray(s.EvidenceJson, "supportedDomains");
-        var reviewed = s.RetrievedUtc.HasValue || s.ConfidenceScore.HasValue;
+        var reviewStatus = EvidenceString(s.EvidenceJson,"reviewStatus");
+        var certificationStatus = EvidenceString(s.EvidenceJson,"certificationStatus") ?? EvidenceString(s.EvidenceJson,"verificationStatus");
+        var reviewed = reviewStatus is not null && reviewStatus.Equals("Reviewed",StringComparison.OrdinalIgnoreCase);
+        var certified = certificationStatus is not null && (certificationStatus.Equals("Certified",StringComparison.OrdinalIgnoreCase)||certificationStatus.Equals("Verified",StringComparison.OrdinalIgnoreCase));
         var draft = new CertifiedNarrationSource(s.Id.ToString(), s.SourceType, s.SourceName, s.SourceName,
-            s.SourceUrl ?? s.Citation ?? "", reviewed, reviewed, knowledge, claims, domains, language,
+            s.SourceUrl ?? s.Citation ?? "", reviewed, certified, knowledge, claims, domains, language,
             Math.Clamp(s.ConfidenceScore ?? .8m, 0m, 1m), "");
         return draft with { Checksum = Phase7Determinism.Hash(draft with { Checksum = "" }) };
     }
@@ -68,7 +90,6 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
     private static string ResolveAuthoritativeFamily(string eventType, string category)
     {
         var direct = NormalizeFamily(eventType);
-        if (Enum.TryParse<NarrationKnowledgeDomainKey>(direct, true, out _)) { }
         var known = new HashSet<string>(StringComparer.Ordinal) { "CONSTELLATION","METEOR_SHOWER","LUNAR_PHASE","ISS_PASS","CLOSE_APPROACH","DEEP_SKY_OBJECT","STAR_FORMING_REGION","CONJUNCTION","GROUPING","OCCULTATION","TRANSIT","OPPOSITION","ELONGATION","ECLIPSE","COMET","SATELLITE","GALAXY","NEBULA","CLUSTER","PLANET","MOON","STAR" };
         if (known.Contains(direct)) return direct;
         var resolved = EventFamilyResolver.Resolve(eventType, category, [], [], "").ToString().ToUpperInvariant();
@@ -78,5 +99,6 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
     private static bool Certified(string value) => value.Equals("Certified", StringComparison.OrdinalIgnoreCase) || value.Equals("Verified", StringComparison.OrdinalIgnoreCase) || value.Equals("Reviewed", StringComparison.OrdinalIgnoreCase);
     private static string? MetadataString(string? json, string key) { if (string.IsNullOrWhiteSpace(json)) return null; using var d = JsonDocument.Parse(json); return d.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null; }
     private static string[] JsonArray(string? json, string key) { if (string.IsNullOrWhiteSpace(json)) return []; try { using var d=JsonDocument.Parse(json); return d.RootElement.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.Array ? v.EnumerateArray().Where(x=>x.ValueKind==JsonValueKind.String).Select(x=>x.GetString()!).ToArray() : []; } catch(JsonException) { return []; } }
+    private static string? EvidenceString(string? json,string key){if(string.IsNullOrWhiteSpace(json))return null;using var d=JsonDocument.Parse(json);return d.RootElement.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString():null;}
     private static string CanonicalDomain(string value) => NarrationKnowledgeDomains.TryParse(value, out var key) ? key.ToString() : value;
 }
