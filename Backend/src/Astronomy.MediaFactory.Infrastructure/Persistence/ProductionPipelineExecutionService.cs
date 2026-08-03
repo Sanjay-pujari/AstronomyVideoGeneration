@@ -277,7 +277,7 @@ public sealed partial class ProductionPipelineExecutionService(
             // validation there produces the canonical P2_REUSED result; the generic retry
             // skip has no authority-specific reason code and therefore cannot satisfy a
             // requested range.
-            if (request.RetryFailedOnly && phase.No is not (1 or 2 or 4 or 6) && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
+            if (request.RetryFailedOnly && phase.No is not (1 or 2 or 4 or 6 or 7) && PreviousPhaseSucceeded(context, phase.No) && PreviousPhaseRequiredOutputsExist(context, phase.No))
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], "retryFailedOnly=true: previous successful phase was not rerun.", false, cancellationToken);
                 phaseResults.Add(skipped);
@@ -550,7 +550,10 @@ public sealed partial class ProductionPipelineExecutionService(
             4 => false, // Phase 4 reuse is asynchronous and exclusively evaluated by IPhase4CommittedAuthorityEvaluator.
             5 => false, // Phase 5 reuse is asynchronous and exclusively evaluated by IPhase5CommittedAuthorityEvaluator.
             6 => ExistingStoryFrameArtifactsAreValid(context),
-            7 => File.Exists(BuildNarrationV5Path(context)),
+            // P7.1A reuse is evaluated asynchronously and exclusively by
+            // IPhase7KnowledgeCommittedStateEvaluator through IPhase7KnowledgeService.
+            // Legacy narration-v5 artifacts must never satisfy Knowledge Authority.
+            7 => false,
             _ => true
         };
 
@@ -16823,6 +16826,11 @@ public sealed partial class ProductionPipelineExecutionService(
 
         if (deleteStartPhaseNo <= 7 && deleteEndPhaseNo >= 7)
         {
+            // This branch is intentionally limited to retired narration-v5 output. It must not
+            // delete or rewrite P7.1A-owned 07-narration/knowledge,
+            // validation/phase-07-knowledge-validation.json, phase-manifest.json, or
+            // .phase-07-knowledge-publication.json. IPhase7KnowledgeTransactionCoordinator
+            // exclusively owns their backup, replacement, rollback, recovery, and mutation.
             PreservePhase7DiagnosticEvidenceForOverwrite(context);
             DeleteProductionSubtree(BuildNarrationV5Root(context), deletedFiles, deletedDirectories);
             DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), deletedFiles);
