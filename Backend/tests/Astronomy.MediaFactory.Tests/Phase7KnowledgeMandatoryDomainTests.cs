@@ -51,7 +51,7 @@ public sealed class Phase7KnowledgeMandatoryDomainTests
     [InlineData("nakshatraNotes","This constellation causes scientific influence through a Nakshatra.")]
     public void UnqualifiedEquivalence_RemainsHumanReview(string field,string text)
     {
-        var result=Resolve($$"""{"astrologyRelationships":{"stableKnowledgeId":"constellation.generic","sourceIds":["astrology-source"],"{{field}}":"{{text}}"}}""",
+        var result=Resolve($"{{\"astrologyRelationships\":{{\"stableKnowledgeId\":\"constellation.generic\",\"sourceIds\":[\"astrology-source\"],\"{field}\":\"{text}\"}}}}",
             Source("astrology-source",$"astrologyRelationships.{field}"));
         var claim=Assert.Single(result.Domains.Single(x=>x.Domain=="AstrologyClarification").Claims);
         Assert.Equal(Phase7ClaimDisposition.HumanReview,claim.Disposition);
