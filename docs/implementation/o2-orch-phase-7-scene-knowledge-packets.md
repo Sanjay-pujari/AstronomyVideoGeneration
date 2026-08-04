@@ -142,3 +142,44 @@ evidence, committed-state evaluation, and production routing.
 
 Azure OpenAI calls: **0**. Azure Speech calls: **0**. No narration prose was generated and no provider
 call occurred.
+
+## P7.1B-A FINAL CLAIM-IMMUTABILITY AND REAL-FIXTURE CERTIFICATION
+
+The packet canonicalizer now orders the Required, Optional, and Deferred claim partitions by
+`ClaimId` while retaining the actual `CertifiedNarrationClaim` instances and their authored nested
+orders. It does not rewrite a certified claim. A private checksum-only projection sorts nested claim
+source and knowledge-reference identifiers for semantic hashing; that projection is used by the
+shared `ComputePacketId` and `ComputeChecksum` methods and never becomes packet JSON. Packet-level
+source IDs, visual evidence IDs, protected terms, approximation warnings, warnings, blocking issues,
+cultural context, dictionary keys, and resolved claim IDs are unordered and canonicalized. Authored
+knowledge-reference order, reference-resolution order, Story Frame order, packet order, and visual
+planning lineage remain ordered.
+
+Validation now includes `PacketClaimAuthorityIdentityGate` for all Required, Optional, and Deferred
+claims. It compares the complete deterministic representation to the matching frozen authority claim
+and emits `P7PACKET_CLAIM_AUTHORITY_IDENTITY_MISMATCH:<ClaimId>`. The Required checksum gate additionally
+requires complete authority identity, the frozen checksum, and successful recomputation from the
+original representation. Production DI contains one singleton registration each for the reference
+compatibility policy, section resolver, reference resolver, packet builder, and packet validator, and
+one scoped registration for the packet-input evaluator. This avoids a singleton consuming its scoped
+committed-authority evaluators.
+
+Final real-fixture certification is **incomplete**. No sanitized successful Orion committed package is
+present. The exact required missing fixture paths are:
+
+- `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/07-narration/knowledge/knowledge-authority.json`
+- `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/07-narration/knowledge/knowledge-resolution-report.json`
+- `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/07-narration/knowledge/knowledge-diagnostics.json`
+- `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/06-story-frames/story-frame-authority.json`
+- `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/06-story-frames/story-frame-index.json`
+- `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/06-story-frames/story-frame-diagnostics.json`
+- `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/07-narration/constellation-family-narration-profile.json`
+
+Consequently there is no source execution/plan identity available to record, and the required values
+(12 Long, 4 Short, 16 total, zero blockers, and zero failed gates) remain unverified. Repeated-build
+byte equivalence, reordered-input equivalence, Long mutation isolation, and Short mutation isolation
+also remain unverified. The current environment has no `dotnet` executable, so focused P7.1B-A,
+unchanged P7.1A regression, and broader Phase 7 totals cannot be truthfully reported. No new observed
+test failure is being concealed; the fixture absence and unavailable SDK are certification blockers.
+Azure OpenAI calls: **0**. Azure Speech calls: **0**. No narration prose or physical packet publication
+was produced. P7.1B-B has not begun.

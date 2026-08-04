@@ -103,8 +103,8 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
           ReferenceResolutions=resolved.Select(x=>new Phase7PacketReferenceResolution(x.Requirement.ReferenceId,x.Requirement.IsPrimary,x.Requirement.IsRequired,x.Resolution.Status,x.Resolution.ReasonCode,x.Resolution.Claims.Select(c=>c.ClaimId).Order(StringComparer.Ordinal).ToArray())).ToArray() };
         draft=draft with { ViewerQuestionResolutionChecksum=Phase7Determinism.Hash(new { draft.SourceViewerQuestionId,question,questionReason,section,variant,claimIds=required.Select(x=>x.ClaimId).Order(StringComparer.Ordinal) }) };
         draft = Phase7SceneKnowledgePacketCanonicalizer.Canonicalize(draft);
-        draft = draft with { PacketId=$"packet-{variant.ToLowerInvariant()}-{Phase7Determinism.Hash(draft with { PacketId="", DeterministicChecksum="" })[..20]}" };
-        return draft with { DeterministicChecksum=Phase7Determinism.Hash(draft with { DeterministicChecksum="" }) };
+        draft = draft with { PacketId=Phase7SceneKnowledgePacketCanonicalizer.ComputePacketId(draft) };
+        return draft with { DeterministicChecksum=Phase7SceneKnowledgePacketCanonicalizer.ComputeChecksum(draft) };
     }
 
     private static bool HasRequiredEvidence(CertifiedNarrationClaim claim, Phase7ScenePacketInputAuthority input) =>
