@@ -97,8 +97,14 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
         var confidence = s.Confidence.Equals("High", StringComparison.OrdinalIgnoreCase) ? .98m : .85m;
         var accepted = ApprovedEvergreenState(s.ReviewStatus);
         var supportedFields = new Phase7KnowledgeSectionAdapterRegistry().Adapters
-            .Where(a => a.SupportedSectionNames.Any(section => s.SupportedSections.Contains(section, StringComparer.OrdinalIgnoreCase)))
+            .Where(a => !a.SupportedSectionNames.Contains("cultureAndMythology") &&
+                a.SupportedSectionNames.Any(section => s.SupportedSections.Contains(section, StringComparer.OrdinalIgnoreCase)))
             .SelectMany(a => a.ApprovedFieldPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        // Section declarations describe the source's scope, not field-level provenance.  Cultural
+        // fields are nested, so add an exact path only when the payload's bounded source lineage
+        // names this registry source for that particular candidate.
+        supportedFields = supportedFields.Concat(Phase7CulturalSourcePathMapper.Map(s, p.CultureAndMythology))
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var draft = new CertifiedNarrationSource(s.SourceId, s.SourceType, s.Title, s.Authority, s.Reference,
             accepted, accepted,
             supportedKnowledge, [], s.SupportedSections.Select(CanonicalDomain).Distinct().ToArray(), language, confidence, "");
@@ -121,4 +127,50 @@ public sealed class Phase7CertifiedKnowledgeSource(MediaFactoryDbContext db, IEv
     private static string[] JsonArray(string? json, string key) { if (string.IsNullOrWhiteSpace(json)) return []; try { using var d=JsonDocument.Parse(json); return d.RootElement.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.Array ? v.EnumerateArray().Where(x=>x.ValueKind==JsonValueKind.String).Select(x=>x.GetString()!).ToArray() : []; } catch(JsonException) { return []; } }
     private static string? EvidenceString(string? json,string key){if(string.IsNullOrWhiteSpace(json))return null;using var d=JsonDocument.Parse(json);return d.RootElement.TryGetProperty(key,out var v)&&v.ValueKind==JsonValueKind.String?v.GetString():null;}
     private static string CanonicalDomain(string value) => NarrationKnowledgeDomains.TryParse(value, out var key) ? key.ToString() : value;
+}
+
+internal static class Phase7CulturalSourcePathMapper
+{
+    private static readonly string[] Traditions = ["greek", "roman", "arabic", "chinese", "indianHindu", "other"];
+    private static readonly string[] Fields = ["summary", "rashiNote", "nakshatraNote", "uncertaintyNote"];
+
+    internal static IReadOnlyList<string> Map(EvergreenKnowledgeSource source, JsonElement culture)
+    {
+        if (!source.SupportedSections.Contains("cultureAndMythology", StringComparer.OrdinalIgnoreCase) ||
+            culture.ValueKind != JsonValueKind.Object)
+            return [];
+
+        var cultureSources = SourceIds(culture);
+        var paths = new List<string>();
+        foreach (var traditionName in Traditions)
+        {
+            if (!culture.TryGetProperty(traditionName, out var tradition) || tradition.ValueKind != JsonValueKind.Object) continue;
+            var traditionSources = SourceIds(tradition);
+            foreach (var fieldName in Fields)
+            {
+                if (!tradition.TryGetProperty(fieldName, out var field) || !HasCandidate(field)) continue;
+                var fieldSources = field.ValueKind == JsonValueKind.Object ? SourceIds(field) : [];
+                var effectiveSources = fieldSources.Length > 0 ? fieldSources
+                    : traditionSources.Length > 0 ? traditionSources
+                    : cultureSources;
+                if (effectiveSources.Contains(source.SourceId, StringComparer.OrdinalIgnoreCase))
+                    paths.Add(Phase7CanonicalFieldPathPolicy.Canonicalize($"cultureAndMythology.{traditionName}.{fieldName}"));
+            }
+        }
+        return paths.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static bool HasCandidate(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => !string.IsNullOrWhiteSpace(value.GetString()),
+        JsonValueKind.Array => value.GetArrayLength() > 0,
+        JsonValueKind.Object => value.EnumerateObject().Any(p => !p.NameEquals("sourceIds")),
+        _ => false
+    };
+
+    private static string[] SourceIds(JsonElement value) =>
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty("sourceIds", out var ids) && ids.ValueKind == JsonValueKind.Array
+            ? ids.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(x.GetString()))
+                .Select(x => x.GetString()!).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            : [];
 }
