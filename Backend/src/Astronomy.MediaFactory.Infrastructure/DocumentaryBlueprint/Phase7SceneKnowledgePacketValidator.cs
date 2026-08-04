@@ -21,7 +21,7 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         var authorityClaims = input.Knowledge.KnowledgeAuthority.Claims.ToDictionary(x => x.ClaimId, StringComparer.Ordinal);
         Check("InputAuthorityGate", input.Knowledge.CommittedStateValidationPassed, "P7.1A committed state is invalid.");
         Check("VariantCoverageGate", longPackets.All(x => x.Variant == "Long") && shortPackets.All(x => x.Variant == "Short"), "Packet variant is wrong.");
-        Check("StoryFrameCoverageGate", all.Count == expected.Length && all.Select(x=>x.StoryFrameId).Order().SequenceEqual(expected.Select(x=>x.FrameId).Order()), "Packet coverage is not exactly one per frame.");
+        Check("StoryFrameCoverageGate", all.Length == expected.Length && all.Select(x=>x.StoryFrameId).Order().SequenceEqual(expected.Select(x=>x.FrameId).Order()), "Packet coverage is not exactly one per frame.");
         Check("SceneOrderGate", Ordered(longPackets) && Ordered(shortPackets), "Authored scene order drifted.");
         Check("SceneIdentityGate", all.All(p => expected.Count(f => f.FrameId == p.StoryFrameId && f.SceneId == p.SourceSceneId && f.SceneNumber == p.SceneNumber && f.FrameNumber == p.FrameNumber) == 1), "Scene/frame identity mismatch.");
         Check("StoryFrameChecksumGate", all.All(p => expected.Any(f => f.FrameId == p.StoryFrameId && p.StoryFrameChecksum == Phase7Determinism.Hash(f))), "Story Frame checksum mismatch.");
