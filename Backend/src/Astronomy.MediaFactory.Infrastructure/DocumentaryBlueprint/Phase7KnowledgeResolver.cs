@@ -15,6 +15,9 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
     public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry,IPhase7KnowledgeMergeClassifier classifier,IPhase7SourceEligibilityPolicy sourceEligibility) { this.registry=registry;this.classifier=classifier;this.sourceEligibility=sourceEligibility; }
 
     public ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile)
+        => Resolve(payload, profile, null);
+
+    public ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile, string? diagnosticPath)
     {
         var sourcePool = Phase7KnowledgeSourcePool.Get(payload);
         var issues = new List<string>(); var warnings = new List<string>(payload.Warnings.Concat(sourcePool.SelectMany(x => x.RegistryDiagnostics))); var candidates = new List<Phase7AdapterClaimCandidate>();
@@ -24,6 +27,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         if (sourcePool.Count == 0) issues.Add("P7KNOWLEDGE_SOURCE_REGISTRY_EMPTY");
         Read(payload.EvergreenJson, Phase7KnowledgeOrigin.Evergreen, payload.EvergreenPayloadId ?? payload.PayloadId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties,entities);
         Read(payload.RawDataJson, Phase7KnowledgeOrigin.Event, payload.EventId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties,entities);
+        WriteCultureDiagnostic(diagnosticPath,payload,profile,candidates,[]);
 
         var merged = new Dictionary<string,Phase7AdapterClaimCandidate>(StringComparer.Ordinal);
         var decisions=new List<Phase7KnowledgeMergeDecision>();
@@ -77,6 +81,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             return ResolveClaim(candidate, disposition, payload, issues, warnings);
         }).OrderBy(x=>x.Claim.ClaimId,StringComparer.Ordinal).ToArray();
         var claims=resolvedClaims.Select(x=>x.Claim).ToArray();
+        WriteCultureDiagnostic(diagnosticPath,payload,profile,candidates,resolvedClaims);
         var claimIdsBySemantic = claims.ToDictionary(x => x.SemanticIdentity, x => x.ClaimId, StringComparer.Ordinal);
         decisions = decisions.Select(d => d.Classification == Phase7KnowledgeMergeClassification.Contradictory
             ? d
@@ -158,6 +163,77 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             }).OrderBy(x=>x.SemanticIdentity,StringComparer.Ordinal).ToArray(),
             ClaimSupportEvidence=supportEvidence,KnowledgeEntities=entities.GroupBy(x=>x.KnowledgeId,StringComparer.Ordinal).Select(x=>x.First()).OrderBy(x=>x.KnowledgeId,StringComparer.Ordinal).ToArray() };
         return result with { DeterministicChecksum=Phase7Determinism.Hash(result with { DeterministicChecksum="" }) };
+    }
+
+    private void WriteCultureDiagnostic(string? path,CertifiedKnowledgePayload payload,FamilyNarrationProfile profile,
+        IReadOnlyList<Phase7AdapterClaimCandidate> extracted,IReadOnlyList<ResolvedClaim> resolved)
+    {
+        if(string.IsNullOrWhiteSpace(path))return;
+        try
+        {
+            var sourcePool=Phase7KnowledgeSourcePool.Get(payload);
+            var culture=extracted.Where(x=>x.Domain==NarrationKnowledgeDomainKey.CultureAndMythology)
+                .OrderBy(x=>x.ApprovedFieldPath,StringComparer.Ordinal).ThenBy(x=>x.Origin).ThenBy(x=>x.SemanticIdentity,StringComparer.Ordinal).ToArray();
+            var mandatory=profile.MandatoryKnowledgeDomains.Contains(nameof(NarrationKnowledgeDomainKey.CultureAndMythology),StringComparer.Ordinal);
+            var optional=profile.OptionalKnowledgeDomains.Contains(nameof(NarrationKnowledgeDomainKey.CultureAndMythology),StringComparer.Ordinal);
+            var candidateRows=culture.Select(c=>
+            {
+                var disposition=c.RequiresHumanReview?Phase7ClaimDisposition.HumanReview:CulturalDisposition(c,payload,mandatory,optional);
+                return new { candidateId=CandidateId(c),origin=c.Origin.ToString(),knowledgeId=c.KnowledgeId,semanticIdentity=c.SemanticIdentity,
+                    approvedFieldPath=c.ApprovedFieldPath,value=c.Text,traditionIdentity=Phase7CulturalClaimPolicy.ResolveCulturalTradition(c.ApprovedFieldPath),
+                    sourceIds=c.SourceIds.Order(StringComparer.Ordinal).ToArray(),requiresQualification=c.RequiresQualification,
+                    qualificationReasons=c.QualificationReasons.Order(StringComparer.Ordinal).ToArray(),requiresHumanReview=c.RequiresHumanReview,
+                    humanReviewReason=c.HumanReviewReason,isNamedTraditionSummary=IsNamedSummary(c),mandatoryDomain=mandatory,
+                    culturalDispositionResult=disposition.ToString()+"; "+SourceInheritance(payload,c) };
+            }).ToArray();
+            var sourceRows=culture.SelectMany(c=>c.SourceIds.DefaultIfEmpty("").Select(id=>(c,id)))
+                .OrderBy(x=>x.id,StringComparer.Ordinal).ThenBy(x=>x.c.ApprovedFieldPath,StringComparer.Ordinal).Select(x=>
+            {
+                var source=sourcePool.SingleOrDefault(s=>s.SourceId==x.id);
+                var result=source is null?null:sourceEligibility.Classify(new(source,payload.Language,x.c.KnowledgeId,x.c.SemanticIdentity,x.c.ApprovedFieldPath,true,false,false));
+                return new {candidateId=CandidateId(x.c),sourceId=x.id,sourceExistsInPool=source is not null,language=source?.Language??"",
+                    reviewState=source?.ReviewState??"",authorityState=source?.AuthorityState??"",reviewed=source?.Reviewed??false,
+                    certified=source?.Certified??false,confidence=source?.Confidence??0,supportedClaimIds=source?.SupportedClaimIds??[],
+                    supportedKnowledgeIds=source?.SupportedKnowledgeIds??[],supportedApprovedFieldPaths=source?.SupportedApprovedFieldPaths??[],
+                    provenancePrecision=result?.Precision.ToString()??"None",eligibility=result?.Eligibility.ToString()??"Rejected",
+                    reasonCode=result?.ReasonCode??(string.IsNullOrEmpty(x.id)?"CandidateSourceIdMissing":"SourceNotInCertifiedRegistry")};
+            }).ToArray();
+            var finalRows=resolved.Where(x=>x.Claim.Domain==nameof(NarrationKnowledgeDomainKey.CultureAndMythology))
+                .OrderBy(x=>x.Diagnostic.ApprovedFieldPath,StringComparer.Ordinal).ThenBy(x=>x.Claim.SemanticIdentity,StringComparer.Ordinal).Select(x=>new {
+                    claimId=x.Claim.ClaimId,semanticIdentity=x.Claim.SemanticIdentity,approvedFieldPath=x.Diagnostic.ApprovedFieldPath,
+                    traditionIdentity=x.Diagnostic.TraditionIdentity,disposition=x.Claim.Disposition.ToString(),requiresHumanReview=x.Claim.RequiresHumanReview,
+                    humanReviewReason=x.Diagnostic.HumanReviewReason,sourceIds=x.Claim.SourceIds,provenancePrecision=x.Claim.ProvenancePrecision,
+                    acceptedAsRequiredAuthority=x.Claim.Disposition==Phase7ClaimDisposition.Required&&x.Evidence.Any(e=>e.SourceEligibility==Phase7SourceEligibility.EligibleForRequiredClaim),
+                    resolutionReason=x.Diagnostic.ResolutionReason }).ToArray();
+            var requiredCandidates=culture.Where(c=>!c.RequiresHumanReview&&CulturalDisposition(c,payload,mandatory,optional)==Phase7ClaimDisposition.Required).ToArray();
+            var noExact=culture.Where(c=>c.SourceIds.Count>0&&!c.SourceIds.Any(id=>sourceRows.Any(s=>s.candidateId==CandidateId(c)&&s.sourceId==id&&s.eligibility==nameof(Phase7SourceEligibility.EligibleForRequiredClaim)))).Select(CandidateId).Distinct().Order().ToArray();
+            var knownPaths=new[]{"cultureAndMythology.greek.summary","cultureAndMythology.roman.summary","cultureAndMythology.arabic.summary","cultureAndMythology.chinese.summary","cultureAndMythology.indianHindu.summary"};
+            var doc=new {contractVersion="p7-culture-debug.v1",runtimeTypes=new {resolver=GetType().FullName,adapterRegistry=registry.GetType().FullName,
+                cultureAdapter=registry.Find("cultureAndMythology")?.GetType().FullName,sourceEligibilityPolicy=sourceEligibility.GetType().FullName,familyProfileResolver=typeof(FamilyNarrationProfileResolver).FullName},
+                profile=new {profileId=profile.ProfileId,profileVersion=profile.ContractVersion,eventFamily=payload.EventFamily,mandatoryKnowledgeDomains=profile.MandatoryKnowledgeDomains,optionalKnowledgeDomains=profile.OptionalKnowledgeDomains},
+                cultureCandidates=candidateRows,sourceEvaluations=sourceRows,finalCultureClaims=finalRows,
+                summary=new {candidateCount=culture.Length,namedTraditionSummaryCount=culture.Count(IsNamedSummary),humanReviewCount=culture.Count(x=>x.RequiresHumanReview),
+                    requiredCandidateCount=requiredCandidates.Length,requiredEligibleClaimCount=finalRows.Count(x=>x.acceptedAsRequiredAuthority),
+                    missingSourceIdCandidates=culture.Where(x=>x.SourceIds.Count==0).Select(CandidateId).Order().ToArray(),noExactEvidenceCandidates=noExact,
+                    nonAuthoritativeSourceCandidates=culture.Where(c=>sourceRows.Any(s=>s.candidateId==CandidateId(c)&&s.sourceExistsInPool&&!s.certified)).Select(CandidateId).Distinct().Order().ToArray(),
+                    lowConfidenceCandidates=culture.Where(c=>sourceRows.Any(s=>s.candidateId==CandidateId(c)&&s.sourceExistsInPool&&s.confidence<0.8m)).Select(CandidateId).Distinct().Order().ToArray(),
+                    missingNamedTraditionSummaries=knownPaths.Where(p=>!culture.Any(c=>c.ApprovedFieldPath.Equals(p,StringComparison.OrdinalIgnoreCase))).Select(p=>p+": "+PathPresence(payload,p)).ToArray()}};
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path,JsonSerializer.Serialize(doc,new JsonSerializerOptions{WriteIndented=true}));
+        }
+        catch(Exception) { /* A temporary diagnostic must never alter API success/failure behavior. */ }
+    }
+    private static string CandidateId(Phase7AdapterClaimCandidate c)=>"p7candidate-"+Phase7Determinism.Hash(new{c.KnowledgeId,c.SemanticIdentity,c.Origin,c.ApprovedFieldPath})[..24];
+    private static bool IsNamedSummary(Phase7AdapterClaimCandidate c)=>c.ApprovedFieldPath.EndsWith(".summary",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrEmpty(Phase7CulturalClaimPolicy.ResolveCulturalTradition(c.ApprovedFieldPath));
+    private static string PathPresence(CertifiedKnowledgePayload p,string path)=>JsonPathExists(p.RawDataJson,path) ? JsonPathExists(p.EvergreenJson,path)?"both":"event RawDataJson" : JsonPathExists(p.EvergreenJson,path)?"evergreen JSON":"neither";
+    private static bool JsonPathExists(string? json,string path){if(string.IsNullOrWhiteSpace(json))return false;using var d=JsonDocument.Parse(json);var e=d.RootElement;foreach(var part in path.Split('.'))if(e.ValueKind!=JsonValueKind.Object||!e.TryGetProperty(part,out e))return false;return true;}
+    private static string SourceInheritance(CertifiedKnowledgePayload p,Phase7AdapterClaimCandidate c)
+    {
+        var json=c.Origin==Phase7KnowledgeOrigin.Event?p.RawDataJson:p.EvergreenJson;var parts=c.ApprovedFieldPath.Split('.');
+        if(string.IsNullOrWhiteSpace(json)||parts.Length<3)return "sourceIds: unavailable; path presence: "+PathPresence(p,c.ApprovedFieldPath);
+        using var d=JsonDocument.Parse(json);var root=d.RootElement;var culture=root.TryGetProperty(parts[0],out var a)?a:default;var tradition=culture.ValueKind==JsonValueKind.Object&&culture.TryGetProperty(parts[1],out var b)?b:default;
+        static bool Sources(JsonElement e)=>e.ValueKind==JsonValueKind.Object&&e.TryGetProperty("sourceIds",out var s)&&s.ValueKind==JsonValueKind.Array&&s.GetArrayLength()>0;
+        return $"sourceIds inherited from summary object: false; named-tradition parent: {Sources(tradition).ToString().ToLowerInvariant()}; cultureAndMythology parent: {(!Sources(tradition)&&Sources(culture)).ToString().ToLowerInvariant()}; path presence: {PathPresence(p,c.ApprovedFieldPath)}";
     }
 
     private void Read(string? json,Phase7KnowledgeOrigin origin,string id,CertifiedKnowledgePayload payload,List<Phase7AdapterClaimCandidate> output,List<string> warnings,List<string> issues,List<Phase7KnowledgeAdapterDiagnostic> diagnostics,List<string> unknownSections,List<string> unknownProperties,List<Phase7KnowledgeEntity> entities)

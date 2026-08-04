@@ -56,7 +56,11 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
             || !ProfileIdentityMatches(expected.ProfileId, expected.ProfileVersion, profile.ProfileId, profile.ContractVersion)
             || !string.Equals(expected.Language, request.Language, StringComparison.OrdinalIgnoreCase))
             return Bad("P7INPUT_PROFILE_INVALID", ProfileMismatchDiagnostics(request, expected, profile, published, normalizedFamily));
-        var knowledge = knowledgeResolver.Resolve(payload, profile);
+        // This path is deliberately outside the committed Phase 7 artifact inventory.  The
+        // resolver writes the temporary diagnostic before returning, including on a knowledge
+        // rejection, without changing the evaluation result.
+        var diagnosticPath = Path.Combine(request.ExecutionRoot, "07-narration", "debug", "culture-required-evidence-debug.json");
+        var knowledge = knowledgeResolver.Resolve(payload, profile, diagnosticPath);
         if (knowledge.BlockingIssues.Count > 0) return Bad("P7INPUT_KNOWLEDGE_PAYLOAD_INVALID", string.Join("; ", knowledge.BlockingIssues));
         var longFrames = authority.Frames.Where(x => x.Variant.Equals("Long", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SceneNumber).ThenBy(x => x.FrameNumber).ToArray();
         var shortFrames = authority.Frames.Where(x => x.Variant.Equals("Short", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SceneNumber).ThenBy(x => x.FrameNumber).ToArray();

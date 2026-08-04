@@ -198,6 +198,8 @@ public sealed record Phase7CertifiedKnowledgeSourceResult(bool IsValid, Certifie
 public interface IPhase7KnowledgeResolver
 {
     ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile);
+    ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile, string? diagnosticPath)
+        => Resolve(payload, profile);
 }
 
 public enum Phase7KnowledgeOrigin { Event, Evergreen }
