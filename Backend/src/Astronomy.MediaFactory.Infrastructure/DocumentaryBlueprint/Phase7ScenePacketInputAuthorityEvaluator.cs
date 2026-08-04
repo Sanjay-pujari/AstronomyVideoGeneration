@@ -6,7 +6,8 @@ namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 public sealed class Phase7ScenePacketInputAuthorityEvaluator(
     IPhase7KnowledgeCommittedStateEvaluator knowledgeEvaluator,
     IPhase6CommittedAuthorityEvaluator phase6Evaluator,
-    IFamilyNarrationProfileResolver profileResolver) : IPhase7ScenePacketInputAuthorityEvaluator
+    IFamilyNarrationProfileResolver profileResolver,
+    IPhase7SceneReferenceCompatibilityPolicy referenceCompatibilityPolicy) : IPhase7ScenePacketInputAuthorityEvaluator
 {
     public async Task<Phase7ScenePacketInputAuthorityEvaluation> EvaluateAsync(
         Phase7ScenePacketInputAuthorityRequest request, CancellationToken token = default)
@@ -53,6 +54,22 @@ public sealed class Phase7ScenePacketInputAuthorityEvaluator(
         var shorts = p6.Frames.Where(x => x.Variant == "Short").OrderBy(x => x.SceneNumber).ThenBy(x => x.FrameNumber).ToArray();
         if (longs.Length == 0 || shorts.Length == 0)
             return Bad("P7PACKET_INPUT_VARIANT_MISSING", "Both Long and Short Story Frame variants are required.");
+        var allFrames = longs.Concat(shorts).ToArray();
+        if (allFrames.GroupBy(x => x.FrameId, StringComparer.Ordinal).Any(x => x.Count() > 1))
+            return Bad("P7PACKET_INPUT_DUPLICATE_FRAME_ID", "The committed authority contains a duplicate FrameId.");
+        if (allFrames.GroupBy(x => (x.Variant, x.SceneId, x.SceneNumber, x.FrameNumber)).Any(x => x.Count() > 1))
+            return Bad("P7PACKET_INPUT_DUPLICATE_SCENE_IDENTITY", "The committed authority contains a duplicate scene/frame identity.");
+        foreach (var frame in allFrames)
+        {
+            var sameIdentity = p.Index.Scenes.Where(x => x.SceneId == frame.SceneId && x.SceneNumber == frame.SceneNumber).ToArray();
+            var exact = sameIdentity.Where(x => x.Variant == frame.Variant).ToArray();
+            if (exact.Length > 1)
+                return Bad("P7PACKET_INPUT_SOURCE_SCENE_AMBIGUOUS", $"Multiple source-scene rows exist for '{frame.FrameId}'.");
+            if (exact.Length == 0 && sameIdentity.Length > 0)
+                return Bad("P7PACKET_INPUT_SOURCE_SCENE_VARIANT_MISMATCH", $"The source-scene row for '{frame.FrameId}' belongs to another variant.");
+            if (exact.Length == 0)
+                return Bad("P7PACKET_INPUT_SOURCE_SCENE_MISSING", $"No source-scene row exists for '{frame.FrameId}'.");
+        }
         if (knowledge.Authority.ArtifactPaths.Concat(p.ArtifactPaths).Any(x => !Safe(x)))
             return Bad("P7PACKET_INPUT_UNSAFE_PATH", "A committed authority contains an unsafe artifact path.");
         var lineage = new SortedDictionary<string,string>(StringComparer.Ordinal) {
@@ -63,8 +80,7 @@ public sealed class Phase7ScenePacketInputAuthorityEvaluator(
             ["phase7KnowledgeAuthorityChecksum"] = k.SemanticChecksum };
         var runtime = k.RuntimeCompatibilityEvidence.Concat(p.RuntimeCompatibilityEvidence)
             .GroupBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Last().Value, StringComparer.Ordinal);
-        var policy = new Phase7SceneReferenceCompatibilityPolicy();
-        var projections = longs.Concat(shorts).Select(frame => (frame, result: policy.Project(frame))).ToArray();
+        var projections = allFrames.Select(frame => (frame, result: referenceCompatibilityPolicy.Project(frame))).ToArray();
         if (projections.Any(x => !x.result.IsValid))
             return Bad("P7PACKET_REFERENCE_REQUIREMENTS_UNRESOLVED", "The governed compatibility policy could not classify every scene reference.",
                 projections.SelectMany(x => x.result.Errors), projections.SelectMany(x => x.result.Warnings));

@@ -7,8 +7,13 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
 {
     private static readonly Regex NeutralPlaceholder = new(@"^(?:tbd|todo|placeholder|unknown|not[- ]?provided)(?:\W|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private readonly IPhase7KnowledgeReferenceResolver resolver;
-    public Phase7SceneKnowledgePacketBuilder() : this(new Phase7KnowledgeReferenceResolver()) { }
-    public Phase7SceneKnowledgePacketBuilder(IPhase7KnowledgeReferenceResolver resolver) => this.resolver = resolver;
+    private readonly IPhase7SceneSectionAuthorityResolver sectionAuthorityResolver;
+    public Phase7SceneKnowledgePacketBuilder(IPhase7KnowledgeReferenceResolver resolver,
+        IPhase7SceneSectionAuthorityResolver sectionAuthorityResolver)
+    {
+        this.resolver = resolver;
+        this.sectionAuthorityResolver = sectionAuthorityResolver;
+    }
 
     [Obsolete("P7.1B packets require the complete typed committed authority, including its resolution report.")]
     public IReadOnlyList<SceneKnowledgePacket> Build(Phase7CommittedInputAuthority authority, string variant) =>
@@ -31,7 +36,7 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         var matches = sourceRows.Where(x => x.Variant == variant && x.SceneId == frame.SceneId && x.SceneNumber == frame.SceneNumber).ToArray();
         if (matches.Length != 1) throw new InvalidOperationException($"Story Frame '{frame.FrameId}' must have exactly one source-scene lineage row in {variant}.");
         var source = matches[0];
-        var sectionAuthority = new Phase7SceneSectionAuthorityResolver().Resolve(frame, source);
+        var sectionAuthority = sectionAuthorityResolver.Resolve(frame, source);
         if (!sectionAuthority.IsValid) throw new InvalidOperationException($"{sectionAuthority.ReasonCode}:{frame.FrameId}");
         var section = sectionAuthority.SectionKey;
         if (!input.ReferenceRequirements.TryGetValue(frame.FrameId, out var requirements))
@@ -59,7 +64,14 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         var review = authorityClaims.Where(c => Relevant(c) && (c.RequiresHumanReview || c.Disposition == Phase7ClaimDisposition.HumanReview)).ToArray();
         var blocking = resolved.Where(x => x.Requirement.IsRequired && x.Resolution.Status != Phase7KnowledgeReferenceStatus.Resolved)
             .Select(x => $"{x.Resolution.ReasonCode}:{x.Requirement.ReferenceId}").ToList();
-        if (!requirements.Any(x => x.IsPrimary)) blocking.Add($"P7PACKET_PRIMARY_REFERENCE_MISSING:{frame.FrameId}");
+        foreach (var item in resolved.Where(x => x.Requirement.IsRequired &&
+            !x.Resolution.Claims.Any(c => required.Any(r => r.ClaimId == c.ClaimId))))
+            blocking.Add($"P7PACKET_REQUIRED_REFERENCE_HAS_NO_REQUIRED_CLAIM:{item.Requirement.ReferenceId}");
+        var primaries = resolved.Where(x => x.Requirement.IsPrimary).ToArray();
+        if (primaries.Length != 1 || primaries[0].Requirement.Variant != variant ||
+            primaries[0].Resolution.Status != Phase7KnowledgeReferenceStatus.Resolved ||
+            primaries[0].Resolution.Claims.Count == 0)
+            blocking.Add($"P7PACKET_PRIMARY_REFERENCE_MISSING:{frame.FrameId}");
         if (required.Length == 0) blocking.Add($"P7PACKET_REQUIRED_CLAIM_MISSING:{frame.FrameId}:{section}");
         var warnings = resolved.Where(x => !x.Requirement.IsRequired && x.Resolution.Status != Phase7KnowledgeReferenceStatus.Resolved)
             .Select(x => $"{x.Resolution.ReasonCode}:{x.Requirement.ReferenceId}").ToList();
@@ -71,14 +83,8 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
             ? "GovernedFamilySectionSceneRoleFallback" : "SourceIdPreservedEditorialTextFallback";
         var storyChecksum = Phase7Determinism.Hash(frame);
         var sourceChecksum = Phase7Determinism.Hash(source);
-        var primaryIds = resolved.Where(x => x.Requirement.IsPrimary && x.Resolution.Status == Phase7KnowledgeReferenceStatus.Resolved)
-            .Select(x => x.Requirement.ReferenceId).Order(StringComparer.Ordinal).ToArray();
-        var identity = new { contract=Phase7ScenePacketContract.Version, input.ExecutionId, variant, frame.FrameId, storyChecksum,
-            source.SceneId, sourceChecksum, section, primaryIds, required=required.Select(x=>x.ClaimId).Order(StringComparer.Ordinal),
-            optional=optional.Select(x=>x.ClaimId).Order(StringComparer.Ordinal) };
-        var packetId = $"packet-{variant.ToLowerInvariant()}-{Phase7Determinism.Hash(identity)[..20]}";
         var target = Math.Max(1, (int)Math.Round(frame.EstimatedDuration));
-        var draft = new SceneKnowledgePacket(packetId,input.ExecutionId,input.PlanId,input.EventId,input.EventFamily,input.Language,
+        var draft = new SceneKnowledgePacket("",input.ExecutionId,input.PlanId,input.EventId,input.EventFamily,input.Language,
             input.ProfileId,input.ProfileVersion,variant,frame.FrameId,storyChecksum,source.SceneId,sourceChecksum,frame.SceneNumber,
             frame.FrameNumber,source.NarrativeStage,source.SceneRole,section,frame.ViewerQuestionIds.FirstOrDefault()??"",question,
             frame.LearningObjectiveIds.FirstOrDefault()??"",$"Explain the certified evidence for the {source.SceneRole} scene.",
@@ -94,8 +100,10 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         { SourceViewerQuestionId=frame.ViewerQuestionIds.FirstOrDefault()??"",ResolvedViewerQuestionText=question,
           ViewerQuestionResolutionReason=questionReason,VisualPlanningLineage=frame.ImageRequirements.Concat(frame.BrollRequirements).Distinct(StringComparer.Ordinal).ToArray(),
           SectionAuthority=sectionAuthority,
-          ReferenceResolutions=resolved.Select(x=>new Phase7PacketReferenceResolution(x.Requirement.ReferenceId,x.Requirement.IsPrimary,x.Requirement.IsRequired,x.Resolution.Status,x.Resolution.ReasonCode,x.Resolution.Claims.Select(c=>c.ClaimId).Order(StringComparer.Ordinal).ToArray())).OrderBy(x=>x.ReferenceId,StringComparer.Ordinal).ToArray() };
+          ReferenceResolutions=resolved.Select(x=>new Phase7PacketReferenceResolution(x.Requirement.ReferenceId,x.Requirement.IsPrimary,x.Requirement.IsRequired,x.Resolution.Status,x.Resolution.ReasonCode,x.Resolution.Claims.Select(c=>c.ClaimId).Order(StringComparer.Ordinal).ToArray())).ToArray() };
         draft=draft with { ViewerQuestionResolutionChecksum=Phase7Determinism.Hash(new { draft.SourceViewerQuestionId,question,questionReason,section,variant,claimIds=required.Select(x=>x.ClaimId).Order(StringComparer.Ordinal) }) };
+        draft = Phase7SceneKnowledgePacketCanonicalizer.Canonicalize(draft);
+        draft = draft with { PacketId=$"packet-{variant.ToLowerInvariant()}-{Phase7Determinism.Hash(draft with { PacketId="", DeterministicChecksum="" })[..20]}" };
         return draft with { DeterministicChecksum=Phase7Determinism.Hash(draft with { DeterministicChecksum="" }) };
     }
 
@@ -111,17 +119,19 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
             !e.RequiresHumanReview && e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField);
     internal static HashSet<string> DomainTerms(string section,string role,string narrativeStage,IReadOnlyList<string> objectives)
     {
+        string[] D(params NarrationKnowledgeDomainKey[] keys) => keys.Select(Domain).ToArray();
         var map = new Dictionary<string,string[]>(StringComparer.Ordinal) {
-            ["hook"]=["identity","recognition","interestingfacts"], ["opening"]=["identity","recognition","interestingfacts"], ["recognition"]=["identity","recognition"],
-            ["identity"]=["identity"], ["appearance"]=["appearance","physicalcharacteristics"], ["geometry"]=["geometry","physicalcharacteristics"],
-            ["science"]=["scientificstructure","physicalcharacteristics","formation","evolution"], ["structure"]=["scientificstructure","physicalcharacteristics"], ["formation"]=["formation"], ["evolution"]=["evolution"],
-            ["objects"]=["objects","stars","deepsky"], ["stars"]=["stars"], ["deepsky"]=["deepsky"],
-            ["observation"]=["observation","visibility","timing","locationdependence"], ["viewing"]=["observation","visibility"], ["visibility"]=["visibility"], ["timing"]=["timing"],
-            ["equipment"]=["equipment"], ["astrophotography"]=["astrophotography"], ["culture"]=["cultureandmythology","regionaltraditions"], ["mythology"]=["cultureandmythology"], ["tradition"]=["regionaltraditions"],
-            ["astrology"]=["astrologyclarification"], ["safety"]=["safety"], ["history"]=["history"], ["closing"]=["summary","interestingfacts"], ["summary"]=["summary","interestingfacts"], ["interestingfacts"]=["interestingfacts"] };
+            ["hook"]=D(NarrationKnowledgeDomainKey.Identity,NarrationKnowledgeDomainKey.Recognition,NarrationKnowledgeDomainKey.InterestingFacts), ["opening"]=D(NarrationKnowledgeDomainKey.Identity,NarrationKnowledgeDomainKey.Recognition,NarrationKnowledgeDomainKey.InterestingFacts), ["recognition"]=D(NarrationKnowledgeDomainKey.Identity,NarrationKnowledgeDomainKey.Recognition,NarrationKnowledgeDomainKey.RecognitionGeometry),
+            ["identity"]=D(NarrationKnowledgeDomainKey.Identity), ["appearance"]=D(NarrationKnowledgeDomainKey.Appearance,NarrationKnowledgeDomainKey.PhysicalCharacteristics), ["geometry"]=D(NarrationKnowledgeDomainKey.Geometry,NarrationKnowledgeDomainKey.RecognitionGeometry,NarrationKnowledgeDomainKey.PhysicalCharacteristics),
+            ["science"]=D(NarrationKnowledgeDomainKey.ScientificStructure,NarrationKnowledgeDomainKey.PhysicalCharacteristics,NarrationKnowledgeDomainKey.Formation,NarrationKnowledgeDomainKey.Evolution,NarrationKnowledgeDomainKey.ScientificSignificance), ["structure"]=D(NarrationKnowledgeDomainKey.ScientificStructure,NarrationKnowledgeDomainKey.PhysicalCharacteristics), ["formation"]=D(NarrationKnowledgeDomainKey.Formation), ["evolution"]=D(NarrationKnowledgeDomainKey.Evolution),
+            ["objects"]=D(NarrationKnowledgeDomainKey.KeyObjects,NarrationKnowledgeDomainKey.ScientificStructure,NarrationKnowledgeDomainKey.Multiplicity,NarrationKnowledgeDomainKey.Variability), ["stars"]=D(NarrationKnowledgeDomainKey.KeyObjects,NarrationKnowledgeDomainKey.ScientificStructure,NarrationKnowledgeDomainKey.Multiplicity,NarrationKnowledgeDomainKey.Variability), ["deepsky"]=D(NarrationKnowledgeDomainKey.DeepSkyObjects),
+            ["observation"]=D(NarrationKnowledgeDomainKey.Observation,NarrationKnowledgeDomainKey.Visibility,NarrationKnowledgeDomainKey.Timing,NarrationKnowledgeDomainKey.LocationDependence), ["viewing"]=D(NarrationKnowledgeDomainKey.Observation,NarrationKnowledgeDomainKey.Visibility,NarrationKnowledgeDomainKey.Timing,NarrationKnowledgeDomainKey.LocationDependence), ["visibility"]=D(NarrationKnowledgeDomainKey.Visibility), ["timing"]=D(NarrationKnowledgeDomainKey.Timing),
+            ["equipment"]=D(NarrationKnowledgeDomainKey.Equipment), ["astrophotography"]=D(NarrationKnowledgeDomainKey.Astrophotography,NarrationKnowledgeDomainKey.ImagingAppearance), ["culture"]=D(NarrationKnowledgeDomainKey.CultureAndMythology,NarrationKnowledgeDomainKey.RegionalTraditions), ["mythology"]=D(NarrationKnowledgeDomainKey.CultureAndMythology,NarrationKnowledgeDomainKey.RegionalTraditions), ["tradition"]=D(NarrationKnowledgeDomainKey.RegionalTraditions),
+            ["astrology"]=D(NarrationKnowledgeDomainKey.AstrologyClarification), ["safety"]=D(NarrationKnowledgeDomainKey.Safety), ["history"]=D(NarrationKnowledgeDomainKey.History), ["closing"]=D(NarrationKnowledgeDomainKey.InterestingFacts,NarrationKnowledgeDomainKey.ScientificSignificance), ["summary"]=D(NarrationKnowledgeDomainKey.InterestingFacts,NarrationKnowledgeDomainKey.ScientificSignificance), ["interestingfacts"]=D(NarrationKnowledgeDomainKey.InterestingFacts) };
         return new[]{section,role,narrativeStage}.Concat(objectives).SelectMany(Tokenize)
             .Where(map.ContainsKey).SelectMany(x=>map[x]).ToHashSet(StringComparer.Ordinal);
     }
+    private static string Domain(NarrationKnowledgeDomainKey key) => Normalize(NarrationKnowledgeDomains.Id(key));
     internal static IEnumerable<string> Tokenize(string value)=>value.Split([' ','_','-','/','.'],StringSplitOptions.RemoveEmptyEntries).Select(Normalize);
     private static string Normalize(string value)=>string.Concat(value.Where(char.IsLetterOrDigit)).ToLowerInvariant();
     private static bool IsPlaceholder(string? value)=>string.IsNullOrWhiteSpace(value)||NeutralPlaceholder.IsMatch(value.Trim());

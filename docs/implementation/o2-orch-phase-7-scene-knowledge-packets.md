@@ -30,7 +30,8 @@ field contains narration prose, a provider prompt, or a provider response.
 
 Domain relevance now tokenizes section, role, narrative stage, and learning-objective identities at
 space, underscore, hyphen, slash, and period boundaries before normalizing each token. One generic
-token-to-domain table governs recognition/identity, appearance/geometry, scientific structure and
+token-to-domain table is constructed exclusively from `NarrationKnowledgeDomainKey` values through
+`NarrationKnowledgeDomains.Id`; no handwritten domain identity can become authority. It governs recognition/identity, appearance/geometry, scientific structure and
 evolution, objects/deep-sky, observation/visibility/timing, equipment, astrophotography, cultural
 traditions, astrology clarification, safety, history, and closing facts. Unknown tokens grant no
 domain authority.
@@ -71,13 +72,22 @@ fallback and labels that result as fallback rather than certified prose. The fal
 checksum. Objectives use section/role framing and selected certified evidence without treating the
 Phase 6 narration brief or visual intent as factual authority.
 
+Both mappings are approved, version-bound P7.1B compatibility decisions—not serialized Phase 6
+facts. The reference decision emits `P7PACKET_REFERENCE_COMPAT_PHASE6_ORDERED_PRIMARY`; the section
+decision emits `P7PACKET_SECTION_COMPAT_SOURCE_SCENE_NARRATIVE_STAGE`. The compatibility warning is
+carried by input authority. Phase 6's governing serialized contracts are
+`StoryFrameAuthorityFrame.KnowledgeReferenceIds` and `StoryFrameSceneIndex.NarrativeStage` in
+`StoryFrameAuthorityContracts.cs`; neither contract exposes the downstream flags/SectionKey.
+
 ## Independence, determinism, and validation
 
 Long and Short builds use separate frame and source-index collections. Packet identity binds execution,
 variant, frame identity/checksum, sorted selected Required and Optional claim IDs, and the P7.1B
 contract version. Unordered semantic collections are sorted before selection or hashing; authored frame
-order remains intact. Packet checksum covers the complete serialized semantic record except the
-checksum itself.
+order and authored reference order remain intact. The packet canonicalizer sorts claim partitions by
+ordinal ClaimId; claim source/reference IDs, packet source/visual/protected-term/approximation/warning/
+cultural collections, dictionary keys, and per-reference resolved ClaimIds ordinally. Packet identity
+and checksum use this complete canonical projection, while visual-planning lineage remains authored.
 
 Required evidence is accepted only when an exact evidence row binds claim and semantic identity, a
 claim source ID, Required eligibility, exact claim/entity/approved-field precision, and no human-review
@@ -93,23 +103,34 @@ The Phase 6 authority does not expose event-family or event-type fields, so no v
 consistency remains indirectly bound through the Phase 4 aggregate, Phase 5 publication, Phase 6
 authority/index checksums, canonical profile identity, and P7.1A lineage.
 
+Input evaluation now rejects duplicate frame IDs, duplicate scene/frame identities, absent or
+ambiguous source-scene rows, and cross-variant source-scene rows with governed `P7PACKET_INPUT_*`
+results before dictionary projection. Required references must resolve and bind at least one exact,
+non-review Required-partition claim with Required-eligible evidence; an unrelated section claim cannot
+substitute. Exactly one Primary is required per packet, and it must resolve with a nonempty claim set
+regardless of its required/optional classification. Both compatibility policies are singleton DI
+services and are constructor-injected into their production consumers.
+
 The validator runs these in-memory gates: InputAuthority, VariantCoverage, StoryFrameCoverage,
 SceneOrder, SceneIdentity, StoryFrameChecksum, SourceSceneLineage, Profile, Language, PrimaryReference,
 RequiredReferenceResolution, PacketBlockingIssue, ClaimPartition, RequiredClaimEvidence,
 OptionalClaimEvidence, RequiredClaimChecksum,
 NoContradiction, HumanReviewIsolation, SafetyRule, CulturalQualification, AstrologySeparation,
 LocationTimeSafety, Duration, VisualEvidence, SectionAuthority, ViewerQuestionResolution,
-ResolutionReportLineage, LongShortIndependence, and Determinism. The net10.0 test project compiles with
-zero errors. The existing P7.1A knowledge regression filter passes 145/145 tests. The broader Phase 7
-filter passes 250/261 tests (11 pre-existing semantic/runtime fixture failures), so this document does
-not claim PASS. No dedicated real-fixture packet suite exists yet; Long/Short and blocking-issue totals
-therefore remain unproven rather than fabricated.
+ResolutionReportLineage, LongShortIndependence, and Determinism. The current correction environment
+does not contain a `dotnet` executable, so compilation and test
+totals could not be re-certified here. The previous record was 145/145 for P7.1A and 250/261 for the
+broader Phase 7 filter (11 pre-existing semantic/runtime fixture failures); those historical results
+are not presented as results for this correction. No dedicated committed-shape packet fixture suite
+exists yet, so Long/Short, blocker, failed-gate, byte-equivalence, reordered-input, and mutation-isolation
+totals remain unproven rather than fabricated. The available real Orion source artifact is
+`Knowledge/Constellations/Orion/Orion.v1.json`; it is not by itself the complete committed P7.1A/Phase 6
+artifact set required by the certification fixture contract.
 
 ## Files and verification record
 
-Added implementation files are the packet-input evaluator and packet validator. Modified implementation
-files are the narration-foundation contracts, exact reference resolver, packet builder, and DI module.
-This document is the only added documentation file.
+This correction adds `Phase7SceneKnowledgePacketCanonicalizer.cs`. It modifies the governance-policy,
+packet-builder, validator, input-evaluator, DI-registration, and implementation-report files.
 
 The expected certified fixture cardinality is 12 Long packets and 4 Short packets. A dedicated fixture
 test must still confirm these counts and the safety, determinism, and independence gates before

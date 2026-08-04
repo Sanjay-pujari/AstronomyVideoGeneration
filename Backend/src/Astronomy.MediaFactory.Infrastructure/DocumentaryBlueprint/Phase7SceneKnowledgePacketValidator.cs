@@ -22,7 +22,7 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         var authorityClaims = input.Knowledge.KnowledgeAuthority.Claims.ToDictionary(x => x.ClaimId, StringComparer.Ordinal);
         Check("InputAuthorityGate", input.Knowledge.CommittedStateValidationPassed, "P7.1A committed state is invalid.");
         Check("VariantCoverageGate", longPackets.All(x => x.Variant == "Long") && shortPackets.All(x => x.Variant == "Short"), "Packet variant is wrong.");
-        Check("StoryFrameCoverageGate", all.Length == expected.Length && all.Select(x=>x.StoryFrameId).Order().SequenceEqual(expected.Select(x=>x.FrameId).Order()), "Packet coverage is not exactly one per frame.");
+        Check("StoryFrameCoverageGate", all.Length == expected.Length && all.Select(x=>x.StoryFrameId).Order(StringComparer.Ordinal).SequenceEqual(expected.Select(x=>x.FrameId).Order(StringComparer.Ordinal)), "Packet coverage is not exactly one per frame.");
         Check("SceneOrderGate", Ordered(longPackets) && Ordered(shortPackets), "Authored scene order drifted.");
         Check("SceneIdentityGate", all.All(p => expected.Count(f => f.FrameId == p.StoryFrameId && f.SceneId == p.SourceSceneId && f.SceneNumber == p.SceneNumber && f.FrameNumber == p.FrameNumber) == 1), "Scene/frame identity mismatch.");
         Check("StoryFrameChecksumGate", all.All(p => expected.Any(f => f.FrameId == p.StoryFrameId && p.StoryFrameChecksum == Phase7Determinism.Hash(f))), "Story Frame checksum mismatch.");
@@ -32,9 +32,13 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         Check("SectionAuthorityGate", all.All(p=>p.SectionAuthority is { IsValid:true } a && a.SectionKey==p.SectionKey &&
             (p.Variant=="Long"?input.LongSourceScenes:input.ShortSourceScenes).Any(s=>s.SceneId==p.SourceSceneId&&s.NarrativeStage==a.NarrativeStage&&s.SceneRole==a.SceneRole)), "Packet section is not resolver-derived source-scene authority.");
         Check("PrimaryReferenceGate", all.All(p => input.ReferenceRequirements.TryGetValue(p.StoryFrameId,out var req) &&
-            req.Any(r=>r.IsPrimary) && req.Where(r=>r.IsPrimary).All(r=>r.Variant==p.Variant && p.KnowledgeReferenceIds.Contains(r.ReferenceId,StringComparer.Ordinal) &&
-                p.ReferenceResolutions.Any(x=>x.ReferenceId==r.ReferenceId&&x.IsPrimary&&(!r.IsRequired||x.Status==Phase7KnowledgeReferenceStatus.Resolved)))), "A governed primary reference is missing, unresolved, or cross-variant.");
-        Check("RequiredReferenceResolutionGate", all.All(p => !p.BlockingIssues.Any(x => x.StartsWith("P7REF_", StringComparison.Ordinal))), "A required reference did not resolve.");
+            req.Count(r=>r.IsPrimary)==1 && req.Where(r=>r.IsPrimary).All(r=>r.Variant==p.Variant && p.KnowledgeReferenceIds.Contains(r.ReferenceId,StringComparer.Ordinal) &&
+                p.ReferenceResolutions.Any(x=>x.ReferenceId==r.ReferenceId&&x.IsPrimary&&x.Status==Phase7KnowledgeReferenceStatus.Resolved&&x.ResolvedClaimIds.Count>0))), "A governed primary reference is missing, unresolved, or cross-variant.");
+        Check("RequiredReferenceResolutionGate", all.All(p => input.ReferenceRequirements.TryGetValue(p.StoryFrameId,out var req) &&
+            req.Where(r=>r.IsRequired).All(r => p.ReferenceResolutions.Any(x => x.ReferenceId==r.ReferenceId && x.IsRequired &&
+                x.Status==Phase7KnowledgeReferenceStatus.Resolved && x.ResolvedClaimIds.Count>0 &&
+                x.ResolvedClaimIds.Any(id => p.RequiredClaims.Any(c => c.ClaimId==id && !c.RequiresHumanReview &&
+                    c.Disposition==Phase7ClaimDisposition.Required && HasRequiredEvidence(c,input))))))), "A required reference did not bind an exact Required packet claim.");
         Check("PacketBlockingIssueGate", all.All(p=>p.BlockingIssues.Count==0), "A packet contains a blocking issue.");
         Check("ClaimPartitionGate", all.All(Partitions), "A claim occurs in multiple partitions or has the wrong disposition.");
         Check("RequiredClaimEvidenceGate", all.SelectMany(p=>p.RequiredClaims).All(c => authorityClaims.TryGetValue(c.ClaimId,out var a) && a.SemanticIdentity==c.SemanticIdentity && input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e=>e.ClaimId==c.ClaimId&&e.SemanticIdentity==c.SemanticIdentity&&c.SourceIds.Contains(e.SourceId,StringComparer.Ordinal)&&e.SourceEligibility==Phase7SourceEligibility.EligibleForRequiredClaim&&!e.RequiresHumanReview&&e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField)), "A required claim lacks exact Required-eligible evidence.");
@@ -54,13 +58,18 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         var longFrameIds=input.LongStoryFrames.Select(x=>x.FrameId).ToHashSet(StringComparer.Ordinal);var shortFrameIds=input.ShortStoryFrames.Select(x=>x.FrameId).ToHashSet(StringComparer.Ordinal);
         bool OwnsRequirements(SceneKnowledgePacket p, string variant) => input.ReferenceRequirements.TryGetValue(p.StoryFrameId,out var r) && r.All(x=>x.Variant==variant);
         Check("LongShortIndependenceGate", !ReferenceEquals(longPackets,shortPackets)&&!longPackets.Select(x=>x.PacketId).Intersect(shortPackets.Select(x=>x.PacketId),StringComparer.Ordinal).Any()&&longPackets.All(x=>longFrameIds.Contains(x.StoryFrameId)&&!shortFrameIds.Contains(x.StoryFrameId)&&OwnsRequirements(x,"Long"))&&shortPackets.All(x=>shortFrameIds.Contains(x.StoryFrameId)&&!longFrameIds.Contains(x.StoryFrameId)&&OwnsRequirements(x,"Short")), "Long and Short packet identity/authority crossed variants.");
-        Check("DeterminismGate", all.All(p=>p.DeterministicChecksum==Phase7Determinism.Hash(p with{DeterministicChecksum=""})), "Packet checksum mismatch.");
+        Check("DeterminismGate", all.All(p=>p.DeterministicChecksum==Phase7Determinism.Hash(Phase7SceneKnowledgePacketCanonicalizer.Canonicalize(p with{DeterministicChecksum=""}))), "Packet checksum mismatch.");
         var gates=GateNames.Select(n=>new Phase7SceneKnowledgePacketValidationGate(n,!failures.ContainsKey(n),failures.GetValueOrDefault(n)??[])).ToArray();
         var errors=gates.SelectMany(x=>x.Errors).ToArray();
         var draft=new Phase7SceneKnowledgePacketValidation(errors.Length==0,errors.Length==0?"P7PACKET_VALID":"P7PACKET_INVALID",gates,errors,"");
         return draft with{DeterministicChecksum=Phase7Determinism.Hash(draft with{DeterministicChecksum=""})};
     }
     private static bool Ordered(IEnumerable<SceneKnowledgePacket> p)=>p.SequenceEqual(p.OrderBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber));
+    private static bool HasRequiredEvidence(CertifiedNarrationClaim claim, Phase7ScenePacketInputAuthority input) =>
+        input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e => e.ClaimId==claim.ClaimId &&
+            e.SemanticIdentity==claim.SemanticIdentity && claim.SourceIds.Contains(e.SourceId,StringComparer.Ordinal) &&
+            e.SourceEligibility==Phase7SourceEligibility.EligibleForRequiredClaim && !e.RequiresHumanReview &&
+            e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField);
     private static bool Partitions(SceneKnowledgePacket p)
     { var r=p.RequiredClaims.Select(x=>x.ClaimId).ToArray();var o=p.OptionalClaims.Select(x=>x.ClaimId).ToArray();var d=p.DeferredClaims.Select(x=>x.ClaimId).ToArray();return !r.Intersect(o).Concat(r.Intersect(d)).Concat(o.Intersect(d)).Any()&&p.RequiredClaims.All(x=>x.Disposition==Phase7ClaimDisposition.Required)&&p.OptionalClaims.All(x=>x.Disposition==Phase7ClaimDisposition.Optional)&&p.DeferredClaims.All(x=>x.Disposition==Phase7ClaimDisposition.Deferred); }
 }
