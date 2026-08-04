@@ -333,13 +333,15 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             cultural,cultural,c.Domain==NarrationKnowledgeDomainKey.AstrologyClarification,c.RequiresQualification,c.RequiresHumanReview,p.Language,"") { SemanticIdentity=c.SemanticIdentity,Disposition=disposition,ProvenancePrecision=precision.ToString(),Uncertain=chosen.Length==0 };
         var claim=draft with { Checksum=Phase7Determinism.Hash(draft with { Checksum="" }) };
         var evidence=chosen.Select(x=>new Phase7ClaimSupportEvidence(id,c.SemanticIdentity,x.Source.SourceId,c.KnowledgeId,
-            Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath),x.Result.Precision,c.AdapterId,c.Origin,SelectionReason(disposition,x.Result.Eligibility),null,claim.Confidence)
+            Phase7CanonicalFieldPathDiagnostics.Canonicalize(c.ApprovedFieldPath,
+                nameof(Phase7KnowledgeResolver), c.Origin.ToString(), c.AdapterId),x.Result.Precision,c.AdapterId,c.Origin,SelectionReason(disposition,x.Result.Eligibility),null,claim.Confidence)
             { AdapterVersion=c.AdapterVersion,SourceEligibility=x.Result.Eligibility,RequiresHumanReview=disposition==Phase7ClaimDisposition.HumanReview,
               QualificationReason=c.RequiresQualification?QualificationReasons(c,claim,warnings):"",AuthorityScope=c.SemanticIdentity.EndsWith(".general",StringComparison.Ordinal)?"GeneralAuthority":c.SemanticIdentity.EndsWith(".execution",StringComparison.Ordinal)?"ExecutionScopedAuthority":c.Origin.ToString(),
               SourceSelectionReason=SelectionReason(disposition,x.Result.Eligibility) }).ToArray();
         var resolutionReason=c.RequiresHumanReview?c.HumanReviewReason:chosen.Length==0?"NoEligibleExactEvidence":"AcceptedExactEligibleEvidence";
         var diagnostic=new Phase7ClaimResolutionDiagnostic(c.Domain.ToString(),required,c.KnowledgeId,c.SemanticIdentity,
-            Phase7CanonicalFieldPathPolicy.Canonicalize(c.ApprovedFieldPath),c.Text,disposition,c.RequiresHumanReview,c.HumanReviewReason,
+            Phase7CanonicalFieldPathDiagnostics.Canonicalize(c.ApprovedFieldPath,
+                nameof(Phase7KnowledgeResolver), c.Origin.ToString(), c.AdapterId),c.Text,disposition,c.RequiresHumanReview,c.HumanReviewReason,
             c.RequiresQualification,c.QualificationReasons,claim.SourceIds,
             allEvaluated.OrderBy(x=>x.Source.SourceId,StringComparer.Ordinal).ToDictionary(x=>x.Source.SourceId,x=>$"{x.Result.Eligibility}:{x.Result.ReasonCode}",StringComparer.Ordinal),precision,resolutionReason);
         diagnostic=diagnostic with {

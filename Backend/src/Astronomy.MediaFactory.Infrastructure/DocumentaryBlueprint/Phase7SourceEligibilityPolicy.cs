@@ -45,7 +45,8 @@ public sealed class Phase7SourceEligibilityPolicy : IPhase7SourceEligibilityPoli
     {
         if (source.SupportedClaimIds.Contains(request.SemanticIdentity, StringComparer.OrdinalIgnoreCase)) return Phase7ProvenancePrecision.ExactClaim;
         if (source.SupportedKnowledgeIds.Contains(request.KnowledgeId, StringComparer.OrdinalIgnoreCase)) return Phase7ProvenancePrecision.ExactKnowledgeEntity;
-        var field = Phase7CanonicalFieldPathPolicy.Canonicalize(request.ApprovedFieldPath);
+        var field = Phase7CanonicalFieldPathDiagnostics.Canonicalize(request.ApprovedFieldPath,
+            nameof(Phase7SourceEligibilityPolicy), "claim-source-evidence", "phase7.source-eligibility-policy");
         return source.SupportedApprovedFieldPaths.Any(path => Phase7CanonicalFieldPathPolicy.TryCanonicalize(path, out var canonical) && canonical == field)
             ? Phase7ProvenancePrecision.ExactApprovedField : Phase7ProvenancePrecision.None;
     }
