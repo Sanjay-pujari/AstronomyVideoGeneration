@@ -149,12 +149,12 @@ public sealed class NarrationDraftValidator(INarrationDraftSafetyValidator safet
     public NarrationDraftValidation Validate(Phase7NarrationDraftInputAuthority input,NarrationDraftAuthority authority)
     {
         var p=input.NarrationPlanningAuthority;var ps=p.LongScenes.Concat(p.ShortScenes).ToArray();var ds=authority.LongScenes.Concat(authority.ShortScenes).ToArray();var map=ps.ToDictionary(x=>x.PlanningId,StringComparer.Ordinal);var claims=input.CertifiedClaims.GroupBy(x=>x.ClaimId).Where(x=>x.Count()==1).ToDictionary(x=>x.Key,x=>x.Single(),StringComparer.Ordinal);
-        bool ScenePairs(Func<NarrationPlanningScene,NarrationDraftScene,bool> f)=>ds.Count==ps.Length&&ds.All(d=>map.TryGetValue(d.PlanningId,out var x)&&f(x,d));
+        bool ScenePairs(Func<NarrationPlanningScene,NarrationDraftScene,bool> f)=>ds.Length==ps.Length&&ds.All(d=>map.TryGetValue(d.PlanningId,out var x)&&f(x,d));
         var checks=new Dictionary<string,bool>(StringComparer.Ordinal)
         {
             [GateNames[0]]=authority.ContractVersion==NarrationDraftContract.Version,[GateNames[1]]=p.DeterministicChecksum==NarrationPlanningCanonicalizer.AuthorityChecksum(p),
             [GateNames[2]]=authority.ProfileId==input.ProfileId&&authority.ProfileVersion==input.ProfileVersion,[GateNames[3]]=authority.Language==input.Language,
-            [GateNames[4]]=authority.PlanningAuthorityId==p.AuthorityId&&authority.PlanningAuthorityChecksum==p.DeterministicChecksum,[GateNames[5]]=ds.Count==ps.Length&&ds.Select(x=>x.PlanningId).SequenceEqual(ps.Select(x=>x.PlanningId)),
+            [GateNames[4]]=authority.PlanningAuthorityId==p.AuthorityId&&authority.PlanningAuthorityChecksum==p.DeterministicChecksum,[GateNames[5]]=ds.Length==ps.Length&&ds.Select(x=>x.PlanningId).SequenceEqual(ps.Select(x=>x.PlanningId)),
             [GateNames[6]]=ScenePairs((x,d)=>d.SceneId==x.SceneId&&d.StoryFrameId==x.StoryFrameId&&d.PacketId==x.PacketId&&d.PlanningChecksum==x.DeterministicChecksum&&d.Variant==x.Variant),
             [GateNames[7]]=ds.SelectMany(x=>x.Sentences).All(x=>x.SentenceId==NarrationDraftCanonicalizer.ComputeSentenceId(x)),[GateNames[8]]=ds.SelectMany(x=>x.Sentences).All(x=>x.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeSentenceChecksum(x)),
             [GateNames[9]]=ScenePairs((x,d)=>x.RequiredClaims.Order(StringComparer.Ordinal).SequenceEqual(d.RequiredClaimUsage.Select(y=>y.ClaimId).Order(StringComparer.Ordinal))),
