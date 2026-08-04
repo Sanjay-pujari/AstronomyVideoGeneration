@@ -154,6 +154,7 @@ public sealed class HistoryKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("p
 public sealed class CultureAndMythologyKnowledgeAdapter() : ApprovedFieldKnowledgeAdapter("phase7.culture.v1","cultureAndMythology",Phase7ApprovedFields.Of(NarrationKnowledgeDomainKey.CultureAndMythology,"summary","rashiNote","nakshatraNote","uncertaintyNote"))
 {
     protected override bool AllowsContainer(string name)=>name is "greek" or "roman" or "indianHindu" or "chinese" or "arabic" or "other";
+    protected override IReadOnlyList<string> QualificationReasons(string path) => ["CulturalTraditionQualification"];
     protected override string ReviewReason(string path,string text) =>
         path.Split('.').Length < 3 ? "MissingTraditionIdentity" :
         path.EndsWith("uncertaintyNote",StringComparison.OrdinalIgnoreCase) ? "UnresolvedCulturalUncertainty" :
