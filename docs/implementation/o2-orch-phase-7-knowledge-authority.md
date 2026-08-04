@@ -494,3 +494,45 @@ unsent reuse variants differ only as specified by the campaign:
 as an endpoint execution.
 
 **Final verdict:** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.
+
+## P7.1A FINAL CLEAN PUBLICATION AND REUSE CERTIFICATION (2026-08-04)
+
+This final-cleanup pass is intentionally bounded to observability, packaging, and
+lock hygiene. `Phase7KnowledgeDiagnostics:EnableCultureEvidenceDebug` is a typed,
+opt-in setting whose production default is `false`; the evaluator neither builds
+the debug path nor asks the resolver to write the non-authoritative culture file
+unless it is explicitly enabled. The diagnostic remains outside generated/output
+files, authority inventory, validation, manifest entries, and publication evidence.
+The canonical-path compatibility entry point now delegates silently to the governed
+policy: successful paths emit nothing, and malformed paths retain the concise
+governed `ArgumentException` without raw-path stderr telemetry. Phase 4 lock release
+closes its exclusively owned file before deleting it and removes `.locks` only when
+empty; a stale file is consequently cleaned only after a later exclusive acquisition
+proves there is no active owner.
+
+The governing manifest contract is the **historical package manifest model**. The
+transaction preserves the top-level Phase 1–6 package history and appends the
+component-scoped `phase7KnowledgeAuthorities` record. Committed-state evaluation
+selects and verifies that dedicated P7.1A record, rather than interpreting unrelated
+top-level run metadata as the current knowledge publication.
+
+| Certification item | Result |
+|---|---|
+| Cleanup files | Typed options/default configuration, evaluator opt-in gate, silent canonical wrapper/test, owner-safe Phase 4 lock cleanup, and this report. |
+| Focused suites | **303 total, 303 passed, 0 failed, 0 skipped, 3 s**. The filter covered all `Phase7Knowledge*`, canonical-field-path, certified-cultural, cultural-safety, `ProductionPipelineExecutionService`, and lock-cleanup tests present in this checkout. |
+| Full test project | Started but stopped after more than four minutes because the checkout has numerous unrelated active failures and environment-dependent tests (including missing `ffprobe`, invalid test assets, and pre-existing architecture assertions). An exact final total is unavailable and is not fabricated. |
+| Forced publication request | Prescribed Phase 7-only request with `overwriteExisting=true` was **not sent**: no Orion execution package or configured PostgreSQL service is available in this workspace. |
+| Forced publication response | None. Success is not claimed. |
+| Governing files | Expected paths remain `07-narration/knowledge/knowledge-authority.json`, `knowledge-resolution-report.json`, `knowledge-diagnostics.json`, `validation/phase-07-knowledge-validation.json`, `phase-manifest.json`, and `.phase-07-knowledge-publication.json`. No real execution root containing them was located. |
+| Six-file sizes/hashes/timestamps/JSON identities | Unavailable because the certified execution package is not mounted. No values are fabricated. |
+| Validation, diagnostics, manifest, publication evidence | Physical and semantic recomputation could not be performed without the six files. The historical manifest decision above follows the implemented append/preserve contract. |
+| Debug and stale-lock package absence | No real package exists locally to inspect or clean. Default code behavior is clean, but package-level absence is not certified. |
+| Normal reuse request/response | Prescribed `overwriteExisting=false`, `retryFailedOnly=false` request was not sent; no response or byte/timestamp comparison exists. |
+| retryFailedOnly request/response | Prescribed `overwriteExisting=false`, `retryFailedOnly=true` request was not sent; service invocation and no-write identity are unproven. |
+| Schema warnings follow-up | Bounded maintenance/P7.1B record: classify envelope metadata as governed/ignored, supported adapter gaps as future coverage, explicitly out-of-scope fields as such, and only the remainder as truly unknown. No broad adapter expansion was made. |
+| Remaining blockers | Full project is not green; production database/plan/execution root are unavailable; forced publication, six-file verification, both reuse calls, and byte/timestamp identity remain unexecuted. |
+
+The cleanup implementation is ready, but the requested release conditions require
+real publication and reuse evidence. P7.1B was not begun.
+
+**Final verdict:** `P7_1A_KNOWLEDGE_AUTHORITY_STILL_INCOMPLETE`.

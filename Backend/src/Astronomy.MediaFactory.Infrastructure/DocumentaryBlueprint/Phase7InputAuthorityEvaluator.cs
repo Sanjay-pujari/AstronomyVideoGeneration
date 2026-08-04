@@ -1,11 +1,13 @@
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
 public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvaluator phase6Evaluator,
     IPhase7CertifiedKnowledgeSource knowledgeSource, IFamilyNarrationProfileResolver profileResolver,
-    IPhase7KnowledgeResolver knowledgeResolver, ILogger<Phase7InputAuthorityEvaluator> logger) : IPhase7InputAuthorityEvaluator
+    IPhase7KnowledgeResolver knowledgeResolver, ILogger<Phase7InputAuthorityEvaluator> logger,
+    IOptions<Phase7KnowledgeDiagnosticsOptions> diagnosticsOptions) : IPhase7InputAuthorityEvaluator
 {
     private static readonly HashSet<string> Variants = new(["Long","Short"], StringComparer.OrdinalIgnoreCase);
     public async Task<Phase7InputAuthorityEvaluation> EvaluateAsync(Phase7InputAuthorityRequest request, CancellationToken token = default)
@@ -56,10 +58,11 @@ public sealed class Phase7InputAuthorityEvaluator(IPhase6CommittedAuthorityEvalu
             || !ProfileIdentityMatches(expected.ProfileId, expected.ProfileVersion, profile.ProfileId, profile.ContractVersion)
             || !string.Equals(expected.Language, request.Language, StringComparison.OrdinalIgnoreCase))
             return Bad("P7INPUT_PROFILE_INVALID", ProfileMismatchDiagnostics(request, expected, profile, published, normalizedFamily));
-        // This path is deliberately outside the committed Phase 7 artifact inventory.  The
-        // resolver writes the temporary diagnostic before returning, including on a knowledge
-        // rejection, without changing the evaluation result.
-        var diagnosticPath = Path.Combine(request.ExecutionRoot, "07-narration", "debug", "culture-required-evidence-debug.json");
+        // Explicitly enabled diagnostics remain outside every authority and commit inventory.
+        // Do not even construct the package path during a normal frozen execution.
+        var diagnosticPath = diagnosticsOptions.Value.EnableCultureEvidenceDebug
+            ? Path.Combine(request.ExecutionRoot, "07-narration", "debug", "culture-required-evidence-debug.json")
+            : null;
         var knowledge = knowledgeResolver.Resolve(payload, profile, diagnosticPath);
         if (knowledge.BlockingIssues.Count > 0) return Bad("P7INPUT_KNOWLEDGE_PAYLOAD_INVALID", string.Join("; ", knowledge.BlockingIssues));
         var longFrames = authority.Frames.Where(x => x.Variant.Equals("Long", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SceneNumber).ThenBy(x => x.FrameNumber).ToArray();

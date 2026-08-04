@@ -7,6 +7,10 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Phase7CultureRequiredEvidenceDiagnosticTests
 {
     [Fact]
+    public void DiagnosticsOption_IsDisabledByDefault()
+        => Assert.False(new Phase7KnowledgeDiagnosticsOptions().EnableCultureEvidenceDebug);
+
+    [Fact]
     public void DiagnosticDirectory_IsCreated()
     {
         var (root,path)=NewPath();

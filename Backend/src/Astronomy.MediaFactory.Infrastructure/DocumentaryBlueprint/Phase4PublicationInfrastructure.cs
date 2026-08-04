@@ -22,8 +22,20 @@ public sealed class Phase4FileSystem:IPhase4FileSystem
 public sealed class Phase4ExecutionLock:IPhase4ExecutionLock
 {
     private static readonly ConcurrentDictionary<string,SemaphoreSlim> Locks=new(StringComparer.OrdinalIgnoreCase);
-    public async ValueTask<IAsyncDisposable> AcquireAsync(string root,string id,CancellationToken token){var key=Path.GetFullPath(root)+"|"+id;var gate=Locks.GetOrAdd(key,_=>new(1,1));await gate.WaitAsync(token);try{Directory.CreateDirectory(Path.Combine(root,".locks"));var stream=new FileStream(Path.Combine(root,".locks",Safe(id)+".phase-04.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);return new Releaser(gate,stream);}catch{gate.Release();throw;}static string Safe(string x)=>string.Concat(x.Select(c=>Path.GetInvalidFileNameChars().Contains(c)?'_':c));}
-    private sealed class Releaser(SemaphoreSlim gate,FileStream stream):IAsyncDisposable{public ValueTask DisposeAsync(){stream.Dispose();gate.Release();return ValueTask.CompletedTask;}}
+    public async ValueTask<IAsyncDisposable> AcquireAsync(string root,string id,CancellationToken token){var key=Path.GetFullPath(root)+"|"+id;var gate=Locks.GetOrAdd(key,_=>new(1,1));await gate.WaitAsync(token);try{var directory=Path.Combine(root,".locks");Directory.CreateDirectory(directory);var path=Path.Combine(directory,Safe(id)+".phase-04.lock");var stream=new FileStream(path,FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);return new Releaser(gate,stream,path,directory);}catch{gate.Release();throw;}static string Safe(string x)=>string.Concat(x.Select(c=>Path.GetInvalidFileNameChars().Contains(c)?'_':c));}
+    private sealed class Releaser(SemaphoreSlim gate,FileStream stream,string path,string directory):IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            // FileShare.None proves this holder owns the lock. Delete only after closing it;
+            // an abandoned file is therefore safely removed on the next successful acquire.
+            stream.Dispose();
+            File.Delete(path);
+            if(Directory.Exists(directory)&&!Directory.EnumerateFileSystemEntries(directory).Any())Directory.Delete(directory);
+            gate.Release();
+            return ValueTask.CompletedTask;
+        }
+    }
 }
 public sealed class Phase4RecoveryService(
     IPhase4ArtifactSerializer serializer,

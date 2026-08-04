@@ -469,6 +469,13 @@ public sealed class Phase7NarrationOptions
     public bool RequireHumanReviewForCulturalUncertainty { get; set; } = true;
 }
 
+/// <summary>Non-authoritative Phase 7 knowledge diagnostics. Disabled in production by default.</summary>
+public sealed class Phase7KnowledgeDiagnosticsOptions
+{
+    public const string SectionName = "Phase7KnowledgeDiagnostics";
+    public bool EnableCultureEvidenceDebug { get; set; }
+}
+
 public sealed record Phase7FoundationDiagnostics(string ExecutionId, string PlanId, string EventId, string EventFamily,
     string Language, string ProfileId, string ProfileVersion, bool InputAuthorityValid, bool KnowledgePayloadResolved,
     bool SourceRegistryValid, bool LocalizationResolved, int LongStoryFrameCount, int ShortStoryFrameCount,
