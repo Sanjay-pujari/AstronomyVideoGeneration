@@ -472,7 +472,6 @@ public sealed record VariantNarrationPlan(string PlanId, string ExecutionId, str
     string Language, string ProfileId, string ProfileVersion, string Variant, string SourceStoryFrameAuthorityId,
     string SourceStoryFrameAuthorityChecksum, int ScenePlanCount, int TargetTotalDurationSeconds,
     IReadOnlyList<NarrationScenePlan> Scenes, string DeterministicChecksum);
-public sealed record NarrationPlanningAuthority(string ContractVersion, VariantNarrationPlan Long, VariantNarrationPlan Short, string DeterministicChecksum);
 public interface IPhase7NarrationPlanningBuilder { VariantNarrationPlan Build(Phase7CommittedInputAuthority authority, IReadOnlyList<SceneKnowledgePacket> packets, string variant); }
 
 public sealed record Phase7FoundationValidationGate(string Name, bool Passed, IReadOnlyList<string> Errors);
