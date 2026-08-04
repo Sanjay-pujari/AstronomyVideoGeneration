@@ -154,7 +154,12 @@ internal static class Phase7CulturalSourcePathMapper
                     : traditionSources.Length > 0 ? traditionSources
                     : cultureSources;
                 if (effectiveSources.Contains(source.SourceId, StringComparer.OrdinalIgnoreCase))
-                    paths.Add(Phase7CanonicalFieldPathPolicy.Canonicalize($"cultureAndMythology.{traditionName}.{fieldName}"));
+                {
+                    var rawPath = $"cultureAndMythology.{traditionName}.{fieldName}";
+                    paths.Add(Phase7CanonicalFieldPathDiagnostics.Canonicalize(rawPath,
+                        nameof(Phase7CulturalSourcePathMapper), "evergreen.cultureAndMythology",
+                        "phase7.culture-source-path-mapper.v1", traditionName, fieldName));
+                }
             }
         }
         return paths.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();

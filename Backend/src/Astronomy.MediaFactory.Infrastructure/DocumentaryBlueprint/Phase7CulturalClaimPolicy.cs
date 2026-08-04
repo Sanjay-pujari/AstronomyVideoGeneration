@@ -19,7 +19,8 @@ public static class Phase7CulturalClaimPolicy
     public static string ResolveCulturalTradition(string approvedFieldPath,
         IReadOnlyDictionary<string,string>? metadata = null)
     {
-        var parts=Phase7CanonicalFieldPathPolicy.Canonicalize(approvedFieldPath)
+        var parts=Phase7CanonicalFieldPathDiagnostics.Canonicalize(approvedFieldPath,
+                nameof(Phase7CulturalClaimPolicy), "resolved-claim", "phase7.cultural-claim-policy")
             .Split('.',StringSplitOptions.RemoveEmptyEntries);
         if(parts.Length>=3 && parts[0].Equals("cultureAndMythology",StringComparison.OrdinalIgnoreCase)
             && SupportedTraditions.TryGetValue(parts[1],out var fromPath)) return fromPath;

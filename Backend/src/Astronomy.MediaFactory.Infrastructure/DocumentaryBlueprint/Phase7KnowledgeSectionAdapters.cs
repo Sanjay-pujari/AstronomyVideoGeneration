@@ -40,7 +40,8 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
     public IReadOnlySet<string> SupportedSectionNames { get; } = new HashSet<string>([section], StringComparer.OrdinalIgnoreCase);
     public IReadOnlySet<NarrationKnowledgeDomainKey> ProducedDomains { get; } = fields.Values.ToHashSet();
     public IReadOnlySet<string> ApprovedFieldPaths { get; } = fields.Keys
-        .Select(x => Phase7CanonicalFieldPathPolicy.Canonicalize($"{section}.{x}"))
+        .Select(x => Phase7CanonicalFieldPathDiagnostics.Canonicalize($"{section}.{x}",
+            $"{id}.ApprovedFieldPaths", "adapter-schema", id, FieldName(x), FieldLeaf(x)))
         .ToHashSet(StringComparer.Ordinal);
     protected virtual bool Qualified => section is "cultureAndMythology" or "regionalTraditions" or "astrologyRelationships";
     protected virtual bool HumanReview => Qualified;
@@ -87,7 +88,10 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
             var relative = path == section ? property.Name : $"{path[(section.Length + 1)..]}.{property.Name}";
             if (fields.TryGetValue(relative, out var domain) || fields.TryGetValue(property.Name, out domain))
             {
-                Emit(property.Value, entityId, Phase7CanonicalFieldPathPolicy.Canonicalize($"{section}.{relative}"), domain, sources, claims, context: null);
+                var rawPath = $"{section}.{relative}";
+                Emit(property.Value, entityId, Phase7CanonicalFieldPathDiagnostics.Canonicalize(rawPath,
+                    $"{GetType().Name}.Visit", "knowledge-payload", id, FieldName(relative), property.Name),
+                    domain, sources, claims, context: null);
             }
             else if (property.Value.ValueKind == JsonValueKind.Object && AllowsContainer(property.Name))
                 Visit(property.Value, $"{path}.{property.Name}", entityId, sources, claims, entities, unknown, blocking);
@@ -95,6 +99,16 @@ public abstract class ApprovedFieldKnowledgeAdapter(string id, string section,
         }
     }
     protected virtual bool AllowsContainer(string name) => false;
+    private static string? FieldName(string path)
+    {
+        var segments=path.Split('.',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
+        return segments.Length>1 ? segments[^2] : null;
+    }
+    private static string FieldLeaf(string path)
+    {
+        var segments=path.Split('.',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries);
+        return segments.Length>0 ? segments[^1] : path;
+    }
     private void Emit(JsonElement value, string entityId, string fieldPath, NarrationKnowledgeDomainKey domain, string[] sources, List<Phase7AdapterClaimCandidate> claims, Phase7KnowledgeSectionContext? context)
     {
         IEnumerable<string> texts = value.ValueKind switch

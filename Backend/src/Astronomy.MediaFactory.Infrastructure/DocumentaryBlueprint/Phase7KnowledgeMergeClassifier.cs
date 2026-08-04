@@ -16,8 +16,10 @@ public sealed class Phase7KnowledgeMergeClassifier : IPhase7KnowledgeMergeClassi
     {
         if (!string.Equals(request.EvergreenCandidate.SemanticIdentity, request.EventCandidate.SemanticIdentity, StringComparison.Ordinal)
             || request.EvergreenCandidate.Domain != request.EventCandidate.Domain
-            || !string.Equals(Phase7CanonicalFieldPathPolicy.Canonicalize(request.EvergreenCandidate.ApprovedFieldPath),
-                Phase7CanonicalFieldPathPolicy.Canonicalize(request.EventCandidate.ApprovedFieldPath), StringComparison.Ordinal))
+            || !string.Equals(Phase7CanonicalFieldPathDiagnostics.Canonicalize(request.EvergreenCandidate.ApprovedFieldPath,
+                    nameof(Phase7KnowledgeMergeClassifier), "evergreen-candidate", request.EvergreenCandidate.AdapterId),
+                Phase7CanonicalFieldPathDiagnostics.Canonicalize(request.EventCandidate.ApprovedFieldPath,
+                    nameof(Phase7KnowledgeMergeClassifier), "event-candidate", request.EventCandidate.AdapterId), StringComparison.Ordinal))
             return Incomparable("Semantic identity, domain, and approved field must match before merge classification.");
 
         var scope = scopeComparer.Compare(request.EvergreenScope, request.EventScope);
