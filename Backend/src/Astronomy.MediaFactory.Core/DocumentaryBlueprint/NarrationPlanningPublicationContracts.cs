@@ -25,6 +25,12 @@ public static class NarrationPlanningArtifactPaths
     public static readonly IReadOnlyList<string> Governed=[Authority,Diagnostics,Report,Validation,Manifest,PublicationEvidence];
 }
 public sealed record NarrationPlanningArtifact(string RelativePath,string PhysicalSha256,long SizeBytes,string SemanticChecksum);
+public sealed record NarrationPlanningContentArtifactInventory(IReadOnlyList<NarrationPlanningArtifact> Artifacts);
+public sealed record NarrationPlanningValidatedArtifactInventory(IReadOnlyList<NarrationPlanningArtifact> Artifacts);
+public sealed record NarrationPlanningCommittedArtifactInventory(IReadOnlyList<NarrationPlanningArtifact> Artifacts);
+public sealed record NarrationPlanningDiagnosticsArtifact(string ContractVersion,string AuthorityId,string AuthorityChecksum,
+    string ExecutionId,string PlanId,string EventId,string Language,string ProfileId,string ProfileVersion,
+    NarrationPlanningDiagnostics Diagnostics,string DeterministicChecksum);
 public sealed record NarrationPlanningPublicationReport(string ContractVersion,string ExecutionId,string PlanId,string EventId,
     string Language,string ProfileId,string ProfileVersion,string AuthorityId,string AuthorityChecksum,int LongPlanningSceneCount,
     int ShortPlanningSceneCount,int TotalPlanningSceneCount,int PrimaryReferenceCount,int SupportingReferenceCount,int RequiredClaimCount,
@@ -36,7 +42,11 @@ public sealed record NarrationPlanningPhysicalValidation(string ContractVersion,
     string ExecutionId,string PlanId,string EventId,string Language,string ProfileId,string ProfileVersion,string ValidationMode,
     IReadOnlyList<NarrationPlanningValidationGate> GateResults,IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,
     IReadOnlyList<NarrationPlanningArtifact> ArtifactInventory,IReadOnlyDictionary<string,string> LineageEvidence,
-    bool PhysicalReadbackPassed,bool CommittedStatePassed,string DeterministicChecksum);
+    bool PhysicalReadbackPassed,bool CommittedStatePassed,string DeterministicChecksum)
+{
+    public bool CandidateReadbackPassed { get; init; }
+    public bool CommittedReadbackPassed { get; init; }
+}
 public sealed record NarrationPlanningManifestEntry(int PhaseNo,string SubPhase,string Name,string ContractVersion,string ExecutionId,string PlanId,string EventId,string AuthorityId,
     string AuthorityChecksum,string DiagnosticsChecksum,string ReportChecksum,string ValidationChecksum,string Phase6AuthorityId,
     string Phase6AuthorityChecksum,string Phase7KnowledgeAuthorityId,string Phase7KnowledgeAuthorityChecksum,string PacketCollectionChecksum,
@@ -59,10 +69,27 @@ public sealed record Phase7NarrationPlanningPublicationResult(bool Success,strin
     IReadOnlyList<string> ArtifactPaths,string ValidationPath,string PublicationEvidencePath);
 public sealed record NarrationPlanningCommittedStateEvaluation(bool IsValid,PublishedNarrationPlanningAuthority? Authority,string ReasonCode,
     IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings);
+public sealed record NarrationPlanningCandidateReadbackResult(bool IsValid,string ReasonCode,
+    IReadOnlyList<NarrationPlanningArtifact> Artifacts,IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings);
+public sealed record NarrationPlanningArtifactReconciliationResult(bool IsValid,string ReasonCode,
+    IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings);
+public sealed record NarrationPlanningRecoveryResult(bool IsValid,bool Recovered,string ReasonCode,
+    IReadOnlyList<string> Actions,IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings);
+public enum NarrationPlanningPublicationFaultPoint { AfterAuthorityStageWrite,AfterDiagnosticsStageWrite,AfterReportStageWrite,
+    AfterValidationStageWrite,AfterManifestStageWrite,AfterEvidenceStageWrite,AfterCandidateReadback,AfterBackup,
+    AfterPlanningSwap,AfterValidationSwap,AfterManifestSwap,AfterEvidenceSwap,BeforeCommittedReadback,
+    AfterCommittedReadback,BeforeBackupDeletion }
 public interface IPhase7NarrationPlanningFileSystem { bool FileExists(string path);bool DirectoryExists(string path);void CreateDirectory(string path);Task<byte[]> ReadAsync(string path,CancellationToken token=default);Task WriteAsync(string path,byte[] bytes,CancellationToken token=default);void MoveFile(string source,string destination,bool overwrite);void MoveDirectory(string source,string destination);void DeleteFile(string path);void DeleteDirectory(string path);IReadOnlyList<string> Directories(string root,string pattern); }
 public interface IPhase7NarrationPlanningExecutionLock { Task<IAsyncDisposable?> TryAcquireAsync(string executionRoot,string planId,CancellationToken token=default); }
 public interface IPhase7NarrationPlanningRecoveryService { Task RecoverAsync(string executionRoot,CancellationToken token=default); }
 public interface IPhase7NarrationPlanningPhysicalReadback { Task<NarrationPlanningPhysicalResult> ReadCommittedAsync(string executionRoot,CancellationToken token=default); }
+public interface IPhase7NarrationPlanningCandidateReadback { Task<NarrationPlanningCandidateReadbackResult> ReadAsync(string stagingRoot,CancellationToken token=default); }
+public interface IPhase7NarrationPlanningArtifactReconciler { NarrationPlanningArtifactReconciliationResult Reconcile(
+    NarrationPlanningAuthority authority,NarrationPlanningDiagnosticsArtifact diagnostics,NarrationPlanningPublicationReport report,
+    NarrationPlanningPhysicalValidation validation,NarrationPlanningManifestEntry manifest,NarrationPlanningPublicationEvidence evidence,
+    IReadOnlyList<NarrationPlanningArtifact> inventory,Phase7NarrationPlanningInputAuthorityRequest? currentInput=null); }
+public interface IPhase7NarrationPlanningPublicationFaultInjector { void Inject(NarrationPlanningPublicationFaultPoint point); }
+public interface IPhase7NarrationPlanningClock { DateTimeOffset UtcNow { get; } }
 public interface IPhase7NarrationPlanningCommittedStateEvaluator { Task<NarrationPlanningCommittedStateEvaluation> EvaluateAsync(Phase7NarrationPlanningInputAuthorityRequest input,CancellationToken token=default); }
 public interface IPhase7NarrationPlanningTransactionCoordinator { Task<Phase7NarrationPlanningPublicationResult> ExecuteAsync(Phase7NarrationPlanningPublicationRequest request,CancellationToken token=default); }
 public interface IPhase7NarrationPlanningPublicationService { Task<Phase7NarrationPlanningPublicationResult> ExecuteAsync(Phase7NarrationPlanningPublicationRequest request,CancellationToken token=default); }

@@ -22,17 +22,36 @@ The coordinator obtains `<PlanId>.phase-07-narration-planning.lock`, recovers st
 committed inputs, builds and validates in memory, and writes a complete candidate beneath
 `07-narration/.planning-staging-<token>`. It deserializes the candidate before changing stable state.
 The prior planning directory and external evidence are retained in
-`07-narration/.planning-backup-<token>` until committed deserialization succeeds. Planning is swapped,
-then validation, then the manifest, and publication evidence is moved last. Any exception restores
-all prior paths. Successful publication removes staging, backup, and lock state before final physical
-committed-state evaluation. Recovery deletes an uncommitted stale staging directory and restores a
-backup only where its stable planning directory is absent; it never deletes the sole known-good copy.
+`07-narration/.planning-backup-<token>` through full physical readback and committed-state evaluation.
+Planning is swapped, then validation, then the manifest, and publication evidence is moved last. Any
+exception restores all prior paths; backup and staging are deleted only after final evaluation passes.
+Recovery classifies complete stable and backup sets: a complete stable set wins, an incomplete stable
+set is replaced by a complete backup, and two incomplete sets are retained for diagnosis rather than
+blindly deleting the only potentially recoverable copy.
 
+Candidate readback deserializes all six staged files, recomputes governed semantic checksums, records
+physical SHA-256 values, and rejects missing or unexpected files before any stable path changes.
 Physical readback deserializes the six governed files, calculates SHA-256 hashes, reports a typed
-inventory, rejects transaction residue, and feeds the committed-state evaluator. The evaluator also
+inventory while the active backup remains present, and feeds the committed-state evaluator. The evaluator also
 recomputes authority, diagnostics, report, validation, manifest-entry, and publication-evidence
 checksums; binds identities across the files; requires committed evidence and passing gates; and
 compares current packet, language, and profile lineage.
+
+Publication checksum ownership is centralized in `NarrationPlanningPublicationCanonicalizer`; the
+foundation canonicalizer remains authoritative for authority, embedded diagnostics, and semantic
+validation. Operational timestamps come from an injected clock and are excluded from report/manifest/
+evidence semantic projections. Diagnostics is published in the governed diagnostics-version envelope.
+
+Validation distinguishes candidate readback, committed readback, and committed-state evaluation. The
+staged projection never claims committed success; a final projection is written after candidate
+readback, and evidence binds that final checksum. Content, validated, and committed inventories contain
+three, four, and six governed paths respectively. Inventory canonicalization sorts paths and blanks the
+evidence physical hash/size/checksum projection, which is the explicit anti-self-reference rule.
+
+The execution lock holds an exclusive `FileStream` (`FileShare.None`) for its entire lease, so separate
+service instances and processes cannot own the same plan lock. The transaction exposes typed fault
+points for each stage write, backup/swap/readback boundary, and backup deletion. The P7.1B-BB service
+remains an explicit DI boundary and neither resolves nor invokes drafting or provider services.
 
 ## Reuse precedence
 
