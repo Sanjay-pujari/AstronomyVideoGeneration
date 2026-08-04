@@ -7,7 +7,7 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
     private static readonly string[] GateNames = ["InputAuthorityGate", "VariantCoverageGate", "StoryFrameCoverageGate",
         "SceneOrderGate", "SceneIdentityGate", "StoryFrameChecksumGate", "SourceSceneLineageGate", "ProfileGate",
         "LanguageGate", "SectionAuthorityGate", "PrimaryReferenceGate", "RequiredReferenceResolutionGate", "PacketBlockingIssueGate", "ClaimPartitionGate",
-        "RequiredClaimEvidenceGate", "OptionalClaimEvidenceGate", "RequiredClaimChecksumGate", "NoContradictionGate", "HumanReviewIsolationGate",
+        "RequiredClaimEvidenceGate", "OptionalClaimEvidenceGate", "RequiredClaimChecksumGate", "PacketClaimAuthorityIdentityGate", "NoContradictionGate", "HumanReviewIsolationGate",
         "SafetyRuleGate", "CulturalQualificationGate", "AstrologySeparationGate", "LocationTimeSafetyGate",
         "DurationGate", "VisualEvidenceGate", "ViewerQuestionResolutionGate",
         "ResolutionReportLineageGate", "LongShortIndependenceGate", "DeterminismGate"];
@@ -53,7 +53,12 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         Check("ClaimPartitionGate", all.All(Partitions), "A claim occurs in multiple partitions or has the wrong disposition.");
         Check("RequiredClaimEvidenceGate", all.SelectMany(p=>p.RequiredClaims).All(c => authorityClaims.TryGetValue(c.ClaimId,out var a) && a.SemanticIdentity==c.SemanticIdentity && input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e=>e.ClaimId==c.ClaimId&&e.SemanticIdentity==c.SemanticIdentity&&c.SourceIds.Contains(e.SourceId,StringComparer.Ordinal)&&e.SourceEligibility==Phase7SourceEligibility.EligibleForRequiredClaim&&!e.RequiresHumanReview&&e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField)), "A required claim lacks exact Required-eligible evidence.");
         Check("OptionalClaimEvidenceGate", all.SelectMany(p=>p.OptionalClaims).All(c => authorityClaims.TryGetValue(c.ClaimId,out var a) && a.SemanticIdentity==c.SemanticIdentity && Phase7SceneKnowledgePacketBuilder.HasOptionalEvidence(c,input)), "An optional claim lacks exact eligible evidence.");
-        Check("RequiredClaimChecksumGate", all.SelectMany(p=>p.RequiredClaims).All(c => c.Checksum == Phase7Determinism.Hash(c with { Checksum="" })), "A required claim checksum is invalid.");
+        Check("RequiredClaimChecksumGate", all.SelectMany(p=>p.RequiredClaims).All(c => authorityClaims.TryGetValue(c.ClaimId, out var a) && ClaimIdentical(c,a) && c.Checksum == a.Checksum && c.Checksum == Phase7Determinism.Hash(c with { Checksum="" })), "A required claim checksum or frozen authority identity is invalid.");
+        var identityMismatches = all.SelectMany(p => p.RequiredClaims.Concat(p.OptionalClaims).Concat(p.DeferredClaims))
+            .Where(c => !authorityClaims.TryGetValue(c.ClaimId, out var a) || !ClaimIdentical(c, a))
+            .Select(c => $"P7PACKET_CLAIM_AUTHORITY_IDENTITY_MISMATCH:{c.ClaimId}").Distinct(StringComparer.Ordinal).ToArray();
+        foreach (var mismatch in identityMismatches) Check("PacketClaimAuthorityIdentityGate", false, mismatch);
+        Check("PacketClaimAuthorityIdentityGate", identityMismatches.Length == 0, "Packet claims are authority-identical.");
         Check("NoContradictionGate", input.Knowledge.KnowledgeAuthority.MergeDecisions.All(x => x.Classification != Phase7KnowledgeMergeClassification.Contradictory || !x.SelectedClaimIds.Any(id => all.SelectMany(p=>p.RequiredClaims).Any(c=>c.ClaimId==id))), "An unresolved contradiction became required.");
         Check("HumanReviewIsolationGate", all.SelectMany(p=>p.RequiredClaims.Concat(p.OptionalClaims)).All(c => !c.RequiresHumanReview && c.Disposition != Phase7ClaimDisposition.HumanReview), "Human-review material is authoritative.");
         Check("SafetyRuleGate", all.All(p => input.FamilyProfile.SafetyRules.All(p.SafetyRules.Contains)), "An applicable safety rule is absent.");
@@ -68,13 +73,15 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         var longFrameIds=input.LongStoryFrames.Select(x=>x.FrameId).ToHashSet(StringComparer.Ordinal);var shortFrameIds=input.ShortStoryFrames.Select(x=>x.FrameId).ToHashSet(StringComparer.Ordinal);
         bool OwnsRequirements(SceneKnowledgePacket p, string variant) => input.ReferenceRequirements.TryGetValue(p.StoryFrameId,out var r) && r.All(x=>x.Variant==variant);
         Check("LongShortIndependenceGate", !ReferenceEquals(longPackets,shortPackets)&&!longPackets.Select(x=>x.PacketId).Intersect(shortPackets.Select(x=>x.PacketId),StringComparer.Ordinal).Any()&&longPackets.All(x=>longFrameIds.Contains(x.StoryFrameId)&&!shortFrameIds.Contains(x.StoryFrameId)&&OwnsRequirements(x,"Long"))&&shortPackets.All(x=>shortFrameIds.Contains(x.StoryFrameId)&&!longFrameIds.Contains(x.StoryFrameId)&&OwnsRequirements(x,"Short")), "Long and Short packet identity/authority crossed variants.");
-        Check("DeterminismGate", all.All(p=>p.DeterministicChecksum==Phase7Determinism.Hash(Phase7SceneKnowledgePacketCanonicalizer.Canonicalize(p with{DeterministicChecksum=""}))), "Packet checksum mismatch.");
+        Check("DeterminismGate", all.All(p=>p.DeterministicChecksum==Phase7SceneKnowledgePacketCanonicalizer.ComputeChecksum(p)), "Packet checksum mismatch.");
         var gates=GateNames.Select(n=>new Phase7SceneKnowledgePacketValidationGate(n,!failures.ContainsKey(n),failures.GetValueOrDefault(n)??[])).ToArray();
         var errors=gates.SelectMany(x=>x.Errors).ToArray();
         var draft=new Phase7SceneKnowledgePacketValidation(errors.Length==0,errors.Length==0?"P7PACKET_VALID":"P7PACKET_INVALID",gates,errors,"");
         return draft with{DeterministicChecksum=Phase7Determinism.Hash(draft with{DeterministicChecksum=""})};
     }
     private static bool Ordered(IEnumerable<SceneKnowledgePacket> p)=>p.SequenceEqual(p.OrderBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber));
+    private static bool ClaimIdentical(CertifiedNarrationClaim left, CertifiedNarrationClaim right) =>
+        Phase7Determinism.Hash(left) == Phase7Determinism.Hash(right);
     private static bool HasRequiredEvidence(CertifiedNarrationClaim claim, Phase7ScenePacketInputAuthority input) =>
         input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e => e.ClaimId==claim.ClaimId &&
             e.SemanticIdentity==claim.SemanticIdentity && claim.SourceIds.Contains(e.SourceId,StringComparer.Ordinal) &&
