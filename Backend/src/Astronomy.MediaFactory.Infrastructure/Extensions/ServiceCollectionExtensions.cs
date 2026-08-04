@@ -781,6 +781,17 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningCommittedStateEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningCommittedStateEvaluator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningTransactionCoordinator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningTransactionCoordinator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningPublicationService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningPublicationService>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationDraftInputAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationDraftInputAuthorityEvaluator>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftLanguagePolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DeterministicNarrationDraftLanguagePolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftTimingPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DeterministicNarrationDraftTimingPolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftRealizationPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DeterministicNarrationDraftRealizationPolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftClaimCoalescingPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.ConservativeNarrationDraftClaimCoalescingPolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftOpeningPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DeterministicNarrationDraftOpeningPolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftClosingPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DeterministicNarrationDraftClosingPolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftTransitionPhrasePolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DeterministicNarrationDraftTransitionPhrasePolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftSafetyValidator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.NarrationDraftSafetyValidator>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftAuthorityBuilder, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.NarrationDraftAuthorityBuilder>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftValidator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.NarrationDraftValidator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningBuilder>(sp =>
         {
             var options = configuration.GetSection(Astronomy.MediaFactory.Core.DocumentaryBlueprint.Phase7NarrationOptions.SectionName)
