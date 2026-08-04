@@ -20,7 +20,15 @@ Incoming and outgoing transitions are built separately. Opening is `(null, curre
 
 ## Diagnostics model
 
-Diagnostics now reconcile packet and total scene counts; Long and Short scene counts; Primary, Supporting, Required, Resolved, and Deferred reference counts; transition and blocking-issue counts; all three claim-partition counts; and warning/error counts. Candidate `FailedGateCount` is zero. Validation results already expose failed gates directly, so this avoids a circular authority-checksum dependency while still making failed-gate state observable after validation.
+Diagnostics now reconcile packet and total scene counts; Long and Short scene counts; Primary, Supporting, Required, Resolved, and Deferred reference counts; transition and blocking-issue counts; all three claim-partition counts; and warning/error counts. `DeferredReferenceCount` means status `Deferred` only. Missing, Ambiguous, CrossVariantInvalid, and Unsupported each have a distinct counter; `UnresolvedReferenceCount` is exactly their sum and excludes Deferred. Candidate `FailedGateCount` is zero. Validation results already expose failed gates directly, so this avoids a circular authority-checksum dependency while still making failed-gate state observable after validation.
+
+## Governed semantic reconciliation
+
+`NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary` is the single Primary predicate used by build admission, scene projection, validation reconciliation, and diagnostics. It requires Primary and Resolved state, a nonempty resolved-claim list, an authored reference ID, claims drawn only from the packet partitions, and—when required—at least one Required claim. Exactly one such reference is accepted. Primary and valid resolved Supporting references are projected in `KnowledgeReferenceIds` authored order; malformed and unresolved rows are excluded.
+
+`NarrationPlanningPolicyCatalog` is the immutable, provider-independent owner of goal, strategy, claim-usage, qualification-prefix, and transition-kind identities. The builder consumes those constants. Validation reconciles every Narrative Goal field to packet/input authority, every Strategy field to packet/catalog authority, and every claim-usage value to the catalog, in addition to recomputing their checksums. A recomputed checksum therefore cannot legitimize modified policy content.
+
+`SceneAuthorityGate` reconciles scene identity, variant, Story Frame and packet lineage, viewer question, objective, exact authored Primary/Supporting sequences, all three semantic-set claim partitions, prohibited/safety/editorial sets, authored visual targets, and all duration bounds. `ConstraintPolicyGate` reruns the injected singleton-safe `INarrationPlanningConstraintPolicy` with the original packet/input request and requires exact deterministic constraint content, preferred sentence count, reading time, and packet duration values. Expected policy-domain argument failures become a failed semantic gate; cancellation and fatal runtime exceptions are not caught.
 
 ## Order and deterministic checksums
 
@@ -45,6 +53,17 @@ The P7.1B-BA constructor graph contains only the committed input evaluator, pack
 - Prompt composer calls = **0**
 - Narration generator calls = **0**
 
-## Verification record
+## Verification record (2026-08-04 UTC)
 
-The hardening source includes focused contract, transition identity, constraint determinism/coherence, dependency-injection shape, and provider isolation tests. The current execution container does not include the .NET SDK (`dotnet: command not found`), so focused, P7.1A regression, P7.1B-A regression, and broader Phase 7 totals cannot be truthfully reported from this environment. No real 12 Long / 4 Short planning certification is claimed because the committed P7.1B-A fixture is not present.
+The hardening covers unified Primary governance, exact diagnostics, goal/strategy/claim-policy reconciliation, injected constraint-policy recomputation, complete packet-derived scene reconciliation, authored reference ordering, checksum canonicalization, claim/safety/qualification gates, Long/Short isolation, provider isolation, and DI lifetime/registration inspection.
+
+Exact focused command: `PATH=/tmp/dotnet10:$PATH dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --filter 'FullyQualifiedName~NarrationPlanning' --logger 'console;verbosity=minimal'`.
+
+- Focused P7.1B-BA: total **19**, passed **19**, failed **0**, skipped **0**, duration **3 s**.
+- Broader Phase 7 command: `PATH=/tmp/dotnet10:$PATH dotnet test Backend/tests/Astronomy.MediaFactory.Tests/Astronomy.MediaFactory.Tests.csproj --no-build --filter 'FullyQualifiedName~Phase7' --logger 'console;verbosity=minimal'`.
+- Broader Phase 7: total **268**, passed **257**, failed **11**, skipped **0**, duration **8 s**. All 11 failures are pre-existing semantic-source/API-path or missing-fixture regressions outside the P7.1B-BA files changed here; focused P7.1B-BA failures remain zero.
+- Azure OpenAI calls = **0**; Azure Speech calls = **0**; Prompt composer calls = **0**; Narration generator calls = **0**.
+- The focused run compiled the full test dependency graph successfully. Existing compiler/analyzer warnings and the known `SQLitePCLRaw.lib.e_sqlite3` NU1903 advisory remain unrelated warnings, not test failures.
+- P7.1A, P7.1B-A, and broader Phase 7 totals are recorded separately only after their commands complete; they are not inferred from the focused run.
+- No narration prose or physical publication occurred.
+- No real 12 Long / 4 Short planning certification is claimed because the committed P7.1B-A fixture is not present.
