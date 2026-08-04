@@ -770,6 +770,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationPlanningConstraintPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DefaultNarrationPlanningConstraintPolicy>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationPlanningAuthorityBuilder, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.NarrationPlanningAuthorityBuilder>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationPlanningValidator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.NarrationPlanningValidator>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningFileSystem, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningFileSystem>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningExecutionLock, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningExecutionLock>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningRecoveryService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningRecoveryService>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningPhysicalReadback, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningPhysicalReadback>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningCommittedStateEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningCommittedStateEvaluator>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningTransactionCoordinator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningTransactionCoordinator>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningPublicationService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningPublicationService>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningBuilder>(sp =>
         {
             var options = configuration.GetSection(Astronomy.MediaFactory.Core.DocumentaryBlueprint.Phase7NarrationOptions.SectionName)
