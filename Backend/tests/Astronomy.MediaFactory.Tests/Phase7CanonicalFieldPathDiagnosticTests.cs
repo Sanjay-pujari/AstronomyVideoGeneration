@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -6,7 +5,7 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Phase7CanonicalFieldPathDiagnosticTests
 {
     [Fact]
-    public void RejectionDiagnosticPreservesExactRawPathAndContext()
+    public void CanonicalizationIsSilentAndRejectionRemainsGoverned()
     {
         var prior = Console.Error;
         using var output = new StringWriter();
@@ -24,20 +23,6 @@ public sealed class Phase7CanonicalFieldPathDiagnosticTests
             Console.SetError(prior);
         }
 
-        var entries = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => JsonDocument.Parse(line)).ToArray();
-        Assert.Equal(2, entries.Length);
-        Assert.Equal("before", entries[0].RootElement.GetProperty("outcome").GetString());
-        Assert.Equal("rejected", entries[1].RootElement.GetProperty("outcome").GetString());
-        Assert.All(entries, entry =>
-        {
-            Assert.Equal("cultureAndMythology.indian (Hindu).summary", entry.RootElement.GetProperty("rawPath").GetString());
-            Assert.Equal("cultureAndMythology.indian (Hindu).summary", entry.RootElement.GetProperty("normalizedPath").GetString());
-            Assert.Equal("test-caller", entry.RootElement.GetProperty("caller").GetString());
-            Assert.Equal("production-orion", entry.RootElement.GetProperty("payloadSource").GetString());
-            Assert.Equal("indian (Hindu)", entry.RootElement.GetProperty("traditionName").GetString());
-            Assert.Equal("summary", entry.RootElement.GetProperty("fieldName").GetString());
-        });
-        foreach (var entry in entries) entry.Dispose();
+        Assert.Equal(string.Empty, output.ToString());
     }
 }

@@ -788,6 +788,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeTransactionCoordinator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeTransactionCoordinator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeService>();
         services.Configure<Astronomy.MediaFactory.Core.DocumentaryBlueprint.Phase7NarrationOptions>(configuration.GetSection(Astronomy.MediaFactory.Core.DocumentaryBlueprint.Phase7NarrationOptions.SectionName));
+        services.Configure<Astronomy.MediaFactory.Core.DocumentaryBlueprint.Phase7KnowledgeDiagnosticsOptions>(configuration.GetSection(Astronomy.MediaFactory.Core.DocumentaryBlueprint.Phase7KnowledgeDiagnosticsOptions.SectionName));
         services.AddSingleton<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase5PublicationFileSystem, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase5PublicationFileSystem>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase5PublicationRecoveryService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase5PublicationRecoveryService>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IPhase5PublicationTransactionCoordinator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase5PublicationTransactionCoordinator>();
