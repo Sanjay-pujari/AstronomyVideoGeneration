@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 public static class Phase7FoundationContract { public const string Version = "rc2-phase7-foundation.v1"; }
-public static class Phase7ScenePacketContract { public const string Version = "o2-orch-phase7.1b-a.v1"; }
+public static class Phase7ScenePacketContract { public const string Version = "rc2-phase7-scene-packets.v1"; }
 public enum KnowledgeDomainStatus { Available, Missing, NotApplicable, Deferred, RequiresHumanReview }
 public enum NarrationKnowledgeDomainKey { Identity, Appearance, Recognition, RecognitionGeometry, ScientificStructure, PhysicalCharacteristics, KeyObjects, DeepSkyObjects, Orbit, Rotation, Atmosphere, Surface, Moons, Rings, Exploration, Lifecycle, Variability, Multiplicity, Distance, Scale, Formation, Evolution, StarFormation, History, CultureAndMythology, RegionalTraditions, AstrologyClarification, Observation, Timing, Visibility, LocationDependence, WeatherDependence, MoonInterference, Safety, Equipment, Astrophotography, ImagingAppearance, ScientificSignificance, Geometry, ContactTimeline, VisibilityFootprint, ParentBody, Radiant, ActivityRate, Uncertainty, OrbitalMotion, ArtificialNaturalDistinction, LocalizedContent, EditorialSafety, InterestingFacts }
 public static class NarrationKnowledgeDomains
@@ -411,13 +411,19 @@ public interface IPhase7SceneKnowledgePacketBuilder
 
 public sealed record Phase7KnowledgeReferenceRequest(string ReferenceId, string Variant, bool Optional,
     IReadOnlyList<string> OtherVariantReferenceIds);
+public sealed record Phase7SceneReferenceRequirement(string ReferenceId, string Variant, bool IsPrimary,
+    bool IsRequired, string SourceAuthority, string SourcePointer);
 public sealed record Phase7ScenePacketInputAuthority(PublishedPhase7KnowledgeAuthority Knowledge,
     PublishedStoryFrameAuthority StoryFrames, FamilyNarrationProfile FamilyProfile, string ExecutionId,
     string PlanId, string EventId, string EventFamily, string EventType, string Language, string ProfileId,
     string ProfileVersion, IReadOnlyList<StoryFrameAuthorityFrame> LongStoryFrames,
     IReadOnlyList<StoryFrameAuthorityFrame> ShortStoryFrames, IReadOnlyList<StoryFrameSceneIndex> LongSourceScenes,
     IReadOnlyList<StoryFrameSceneIndex> ShortSourceScenes, IReadOnlyDictionary<string,string> LineageEvidence,
-    IReadOnlyDictionary<string,string> RuntimeCompatibilityEvidence);
+    IReadOnlyDictionary<string,string> RuntimeCompatibilityEvidence)
+{
+    public IReadOnlyDictionary<string, IReadOnlyList<Phase7SceneReferenceRequirement>> ReferenceRequirements { get; init; }
+        = new Dictionary<string, IReadOnlyList<Phase7SceneReferenceRequirement>>(StringComparer.Ordinal);
+}
 public sealed record Phase7ScenePacketInputAuthorityRequest(string ExecutionRoot, string ExecutionId, string PlanId,
     string EventId, string Language, string ProfileId, string ProfileVersion);
 public sealed record Phase7ScenePacketInputAuthorityEvaluation(bool IsValid, Phase7ScenePacketInputAuthority? Authority,

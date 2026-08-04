@@ -30,7 +30,14 @@ public sealed record PublishedPhase7KnowledgeAuthority(
     IReadOnlyList<string> ValidationEvidence, IReadOnlyList<string> ManifestEvidence, string PublicationId,
     bool AlreadyPublished, bool PublicationCommitted, bool CommittedStateValidationPassed,
     IReadOnlyDictionary<string,string> ContractVersions,
-    IReadOnlyDictionary<string,string> RuntimeCompatibilityEvidence);
+    IReadOnlyDictionary<string,string> RuntimeCompatibilityEvidence)
+{
+    // These are populated only by the committed-state evaluator after complete-set physical
+    // readback.  They intentionally prevent downstream consumers from rehydrating a lossy
+    // approximation from KnowledgeAuthority.Claims.
+    public ResolvedNarrationKnowledge? ResolvedNarrationKnowledge { get; init; }
+    public Phase7KnowledgeDiagnostics? KnowledgeDiagnostics { get; init; }
+}
 
 public sealed record Phase7KnowledgeExecutionResult(bool IsValid, string Status, string ReasonCode,
     string OutputDirectory, string AuthorityId, bool AlreadyPublished, bool PublicationCommitted,

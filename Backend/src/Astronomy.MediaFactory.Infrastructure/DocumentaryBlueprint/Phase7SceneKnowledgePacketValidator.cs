@@ -9,7 +9,8 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         "LanguageGate", "PrimaryReferenceGate", "RequiredReferenceResolutionGate", "ClaimPartitionGate",
         "RequiredClaimEvidenceGate", "RequiredClaimChecksumGate", "NoContradictionGate", "HumanReviewIsolationGate",
         "SafetyRuleGate", "CulturalQualificationGate", "AstrologySeparationGate", "LocationTimeSafetyGate",
-        "DurationGate", "VisualEvidenceGate", "LongShortIndependenceGate", "DeterminismGate"];
+        "DurationGate", "VisualEvidenceGate", "SectionAuthorityGate", "ViewerQuestionResolutionGate",
+        "ResolutionReportLineageGate", "LongShortIndependenceGate", "DeterminismGate"];
 
     public Phase7SceneKnowledgePacketValidation Validate(Phase7ScenePacketInputAuthority input,
         IReadOnlyList<SceneKnowledgePacket> longPackets, IReadOnlyList<SceneKnowledgePacket> shortPackets)
@@ -25,13 +26,13 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         Check("SceneOrderGate", Ordered(longPackets) && Ordered(shortPackets), "Authored scene order drifted.");
         Check("SceneIdentityGate", all.All(p => expected.Count(f => f.FrameId == p.StoryFrameId && f.SceneId == p.SourceSceneId && f.SceneNumber == p.SceneNumber && f.FrameNumber == p.FrameNumber) == 1), "Scene/frame identity mismatch.");
         Check("StoryFrameChecksumGate", all.All(p => expected.Any(f => f.FrameId == p.StoryFrameId && p.StoryFrameChecksum == Phase7Determinism.Hash(f))), "Story Frame checksum mismatch.");
-        Check("SourceSceneLineageGate", all.All(p => (p.Variant == "Long" ? input.LongSourceScenes : input.ShortSourceScenes).Count(s => s.SceneId == p.SourceSceneId && s.SceneNumber == p.SceneNumber) == 1), "Source scene row is absent or ambiguous.");
+        Check("SourceSceneLineageGate", all.All(p => (p.Variant == "Long" ? input.LongSourceScenes : input.ShortSourceScenes).Count(s => s.Variant == p.Variant && s.SceneId == p.SourceSceneId && s.SceneNumber == p.SceneNumber && p.SourceSceneChecksum == Phase7Determinism.Hash(s)) == 1), "Source scene row/checksum is absent, ambiguous, or not authoritative.");
         Check("ProfileGate", all.All(p => p.ProfileId == input.ProfileId && p.ProfileVersion == input.ProfileVersion), "Profile identity mismatch.");
         Check("LanguageGate", all.All(p => string.Equals(p.Language, input.Language, StringComparison.OrdinalIgnoreCase)), "Language mismatch.");
         Check("PrimaryReferenceGate", all.All(p => p.KnowledgeReferenceIds.Count > 0), "A primary reference is missing.");
         Check("RequiredReferenceResolutionGate", all.All(p => !p.BlockingIssues.Any(x => x.StartsWith("P7REF_", StringComparison.Ordinal))), "A required reference did not resolve.");
         Check("ClaimPartitionGate", all.All(Partitions), "A claim occurs in multiple partitions or has the wrong disposition.");
-        Check("RequiredClaimEvidenceGate", all.SelectMany(p=>p.RequiredClaims).All(c => c.SourceIds.Count > 0 && authorityClaims.ContainsKey(c.ClaimId)), "A required claim lacks exact eligible evidence.");
+        Check("RequiredClaimEvidenceGate", all.SelectMany(p=>p.RequiredClaims).All(c => authorityClaims.TryGetValue(c.ClaimId,out var a) && a.SemanticIdentity==c.SemanticIdentity && input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e=>e.ClaimId==c.ClaimId&&e.SemanticIdentity==c.SemanticIdentity&&c.SourceIds.Contains(e.SourceId,StringComparer.Ordinal)&&e.SourceEligibility==Phase7SourceEligibility.EligibleForRequiredClaim&&!e.RequiresHumanReview&&e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField)), "A required claim lacks exact Required-eligible evidence.");
         Check("RequiredClaimChecksumGate", all.SelectMany(p=>p.RequiredClaims).All(c => c.Checksum == Phase7Determinism.Hash(c with { Checksum="" })), "A required claim checksum is invalid.");
         Check("NoContradictionGate", input.Knowledge.KnowledgeAuthority.MergeDecisions.All(x => x.Classification != Phase7KnowledgeMergeClassification.Contradictory || !x.SelectedClaimIds.Any(id => all.SelectMany(p=>p.RequiredClaims).Any(c=>c.ClaimId==id))), "An unresolved contradiction became required.");
         Check("HumanReviewIsolationGate", all.SelectMany(p=>p.RequiredClaims.Concat(p.OptionalClaims)).All(c => !c.RequiresHumanReview && c.Disposition != Phase7ClaimDisposition.HumanReview), "Human-review material is authoritative.");
@@ -42,7 +43,11 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         Check("DurationGate", all.All(p=>p.MinimumDurationSeconds>0&&p.MinimumDurationSeconds<=p.TargetDurationSeconds&&p.TargetDurationSeconds<=p.MaximumDurationSeconds), "Duration bounds are invalid.");
         var entityIds=input.Knowledge.KnowledgeAuthority.KnowledgeEntities.Select(x=>x.KnowledgeId).ToHashSet(StringComparer.Ordinal);
         Check("VisualEvidenceGate", all.SelectMany(p=>p.VisualEvidenceIds).All(entityIds.Contains), "Visual evidence is not a certified object identity.");
-        Check("LongShortIndependenceGate", !longPackets.Select(x=>x.PacketId).Intersect(shortPackets.Select(x=>x.PacketId),StringComparer.Ordinal).Any() && !ReferenceEquals(longPackets,shortPackets), "Long and Short packets are dependent.");
+        Check("SectionAuthorityGate", all.All(p=>(p.Variant=="Long"?input.LongSourceScenes:input.ShortSourceScenes).Any(s=>s.SceneId==p.SourceSceneId&&s.NarrativeStage==p.SectionKey)), "Packet section is not source-scene authority.");
+        Check("ViewerQuestionResolutionGate", all.All(p=>!string.IsNullOrWhiteSpace(p.ResolvedViewerQuestionText)&&p.ViewerQuestionResolutionChecksum==Phase7Determinism.Hash(new{p.SourceViewerQuestionId,question=p.ResolvedViewerQuestionText,questionReason=p.ViewerQuestionResolutionReason,section=p.SectionKey,variant=p.Variant,claimIds=p.RequiredClaims.Select(x=>x.ClaimId).Order(StringComparer.Ordinal)})), "Viewer-question resolution lineage is invalid.");
+        Check("ResolutionReportLineageGate", input.Knowledge.ResolvedNarrationKnowledge is { } r&&r.DeterministicChecksum==Phase7Determinism.Hash(r with{DeterministicChecksum=""}), "Committed resolution report is absent or invalid.");
+        var longFrameIds=input.LongStoryFrames.Select(x=>x.FrameId).ToHashSet(StringComparer.Ordinal);var shortFrameIds=input.ShortStoryFrames.Select(x=>x.FrameId).ToHashSet(StringComparer.Ordinal);
+        Check("LongShortIndependenceGate", !ReferenceEquals(longPackets,shortPackets)&&!longPackets.Select(x=>x.PacketId).Intersect(shortPackets.Select(x=>x.PacketId),StringComparer.Ordinal).Any()&&longPackets.All(x=>longFrameIds.Contains(x.StoryFrameId)&&!shortFrameIds.Contains(x.StoryFrameId))&&shortPackets.All(x=>shortFrameIds.Contains(x.StoryFrameId)&&!longFrameIds.Contains(x.StoryFrameId)), "Long and Short packet identity/authority crossed variants.");
         Check("DeterminismGate", all.All(p=>p.DeterministicChecksum==Phase7Determinism.Hash(p with{DeterministicChecksum=""})), "Packet checksum mismatch.");
         var gates=GateNames.Select(n=>new Phase7SceneKnowledgePacketValidationGate(n,!failures.ContainsKey(n),failures.GetValueOrDefault(n)??[])).ToArray();
         var errors=gates.SelectMany(x=>x.Errors).ToArray();

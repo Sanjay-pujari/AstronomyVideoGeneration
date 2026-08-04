@@ -182,7 +182,8 @@ public sealed class Phase7KnowledgeCommittedStateEvaluator(IPhase7KnowledgeFileS
                 physical.Artifacts.ToDictionary(x=>x.RelativePath,x=>v.ArtifactInventory!.Artifacts.Single(y=>y.RelativePath==x.RelativePath).SemanticChecksum),
                 physical.Artifacts.ToDictionary(x=>x.RelativePath,x=>x.PhysicalSha256),physical.Artifacts.ToDictionary(x=>x.RelativePath,x=>x.SizeBytes),
                 [v.DeterministicChecksum],[e.PublicationId],e.PublicationId,true,true,true,
-                new Dictionary<string,string>{{"knowledge",Phase7KnowledgeContract.Version}},a.RuntimeCompatibilityEvidence);
+                new Dictionary<string,string>{{"knowledge",Phase7KnowledgeContract.Version}},a.RuntimeCompatibilityEvidence)
+                { ResolvedNarrationKnowledge=resolution, KnowledgeDiagnostics=diagnostics };
             return new(true,published,"P7KNOWLEDGE_VALID",[],v.Warnings);
         }
         catch(Exception ex) when(ex is JsonException or InvalidDataException or IOException)
