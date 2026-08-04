@@ -25,6 +25,13 @@ public sealed class Phase7ScenePacketInputAuthorityEvaluator(
             return Bad("P7PACKET_INPUT_PHASE6_AUTHORITY_INVALID", phase6.ReasonCode, phase6.Errors, phase6.Warnings);
 
         var k = knowledge.Authority.KnowledgeAuthority;
+        var resolution = knowledge.Authority.ResolvedNarrationKnowledge;
+        if (resolution is null || knowledge.Authority.KnowledgeDiagnostics is null)
+            return Bad("P7PACKET_INPUT_RESOLUTION_REPORT_MISSING", "Committed P7.1A did not carry its physically validated resolution report and diagnostics.");
+        if (resolution.PayloadId != k.EventKnowledgePayloadId || resolution.PayloadChecksum != k.EventKnowledgeChecksum ||
+            resolution.SourceRegistryId != k.SourceRegistryId || resolution.SourceRegistryChecksum != k.SourceRegistryChecksum ||
+            resolution.Language != k.Language || resolution.DeterministicChecksum != Phase7Determinism.Hash(resolution with { DeterministicChecksum = "" }))
+            return Bad("P7PACKET_INPUT_RESOLUTION_REPORT_MISMATCH", "Committed resolution-report identity or checksum differs from the knowledge authority.");
         var p = phase6.Authority;
         var p6 = p.Authority;
         if (k.ExecutionId != request.ExecutionId || k.PlanId != request.PlanId || k.EventId != request.EventId ||
@@ -56,11 +63,16 @@ public sealed class Phase7ScenePacketInputAuthorityEvaluator(
             ["phase7KnowledgeAuthorityChecksum"] = k.SemanticChecksum };
         var runtime = k.RuntimeCompatibilityEvidence.Concat(p.RuntimeCompatibilityEvidence)
             .GroupBy(x => x.Key, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.Last().Value, StringComparer.Ordinal);
+        var requirements = longs.Concat(shorts).ToDictionary(frame => frame.FrameId, frame =>
+            (IReadOnlyList<Phase7SceneReferenceRequirement>)frame.KnowledgeReferenceIds.Select((id, index) =>
+                new Phase7SceneReferenceRequirement(id, frame.Variant, index == 0, true,
+                    "Phase6StoryFramesAuthority", $"frames/{frame.FrameId}/knowledgeReferenceIds/{index}" )).ToArray(), StringComparer.Ordinal);
         var authority = new Phase7ScenePacketInputAuthority(knowledge.Authority, p, profile.Profile,
             request.ExecutionId, request.PlanId, request.EventId, k.EventFamily, k.EventType, request.Language,
             k.ProfileId, k.ProfileVersion, longs, shorts,
             p.Index.Scenes.Where(x => x.Variant == "Long").OrderBy(x => x.SceneNumber).ToArray(),
-            p.Index.Scenes.Where(x => x.Variant == "Short").OrderBy(x => x.SceneNumber).ToArray(), lineage, runtime);
+            p.Index.Scenes.Where(x => x.Variant == "Short").OrderBy(x => x.SceneNumber).ToArray(), lineage, runtime)
+            { ReferenceRequirements = requirements };
         return new(true, authority, "P7PACKET_INPUT_VALID", [], knowledge.Warnings.Concat(phase6.Warnings).Distinct().ToArray());
     }
 
