@@ -147,9 +147,11 @@ call occurred.
 
 The packet canonicalizer now orders the Required, Optional, and Deferred claim partitions by
 `ClaimId` while retaining the actual `CertifiedNarrationClaim` instances and their authored nested
-orders. It does not rewrite a certified claim. A private checksum-only projection sorts nested claim
-source and knowledge-reference identifiers for semantic hashing; that projection is used by the
-shared `ComputePacketId` and `ComputeChecksum` methods and never becomes packet JSON. Packet-level
+orders. It does not rewrite a certified claim. The dedicated immutable internal
+`Phase7ClaimChecksumProjection` contains every semantic claim field plus the original certified
+checksum. It sorts source and knowledge-reference membership ordinally for semantic hashing and is
+used only by `ComputePacketId` and `ComputeChecksum`; canonical hashing no longer manufactures a
+cloned `CertifiedNarrationClaim`, and the projection never becomes packet authority or packet JSON. Packet-level
 source IDs, visual evidence IDs, protected terms, approximation warnings, warnings, blocking issues,
 cultural context, dictionary keys, and resolved claim IDs are unordered and canonicalized. Authored
 knowledge-reference order, reference-resolution order, Story Frame order, packet order, and visual
@@ -164,8 +166,10 @@ compatibility policy, section resolver, reference resolver, packet builder, and 
 one scoped registration for the packet-input evaluator. This avoids a singleton consuming its scoped
 committed-authority evaluators.
 
-Final real-fixture certification is **incomplete**. No sanitized successful Orion committed package is
-present. The exact required missing fixture paths are:
+Final real-fixture certification is **incomplete**. The repository and execution environment were
+searched again for the successful Orion committed package, but no source package is present. Creating
+synthetic 12/4 artifacts would violate the committed-fixture requirement, so none were fabricated.
+The exact required missing fixture paths are:
 
 - `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/07-narration/knowledge/knowledge-authority.json`
 - `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/07-narration/knowledge/knowledge-resolution-report.json`
@@ -175,7 +179,8 @@ present. The exact required missing fixture paths are:
 - `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/06-story-frames/story-frame-diagnostics.json`
 - `Astronomy.MediaFactory.Tests/Fixtures/Phase7/P7.1B/OrionCommitted/07-narration/constellation-family-narration-profile.json`
 
-Consequently there is no source execution/plan identity available to record, and the required values
+The requested source PlanId is `baa5af31-4ba9-4d1d-8ef3-0796210a9ed2`; its execution ID and imported
+artifact checksums cannot be truthfully recorded without the package. Consequently the required values
 (12 Long, 4 Short, 16 total, zero blockers, and zero failed gates) remain unverified. Repeated-build
 byte equivalence, reordered-input equivalence, Long mutation isolation, and Short mutation isolation
 also remain unverified. The current environment has no `dotnet` executable, so focused P7.1B-A,
