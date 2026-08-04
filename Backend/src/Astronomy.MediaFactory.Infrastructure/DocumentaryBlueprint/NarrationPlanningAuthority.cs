@@ -115,21 +115,46 @@ public static class NarrationPlanningCanonicalizer
 
 public static class NarrationPlanningReferenceGovernance
 {
-    public static bool IsGovernedResolvedPrimary(SceneKnowledgePacket packet, Phase7PacketReferenceResolution resolution)
+    /// <summary>
+    /// Establishes packet/reference variant ownership from the validated P7.1B-A boundary. Reference text is
+    /// deliberately not interpreted as variant metadata.
+    /// </summary>
+    public static bool HasValidatedVariantOwnership(Phase7NarrationPlanningInputAuthority input, SceneKnowledgePacket packet)
+    {
+        if (input.PacketValidation is null || !input.PacketValidation.IsValid ||
+            input.PacketValidation.ReasonCode != "P7PACKET_VALID" || input.PacketValidation.Gates.Any(g => !g.Passed))
+            return false;
+
+        var inLong = input.SceneKnowledgePacketCollection.Long.Count(p =>
+            string.Equals(p.PacketId, packet.PacketId, StringComparison.Ordinal));
+        var inShort = input.SceneKnowledgePacketCollection.Short.Count(p =>
+            string.Equals(p.PacketId, packet.PacketId, StringComparison.Ordinal));
+        var ownedByLong = inLong == 1 && inShort == 0 && packet.Variant == "Long";
+        var ownedByShort = inShort == 1 && inLong == 0 && packet.Variant == "Short";
+        return (ownedByLong || ownedByShort) &&
+            packet.ReferenceResolutions.Where(r => r.IsPrimary).All(r =>
+                packet.KnowledgeReferenceIds.Contains(r.ReferenceId, StringComparer.Ordinal)) &&
+            packet.ReferenceResolutions.All(r => r.Status != Phase7KnowledgeReferenceStatus.CrossVariantInvalid);
+    }
+
+    public static bool IsGovernedResolvedPrimary(Phase7NarrationPlanningInputAuthority input,
+        SceneKnowledgePacket packet, Phase7PacketReferenceResolution resolution)
     {
         var required = packet.RequiredClaims.Select(c => c.ClaimId).ToHashSet(StringComparer.Ordinal);
         var allClaims = required.Concat(packet.OptionalClaims.Select(c => c.ClaimId))
             .Concat(packet.DeferredClaims.Select(c => c.ClaimId)).ToHashSet(StringComparer.Ordinal);
-        return resolution.IsPrimary && resolution.Status == Phase7KnowledgeReferenceStatus.Resolved &&
+        return HasValidatedVariantOwnership(input, packet) && resolution.IsPrimary &&
+            resolution.Status == Phase7KnowledgeReferenceStatus.Resolved &&
             resolution.ResolvedClaimIds.Count > 0 &&
             packet.KnowledgeReferenceIds.Contains(resolution.ReferenceId, StringComparer.Ordinal) &&
             resolution.ResolvedClaimIds.All(allClaims.Contains) &&
             (!resolution.IsRequired || resolution.ResolvedClaimIds.Any(required.Contains));
     }
 
-    public static IReadOnlyList<string> GovernedPrimaryReferences(SceneKnowledgePacket packet)
+    public static IReadOnlyList<string> GovernedPrimaryReferences(Phase7NarrationPlanningInputAuthority input,
+        SceneKnowledgePacket packet)
     {
-        var governed = packet.ReferenceResolutions.Where(r => IsGovernedResolvedPrimary(packet, r))
+        var governed = packet.ReferenceResolutions.Where(r => IsGovernedResolvedPrimary(input, packet, r))
             .Select(r => r.ReferenceId).ToHashSet(StringComparer.Ordinal);
         return packet.KnowledgeReferenceIds.Where(governed.Contains).ToArray();
     }
@@ -154,12 +179,15 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
             return Failure("NARRATION_PLANNING_INPUT_INVALID", "The typed planning input is incomplete.");
 
         var packets = input.SceneKnowledgePacketCollection.Long.Concat(input.SceneKnowledgePacketCollection.Short).ToArray();
+        if (packets.Any(p => !NarrationPlanningReferenceGovernance.HasValidatedVariantOwnership(input, p)))
+            return Failure("NARRATION_PLANNING_PACKET_VARIANT_OWNERSHIP_INVALID",
+                "Packet variant ownership is not validated by the P7PACKET_VALID boundary.", packets);
         if (packets.Any(p => string.IsNullOrWhiteSpace(p.PacketId) || p.DeterministicChecksum != Phase7SceneKnowledgePacketCanonicalizer.ComputeChecksum(p)))
             return Failure("NARRATION_PLANNING_PACKET_NOT_FOUND", "A packet has invalid identity or checksum.", packets);
         var frames = input.PublishedStoryFrameAuthority.Authority.Frames;
         if (packets.Any(p => frames.Count(f => f.FrameId == p.StoryFrameId) != 1))
             return Failure("NARRATION_PLANNING_STORY_FRAME_NOT_FOUND", "A packet does not resolve to exactly one Story Frame.", packets);
-        if (packets.Any(p => p.ReferenceResolutions.Count(x => NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary(p, x)) != 1))
+        if (packets.Any(p => p.ReferenceResolutions.Count(x => NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary(input, p, x)) != 1))
             return Failure("NARRATION_PLANNING_PRIMARY_REFERENCE_INVALID", "A packet must contain exactly one governed resolved Primary.", packets);
         if (packets.Any(p => !Partitions(p)))
             return Failure("NARRATION_PLANNING_CLAIM_PARTITION_INVALID", "A packet claim occurs in an invalid partition.", packets);
@@ -173,7 +201,7 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
         var warnings = packets.SelectMany(p => p.Warnings).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var references = packets.SelectMany(p => p.ReferenceResolutions).ToArray();
         var dd = new NarrationPlanningDiagnostics(packets.Length, scenes.Length, longs.Count, shorts.Count,
-            packets.Sum(p => p.ReferenceResolutions.Count(r => NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary(p, r))), scenes.Sum(x => x.SupportingKnowledgeReferences.Count),
+            packets.Sum(p => p.ReferenceResolutions.Count(r => NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary(input, p, r))), scenes.Sum(x => x.SupportingKnowledgeReferences.Count),
             references.Count(x => x.IsRequired), references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Resolved),
             references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Deferred),
             references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Missing),
@@ -211,7 +239,7 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
     private (bool IsValid, NarrationPlanningScene? Scene, NarrationPlanningAuthorityBuildResult? Failure) BuildScene(
         Phase7NarrationPlanningInputAuthority input, SceneKnowledgePacket p, string variant, SceneKnowledgePacket? previous, SceneKnowledgePacket? next)
     {
-        var primary = NarrationPlanningReferenceGovernance.GovernedPrimaryReferences(p);
+        var primary = NarrationPlanningReferenceGovernance.GovernedPrimaryReferences(input, p);
         var supporting = NarrationPlanningReferenceGovernance.GovernedSupportingReferences(p);
         NarrationPlanningConstraints constraints;
         try { constraints = constraintPolicy.Resolve(new(input.Language, variant, p.TargetDurationSeconds, p.MinimumDurationSeconds,
@@ -282,9 +310,16 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
     }
 
     private static NarrationPlanningAuthorityBuildResult Failure(string code, string error,
-        IEnumerable<SceneKnowledgePacket>? packets = null) => new(false, null, code, [error],
-            packets?.SelectMany(p => p.Warnings).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() ?? [],
-            packets?.SelectMany(p => p.BlockingIssues).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() ?? [error]);
+        IEnumerable<SceneKnowledgePacket>? packets = null)
+    {
+        var warnings = packets?.SelectMany(p => p.Warnings).Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal).ToArray() ?? [];
+        var upstreamBlockers = packets?.SelectMany(p => p.BlockingIssues).Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal).ToArray() ?? [];
+        var blockers = upstreamBlockers.Append(code).Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal).ToArray();
+        return new(false, null, code, [error], warnings, blockers);
+    }
 }
 
 public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolicy constraintPolicy) : INarrationPlanningValidator
@@ -314,7 +349,8 @@ public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolic
                 s.StoryFrameChecksum == p.StoryFrameChecksum && s.SourceSceneChecksum == p.SourceSceneChecksum &&
                 s.PacketId == p.PacketId && s.PacketChecksum == p.DeterministicChecksum &&
                 s.ViewerQuestion == p.ResolvedViewerQuestionText && s.LearningObjective == p.SceneObjective &&
-                s.PrimaryKnowledgeReferences.SequenceEqual(NarrationPlanningReferenceGovernance.GovernedPrimaryReferences(p), StringComparer.Ordinal) &&
+                NarrationPlanningReferenceGovernance.HasValidatedVariantOwnership(input, p) &&
+                s.PrimaryKnowledgeReferences.SequenceEqual(NarrationPlanningReferenceGovernance.GovernedPrimaryReferences(input, p), StringComparer.Ordinal) &&
                 s.SupportingKnowledgeReferences.SequenceEqual(NarrationPlanningReferenceGovernance.GovernedSupportingReferences(p), StringComparer.Ordinal) &&
                 SetEqual(s.RequiredClaims, p.RequiredClaims.Select(c => c.ClaimId)) &&
                 SetEqual(s.OptionalClaims, p.OptionalClaims.Select(c => c.ClaimId)) && SetEqual(s.DeferredClaims, p.DeferredClaims.Select(c => c.ClaimId)) &&
@@ -416,8 +452,8 @@ public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolic
             [Names[19]] = scenes.All(s => HasPacket(s) && ExactQualifications(s.LocationQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsLocationDependent).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.LocationQualificationPrefix) && ExactQualifications(s.TimeQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsDateTimeDependent).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.TimeQualificationPrefix)),
             [Names[20]] = scenes.All(s => HasPacket(s) && ExactQualifications(s.AstrologyQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsAstrologyRelated).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.AstrologyQualificationPrefix)),
             [Names[21]] = scenes.All(s => HasPacket(s) && !packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Any(c => c.RequiresHumanReview) && ExactQualifications(s.HumanReviewRequirements, packets[s.PacketId].DeferredClaims.Where(c => c.RequiresHumanReview).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.HumanReviewPrefix)),
-            [Names[22]] = authority.LongScenes.All(s => HasPacket(s) && packets[s.PacketId].Variant == "Long") && authority.ShortScenes.All(s => HasPacket(s) && packets[s.PacketId].Variant == "Short") && !authority.LongScenes.Select(s => s.PacketId).Intersect(authority.ShortScenes.Select(s => s.PacketId), StringComparer.Ordinal).Any() && !authority.LongScenes.Select(s => s.PlanningId).Intersect(authority.ShortScenes.Select(s => s.PlanningId), StringComparer.Ordinal).Any(),
-            [Names[23]] = DiagnosticsValid(authority.Diagnostics, scenes, packets.Values), [Names[24]] = authority.AuthorityId == NarrationPlanningCanonicalizer.AuthorityId(authority with { AuthorityId = "", DeterministicChecksum = "" }) && authority.DeterministicChecksum == NarrationPlanningCanonicalizer.AuthorityChecksum(authority),
+            [Names[22]] = authority.LongScenes.All(s => input.SceneKnowledgePacketCollection.Long.Any(p => p.PacketId == s.PacketId) && HasPacket(s) && packets[s.PacketId].Variant == "Long" && NarrationPlanningReferenceGovernance.HasValidatedVariantOwnership(input, packets[s.PacketId])) && authority.ShortScenes.All(s => input.SceneKnowledgePacketCollection.Short.Any(p => p.PacketId == s.PacketId) && HasPacket(s) && packets[s.PacketId].Variant == "Short" && NarrationPlanningReferenceGovernance.HasValidatedVariantOwnership(input, packets[s.PacketId])) && !input.SceneKnowledgePacketCollection.Long.Select(s => s.PacketId).Intersect(input.SceneKnowledgePacketCollection.Short.Select(s => s.PacketId), StringComparer.Ordinal).Any() && !authority.LongScenes.Select(s => s.PacketId).Intersect(authority.ShortScenes.Select(s => s.PacketId), StringComparer.Ordinal).Any() && !authority.LongScenes.Select(s => s.PlanningId).Intersect(authority.ShortScenes.Select(s => s.PlanningId), StringComparer.Ordinal).Any(),
+            [Names[23]] = DiagnosticsValid(input, authority.Diagnostics, scenes, packets.Values), [Names[24]] = authority.AuthorityId == NarrationPlanningCanonicalizer.AuthorityId(authority with { AuthorityId = "", DeterministicChecksum = "" }) && authority.DeterministicChecksum == NarrationPlanningCanonicalizer.AuthorityChecksum(authority),
             [Names[25]] = scenes.All(s => s.DeterministicChecksum == NarrationPlanningCanonicalizer.SceneChecksum(s))
         };
         var gates = Names.Select(n => new NarrationPlanningValidationGate(n, checks[n], checks[n] ? [] : [$"{n} failed."])).ToArray();
@@ -426,13 +462,13 @@ public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolic
         return draft with { DeterministicChecksum = NarrationPlanningCanonicalizer.ValidationChecksum(draft) };
     }
 
-    private static bool DiagnosticsValid(NarrationPlanningDiagnostics d, IReadOnlyList<NarrationPlanningScene> scenes,
+    private static bool DiagnosticsValid(Phase7NarrationPlanningInputAuthority input, NarrationPlanningDiagnostics d, IReadOnlyList<NarrationPlanningScene> scenes,
         IEnumerable<SceneKnowledgePacket> packetSource)
     {
         var packets = packetSource.ToArray(); var references = packets.SelectMany(p => p.ReferenceResolutions).ToArray();
         return d.PacketCount == packets.Length && d.PlanningSceneCount == scenes.Count &&
             d.LongPlanningSceneCount == scenes.Count(s => s.Variant == "Long") && d.ShortPlanningSceneCount == scenes.Count(s => s.Variant == "Short") &&
-            d.PrimaryReferenceCount == packets.Sum(p => p.ReferenceResolutions.Count(r => NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary(p, r))) && d.SupportingReferenceCount == scenes.Sum(s => s.SupportingKnowledgeReferences.Count) &&
+            d.PrimaryReferenceCount == packets.Sum(p => p.ReferenceResolutions.Count(r => NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary(input, p, r))) && d.SupportingReferenceCount == scenes.Sum(s => s.SupportingKnowledgeReferences.Count) &&
             d.RequiredReferenceCount == references.Count(x => x.IsRequired) && d.ResolvedReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Resolved) &&
             d.DeferredReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Deferred) &&
             d.MissingReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Missing) && d.AmbiguousReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Ambiguous) &&
