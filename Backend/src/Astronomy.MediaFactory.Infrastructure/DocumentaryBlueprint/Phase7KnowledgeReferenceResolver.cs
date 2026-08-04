@@ -21,4 +21,27 @@ public sealed class Phase7KnowledgeReferenceResolver : IPhase7KnowledgeReference
             };
         }).ToArray();
     }
+
+    public Phase7KnowledgeReferenceResolution Resolve(Phase7KnowledgeReferenceRequest request,
+        Phase7ScenePacketInputAuthority authority)
+    {
+        var id = request.ReferenceId;
+        if (string.IsNullOrWhiteSpace(id) || id.Any(char.IsWhiteSpace))
+            return new(id, Phase7KnowledgeReferenceStatus.Unsupported, [], "P7REF_UNSUPPORTED_SHAPE");
+        var k = authority.Knowledge.KnowledgeAuthority;
+        // Governed identities are deliberately ordinal: presentation text and fuzzy matching are never authority.
+        var claims = k.Claims.Where(c => c.ClaimId == id || c.SemanticIdentity == id ||
+            c.KnowledgeReferenceIds.Contains(id, StringComparer.Ordinal)).ToArray();
+        var entity = k.KnowledgeEntities.Any(e => e.KnowledgeId == id);
+        if (entity) claims = claims.Concat(k.Claims.Where(c => c.KnowledgeReferenceIds.Contains(id, StringComparer.Ordinal)))
+            .DistinctBy(c => c.ClaimId, StringComparer.Ordinal).ToArray();
+        if (claims.Length == 0 && request.OtherVariantReferenceIds.Contains(id, StringComparer.Ordinal))
+            return new(id, Phase7KnowledgeReferenceStatus.CrossVariantInvalid, [], "P7REF_CROSS_VARIANT_INVALID");
+        if (claims.Length == 0)
+            return new(id, request.Optional ? Phase7KnowledgeReferenceStatus.Deferred : Phase7KnowledgeReferenceStatus.Missing,
+                [], request.Optional ? "P7REF_OPTIONAL_DEFERRED" : "P7REF_REQUIRED_MISSING");
+        var incompatible = claims.Select(c => c.SemanticIdentity).Distinct(StringComparer.Ordinal).Count() > 1;
+        if (incompatible) return new(id, Phase7KnowledgeReferenceStatus.Ambiguous, claims, "P7REF_AMBIGUOUS");
+        return new(id, Phase7KnowledgeReferenceStatus.Resolved, claims, "P7REF_RESOLVED");
+    }
 }
