@@ -15,7 +15,13 @@ public static class NarrationDraftReasonCodes
         SafetyInvalid="NARRATION_DRAFT_SAFETY_INVALID", TransitionInvalid="NARRATION_DRAFT_TRANSITION_INVALID",
         TimingInvalid="NARRATION_DRAFT_TIMING_INVALID", LanguageInvalid="NARRATION_DRAFT_LANGUAGE_INVALID",
         CertifiedLanguageClaimMissing="NARRATION_DRAFT_CERTIFIED_LANGUAGE_CLAIM_MISSING",
-        HumanReviewInvalid="NARRATION_DRAFT_HUMAN_REVIEW_CLAIM_INVALID";
+        HumanReviewInvalid="NARRATION_DRAFT_HUMAN_REVIEW_CLAIM_INVALID",
+        ClaimAuthorityMissing="NARRATION_DRAFT_COMMITTED_CLAIM_AUTHORITY_MISSING",
+        ClaimAuthorityInvalid="NARRATION_DRAFT_COMMITTED_CLAIM_AUTHORITY_INVALID",
+        ClaimLineageStale="NARRATION_DRAFT_CLAIM_LINEAGE_STALE",
+        ClaimChecksumMismatch="NARRATION_DRAFT_CLAIM_CHECKSUM_MISMATCH",
+        UnknownPlanningClaim="NARRATION_DRAFT_UNKNOWN_PLANNING_CLAIM",
+        ClaimPartitionMismatch="NARRATION_DRAFT_CLAIM_PARTITION_MISMATCH";
 }
 
 public sealed record Phase7NarrationDraftInputAuthority(PublishedNarrationPlanningAuthority PublishedNarrationPlanningAuthority,
@@ -28,12 +34,15 @@ public sealed record Phase7NarrationDraftInputAuthority(PublishedNarrationPlanni
 {
     /// <summary>The certified, language-specific text boundary. Claims are copied from the committed knowledge package; no provider is consulted.</summary>
     public IReadOnlyList<CertifiedNarrationClaim> CertifiedClaims { get; init; } = [];
+    public PublishedPhase7KnowledgeAuthority CommittedClaimAuthority { get; init; } = null!;
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
+/// <summary>Only committed-state coordinates are accepted; callers cannot submit narration claims.</summary>
 public sealed record Phase7NarrationDraftInputAuthorityRequest(Phase7NarrationPlanningInputAuthorityRequest PlanningRequest,
-    IReadOnlyList<CertifiedNarrationClaim> CertifiedClaims);
+    Phase7KnowledgeCommittedStateRequest CommittedClaimAuthorityRequest);
 public sealed record Phase7NarrationDraftInputAuthorityEvaluation(bool IsValid, Phase7NarrationDraftInputAuthority? Authority,
-    string ReasonCode, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings);
+    string ReasonCode, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings)
+{ public IReadOnlyList<string> BlockingIssues { get; init; } = []; }
 public interface IPhase7NarrationDraftInputAuthorityEvaluator { Task<Phase7NarrationDraftInputAuthorityEvaluation> EvaluateAsync(
     Phase7NarrationDraftInputAuthorityRequest request, CancellationToken cancellationToken=default); }
 
@@ -82,3 +91,8 @@ public interface INarrationDraftTransitionPhrasePolicy { NarrationDraftTransitio
 public interface INarrationDraftSafetyValidator { IReadOnlyList<string> Validate(NarrationPlanningScene planning,NarrationDraftScene draft,IReadOnlyDictionary<string,CertifiedNarrationClaim> claims); }
 public interface INarrationDraftAuthorityBuilder { NarrationDraftAuthorityBuildResult Build(Phase7NarrationDraftInputAuthority input); }
 public interface INarrationDraftValidator { NarrationDraftValidation Validate(Phase7NarrationDraftInputAuthority input,NarrationDraftAuthority authority); }
+public sealed record Phase7NarrationDraftAuthorityServiceResult(bool Success,string InputEvaluationReason,string BuildReason,
+    string ValidationReason,NarrationDraftAuthority? Authority,NarrationDraftValidation? Validation,
+    IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,IReadOnlyList<string> BlockingIssues);
+public interface IPhase7NarrationDraftAuthorityService { Task<Phase7NarrationDraftAuthorityServiceResult> ExecuteAsync(
+    Phase7NarrationDraftInputAuthorityRequest request,CancellationToken cancellationToken=default); }

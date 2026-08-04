@@ -8,7 +8,7 @@ P7.1C-A is an in-memory authority boundary:
 
 The contract version is owned exclusively by `NarrationDraftContract.Version` (`rc2-phase7-narration-draft.v1`). The input evaluator consumes the committed P7.1B-BB evaluator, verifies committed planning identity, checksums, gates, physical readback state, manifest/evidence state, profile, language, lineage identity and runtime evidence, and preserves upstream warnings. It performs no write.
 
-The input also carries the certified language-specific claim objects copied from committed knowledge authority. This is essential because planning scenes intentionally contain claim identities rather than fact text. It is not a second knowledge-resolution path.
+The request carries only a typed `Phase7KnowledgeCommittedStateRequest`, never a caller-authored claim list. The P7.1A committed-state evaluator supplies `PublishedPhase7KnowledgeAuthority`; P7.1C-A then reconciles its execution/plan/event, knowledge authority identity/checksum, normalized language, claim checksum, unique claim identity and Required/Optional/Deferred planning partition before copying claims into its internal input authority. This is essential because planning scenes intentionally contain claim identities rather than fact text. It is not a second knowledge-resolution path.
 
 ## Deterministic realization and permitted transformations
 
@@ -18,15 +18,15 @@ No generated paraphrase is permitted. The realization policy performs exactly th
 2. inserts the planning-authorized qualification strings before the exact certified claim text, in ordinal order;
 3. adds the language policy's terminal punctuation only when terminal punctuation is absent.
 
-Numerals, units, proper names, dates, directions, and locations in certified text are protected and must still occur ordinally in realized text. No synonym, metaphor, inferred fact, comparison, changed confidence, truncation, or translation is allowed.
+Realized factual text must equal the deterministic composition of qualification text plus the trimmed certified body plus permitted terminal punctuation. The former protected-token substring test is not the authority decision. No synonym, metaphor, inferred fact, comparison, changed confidence, truncation, or translation is allowed.
 
 English and Hindi punctuation, conjunction, sentence estimation, and reading rates are deterministic and culture-invariant. The governed rates are 150 words/minute for English and 130 words/minute for Hindi. A Hindi plan without matching certified Hindi claim text returns `NARRATION_DRAFT_CERTIFIED_LANGUAGE_CLAIM_MISSING`; English claim text is never silently translated.
 
 ## Composition governance
 
-Required claims are emitted once in planning order and may never be dropped. Optional claims are considered after Required claims and are omitted before a budget violation. Deferred claims remain typed on the scene for audit but never enter a sentence or factual usage. Any factual Human Review claim blocks construction. Conservative coalescing declines unless a future certified compatibility proof is supplied; it does not recreate P7.1A merge semantics.
+Required claims are emitted once in planning order and may never be dropped. Optional claims are considered after Required claims and are omitted before a budget violation; Optional Human Review and incompletely qualified claims are also deterministically omitted. Deferred claims remain typed on the scene for audit but never enter a sentence or factual usage. A Required Human Review claim blocks construction. Conservative coalescing declines unless a future certified compatibility proof is supplied; it does not recreate P7.1A merge semantics.
 
-Openings come from viewer question (or the learning objective when absent). Closings and transition phrases come only from typed planning transition/goal fields. Generic filler is not created. Long and Short scene lists are independently traversed, and identities bind their variant; neither variant reads or edits the other.
+Openings come from viewer question (or the learning objective when absent). Every spoken opening, distinct closing, incoming `DestinationTransitionIn`, and outgoing `SourceTransitionOut` is represented by an identified, checksummed sentence and therefore participates in word, sentence, timing, diagnostics, and safety authority. Generic filler is not created. Long and Short scene lists are independently traversed, and identities bind their variant; neither variant reads or edits the other.
 
 Cultural, mythological, astrology, location, and date/time flags select the corresponding planning qualification requirements for the exact claim sentence. Safety validation evaluates typed usage and text, rejects prohibited strings, missing required qualification, Human Review use, unknown usage, and Deferred use. Sentence and scene checks enforce planning maxima; sentences are never truncated. Reading estimates and optional capacity belong to the timing policy rather than the builder.
 
@@ -46,7 +46,7 @@ Draft constructors contain only P7.1C-A policy/evaluator interfaces. There is no
 - Azure Speech calls = 0
 - Translation provider calls = 0
 
-Stateless policies, builder, and validator are singleton registrations. The input evaluator is scoped because the committed P7.1B-BB evaluator is scoped. Each required draft service has one registration and there is no captive scoped dependency.
+Stateless policies, builder, and validator are singleton registrations. The input evaluator and `IPhase7NarrationDraftAuthorityService` are scoped because both committed-state evaluators are scoped. The application service evaluates input, builds, independently validates, and returns governed errors/blockers without writing or resolving a provider. Each required draft service has one registration and there is no captive scoped dependency.
 
 ## Verification status and exclusions
 
