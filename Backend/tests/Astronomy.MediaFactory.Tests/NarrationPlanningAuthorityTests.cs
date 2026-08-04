@@ -24,6 +24,46 @@ public sealed class NarrationPlanningBuilderTests
         typeof(NarrationPlanningScene).GetProperty(nameof(NarrationPlanningScene.Strategy))!.PropertyType.Should().Be<NarrationPlanningStrategy>();
         NarrationPlanningContract.Version.Should().Be("rc2-phase7-narration-planning.v1");
     }
+
+    [Fact]
+    public void Builder_exposes_governed_semantic_result()
+    {
+        typeof(INarrationPlanningAuthorityBuilder).GetMethod(nameof(INarrationPlanningAuthorityBuilder.Build))!
+            .ReturnType.Should().Be<NarrationPlanningAuthorityBuildResult>();
+    }
+}
+
+public sealed class NarrationPlanningTransitionTests
+{
+    public static IEnumerable<object[]> IdentityMutations()
+    {
+        yield return [new Func<NarrationPlanningTransition, NarrationPlanningTransition>(x => x with { ExecutionId = "execution-2" })];
+        yield return [new Func<NarrationPlanningTransition, NarrationPlanningTransition>(x => x with { FromStoryFrameId = "frame-0" })];
+        yield return [new Func<NarrationPlanningTransition, NarrationPlanningTransition>(x => x with { ToStoryFrameId = "frame-3" })];
+        yield return [new Func<NarrationPlanningTransition, NarrationPlanningTransition>(x => x with { Kind = "VariantClosing" })];
+        yield return [new Func<NarrationPlanningTransition, NarrationPlanningTransition>(x => x with { NextPacketId = "packet-3" })];
+    }
+
+    [Theory]
+    [MemberData(nameof(IdentityMutations))]
+    public void Every_governed_transition_identity_field_changes_id(
+        Func<NarrationPlanningTransition, NarrationPlanningTransition> mutate)
+    {
+        var transition = Transition();
+        NarrationPlanningCanonicalizer.ComputeTransitionId(mutate(transition))
+            .Should().NotBe(NarrationPlanningCanonicalizer.ComputeTransitionId(transition));
+    }
+
+    [Fact]
+    public void Same_transition_in_different_execution_has_different_id()
+    {
+        var transition = Transition();
+        NarrationPlanningCanonicalizer.ComputeTransitionId(transition with { ExecutionId = "other" })
+            .Should().NotBe(NarrationPlanningCanonicalizer.ComputeTransitionId(transition));
+    }
+
+    private static NarrationPlanningTransition Transition() => new("", "execution-1", "Long", "frame-1", "from-sum",
+        "frame-2", "to-sum", "StoryFrameSuccessor", "out", "in", "packet-0", "packet-1", "packet-2", "");
 }
 
 public sealed class NarrationPlanningConstraintPolicyTests
