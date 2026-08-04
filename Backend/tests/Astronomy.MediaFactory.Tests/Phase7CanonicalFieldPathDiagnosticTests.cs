@@ -25,7 +25,7 @@ public sealed class Phase7CanonicalFieldPathDiagnosticTests
         }
 
         var entries = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
-            .Select(JsonDocument.Parse).ToArray();
+            .Select(line => JsonDocument.Parse(line)).ToArray();
         Assert.Equal(2, entries.Length);
         Assert.Equal("before", entries[0].RootElement.GetProperty("outcome").GetString());
         Assert.Equal("rejected", entries[1].RootElement.GetProperty("outcome").GetString());
