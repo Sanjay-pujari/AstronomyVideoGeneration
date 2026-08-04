@@ -113,6 +113,37 @@ public static class NarrationPlanningCanonicalizer
     }
 }
 
+public static class NarrationPlanningReferenceGovernance
+{
+    public static bool IsGovernedResolvedPrimary(SceneKnowledgePacket packet, Phase7PacketReferenceResolution resolution)
+    {
+        var required = packet.RequiredClaims.Select(c => c.ClaimId).ToHashSet(StringComparer.Ordinal);
+        var allClaims = required.Concat(packet.OptionalClaims.Select(c => c.ClaimId))
+            .Concat(packet.DeferredClaims.Select(c => c.ClaimId)).ToHashSet(StringComparer.Ordinal);
+        return resolution.IsPrimary && resolution.Status == Phase7KnowledgeReferenceStatus.Resolved &&
+            resolution.ResolvedClaimIds.Count > 0 &&
+            packet.KnowledgeReferenceIds.Contains(resolution.ReferenceId, StringComparer.Ordinal) &&
+            resolution.ResolvedClaimIds.All(allClaims.Contains) &&
+            (!resolution.IsRequired || resolution.ResolvedClaimIds.Any(required.Contains));
+    }
+
+    public static IReadOnlyList<string> GovernedPrimaryReferences(SceneKnowledgePacket packet)
+    {
+        var governed = packet.ReferenceResolutions.Where(r => IsGovernedResolvedPrimary(packet, r))
+            .Select(r => r.ReferenceId).ToHashSet(StringComparer.Ordinal);
+        return packet.KnowledgeReferenceIds.Where(governed.Contains).ToArray();
+    }
+
+    public static IReadOnlyList<string> GovernedSupportingReferences(SceneKnowledgePacket packet)
+    {
+        var governed = packet.ReferenceResolutions.Where(r => !r.IsPrimary &&
+                r.Status == Phase7KnowledgeReferenceStatus.Resolved && r.ResolvedClaimIds.Count > 0 &&
+                packet.KnowledgeReferenceIds.Contains(r.ReferenceId, StringComparer.Ordinal))
+            .Select(r => r.ReferenceId).ToHashSet(StringComparer.Ordinal);
+        return packet.KnowledgeReferenceIds.Where(governed.Contains).ToArray();
+    }
+}
+
 public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstraintPolicy constraintPolicy) : INarrationPlanningAuthorityBuilder
 {
     public NarrationPlanningAuthorityBuildResult Build(Phase7NarrationPlanningInputAuthority input)
@@ -128,8 +159,7 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
         var frames = input.PublishedStoryFrameAuthority.Authority.Frames;
         if (packets.Any(p => frames.Count(f => f.FrameId == p.StoryFrameId) != 1))
             return Failure("NARRATION_PLANNING_STORY_FRAME_NOT_FOUND", "A packet does not resolve to exactly one Story Frame.", packets);
-        if (packets.Any(p => p.ReferenceResolutions.Count(x => x.IsPrimary && x.Status == Phase7KnowledgeReferenceStatus.Resolved &&
-                x.ResolvedClaimIds.Count > 0 && p.KnowledgeReferenceIds.Contains(x.ReferenceId, StringComparer.Ordinal)) != 1))
+        if (packets.Any(p => p.ReferenceResolutions.Count(x => NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary(p, x)) != 1))
             return Failure("NARRATION_PLANNING_PRIMARY_REFERENCE_INVALID", "A packet must contain exactly one governed resolved Primary.", packets);
         if (packets.Any(p => !Partitions(p)))
             return Failure("NARRATION_PLANNING_CLAIM_PARTITION_INVALID", "A packet claim occurs in an invalid partition.", packets);
@@ -143,9 +173,14 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
         var warnings = packets.SelectMany(p => p.Warnings).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var references = packets.SelectMany(p => p.ReferenceResolutions).ToArray();
         var dd = new NarrationPlanningDiagnostics(packets.Length, scenes.Length, longs.Count, shorts.Count,
-            scenes.Sum(x => x.PrimaryKnowledgeReferences.Count), scenes.Sum(x => x.SupportingKnowledgeReferences.Count),
+            packets.Sum(p => p.ReferenceResolutions.Count(r => NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary(p, r))), scenes.Sum(x => x.SupportingKnowledgeReferences.Count),
             references.Count(x => x.IsRequired), references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Resolved),
-            references.Count(x => x.Status != Phase7KnowledgeReferenceStatus.Resolved), scenes.Length * 2,
+            references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Deferred),
+            references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Missing),
+            references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Ambiguous),
+            references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.CrossVariantInvalid),
+            references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Unsupported),
+            references.Count(x => x.Status is Phase7KnowledgeReferenceStatus.Missing or Phase7KnowledgeReferenceStatus.Ambiguous or Phase7KnowledgeReferenceStatus.CrossVariantInvalid or Phase7KnowledgeReferenceStatus.Unsupported), scenes.Length * 2,
             packets.Sum(x => x.BlockingIssues.Count), 0, scenes.Sum(x => x.RequiredClaims.Count),
             scenes.Sum(x => x.OptionalClaims.Count), scenes.Sum(x => x.DeferredClaims.Count), warnings.Length, 0, warnings, [], "");
         var diagnostics = dd with { DeterministicChecksum = NarrationPlanningCanonicalizer.DiagnosticsChecksum(dd) };
@@ -176,23 +211,22 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
     private (bool IsValid, NarrationPlanningScene? Scene, NarrationPlanningAuthorityBuildResult? Failure) BuildScene(
         Phase7NarrationPlanningInputAuthority input, SceneKnowledgePacket p, string variant, SceneKnowledgePacket? previous, SceneKnowledgePacket? next)
     {
-        var primary = p.ReferenceResolutions.Where(x => x.IsPrimary && x.Status == Phase7KnowledgeReferenceStatus.Resolved)
-            .Select(x => x.ReferenceId).ToArray();
-        var supportingIds = p.ReferenceResolutions.Where(x => !x.IsPrimary && x.Status == Phase7KnowledgeReferenceStatus.Resolved)
-            .Select(x => x.ReferenceId).ToHashSet(StringComparer.Ordinal);
-        var supporting = p.KnowledgeReferenceIds.Where(supportingIds.Contains).ToArray();
-        var constraints = constraintPolicy.Resolve(new(input.Language, variant, p.TargetDurationSeconds, p.MinimumDurationSeconds,
+        var primary = NarrationPlanningReferenceGovernance.GovernedPrimaryReferences(p);
+        var supporting = NarrationPlanningReferenceGovernance.GovernedSupportingReferences(p);
+        NarrationPlanningConstraints constraints;
+        try { constraints = constraintPolicy.Resolve(new(input.Language, variant, p.TargetDurationSeconds, p.MinimumDurationSeconds,
             p.MaximumDurationSeconds, input.FamilyNarrationProfile, p.SceneRole, p.SectionKey, p.RequiredClaims.Count, p.OptionalClaims.Count));
+        } catch (ArgumentException ex) { return (false, null, Failure("NARRATION_PLANNING_CONSTRAINT_POLICY_INVALID", ex.Message, [p])); }
         if (constraints is null || constraints.MinimumSentenceCount < 1 || constraints.MinimumSentenceCount > constraints.PreferredSentenceCount ||
             constraints.PreferredSentenceCount > constraints.MaximumSentenceCount || constraints.ReadingTimeTargetSeconds < p.MinimumDurationSeconds ||
             constraints.ReadingTimeTargetSeconds > p.MaximumDurationSeconds)
             return (false, null, Failure("NARRATION_PLANNING_CONSTRAINT_POLICY_INVALID", "Constraint policy returned incoherent constraints.", [p]));
         var goalDraft = new NarrationPlanningGoal(p.SceneRole, p.SectionKey, p.ViewerQuestionId, p.LearningObjectiveId,
-            p.RequiredClaims.Select(c => c.ClaimId).ToArray(), input.ProfileId, "CertifiedClaimsAndViewerQuestion", "");
+            p.RequiredClaims.Select(c => c.ClaimId).ToArray(), input.ProfileId, NarrationPlanningPolicyCatalog.GoalPolicy, "");
         var goal = goalDraft with { DeterministicChecksum = NarrationPlanningCanonicalizer.GoalChecksum(goalDraft) };
-        var strategyDraft = new NarrationPlanningStrategy(p.NarrativeStage, p.SceneRole, p.SectionKey, "VariantOpeningWhenFirst",
-            "RequiredThenOptional", "VariantClosingWhenLast", "RequiredInPacketOrder", "OptionalOnlyWhenTimeAllows",
-            "UnavailableForFactualDrafting", "PacketLineageOnly", "");
+        var strategyDraft = new NarrationPlanningStrategy(p.NarrativeStage, p.SceneRole, p.SectionKey, NarrationPlanningPolicyCatalog.OpeningMode,
+            NarrationPlanningPolicyCatalog.DevelopmentMode, NarrationPlanningPolicyCatalog.ClosingMode, NarrationPlanningPolicyCatalog.ClaimIntroductionPolicy,
+            NarrationPlanningPolicyCatalog.OptionalClaimUsagePolicy, NarrationPlanningPolicyCatalog.DeferredClaimPolicy, NarrationPlanningPolicyCatalog.CallbackPolicy, "");
         var strategy = strategyDraft with { DeterministicChecksum = NarrationPlanningCanonicalizer.StrategyChecksum(strategyDraft) };
         var incoming = BuildIncomingTransition(input, variant, previous, p, next);
         var outgoing = BuildOutgoingTransition(input, variant, previous, p, next);
@@ -201,11 +235,11 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
         var draft = new NarrationPlanningScene("", p.SourceSceneId, variant, p.StoryFrameId, p.StoryFrameChecksum,
             p.SourceSceneChecksum, p.PacketId, p.DeterministicChecksum, p.ResolvedViewerQuestionText, p.SceneObjective, goal,
             primary, supporting, p.RequiredClaims.Select(c => c.ClaimId).ToArray(), p.OptionalClaims.Select(c => c.ClaimId).ToArray(),
-            p.DeferredClaims.Select(c => c.ClaimId).ToArray(), strategy, new("MandatoryFactualAuthority", "ConditionalFactualAuthority", "UnavailableForFactualDrafting"), constraints,
-            p.ProhibitedClaims, p.SafetyRules, p.EditorialConstraints, Qualified(c => c.IsCultural || c.IsMythological, "QualifyCulture"),
-            Qualified(c => c.IsLocationDependent, "QualifyLocation"), Qualified(c => c.IsDateTimeDependent, "QualifyDateTime"),
-            Qualified(c => c.IsAstrologyRelated, "ClarifyAstrology"), p.RequiredClaims.Concat(p.OptionalClaims).Concat(p.DeferredClaims)
-                .Where(c => c.RequiresHumanReview).Select(c => $"HumanReview:{c.ClaimId}").ToArray(),
+            p.DeferredClaims.Select(c => c.ClaimId).ToArray(), strategy, new(NarrationPlanningPolicyCatalog.RequiredClaimUsage, NarrationPlanningPolicyCatalog.OptionalClaimUsage, NarrationPlanningPolicyCatalog.DeferredClaimUsage), constraints,
+            p.ProhibitedClaims, p.SafetyRules, p.EditorialConstraints, Qualified(c => c.IsCultural || c.IsMythological, NarrationPlanningPolicyCatalog.CulturalQualificationPrefix),
+            Qualified(c => c.IsLocationDependent, NarrationPlanningPolicyCatalog.LocationQualificationPrefix), Qualified(c => c.IsDateTimeDependent, NarrationPlanningPolicyCatalog.TimeQualificationPrefix),
+            Qualified(c => c.IsAstrologyRelated, NarrationPlanningPolicyCatalog.AstrologyQualificationPrefix), p.RequiredClaims.Concat(p.OptionalClaims).Concat(p.DeferredClaims)
+                .Where(c => c.RequiresHumanReview).Select(c => $"{NarrationPlanningPolicyCatalog.HumanReviewPrefix}:{c.ClaimId}").ToArray(),
             p.MinimumDurationSeconds, p.TargetDurationSeconds, p.MaximumDurationSeconds, constraints.PreferredSentenceCount,
             constraints.ReadingTimeTargetSeconds, p.VisualEvidenceIds, incoming, outgoing, "");
         draft = draft with { PlanningId = NarrationPlanningCanonicalizer.PlanningId(draft) };
@@ -214,11 +248,11 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
 
     private static NarrationPlanningTransition BuildIncomingTransition(Phase7NarrationPlanningInputAuthority input,
         string variant, SceneKnowledgePacket? previous, SceneKnowledgePacket current, SceneKnowledgePacket? next) =>
-        Transition(input, variant, previous, current, previous, current, next, previous is null ? "VariantOpening" : "StoryFrameSuccessor");
+        Transition(input, variant, previous, current, previous, current, next, previous is null ? NarrationPlanningPolicyCatalog.VariantOpeningTransition : NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition);
 
     private static NarrationPlanningTransition BuildOutgoingTransition(Phase7NarrationPlanningInputAuthority input,
         string variant, SceneKnowledgePacket? previous, SceneKnowledgePacket current, SceneKnowledgePacket? next) =>
-        Transition(input, variant, current, next, previous, current, next, next is null ? "VariantClosing" : "StoryFrameSuccessor");
+        Transition(input, variant, current, next, previous, current, next, next is null ? NarrationPlanningPolicyCatalog.VariantClosingTransition : NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition);
 
     private static NarrationPlanningTransition Transition(Phase7NarrationPlanningInputAuthority input, string variant,
         SceneKnowledgePacket? from, SceneKnowledgePacket? to, SceneKnowledgePacket? previous, SceneKnowledgePacket current,
@@ -239,7 +273,8 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
         var required = p.RequiredClaims.Select(x => x.ClaimId).ToArray();
         var optional = p.OptionalClaims.Select(x => x.ClaimId).ToArray();
         var deferred = p.DeferredClaims.Select(x => x.ClaimId).ToArray();
-        return !required.Intersect(optional, StringComparer.Ordinal).Concat(required.Intersect(deferred, StringComparer.Ordinal))
+        return !p.RequiredClaims.Concat(p.OptionalClaims).Any(x => x.RequiresHumanReview) &&
+            !required.Intersect(optional, StringComparer.Ordinal).Concat(required.Intersect(deferred, StringComparer.Ordinal))
             .Concat(optional.Intersect(deferred, StringComparer.Ordinal)).Any() &&
             p.RequiredClaims.All(x => x.Disposition == Phase7ClaimDisposition.Required) &&
             p.OptionalClaims.All(x => x.Disposition == Phase7ClaimDisposition.Optional) &&
@@ -252,9 +287,9 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
             packets?.SelectMany(p => p.BlockingIssues).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() ?? [error]);
 }
 
-public sealed class NarrationPlanningValidator : INarrationPlanningValidator
+public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolicy constraintPolicy) : INarrationPlanningValidator
 {
-    private static readonly string[] Names = ["ContractGate", "InputAuthorityGate", "ProfileGate", "LanguageGate", "PlanningCoverageGate", "ScenePlanningGate", "PacketLineageGate", "ViewerQuestionGate", "LearningObjectiveGate", "NarrativeGoalGate", "TransitionGate", "ConstraintGate", "RequiredClaimPlanningGate", "OptionalClaimPlanningGate", "DeferredClaimPlanningGate", "SafetyPlanningGate", "CulturalPlanningGate", "LocationTimePlanningGate", "AstrologyPlanningGate", "HumanReviewPlanningGate", "LongShortIndependenceGate", "DiagnosticsGate", "AuthorityChecksumGate", "DeterminismGate"];
+    private static readonly string[] Names = ["ContractGate", "InputAuthorityGate", "ProfileGate", "LanguageGate", "PlanningCoverageGate", "ScenePlanningGate", "SceneAuthorityGate", "ViewerQuestionGate", "LearningObjectiveGate", "NarrativeGoalGate", "StrategyGate", "TransitionGate", "ConstraintPolicyGate", "ClaimUsagePolicyGate", "RequiredClaimPlanningGate", "OptionalClaimPlanningGate", "DeferredClaimPlanningGate", "SafetyPlanningGate", "CulturalPlanningGate", "LocationTimePlanningGate", "AstrologyPlanningGate", "HumanReviewPlanningGate", "LongShortIndependenceGate", "DiagnosticsGate", "AuthorityChecksumGate", "DeterminismGate"];
 
     public NarrationPlanningValidation Validate(Phase7NarrationPlanningInputAuthority input, NarrationPlanningAuthority authority)
     {
@@ -271,6 +306,53 @@ public sealed class NarrationPlanningValidator : INarrationPlanningValidator
                 SetEqual(select(packets[s.PacketId]).Select(c => c.ClaimId), planned(s)));
         static bool ExactQualifications(IEnumerable<string> actual, IEnumerable<string> claims, string prefix) =>
             SetEqual(actual, claims.Select(id => $"{prefix}:{id}"));
+        bool SceneAuthority(NarrationPlanningScene s)
+        {
+            if (!HasPacket(s)) return false;
+            var p = packets[s.PacketId];
+            return s.SceneId == p.SourceSceneId && s.Variant == p.Variant && s.StoryFrameId == p.StoryFrameId &&
+                s.StoryFrameChecksum == p.StoryFrameChecksum && s.SourceSceneChecksum == p.SourceSceneChecksum &&
+                s.PacketId == p.PacketId && s.PacketChecksum == p.DeterministicChecksum &&
+                s.ViewerQuestion == p.ResolvedViewerQuestionText && s.LearningObjective == p.SceneObjective &&
+                s.PrimaryKnowledgeReferences.SequenceEqual(NarrationPlanningReferenceGovernance.GovernedPrimaryReferences(p), StringComparer.Ordinal) &&
+                s.SupportingKnowledgeReferences.SequenceEqual(NarrationPlanningReferenceGovernance.GovernedSupportingReferences(p), StringComparer.Ordinal) &&
+                SetEqual(s.RequiredClaims, p.RequiredClaims.Select(c => c.ClaimId)) &&
+                SetEqual(s.OptionalClaims, p.OptionalClaims.Select(c => c.ClaimId)) && SetEqual(s.DeferredClaims, p.DeferredClaims.Select(c => c.ClaimId)) &&
+                SetEqual(s.ForbiddenStatements, p.ProhibitedClaims) && SetEqual(s.SafetyRequirements, p.SafetyRules) &&
+                SetEqual(s.EditorialConstraints, p.EditorialConstraints) &&
+                s.VisualSynchronizationTargets.SequenceEqual(p.VisualEvidenceIds, StringComparer.Ordinal) &&
+                s.MinimumDuration == p.MinimumDurationSeconds && s.ExpectedDuration == p.TargetDurationSeconds && s.MaximumDuration == p.MaximumDurationSeconds;
+        }
+        bool Goal(NarrationPlanningScene s)
+        {
+            if (!HasPacket(s)) return false; var p = packets[s.PacketId]; var g = s.NarrativeGoal;
+            return g.SceneRole == p.SceneRole && g.SectionKey == p.SectionKey && g.ViewerQuestionId == p.ViewerQuestionId &&
+                g.LearningObjectiveId == p.LearningObjectiveId && SetEqual(g.RequiredClaimIds, p.RequiredClaims.Select(c => c.ClaimId)) &&
+                g.ProfileId == input.ProfileId && g.GoalPolicy == NarrationPlanningPolicyCatalog.GoalPolicy &&
+                g.DeterministicChecksum == NarrationPlanningCanonicalizer.GoalChecksum(g);
+        }
+        bool Strategy(NarrationPlanningScene s)
+        {
+            if (!HasPacket(s)) return false; var p = packets[s.PacketId]; var x = s.Strategy;
+            return x.NarrativeStage == p.NarrativeStage && x.SceneRole == p.SceneRole && x.SectionKey == p.SectionKey &&
+                x.OpeningMode == NarrationPlanningPolicyCatalog.OpeningMode && x.DevelopmentMode == NarrationPlanningPolicyCatalog.DevelopmentMode &&
+                x.ClosingMode == NarrationPlanningPolicyCatalog.ClosingMode && x.ClaimIntroductionPolicy == NarrationPlanningPolicyCatalog.ClaimIntroductionPolicy &&
+                x.OptionalClaimUsagePolicy == NarrationPlanningPolicyCatalog.OptionalClaimUsagePolicy && x.DeferredClaimPolicy == NarrationPlanningPolicyCatalog.DeferredClaimPolicy &&
+                x.CallbackPolicy == NarrationPlanningPolicyCatalog.CallbackPolicy && x.DeterministicChecksum == NarrationPlanningCanonicalizer.StrategyChecksum(x);
+        }
+        bool Constraints(NarrationPlanningScene s)
+        {
+            if (!HasPacket(s)) return false; var p = packets[s.PacketId];
+            try
+            {
+                var expected = constraintPolicy.Resolve(new(input.Language, s.Variant, p.TargetDurationSeconds, p.MinimumDurationSeconds,
+                    p.MaximumDurationSeconds, input.FamilyNarrationProfile, p.SceneRole, p.SectionKey, p.RequiredClaims.Count, p.OptionalClaims.Count));
+                return Phase7Determinism.Hash(expected) == Phase7Determinism.Hash(s.NarrationConstraints) && s.MinimumDuration == p.MinimumDurationSeconds &&
+                    s.ExpectedDuration == p.TargetDurationSeconds && s.MaximumDuration == p.MaximumDurationSeconds &&
+                    s.ExpectedSentenceCount == expected.PreferredSentenceCount && s.EstimatedReadingTime == expected.ReadingTimeTargetSeconds;
+            }
+            catch (ArgumentException) { return false; }
+        }
 
         bool Transitions(IReadOnlyList<NarrationPlanningScene> list, IReadOnlyList<SceneKnowledgePacket> source, string variant)
         {
@@ -283,9 +365,9 @@ public sealed class NarrationPlanningValidator : INarrationPlanningValidator
                 var previous = i == 0 ? null : orderedPackets[i - 1];
                 var next = i == orderedPackets.Length - 1 ? null : orderedPackets[i + 1];
                 if (!TransitionValid(scene.IncomingTransition, previous, current, next, previous, current,
-                        previous is null ? "VariantOpening" : "StoryFrameSuccessor", variant) ||
+                        previous is null ? NarrationPlanningPolicyCatalog.VariantOpeningTransition : NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, variant) ||
                     !TransitionValid(scene.OutgoingTransition, previous, current, next, current, next,
-                        next is null ? "VariantClosing" : "StoryFrameSuccessor", variant)) return false;
+                        next is null ? NarrationPlanningPolicyCatalog.VariantClosingTransition : NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, variant)) return false;
                 if (i + 1 < list.Count)
                 {
                     var incoming = list[i + 1].IncomingTransition;
@@ -324,24 +406,19 @@ public sealed class NarrationPlanningValidator : INarrationPlanningValidator
             [Names[3]] = authority.Language == input.Language,
             [Names[4]] = allPackets.Length == packets.Count && scenes.Length == packets.Count && packets.Keys.All(id => scenes.Count(s => s.PacketId == id) == 1),
             [Names[5]] = scenes.All(s => s.PlanningId == NarrationPlanningCanonicalizer.PlanningId(s with { PlanningId = "", DeterministicChecksum = "" })),
-            [Names[6]] = scenes.All(s => HasPacket(s) && packets[s.PacketId] is var p && p.DeterministicChecksum == s.PacketChecksum && p.StoryFrameId == s.StoryFrameId && p.StoryFrameChecksum == s.StoryFrameChecksum && p.SourceSceneChecksum == s.SourceSceneChecksum),
-            [Names[7]] = scenes.All(s => HasPacket(s) && s.ViewerQuestion == packets[s.PacketId].ResolvedViewerQuestionText),
-            [Names[8]] = scenes.All(s => HasPacket(s) && s.LearningObjective == packets[s.PacketId].SceneObjective),
-            [Names[9]] = scenes.All(s => s.NarrativeGoal.DeterministicChecksum == NarrationPlanningCanonicalizer.GoalChecksum(s.NarrativeGoal) && s.Strategy.DeterministicChecksum == NarrationPlanningCanonicalizer.StrategyChecksum(s.Strategy)),
-            [Names[10]] = Transitions(authority.LongScenes, input.SceneKnowledgePacketCollection.Long, "Long") && Transitions(authority.ShortScenes, input.SceneKnowledgePacketCollection.Short, "Short"),
-            [Names[11]] = scenes.All(s => s.NarrationConstraints.MinimumSentenceCount <= s.ExpectedSentenceCount && s.ExpectedSentenceCount <= s.NarrationConstraints.MaximumSentenceCount && s.EstimatedReadingTime >= s.MinimumDuration && s.EstimatedReadingTime <= s.MaximumDuration),
-            [Names[12]] = Claims(p => p.RequiredClaims, s => s.RequiredClaims),
-            [Names[13]] = Claims(p => p.OptionalClaims, s => s.OptionalClaims),
-            [Names[14]] = Claims(p => p.DeferredClaims, s => s.DeferredClaims),
-            [Names[15]] = scenes.All(s => HasPacket(s) && SetEqual(packets[s.PacketId].SafetyRules, s.SafetyRequirements) && SetEqual(packets[s.PacketId].EditorialConstraints, s.EditorialConstraints) && SetEqual(packets[s.PacketId].ProhibitedClaims, s.ForbiddenStatements)),
-            [Names[16]] = scenes.All(s => HasPacket(s) && ExactQualifications(s.CulturalQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsCultural || c.IsMythological).Select(c => c.ClaimId), "QualifyCulture")),
-            [Names[17]] = scenes.All(s => HasPacket(s) && ExactQualifications(s.LocationQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsLocationDependent).Select(c => c.ClaimId), "QualifyLocation") && ExactQualifications(s.TimeQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsDateTimeDependent).Select(c => c.ClaimId), "QualifyDateTime")),
-            [Names[18]] = scenes.All(s => HasPacket(s) && ExactQualifications(s.AstrologyQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsAstrologyRelated).Select(c => c.ClaimId), "ClarifyAstrology")),
-            [Names[19]] = scenes.All(s => HasPacket(s) && !packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Any(c => c.RequiresHumanReview) && ExactQualifications(s.HumanReviewRequirements, packets[s.PacketId].DeferredClaims.Where(c => c.RequiresHumanReview).Select(c => c.ClaimId), "HumanReview")),
-            [Names[20]] = authority.LongScenes.All(s => HasPacket(s) && packets[s.PacketId].Variant == "Long") && authority.ShortScenes.All(s => HasPacket(s) && packets[s.PacketId].Variant == "Short") && !authority.LongScenes.Select(s => s.PacketId).Intersect(authority.ShortScenes.Select(s => s.PacketId), StringComparer.Ordinal).Any() && !authority.LongScenes.Select(s => s.PlanningId).Intersect(authority.ShortScenes.Select(s => s.PlanningId), StringComparer.Ordinal).Any(),
-            [Names[21]] = DiagnosticsValid(authority.Diagnostics, scenes, packets.Values),
-            [Names[22]] = authority.AuthorityId == NarrationPlanningCanonicalizer.AuthorityId(authority with { AuthorityId = "", DeterministicChecksum = "" }) && authority.DeterministicChecksum == NarrationPlanningCanonicalizer.AuthorityChecksum(authority),
-            [Names[23]] = scenes.All(s => s.DeterministicChecksum == NarrationPlanningCanonicalizer.SceneChecksum(s))
+            [Names[6]] = scenes.All(SceneAuthority), [Names[7]] = scenes.All(s => HasPacket(s) && s.ViewerQuestion == packets[s.PacketId].ResolvedViewerQuestionText),
+            [Names[8]] = scenes.All(s => HasPacket(s) && s.LearningObjective == packets[s.PacketId].SceneObjective), [Names[9]] = scenes.All(Goal),
+            [Names[10]] = scenes.All(Strategy), [Names[11]] = Transitions(authority.LongScenes, input.SceneKnowledgePacketCollection.Long, "Long") && Transitions(authority.ShortScenes, input.SceneKnowledgePacketCollection.Short, "Short"),
+            [Names[12]] = scenes.All(Constraints), [Names[13]] = scenes.All(s => s.ClaimUsagePolicy == new NarrationClaimUsagePolicy(NarrationPlanningPolicyCatalog.RequiredClaimUsage, NarrationPlanningPolicyCatalog.OptionalClaimUsage, NarrationPlanningPolicyCatalog.DeferredClaimUsage)),
+            [Names[14]] = Claims(p => p.RequiredClaims, s => s.RequiredClaims), [Names[15]] = Claims(p => p.OptionalClaims, s => s.OptionalClaims), [Names[16]] = Claims(p => p.DeferredClaims, s => s.DeferredClaims),
+            [Names[17]] = scenes.All(s => HasPacket(s) && SetEqual(packets[s.PacketId].SafetyRules, s.SafetyRequirements) && SetEqual(packets[s.PacketId].EditorialConstraints, s.EditorialConstraints) && SetEqual(packets[s.PacketId].ProhibitedClaims, s.ForbiddenStatements)),
+            [Names[18]] = scenes.All(s => HasPacket(s) && ExactQualifications(s.CulturalQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsCultural || c.IsMythological).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.CulturalQualificationPrefix)),
+            [Names[19]] = scenes.All(s => HasPacket(s) && ExactQualifications(s.LocationQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsLocationDependent).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.LocationQualificationPrefix) && ExactQualifications(s.TimeQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsDateTimeDependent).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.TimeQualificationPrefix)),
+            [Names[20]] = scenes.All(s => HasPacket(s) && ExactQualifications(s.AstrologyQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsAstrologyRelated).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.AstrologyQualificationPrefix)),
+            [Names[21]] = scenes.All(s => HasPacket(s) && !packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Any(c => c.RequiresHumanReview) && ExactQualifications(s.HumanReviewRequirements, packets[s.PacketId].DeferredClaims.Where(c => c.RequiresHumanReview).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.HumanReviewPrefix)),
+            [Names[22]] = authority.LongScenes.All(s => HasPacket(s) && packets[s.PacketId].Variant == "Long") && authority.ShortScenes.All(s => HasPacket(s) && packets[s.PacketId].Variant == "Short") && !authority.LongScenes.Select(s => s.PacketId).Intersect(authority.ShortScenes.Select(s => s.PacketId), StringComparer.Ordinal).Any() && !authority.LongScenes.Select(s => s.PlanningId).Intersect(authority.ShortScenes.Select(s => s.PlanningId), StringComparer.Ordinal).Any(),
+            [Names[23]] = DiagnosticsValid(authority.Diagnostics, scenes, packets.Values), [Names[24]] = authority.AuthorityId == NarrationPlanningCanonicalizer.AuthorityId(authority with { AuthorityId = "", DeterministicChecksum = "" }) && authority.DeterministicChecksum == NarrationPlanningCanonicalizer.AuthorityChecksum(authority),
+            [Names[25]] = scenes.All(s => s.DeterministicChecksum == NarrationPlanningCanonicalizer.SceneChecksum(s))
         };
         var gates = Names.Select(n => new NarrationPlanningValidationGate(n, checks[n], checks[n] ? [] : [$"{n} failed."])).ToArray();
         var errors = gates.SelectMany(g => g.Errors).ToArray();
@@ -355,9 +432,12 @@ public sealed class NarrationPlanningValidator : INarrationPlanningValidator
         var packets = packetSource.ToArray(); var references = packets.SelectMany(p => p.ReferenceResolutions).ToArray();
         return d.PacketCount == packets.Length && d.PlanningSceneCount == scenes.Count &&
             d.LongPlanningSceneCount == scenes.Count(s => s.Variant == "Long") && d.ShortPlanningSceneCount == scenes.Count(s => s.Variant == "Short") &&
-            d.PrimaryReferenceCount == scenes.Sum(s => s.PrimaryKnowledgeReferences.Count) && d.SupportingReferenceCount == scenes.Sum(s => s.SupportingKnowledgeReferences.Count) &&
+            d.PrimaryReferenceCount == packets.Sum(p => p.ReferenceResolutions.Count(r => NarrationPlanningReferenceGovernance.IsGovernedResolvedPrimary(p, r))) && d.SupportingReferenceCount == scenes.Sum(s => s.SupportingKnowledgeReferences.Count) &&
             d.RequiredReferenceCount == references.Count(x => x.IsRequired) && d.ResolvedReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Resolved) &&
-            d.DeferredReferenceCount == references.Count(x => x.Status != Phase7KnowledgeReferenceStatus.Resolved) && d.TransitionCount == scenes.Count * 2 &&
+            d.DeferredReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Deferred) &&
+            d.MissingReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Missing) && d.AmbiguousReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Ambiguous) &&
+            d.CrossVariantReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.CrossVariantInvalid) && d.UnsupportedReferenceCount == references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Unsupported) &&
+            d.UnresolvedReferenceCount == d.MissingReferenceCount + d.AmbiguousReferenceCount + d.CrossVariantReferenceCount + d.UnsupportedReferenceCount && d.TransitionCount == scenes.Count * 2 &&
             d.BlockingIssueCount == packets.Sum(p => p.BlockingIssues.Count) && d.FailedGateCount == 0 &&
             d.RequiredClaimCount == scenes.Sum(s => s.RequiredClaims.Count) && d.OptionalClaimCount == scenes.Sum(s => s.OptionalClaims.Count) &&
             d.DeferredClaimCount == scenes.Sum(s => s.DeferredClaims.Count) && d.WarningCount == d.Warnings.Count && d.ErrorCount == d.Errors.Count &&

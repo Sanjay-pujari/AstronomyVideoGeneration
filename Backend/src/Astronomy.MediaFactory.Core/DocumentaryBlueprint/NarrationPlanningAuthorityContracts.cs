@@ -2,6 +2,30 @@ namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 public static class NarrationPlanningContract { public const string Version = "rc2-phase7-narration-planning.v1"; }
 
+/// <summary>Provider-independent identities which govern narration planning semantics.</summary>
+public static class NarrationPlanningPolicyCatalog
+{
+    public const string GoalPolicy = "CertifiedClaimsAndViewerQuestion";
+    public const string OpeningMode = "VariantOpeningWhenFirst";
+    public const string DevelopmentMode = "RequiredThenOptional";
+    public const string ClosingMode = "VariantClosingWhenLast";
+    public const string ClaimIntroductionPolicy = "RequiredInPacketOrder";
+    public const string OptionalClaimUsagePolicy = "OptionalOnlyWhenTimeAllows";
+    public const string DeferredClaimPolicy = "UnavailableForFactualDrafting";
+    public const string CallbackPolicy = "PacketLineageOnly";
+    public const string RequiredClaimUsage = "MandatoryFactualAuthority";
+    public const string OptionalClaimUsage = "ConditionalFactualAuthority";
+    public const string DeferredClaimUsage = "UnavailableForFactualDrafting";
+    public const string CulturalQualificationPrefix = "QualifyCulture";
+    public const string LocationQualificationPrefix = "QualifyLocation";
+    public const string TimeQualificationPrefix = "QualifyDateTime";
+    public const string AstrologyQualificationPrefix = "ClarifyAstrology";
+    public const string HumanReviewPrefix = "HumanReview";
+    public const string VariantOpeningTransition = "VariantOpening";
+    public const string StoryFrameSuccessorTransition = "StoryFrameSuccessor";
+    public const string VariantClosingTransition = "VariantClosing";
+}
+
 public sealed record SceneKnowledgePacketCollection(IReadOnlyList<SceneKnowledgePacket> Long,
     IReadOnlyList<SceneKnowledgePacket> Short, string DeterministicChecksum);
 
@@ -54,7 +78,9 @@ public sealed record NarrationPlanningScene(string PlanningId, string SceneId, s
     string DeterministicChecksum);
 public sealed record NarrationPlanningDiagnostics(int PacketCount, int PlanningSceneCount, int LongPlanningSceneCount,
     int ShortPlanningSceneCount, int PrimaryReferenceCount, int SupportingReferenceCount, int RequiredReferenceCount,
-    int ResolvedReferenceCount, int DeferredReferenceCount, int TransitionCount, int BlockingIssueCount,
+    int ResolvedReferenceCount, int DeferredReferenceCount, int MissingReferenceCount,
+    int AmbiguousReferenceCount, int CrossVariantReferenceCount, int UnsupportedReferenceCount,
+    int UnresolvedReferenceCount, int TransitionCount, int BlockingIssueCount,
     int FailedGateCount, int RequiredClaimCount, int OptionalClaimCount, int DeferredClaimCount, int WarningCount, int ErrorCount,
     IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, string DeterministicChecksum);
 public sealed record NarrationPlanningAuthority(string ContractVersion, string AuthorityId, string ExecutionId,
