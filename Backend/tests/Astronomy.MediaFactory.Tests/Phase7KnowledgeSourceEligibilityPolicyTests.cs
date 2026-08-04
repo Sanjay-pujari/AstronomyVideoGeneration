@@ -44,6 +44,30 @@ public sealed class Phase7KnowledgeSourceEligibilityPolicyTests
         Assert.False(result.Authoritative);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SourceEligibility_EmptyApprovedField_DoesNotThrowWhenClaimOrEntityEvidenceExists(bool claimEvidence)
+    {
+        var source=Source(true,true) with
+        {
+            SupportedClaimIds=claimEvidence?["constellation.example.identity.summary"]:[],
+            SupportedKnowledgeIds=claimEvidence?[]:["constellation.example"]
+        };
+        var result=policy.Classify(Request(source) with { ApprovedFieldPath="" });
+        Assert.Equal(Phase7SourceEligibility.EligibleForRequiredClaim,result.Eligibility);
+        Assert.Equal(claimEvidence?Phase7ProvenancePrecision.ExactClaim:Phase7ProvenancePrecision.ExactKnowledgeEntity,result.Precision);
+    }
+
+    [Fact]
+    public void SourceEligibility_EmptyApprovedField_ReturnsEvidenceMismatchWhenNoOtherExactEvidence()
+    {
+        var result=policy.Classify(Request(Source(true,true)) with { ApprovedFieldPath="" });
+        Assert.Equal(Phase7SourceEligibility.AuditOnly,result.Eligibility);
+        Assert.Equal("P7KNOWLEDGE_SOURCE_EVIDENCE_MISMATCH",result.ReasonCode);
+        Assert.Equal(Phase7ProvenancePrecision.None,result.Precision);
+    }
+
     private static Phase7SourceEligibilityRequest Request(CertifiedNarrationSource source) =>
         new(source,"en","constellation.example","constellation.example.identity.summary","identity.summary",true,false,false);
     private static CertifiedNarrationSource Source(bool reviewed,bool certified) =>

@@ -11,6 +11,18 @@ public sealed class Phase7KnowledgeCultureClaimRootCauseTests
     [Fact] public void ChineseSummaryPath_ResolvesChineseTradition()=>Tradition("chinese","Chinese");
     [Fact] public void IndianHinduSummaryPath_ResolvesIndianHinduTradition()=>Tradition("indianHindu","IndianHindu");
     [Fact] public void OtherSummaryPath_RemainsUncategorised()=>Assert.Empty(Phase7CulturalClaimPolicy.ResolveCulturalTradition("cultureAndMythology.other.summary"));
+    [Fact] public void ResolveCulturalTradition_EmptyPath_UsesMetadata()=>Assert.Equal("Greek",ResolveTradition("","greek"));
+    [Fact] public void ResolveCulturalTradition_NullPath_UsesMetadata()=>Assert.Equal("Greek",ResolveTradition(null,"greek"));
+    [Fact] public void ResolveCulturalTradition_WhitespacePath_UsesMetadata()=>Assert.Equal("Greek",ResolveTradition(" \t","greek"));
+    [Fact] public void ResolveCulturalTradition_EmptyPath_UnknownMetadata_ReturnsEmpty()=>Assert.Empty(ResolveTradition("","unsupported"));
+    [Fact] public void ResolveCulturalTradition_ValidCanonicalPath_UsesPath()=>Assert.Equal("Greek",Phase7CulturalClaimPolicy.ResolveCulturalTradition("cultureAndMythology.greek.summary"));
+    [Fact] public void ResolveCulturalTradition_PathHasPriorityOverMetadata()=>Assert.Equal("Greek",ResolveTradition("cultureAndMythology.greek.summary","roman"));
+    [Fact] public void ResolveCulturalTradition_NonblankMalformedPath_StillThrows()=>Assert.Throws<ArgumentException>(()=>ResolveTradition("not-a-governed-path","greek"));
+    [Fact] public void ResolveCanonicalCulturalTradition_DiagnosticIdentityFallback_DoesNotThrow()
+    {
+        var resolution=Safe();var claim=Required(resolution);
+        Assert.Equal("Greek",Phase7CulturalKnowledgeSafetyPolicy.ResolveCanonicalCulturalTradition(null!,resolution,claim));
+    }
 
     [Fact] public void CulturalQualification_DoesNotImplyHumanReview()=>Assert.False(Required(Safe()).RequiresHumanReview);
     [Fact] public void SafeCulturalHistoryClaim_CanBeRequired()=>Assert.Equal(Phase7ClaimDisposition.Required,Required(Safe()).Disposition);
@@ -35,6 +47,8 @@ public sealed class Phase7KnowledgeCultureClaimRootCauseTests
     [Fact] public void RealConstellationFixture_CrossesCultureDomainGate_WhenEvidenceSupportsIt()=>Assert.Equal(KnowledgeDomainStatus.Available,Culture(Fixture()).Status);
 
     private static void Tradition(string branch,string expected)=>Assert.Equal(expected,Phase7CulturalClaimPolicy.ResolveCulturalTradition($"cultureAndMythology.{branch}.summary"));
+    private static string ResolveTradition(string? path,string identity)=>Phase7CulturalClaimPolicy.ResolveCulturalTradition(path,
+        new Dictionary<string,string>{{"traditionIdentity",identity}});
     private static void Review(string field,string reason,string branch="indianHindu")
     { var result=Resolve(Json($"\"{branch}\":{{\"{field}\":\"Governed statement.\"}}"),[]); Assert.Equal(reason,Assert.Single(result.ClaimResolutionDiagnostics).HumanReviewReason); }
     private static ResolvedNarrationKnowledge Safe()=>Resolve(Json("\"greek\":{\"summary\":\"In Greek tradition, a named myth is associated.\"}"),[Source("culture-source","cultureAndMythology.greek.summary")]);
