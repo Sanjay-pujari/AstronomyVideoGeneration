@@ -61,6 +61,41 @@ public sealed class Phase7LocationTimeSafetyPolicy : IPhase7LocationTimeSafetyPo
 
 public sealed class Phase7CulturalKnowledgeSafetyPolicy : IPhase7CulturalKnowledgeSafetyPolicy
 {
+    /// <summary>
+    /// Resolves the governed tradition identity without deriving culture from prose or
+    /// source presentation metadata. Resolver diagnostics are authoritative, followed
+    /// by exact approved-field provenance; old marker identities are retained only for
+    /// authorities produced before canonical cultural paths were introduced.
+    /// </summary>
+    public static string? ResolveCanonicalCulturalTradition(Phase7KnowledgeAuthority authority,
+        ResolvedNarrationKnowledge resolution, CertifiedNarrationClaim claim)
+    {
+        var diagnostic=resolution.ClaimResolutionDiagnostics.FirstOrDefault(x=>x.ClaimId==claim.ClaimId);
+        if(!string.IsNullOrWhiteSpace(diagnostic?.TraditionIdentity))
+        {
+            var normalized=Phase7CulturalClaimPolicy.ResolveCulturalTradition("",
+                new Dictionary<string,string>{{"traditionIdentity",diagnostic.TraditionIdentity}});
+            if(!string.IsNullOrWhiteSpace(normalized))return normalized;
+        }
+
+        foreach(var path in authority.ClaimSupportEvidence.Where(x=>x.ClaimId==claim.ClaimId)
+            .Select(x=>x.ApprovedFieldPath).Where(x=>!string.IsNullOrWhiteSpace(x))
+            .Order(StringComparer.Ordinal))
+        {
+            var normalized=Phase7CulturalClaimPolicy.ResolveCulturalTradition(path);
+            if(!string.IsNullOrWhiteSpace(normalized))return normalized;
+        }
+
+        var legacy=Phase7KnowledgePolicyFacts.Identity(authority,claim,
+            ["tradition-","culture-","mythology-"]);
+        if(string.IsNullOrWhiteSpace(legacy))return null;
+        var separator=legacy.IndexOf('-');
+        var declared=separator>=0 ? legacy[(separator+1)..] : legacy;
+        var fallback=Phase7CulturalClaimPolicy.ResolveCulturalTradition("",
+            new Dictionary<string,string>{{"traditionIdentity",declared}});
+        return string.IsNullOrWhiteSpace(fallback)?null:fallback;
+    }
+
     public Phase7CulturalKnowledgeSafetyResult Evaluate(Phase7KnowledgeAuthority authority, ResolvedNarrationKnowledge resolution, FamilyNarrationProfile profile)
     {
         var claims=authority.Claims.Where(x=>Phase7KnowledgePolicyFacts.Active(x)&&(x.IsCultural||x.IsMythological)).OrderBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray();
@@ -70,8 +105,17 @@ public sealed class Phase7CulturalKnowledgeSafetyPolicy : IPhase7CulturalKnowled
         foreach(var claim in claims)
         {
             if(!approved.Contains(claim.Domain))errors.Add($"P7KNOWLEDGE_CULTURAL_DOMAIN_INVALID:{claim.ClaimId}");
-            var identity=Phase7KnowledgePolicyFacts.Identity(authority,claim,["tradition-","culture-","mythology-","greek","roman","indianhindu","chinese","arabic"]);
-            if(identity is null)errors.Add($"P7KNOWLEDGE_TRADITION_IDENTITY_REQUIRED:{claim.ClaimId}");else identities[claim.ClaimId]=identity;
+            var identity=ResolveCanonicalCulturalTradition(authority,resolution,claim);
+            var diagnostic=resolution.ClaimResolutionDiagnostics.FirstOrDefault(x=>x.ClaimId==claim.ClaimId);
+            var intentionallyUncategorised=claim.Disposition==Phase7ClaimDisposition.HumanReview &&
+                diagnostic?.HumanReviewReason is "UncategorisedTraditionRequiresReview" or "MissingTraditionIdentity";
+            if(identity is null)
+            {
+                if(intentionallyUncategorised)
+                    warnings.Add($"P7KNOWLEDGE_UNCATEGORISED_TRADITION_RETAINED_FOR_REVIEW:{claim.ClaimId}");
+                else errors.Add($"P7KNOWLEDGE_TRADITION_IDENTITY_REQUIRED:{claim.ClaimId}");
+            }
+            else identities[claim.ClaimId]=identity;
             var evidence=authority.ClaimSupportEvidence.Where(x=>x.ClaimId==claim.ClaimId).ToArray();
             if(evidence.Length==0||evidence.Any(x=>!Phase7KnowledgePolicyFacts.Eligible(x)))errors.Add($"P7KNOWLEDGE_CULTURAL_EVIDENCE_INELIGIBLE:{claim.ClaimId}");
             if(claim.RequiresHumanReview&&claim.Disposition!=Phase7ClaimDisposition.HumanReview)errors.Add($"P7KNOWLEDGE_CULTURAL_REVIEW_STATUS_LOST:{claim.ClaimId}");
