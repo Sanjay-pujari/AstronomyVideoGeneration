@@ -767,6 +767,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7ScenePacketInputAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7ScenePacketInputAuthorityEvaluator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7SceneKnowledgePacketValidator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7SceneKnowledgePacketValidator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningInputAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningInputAuthorityEvaluator>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationPlanningConstraintPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DefaultNarrationPlanningConstraintPolicy>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationPlanningAuthorityBuilder, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.NarrationPlanningAuthorityBuilder>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationPlanningValidator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.NarrationPlanningValidator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningBuilder>(sp =>
