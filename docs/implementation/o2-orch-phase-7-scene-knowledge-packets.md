@@ -28,6 +28,13 @@ field contains narration prose, a provider prompt, or a provider response.
 
 ## Reference and mapping rules
 
+Domain relevance now tokenizes section, role, narrative stage, and learning-objective identities at
+space, underscore, hyphen, slash, and period boundaries before normalizing each token. One generic
+token-to-domain table governs recognition/identity, appearance/geometry, scientific structure and
+evolution, objects/deep-sky, observation/visibility/timing, equipment, astrophotography, cultural
+traditions, astrology clarification, safety, history, and closing facts. Unknown tokens grant no
+domain authority.
+
 References resolve by exact ordinal Claim ID, exact semantic identity, exact Knowledge Entity ID, or
 an exact certified claim-to-knowledge-reference mapping. Blank/whitespace-shaped references are
 unsupported; fuzzy, substring, title, and display-text matching are prohibited. Results are
@@ -35,10 +42,22 @@ unsupported; fuzzy, substring, title, and display-text matching are prohibited. 
 absence alone defers. Disposition, sources, entity references, provenance, qualifications, and safety
 flags remain attached to the immutable certified claim.
 
+The frozen Phase 6 contracts expose no explicit required/optional/primary metadata beyond the authored
+ordered `KnowledgeReferenceIds` list. `Phase7SceneReferenceCompatibilityPolicy` is therefore the sole
+compatibility authority: it records that order is governing, identifies the first authored reference
+as Primary, classifies the authored references as Required, emits
+`P7PACKET_REFERENCE_COMPAT_PHASE6_ORDERED_PRIMARY`, and requires no human review. Empty or malformed
+collections fail input authority with `P7PACKET_REFERENCE_REQUIREMENTS_UNRESOLVED`; the builder never
+reconstructs requirements. Every packet carries typed resolution status and resolved claim IDs for
+each governed reference. Primary validation binds requirement ownership, packet variant and ID, and
+resolution status rather than treating a nonempty ID collection as proof.
+
 Each variant is built from its own authored frames in scene/frame order. Every frame must have exactly
 one matching variant source-scene index row. `SectionKey` is the source row's narrative-stage value and
 `SourceSceneChecksum` is the deterministic canonical checksum of the complete source row; neither is
-positionally inferred or partially fabricated. Reference requirements preserve typed primary/required
+positionally inferred or partially fabricated. The frozen contracts have no distinct section field;
+the single section resolver documents the source-scene `NarrativeStage` profile-slot compatibility
+mapping and retains NarrativeStage separately as resolver evidence. Reference requirements preserve typed primary/required
 status and source pointers. Required absence blocks, while explicitly optional absence defers. Required,
 Optional, Deferred, and HumanReview dispositions are
 partitioned without promotion: HumanReview claims are excluded from authoritative partitions and
@@ -65,9 +84,19 @@ claim source ID, Required eligibility, exact claim/entity/approved-field precisi
 requirement. There is no global Required-claim fallback. Generic neutral placeholder policy is used;
 production packet code embeds no event, astronomy-family, country, or time-zone special case.
 
+Optional evidence uses the same exact claim/semantic/source binding and precision set, accepts only
+Required-eligible or Optional-eligible sources, and rejects audit-only, rejected, coarse, and
+human-review rows. Optional claims participate in source and visual identities, cultural context,
+location/date-time dependence, and approximation warnings. `PacketBlockingIssueGate` rejects every
+blocking issue, regardless of prefix; builder-generated blockers are deterministic reason codes.
+The Phase 6 authority does not expose event-family or event-type fields, so no values are fabricated;
+consistency remains indirectly bound through the Phase 4 aggregate, Phase 5 publication, Phase 6
+authority/index checksums, canonical profile identity, and P7.1A lineage.
+
 The validator runs these in-memory gates: InputAuthority, VariantCoverage, StoryFrameCoverage,
 SceneOrder, SceneIdentity, StoryFrameChecksum, SourceSceneLineage, Profile, Language, PrimaryReference,
-RequiredReferenceResolution, ClaimPartition, RequiredClaimEvidence, RequiredClaimChecksum,
+RequiredReferenceResolution, PacketBlockingIssue, ClaimPartition, RequiredClaimEvidence,
+OptionalClaimEvidence, RequiredClaimChecksum,
 NoContradiction, HumanReviewIsolation, SafetyRule, CulturalQualification, AstrologySeparation,
 LocationTimeSafety, Duration, VisualEvidence, SectionAuthority, ViewerQuestionResolution,
 ResolutionReportLineage, LongShortIndependence, and Determinism. The net10.0 test project compiles with
