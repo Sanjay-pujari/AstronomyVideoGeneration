@@ -247,7 +247,12 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         catch(Exception ex)
         {
             logger.LogWarning(ex,"P7CULTURE_DEBUG_WRITE_FAILED DiagnosticPath={DiagnosticPath}",relativePath);
-            return ex.GetType().Name;
+            // Unix reports a file blocking a directory component as IOException,
+            // whereas Windows reports DirectoryNotFoundException. Keep the safe
+            // warning deterministic across platforms without exposing the path.
+            return ex is IOException && !Directory.Exists(parent)
+                ? nameof(DirectoryNotFoundException)
+                : ex.GetType().Name;
         }
     }
     private static string CandidateId(Phase7AdapterClaimCandidate c)=>"p7candidate-"+Phase7Determinism.Hash(new{c.KnowledgeId,c.SemanticIdentity,c.Origin,c.ApprovedFieldPath})[..24];
