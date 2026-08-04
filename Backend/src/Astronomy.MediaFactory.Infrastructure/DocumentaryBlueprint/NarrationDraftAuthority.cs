@@ -17,7 +17,18 @@ public sealed class Phase7NarrationDraftInputAuthorityEvaluator(
         if(!result.IsValid||result.Authority is null||result.ReasonCode!=NarrationPlanningPublicationReasonCodes.ReuseValid)
             return Fail(result.Authority is null?NarrationDraftReasonCodes.PlanningMissing:NarrationDraftReasonCodes.PlanningInvalid,result.Errors,result.Warnings);
         var p=result.Authority;var a=p.Authority;var r=request.PlanningRequest;
-        if(a.DeterministicChecksum!=NarrationPlanningCanonicalizer.AuthorityChecksum(a)||p.Diagnostics!=a.Diagnostics||
+        if(a.DeterministicChecksum!=NarrationPlanningCanonicalizer.AuthorityChecksum(a)||
+           p.Diagnostics.DeterministicChecksum!=NarrationPlanningCanonicalizer.DiagnosticsChecksum(p.Diagnostics)||
+           a.Diagnostics.DeterministicChecksum!=NarrationPlanningCanonicalizer.DiagnosticsChecksum(a.Diagnostics)||
+           p.Diagnostics.DeterministicChecksum!=a.Diagnostics.DeterministicChecksum||
+           p.Report.DeterministicChecksum!=NarrationPlanningPublicationCanonicalizer.ComputeReportChecksum(p.Report)||
+           p.Validation.DeterministicChecksum!=NarrationPlanningPublicationCanonicalizer.ComputePhysicalValidationChecksum(p.Validation)||
+           p.ManifestEntry.DeterministicChecksum!=NarrationPlanningPublicationCanonicalizer.ComputeManifestEntryChecksum(p.ManifestEntry)||
+           p.PublicationEvidence.DeterministicChecksum!=NarrationPlanningPublicationCanonicalizer.ComputePublicationEvidenceChecksum(p.PublicationEvidence)||
+           p.Report.AuthorityId!=a.AuthorityId||p.Report.AuthorityChecksum!=a.DeterministicChecksum||
+           p.Validation.AuthorityId!=a.AuthorityId||p.Validation.AuthorityChecksum!=a.DeterministicChecksum||
+           p.ManifestEntry.DiagnosticsChecksum!=p.Diagnostics.DeterministicChecksum||p.ManifestEntry.ReportChecksum!=p.Report.DeterministicChecksum||p.ManifestEntry.ValidationChecksum!=p.Validation.DeterministicChecksum||
+           p.PublicationEvidence.ValidationChecksum!=p.Validation.DeterministicChecksum||p.PublicationEvidence.ManifestEntryChecksum!=p.ManifestEntry.DeterministicChecksum||
            !p.Validation.PhysicalReadbackPassed||!p.Validation.CommittedStatePassed||p.Validation.GateResults.Any(x=>!x.Passed)||
            p.ManifestEntry.AuthorityChecksum!=a.DeterministicChecksum||p.PublicationEvidence.AuthorityChecksum!=a.DeterministicChecksum||
            p.ManifestEntry.PublicationStatus!="Committed"||!p.PublicationEvidence.CommittedPhysical)
@@ -37,11 +48,24 @@ public sealed class Phase7NarrationDraftInputAuthorityEvaluator(
         var knowledge=await knowledgeEvaluator.EvaluateAsync(request.CommittedClaimAuthorityRequest,token);
         if(!knowledge.IsValid||knowledge.Authority is null)return Fail(NarrationDraftReasonCodes.ClaimAuthorityInvalid,
             ["Committed claim authority could not be validated.",..knowledge.Errors],result.Warnings.Concat(knowledge.Warnings).ToArray());
+        if(knowledge.ReasonCode!="P7KNOWLEDGE_VALID")return Fail(NarrationDraftReasonCodes.UnsupportedKnowledgeResult,
+            ["Committed knowledge evaluation returned an unsupported governed result."],MergeWarnings(result.Warnings,knowledge.Warnings));
         var publishedKnowledge=knowledge.Authority;var ka=publishedKnowledge.KnowledgeAuthority;
         if(ka.ExecutionId!=a.ExecutionId||ka.PlanId!=a.PlanId||ka.EventId!=a.EventId||
            ka.SemanticChecksum!=a.KnowledgeAuthorityChecksum||
            !a.Phase4To7Lineage.TryGetValue("phase7KnowledgeAuthorityId",out var knowledgeId)||knowledgeId!=ka.AuthorityId)
             return Fail(NarrationDraftReasonCodes.ClaimLineageStale,["Committed claim authority does not match planning lineage."],result.Warnings);
+        var expectedLineage=new Dictionary<string,string>(StringComparer.Ordinal)
+        {
+            ["phase4AggregateId"]=ka.SourcePhase4AggregateId,["phase4Checksum"]=ka.SourcePhase4Checksum,
+            ["phase5PublicationId"]=ka.SourcePhase5PublicationId,["phase6AuthorityId"]=ka.SourcePhase6AuthorityId,
+            ["phase6AuthorityChecksum"]=ka.SourcePhase6AuthorityChecksum,["phase7KnowledgeAuthorityId"]=ka.AuthorityId,
+            ["phase7KnowledgeAuthorityChecksum"]=ka.SemanticChecksum
+        };
+        var stale=expectedLineage.FirstOrDefault(x=>!a.Phase4To7Lineage.TryGetValue(x.Key,out var value)||value!=x.Value);
+        if(!string.IsNullOrEmpty(stale.Key))return Fail(NarrationDraftReasonCodes.ClaimLineageStale,[$"Committed lineage component '{stale.Key}' is missing or stale."],MergeWarnings(result.Warnings,knowledge.Warnings));
+        if(ka.RuntimeCompatibilityEvidence.Any(x=>!a.RuntimeCompatibilityEvidence.TryGetValue(x.Key,out var value)||value!=x.Value))
+            return Fail(NarrationDraftReasonCodes.RuntimeIncompatible,["Committed runtime evidence does not match the knowledge runtime."],MergeWarnings(result.Warnings,knowledge.Warnings));
         if(!GovernedNarrationLanguage.TryNormalize(ka.Language,out var claimLanguage)||claimLanguage!=normalized)
             return Fail(NarrationDraftReasonCodes.LanguageMismatch,["Committed claim authority language differs from planning."],result.Warnings);
         if(ka.Claims.Any(c=>c.Checksum!=Phase7Determinism.Hash(c with{Checksum=""})))
@@ -59,8 +83,9 @@ public sealed class Phase7NarrationDraftInputAuthorityEvaluator(
         var input=new Phase7NarrationDraftInputAuthority(p,a,p.Diagnostics,p.Report,p.Validation,p.ManifestEntry,p.PublicationEvidence,
             profile,a.ExecutionId,a.PlanId,a.EventId,a.Language,a.ProfileId,a.ProfileVersion,a.Phase4To7Lineage,a.RuntimeCompatibilityEvidence)
             {CertifiedClaims=ka.Claims,CommittedClaimAuthority=publishedKnowledge,Warnings=result.Warnings.Concat(knowledge.Warnings).Distinct().ToArray()};
-        return new(true,input,NarrationDraftReasonCodes.InputValid,[],result.Warnings);
+        return new(true,input,NarrationDraftReasonCodes.InputValid,[],input.Warnings);
     }
+    private static string[] MergeWarnings(params IEnumerable<string>[] sources)=>sources.SelectMany(x=>x).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
     private static Phase7NarrationDraftInputAuthorityEvaluation Fail(string code,IReadOnlyList<string> errors,IReadOnlyList<string> warnings)=>new(false,null,code,errors,warnings){BlockingIssues=errors};
 }
 
@@ -81,6 +106,8 @@ public static class NarrationDraftCanonicalizer
     public static string ComputeAuthorityId(NarrationDraftAuthority x)=>$"narration-draft-{ComputeAuthorityChecksum(x)[..20]}";
     public static string ComputeAuthorityChecksum(NarrationDraftAuthority x)=>Phase7Determinism.Hash(x with{AuthorityId="",Phase4To7Lineage=Sort(x.Phase4To7Lineage),RuntimeCompatibilityEvidence=Sort(x.RuntimeCompatibilityEvidence),DeterministicChecksum=""});
     public static string ComputeValidationChecksum(NarrationDraftValidation x)=>Phase7Determinism.Hash(x with{DeterministicChecksum=""});
+    public static string ComputeClaimUsageChecksum(NarrationDraftClaimUsage x)=>Phase7Determinism.Hash(x with{QualificationIds=Sort(x.QualificationIds),DeterministicChecksum=""});
+    public static string ComputeTransitionPhraseChecksum(NarrationDraftTransitionPhrase x)=>Phase7Determinism.Hash(x with{PlanningTransitionIds=Sort(x.PlanningTransitionIds),DeterministicChecksum=""});
     private static string[] Sort(IEnumerable<string> x)=>x.Order(StringComparer.Ordinal).ToArray();
     private static NarrationDraftClaimUsage[] SortUsage(IEnumerable<NarrationDraftClaimUsage>x)=>x.OrderBy(y=>y.ClaimId,StringComparer.Ordinal).ToArray();
     private static SortedDictionary<string,string> Sort(IReadOnlyDictionary<string,string>x){var result=new SortedDictionary<string,string>(StringComparer.Ordinal);foreach(var pair in x)result[pair.Key]=pair.Value;return result;}
@@ -99,19 +126,24 @@ public sealed partial class DeterministicNarrationDraftLanguagePolicy:INarration
 }
 public sealed class DeterministicNarrationDraftTimingPolicy:INarrationDraftTimingPolicy
 {
-    public NarrationDraftTimingBudget Resolve(NarrationDraftTimingRequest r){var wpm=GovernedNarrationLanguage.IsHindi(r.Language)?130m:150m;var min=(int)Math.Floor(r.MinimumDurationSeconds*wpm/60m);var max=(int)Math.Ceiling(r.MaximumDurationSeconds*wpm/60m);var target=(int)Math.Round(r.TargetDurationSeconds*wpm/60m);return new(target,min,max,r.TargetDurationSeconds,1m,Math.Max(0,r.MaximumSentenceCount-r.RequiredClaimCount-1),wpm);}
+    public NarrationDraftTimingBudget Resolve(NarrationDraftTimingRequest r){var wpm=GovernedNarrationLanguage.IsHindi(r.Language)?130m:150m;var min=(int)Math.Floor(r.MinimumDurationSeconds*wpm/60m);var max=(int)Math.Ceiling(r.MaximumDurationSeconds*wpm/60m);var target=(int)Math.Round(r.TargetDurationSeconds*wpm/60m);return new(target,min,max,r.TargetDurationSeconds,1m,Math.Max(0,r.MaximumSentenceCount-r.RequiredClaimCount-r.MandatoryStructuralSentenceCount),wpm);}
 }
 public sealed class DeterministicNarrationDraftRealizationPolicy(INarrationDraftLanguagePolicy language):INarrationDraftRealizationPolicy
 {
     // The only transformations are whitespace trimming, governed qualification prefix insertion, and terminal punctuation.
     public string Realize(CertifiedNarrationClaim c,IReadOnlyList<string> q,string l)=>language.Terminate(string.Join(" ",q.Append(c.Text)).Trim(),l);
 }
+internal static class NarrationDraftFactualRealization
+{
+    internal static string Expected(string certified,IReadOnlyList<string> qualifications,string language,INarrationDraftLanguagePolicy policy)=
+        policy.Terminate(string.Join(" ",qualifications.Append(certified.Trim())).Trim(),language);
+}
 public sealed class ConservativeNarrationDraftClaimCoalescingPolicy:INarrationDraftClaimCoalescingPolicy{public bool CanCoalesce(NarrationPlanningScene s,CertifiedNarrationClaim a,CertifiedNarrationClaim b,int m)=>false;}
 public sealed class DeterministicNarrationDraftOpeningPolicy(INarrationDraftLanguagePolicy language):INarrationDraftOpeningPolicy{public string Create(NarrationPlanningScene s,string l)=>language.OpeningBridge(s.ViewerQuestion,s.LearningObjective,l);}
-public sealed class DeterministicNarrationDraftClosingPolicy(INarrationDraftLanguagePolicy language):INarrationDraftClosingPolicy{public string Create(NarrationPlanningScene s,bool next,string l)=>language.Terminate(next?s.OutgoingTransition.DestinationTransitionIn??s.LearningObjective:s.OutgoingTransition.SourceTransitionOut??s.LearningObjective,l);}
+public sealed class DeterministicNarrationDraftClosingPolicy(INarrationDraftLanguagePolicy language):INarrationDraftClosingPolicy{public string Create(NarrationPlanningScene s,bool next,string l)=>string.IsNullOrWhiteSpace(s.LearningObjective)?"":language.Terminate(s.LearningObjective,l);}
 public sealed class DeterministicNarrationDraftTransitionPhrasePolicy(INarrationDraftLanguagePolicy language):INarrationDraftTransitionPhrasePolicy
 {
-    public NarrationDraftTransitionPhrase? Create(NarrationPlanningTransition t,string l){var text=t.DestinationTransitionIn??t.SourceTransitionOut;if(string.IsNullOrWhiteSpace(text))return null;var d=new NarrationDraftTransitionPhrase(t.TransitionId,t.Kind,language.Terminate(text,l),t.Variant,[t.TransitionId],"");return d with{DeterministicChecksum=Phase7Determinism.Hash(d with{DeterministicChecksum=""})};}
+    public NarrationDraftTransitionPhrase? Create(NarrationDraftTransitionPhraseRequest r){var t=r.Transition;var text=r.Ownership==NarrationDraftTransitionOwnership.IncomingDestination?t.DestinationTransitionIn:t.SourceTransitionOut;if(string.IsNullOrWhiteSpace(text)||t.Variant!=r.Variant)return null;var d=new NarrationDraftTransitionPhrase(t.TransitionId,t.Kind,language.Terminate(text,r.Language),t.Variant,[t.TransitionId],"");return d with{DeterministicChecksum=NarrationDraftCanonicalizer.ComputeTransitionPhraseChecksum(d)};}
 }
 public sealed class NarrationDraftSafetyValidator:INarrationDraftSafetyValidator
 {
@@ -156,33 +188,38 @@ public sealed class NarrationDraftAuthorityBuilder(INarrationDraftLanguagePolicy
         var required=new List<CertifiedNarrationClaim>();foreach(var id in p.RequiredClaims){if(!catalog.TryGetValue(id,out var c))return(null,Fail(NarrationDraftReasonCodes.RequiredMissing,$"Certified Required claim is missing: {id}"));required.Add(c);}
         if(required.Any(x=>x.RequiresHumanReview))return(null,Fail(NarrationDraftReasonCodes.HumanReviewInvalid,"A Required factual claim requires human review."));
         if(required.Any(x=>!string.Equals(x.Language,lang,StringComparison.OrdinalIgnoreCase)))return(null,Fail(NarrationDraftReasonCodes.CertifiedLanguageClaimMissing,"A Required claim has no certified text in the planning language."));
-        var budget=timing.Resolve(new(lang,p.MinimumDuration,p.ExpectedDuration,p.MaximumDuration,p.NarrationConstraints.PreferredSentenceCount,p.NarrationConstraints.MinimumSentenceCount,p.NarrationConstraints.MaximumSentenceCount,required.Count,p.OptionalClaims.Count,p.NarrationConstraints.PauseStrategy));
-        var sentences=new List<NarrationDraftSentence>();AddSentence(openings.Create(p,lang),"Opening",[],[],false,false,false,p.VisualSynchronizationTargets);
+        var incoming=transitions.Create(new(p.IncomingTransition,NarrationDraftTransitionOwnership.IncomingDestination,p.Variant,lang));
+        var outgoing=transitions.Create(new(p.OutgoingTransition,NarrationDraftTransitionOwnership.OutgoingSource,p.Variant,lang));
+        var opening=openings.Create(p,lang);var closing=closings.Create(p,hasNext,lang);
+        var structural=(incoming is null?0:1)+(string.IsNullOrWhiteSpace(opening)?0:1)+(string.IsNullOrWhiteSpace(closing)?0:1)+(outgoing is null?0:1);
+        var budget=timing.Resolve(new(lang,p.MinimumDuration,p.ExpectedDuration,p.MaximumDuration,p.NarrationConstraints.PreferredSentenceCount,p.NarrationConstraints.MinimumSentenceCount,p.NarrationConstraints.MaximumSentenceCount,required.Count,p.OptionalClaims.Count,p.NarrationConstraints.PauseStrategy,structural));
+        var requiredWords=required.Sum(c=>DeterministicNarrationDraftLanguagePolicy.Count(realization.Realize(c,Qualifications(p,c),lang)));
+        if(required.Count>p.NarrationConstraints.MaximumSentenceCount||requiredWords>budget.MaximumWords)
+            return(null,Fail(NarrationDraftReasonCodes.RequiredOverBudget,"Required factual realization exceeds the governed maximum."));
+        var sentences=new List<NarrationDraftSentence>();
+        if(incoming is not null)AddSentence(incoming.Text,"IncomingTransition",[],[],false,false,true,[]);
+        if(!string.IsNullOrWhiteSpace(opening))AddSentence(opening,"Opening",[],[],false,false,false,p.VisualSynchronizationTargets);
         var usages=new List<NarrationDraftClaimUsage>();
         foreach(var c in required){var q=Qualifications(p,c);if(c.RequiresQualification&&q.Count==0)return(null,Fail(NarrationDraftReasonCodes.QualificationMissing,$"Qualification authority is missing: {c.ClaimId}"));var text=realization.Realize(c,q,lang);if(!ExactRealization(c.Text,q,text,lang))return(null,Fail(NarrationDraftReasonCodes.SafetyInvalid,$"Certified claim realization changed: {c.ClaimId}"));var s=AddSentence(text,"RequiredClaim",[c.ClaimId],q,true,false,false,c.KnowledgeReferenceIds);usages.Add(Usage(c.ClaimId,"Required",s,q));}
         var optionalUsages=new List<NarrationDraftClaimUsage>();foreach(var id in p.OptionalClaims.Take(budget.PermittedOptionalClaimCapacity)){if(!catalog.TryGetValue(id,out var c)||c.RequiresHumanReview||!SameLanguage(c.Language,lang))continue;var q=Qualifications(p,c);if(c.RequiresQualification&&q.Count==0)continue;var text=realization.Realize(c,q,lang);if(!ExactRealization(c.Text,q,text,lang))continue;if(sentences.Sum(x=>DeterministicNarrationDraftLanguagePolicy.Count(x.Text))+DeterministicNarrationDraftLanguagePolicy.Count(text)>budget.MaximumWords)continue;var s=AddSentence(text,"OptionalClaim",[id],q,false,true,false,c.KnowledgeReferenceIds);optionalUsages.Add(Usage(id,"Optional",s,q));}
-        var incoming=Phrase(p.IncomingTransition,p.IncomingTransition.DestinationTransitionIn);
-        if(incoming is not null)AddSentence(incoming.Text,"IncomingTransition",[],[],false,false,true,[]);
-        var outgoing=Phrase(p.OutgoingTransition,p.OutgoingTransition.SourceTransitionOut);
+        if(!string.IsNullOrWhiteSpace(closing))AddSentence(closing,"Closing",[],[],false,false,false,p.VisualSynchronizationTargets);
         if(outgoing is not null)AddSentence(outgoing.Text,"OutgoingTransition",[],[],false,false,true,[]);
-        var closing=closings.Create(p,hasNext,lang);
-        if(!string.IsNullOrWhiteSpace(closing)&&!sentences.Any(s=>s.Text==closing))AddSentence(closing,"Closing",[],[],false,false,false,p.VisualSynchronizationTargets);
-        if(sentences.Count>p.NarrationConstraints.MaximumSentenceCount)return(null,Fail(NarrationDraftReasonCodes.RequiredOverBudget,"Required claims exceed the governed sentence budget."));
+        if(sentences.Count<p.NarrationConstraints.MinimumSentenceCount||sentences.Count>p.NarrationConstraints.MaximumSentenceCount)
+            return(null,Fail(NarrationDraftReasonCodes.TimingInvalid,"Complete scene is outside the governed sentence range."));
         var words=sentences.Sum(x=>DeterministicNarrationDraftLanguagePolicy.Count(x.Text));var read=sentences.Sum(x=>x.EstimatedDurationSeconds);
-        if(words>budget.MaximumWords||read>p.MaximumDuration)return(null,Fail(NarrationDraftReasonCodes.RequiredOverBudget,"Required claims exceed the governed duration budget."));
-        var draft=new NarrationDraftScene("",p.PlanningId,p.SceneId,p.Variant,p.StoryFrameId,p.PacketId,p.DeterministicChecksum,p.ViewerQuestion,p.LearningObjective,sentences[0].Text,sentences,
+        if(words<budget.MinimumWords||words>budget.MaximumWords||read<p.MinimumDuration||read>p.MaximumDuration)return(null,Fail(NarrationDraftReasonCodes.TimingInvalid,"Complete scene is outside the governed word or reading-time range."));
+        var draft=new NarrationDraftScene("",p.PlanningId,p.SceneId,p.Variant,p.StoryFrameId,p.PacketId,p.DeterministicChecksum,p.ViewerQuestion,p.LearningObjective,opening,sentences,
             closing,incoming,outgoing,usages,optionalUsages,p.DeferredClaims,usages.Concat(optionalUsages).SelectMany(x=>x.QualificationIds).Distinct().ToArray(),p.SafetyRequirements,p.EditorialConstraints,words,sentences.Count,read,p.MinimumDuration,p.ExpectedDuration,p.MaximumDuration,"");
         var errors=safety.Validate(p,draft,catalog);if(errors.Count>0)return(null,new(false,null,NarrationDraftReasonCodes.SafetyInvalid,errors,[],errors));
         draft=draft with{DraftSceneId=NarrationDraftCanonicalizer.ComputeSceneId(draft)};draft=draft with{DeterministicChecksum=NarrationDraftCanonicalizer.ComputeSceneChecksum(draft)};return(draft,null);
         NarrationDraftSentence AddSentence(string text,string role,IReadOnlyList<string> ids,IReadOnlyList<string> q,bool req,bool opt,bool transition,IReadOnlyList<string> refs){var d=language.EstimateReadingTime(text,lang);var x=new NarrationDraftSentence("",sentences.Count+1,text,role,ids,refs,q,p.SafetyRequirements,p.VisualSynchronizationTargets,req,opt,transition,d,"");x=x with{SentenceId=NarrationDraftCanonicalizer.ComputeSentenceId(x)};x=x with{DeterministicChecksum=NarrationDraftCanonicalizer.ComputeSentenceChecksum(x)};sentences.Add(x);return x;}
-        NarrationDraftTransitionPhrase? Phrase(NarrationPlanningTransition t,string? authored){if(string.IsNullOrWhiteSpace(authored))return null;var x=new NarrationDraftTransitionPhrase(t.TransitionId,t.Kind,language.Terminate(authored,lang),t.Variant,[t.TransitionId],"");return x with{DeterministicChecksum=Phase7Determinism.Hash(x with{DeterministicChecksum=""})};}
     }
     private bool ExactRealization(string certified,IReadOnlyList<string> qualifications,string realized,string lang)=>
-        realized==language.Terminate(string.Join(" ",qualifications.Append(certified.Trim())).Trim(),lang);
+        realized==NarrationDraftFactualRealization.Expected(certified,qualifications,lang,language);
     private static bool SameLanguage(string a,string b)=>GovernedNarrationLanguage.TryNormalize(a,out var x)&&GovernedNarrationLanguage.TryNormalize(b,out var y)&&x==y;
     private static IReadOnlyList<string> Qualifications(NarrationPlanningScene p,CertifiedNarrationClaim c)=>
         (c.IsCultural?p.CulturalQualificationRequirements:[]).Concat(c.IsMythological?p.CulturalQualificationRequirements:[]).Concat(c.IsAstrologyRelated?p.AstrologyQualificationRequirements:[]).Concat(c.IsLocationDependent?p.LocationQualificationRequirements:[]).Concat(c.IsDateTimeDependent?p.TimeQualificationRequirements:[]).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-    private static NarrationDraftClaimUsage Usage(string id,string part,NarrationDraftSentence sentence,IReadOnlyList<string> q){var x=new NarrationDraftClaimUsage(id,part,sentence.SentenceId,"ExactCertifiedText",q,"");return x with{DeterministicChecksum=Phase7Determinism.Hash(x with{QualificationIds=q.Order(StringComparer.Ordinal).ToArray(),DeterministicChecksum=""})};}
+    private static NarrationDraftClaimUsage Usage(string id,string part,NarrationDraftSentence sentence,IReadOnlyList<string> q){var x=new NarrationDraftClaimUsage(id,part,sentence.SentenceId,"ExactCertifiedText",q,"");return x with{DeterministicChecksum=NarrationDraftCanonicalizer.ComputeClaimUsageChecksum(x)};}
     private static NarrationDraftAuthorityBuildResult Fail(string code,string error)=>new(false,null,code,[error],[],[error]);
 }
 
@@ -201,23 +238,55 @@ public sealed class NarrationDraftValidator(INarrationDraftSafetyValidator safet
             [GateNames[2]]=authority.ProfileId==input.ProfileId&&authority.ProfileVersion==input.ProfileVersion,[GateNames[3]]=authority.Language==input.Language,
             [GateNames[4]]=authority.PlanningAuthorityId==p.AuthorityId&&authority.PlanningAuthorityChecksum==p.DeterministicChecksum,[GateNames[5]]=ds.Length==ps.Length&&ds.Select(x=>x.PlanningId).SequenceEqual(ps.Select(x=>x.PlanningId)),
             [GateNames[6]]=ScenePairs((x,d)=>d.SceneId==x.SceneId&&d.StoryFrameId==x.StoryFrameId&&d.PacketId==x.PacketId&&d.PlanningChecksum==x.DeterministicChecksum&&d.Variant==x.Variant),
-            [GateNames[7]]=ds.SelectMany(x=>x.Sentences).All(x=>x.SentenceId==NarrationDraftCanonicalizer.ComputeSentenceId(x)),[GateNames[8]]=ds.SelectMany(x=>x.Sentences).All(x=>x.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeSentenceChecksum(x)),
+            [GateNames[7]]=ds.All(d=>d.Sentences.Count>=map.GetValueOrDefault(d.PlanningId)?.NarrationConstraints.MinimumSentenceCount&&d.Sentences.Select((s,i)=>s.Ordinal==i+1).All(x=>x)&&d.Sentences.Select(x=>x.Ordinal).Distinct().Count()==d.Sentences.Count&&d.Sentences.Select(x=>x.SentenceId).Distinct(StringComparer.Ordinal).Count()==d.Sentences.Count&&d.Sentences.All(x=>x.SentenceId==NarrationDraftCanonicalizer.ComputeSentenceId(x)&&ValidFlags(x))),[GateNames[8]]=ds.SelectMany(x=>x.Sentences).All(x=>x.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeSentenceChecksum(x)),
             [GateNames[9]]=ScenePairs((x,d)=>x.RequiredClaims.Order(StringComparer.Ordinal).SequenceEqual(d.RequiredClaimUsage.Select(y=>y.ClaimId).Order(StringComparer.Ordinal))),
             [GateNames[10]]=ds.All(d=>d.RequiredClaimUsage.Select(x=>x.ClaimId).Distinct(StringComparer.Ordinal).Count()==d.RequiredClaimUsage.Count),
             [GateNames[11]]=ScenePairs((x,d)=>d.OptionalClaimUsage.All(y=>x.OptionalClaims.Contains(y.ClaimId,StringComparer.Ordinal))),
             [GateNames[12]]=ScenePairs((x,d)=>d.Sentences.All(y=>!y.ClaimIds.Intersect(x.DeferredClaims,StringComparer.Ordinal).Any())&&!d.RequiredClaimUsage.Concat(d.OptionalClaimUsage).Any(y=>x.DeferredClaims.Contains(y.ClaimId,StringComparer.Ordinal))),
-            [GateNames[13]]=ds.All(d=>d.RequiredClaimUsage.Concat(d.OptionalClaimUsage).All(u=>d.Sentences.Count(s=>s.SentenceId==u.SentenceId&&s.ClaimIds.Contains(u.ClaimId,StringComparer.Ordinal))==1)),
-            [GateNames[14]]=ds.All(d=>d.RequiredClaimUsage.Concat(d.OptionalClaimUsage).All(u=>!claims.TryGetValue(u.ClaimId,out var c)||!c.RequiresQualification||u.QualificationIds.Count>0)),
+            [GateNames[13]]=ScenePairs((x,d)=>d.RequiredClaimUsage.Concat(d.OptionalClaimUsage).All(u=>ValidUsage(x,d,u))),
+            [GateNames[14]]=ds.All(d=>d.RequiredClaimUsage.Concat(d.OptionalClaimUsage).All(u=>claims.TryGetValue(u.ClaimId,out var c)&&(!c.RequiresQualification||u.QualificationIds.Count>0))),
             [GateNames[15]]=ScenePairs((x,d)=>safety.Validate(x,d,claims).Count==0),[GateNames[16]]=Qualified(c=>c.IsAstrologyRelated),[GateNames[17]]=Qualified(c=>c.IsCultural||c.IsMythological),
-            [GateNames[18]]=Qualified(c=>c.IsLocationDependent||c.IsDateTimeDependent),[GateNames[19]]=ds.SelectMany(x=>x.RequiredClaimUsage.Concat(x.OptionalClaimUsage)).All(u=>!claims.TryGetValue(u.ClaimId,out var c)||!c.RequiresHumanReview),
-            [GateNames[20]]=ScenePairs((x,d)=>(d.IncomingTransitionPhrase is null||d.IncomingTransitionPhrase.Variant==d.Variant)&&(d.OutgoingTransitionPhrase is null||d.OutgoingTransitionPhrase.Variant==d.Variant)),
-            [GateNames[21]]=ScenePairs((x,d)=>d.SentenceCount==d.Sentences.Count&&d.SentenceCount<=x.NarrationConstraints.MaximumSentenceCount),[GateNames[22]]=ds.All(d=>d.EstimatedReadingTimeSeconds<=d.MaximumDurationSeconds),
-            [GateNames[23]]=authority.LongScenes.All(x=>x.Variant=="Long")&&authority.ShortScenes.All(x=>x.Variant=="Short")&&!authority.LongScenes.Select(x=>x.DraftSceneId).Intersect(authority.ShortScenes.Select(x=>x.DraftSceneId)).Any(),
+            [GateNames[18]]=Qualified(c=>c.IsLocationDependent||c.IsDateTimeDependent),[GateNames[19]]=ds.SelectMany(x=>x.RequiredClaimUsage.Concat(x.OptionalClaimUsage)).All(u=>claims.TryGetValue(u.ClaimId,out var c)&&!c.RequiresHumanReview),
+            [GateNames[20]]=ScenePairs(ValidTransitions),
+            [GateNames[21]]=ScenePairs((x,d)=>d.SentenceCount==d.Sentences.Count&&d.SentenceCount>=x.NarrationConstraints.MinimumSentenceCount&&d.SentenceCount<=x.NarrationConstraints.MaximumSentenceCount),[GateNames[22]]=ds.All(d=>d.EstimatedReadingTimeSeconds>=d.MinimumDurationSeconds&&d.EstimatedReadingTimeSeconds<=d.MaximumDurationSeconds),
+            [GateNames[23]]=Independent(authority),
             [GateNames[24]]=Diagnostics(authority.Diagnostics,ps,ds),[GateNames[25]]=authority.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeAuthorityChecksum(authority)&&ds.All(x=>x.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeSceneChecksum(x)),
             [GateNames[26]]=authority.AuthorityId==NarrationDraftCanonicalizer.ComputeAuthorityId(authority)
         };
         var gates=GateNames.Select(x=>new NarrationDraftValidationGate(x,checks[x],checks[x]?[]:[$"{x} failed."])).ToArray();var errors=gates.SelectMany(x=>x.Errors).ToArray();var v=new NarrationDraftValidation(errors.Length==0,errors.Length==0?NarrationDraftReasonCodes.AuthorityValid:"NARRATION_DRAFT_AUTHORITY_INVALID",gates,errors,input.Warnings,"");return v with{DeterministicChecksum=NarrationDraftCanonicalizer.ComputeValidationChecksum(v)};
         bool Qualified(Func<CertifiedNarrationClaim,bool> applies)=>ds.SelectMany(x=>x.RequiredClaimUsage.Concat(x.OptionalClaimUsage)).Where(u=>claims.TryGetValue(u.ClaimId,out var c)&&applies(c)).All(u=>u.QualificationIds.Count>0);
+        bool ValidUsage(NarrationPlanningScene scene,NarrationDraftScene draft,NarrationDraftClaimUsage u)
+        {
+            if(!claims.TryGetValue(u.ClaimId,out var c)||u.UsageMode!="ExactCertifiedText"||u.DeterministicChecksum!=NarrationDraftCanonicalizer.ComputeClaimUsageChecksum(u))return false;
+            var required=u.ClaimPartition=="Required"&&scene.RequiredClaims.Contains(u.ClaimId,StringComparer.Ordinal);
+            var optional=u.ClaimPartition=="Optional"&&scene.OptionalClaims.Contains(u.ClaimId,StringComparer.Ordinal);
+            if(!required&&!optional)return false;
+            var matches=draft.Sentences.Where(s=>s.SentenceId==u.SentenceId).ToArray();if(matches.Length!=1)return false;var s=matches[0];
+            return s.ClaimIds.Count(x=>x==u.ClaimId)==1&&s.ClaimIds.Count==1&&s.IsRequired==required&&s.IsOptional==optional&&!s.IsTransition&&
+                s.SentenceRole==(required?"RequiredClaim":"OptionalClaim")&&s.QualificationIds.Order(StringComparer.Ordinal).SequenceEqual(u.QualificationIds.Order(StringComparer.Ordinal))&&
+                s.KnowledgeReferenceIds.Order(StringComparer.Ordinal).SequenceEqual(c.KnowledgeReferenceIds.Order(StringComparer.Ordinal))&&
+                s.Text==NarrationDraftFactualRealization.Expected(c.Text,u.QualificationIds,input.Language,new DeterministicNarrationDraftLanguagePolicy());
+        }
+        static bool ValidFlags(NarrationDraftSentence s)=>s.SentenceRole switch {"RequiredClaim"=>s.IsRequired&&!s.IsOptional&&!s.IsTransition,"OptionalClaim"=>!s.IsRequired&&s.IsOptional&&!s.IsTransition,"IncomingTransition" or "OutgoingTransition"=>!s.IsRequired&&!s.IsOptional&&s.IsTransition,"Opening" or "Closing"=>!s.IsRequired&&!s.IsOptional&&!s.IsTransition,_=>false};
+        bool ValidTransitions(NarrationPlanningScene plan,NarrationDraftScene draft)
+        {
+            bool One(NarrationDraftTransitionPhrase? phrase,NarrationPlanningTransition source,string? authored,string role,bool first)=phrase is null
+                ? string.IsNullOrWhiteSpace(authored)&&draft.Sentences.All(s=>s.SentenceRole!=role)
+                : phrase.TransitionId==source.TransitionId&&phrase.Kind==source.Kind&&phrase.Variant==draft.Variant&&phrase.PlanningTransitionIds.SequenceEqual([source.TransitionId])&&phrase.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeTransitionPhraseChecksum(phrase)&&
+                  phrase.Text==new DeterministicNarrationDraftLanguagePolicy().Terminate(authored!,input.Language)&&draft.Sentences.Count(s=>s.SentenceRole==role&&s.IsTransition&&s.Text==phrase.Text&&s.ClaimIds.Count==0&&s.KnowledgeReferenceIds.Count==0)==1&&(!first||draft.Sentences[0].SentenceRole==role)&&(!first||draft.Sentences[0].Text==phrase.Text);
+            return One(draft.IncomingTransitionPhrase,plan.IncomingTransition,plan.IncomingTransition.DestinationTransitionIn,"IncomingTransition",true)&&One(draft.OutgoingTransitionPhrase,plan.OutgoingTransition,plan.OutgoingTransition.SourceTransitionOut,"OutgoingTransition",false)&&
+                (draft.OutgoingTransitionPhrase is null||draft.Sentences[^1].SentenceRole=="OutgoingTransition");
+        }
+    }
+    private static bool Independent(NarrationDraftAuthority authority)
+    {
+        if(authority.LongScenes.Any(x=>x.Variant!="Long")||authority.ShortScenes.Any(x=>x.Variant!="Short")||
+           authority.LongScenes.Select(x=>x.DraftSceneId).Intersect(authority.ShortScenes.Select(x=>x.DraftSceneId),StringComparer.Ordinal).Any()||
+           authority.LongScenes.Select(x=>x.PlanningId).Intersect(authority.ShortScenes.Select(x=>x.PlanningId),StringComparer.Ordinal).Any())return false;
+        var longs=authority.LongScenes.SelectMany(x=>x.Sentences).Select(x=>x.Text).ToArray();var shorts=authority.ShortScenes.SelectMany(x=>x.Sentences).Select(x=>x.Text).ToArray();
+        if(shorts.Length==0||longs.Length==0)return true;
+        if(longs.SequenceEqual(shorts,StringComparer.Ordinal)||shorts.Length<=longs.Length&&Enumerable.Range(0,longs.Length-shorts.Length+1).Any(i=>longs.Skip(i).Take(shorts.Length).SequenceEqual(shorts,StringComparer.Ordinal)))return false;
+        var cursor=0;foreach(var text in longs)if(cursor<shorts.Length&&text==shorts[cursor])cursor++;return cursor!=shorts.Length;
     }
     private static bool Diagnostics(NarrationDraftDiagnostics d,IReadOnlyList<NarrationPlanningScene> p,IReadOnlyList<NarrationDraftScene> s)=>d.PlanningSceneCount==p.Count&&d.DraftSceneCount==s.Count&&d.RequiredClaimCount==p.Sum(x=>x.RequiredClaims.Count)&&d.RequiredClaimUsageCount==s.Sum(x=>x.RequiredClaimUsage.Count)&&d.RequiredClaimUsageCount==d.RequiredClaimCount&&d.DeferredClaimUsageCount==0&&d.BlockingIssueCount==0&&d.FailedGateCount==0&&d.SentenceCount==s.Sum(x=>x.SentenceCount)&&d.TotalWordCount==s.Sum(x=>x.WordCount)&&d.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeDiagnosticsChecksum(d);
 }
@@ -231,9 +300,10 @@ public sealed class Phase7NarrationDraftAuthorityService(IPhase7NarrationDraftIn
         var evaluated=await inputEvaluator.EvaluateAsync(request,token);
         if(!evaluated.IsValid||evaluated.Authority is null)return new(false,evaluated.ReasonCode,"NotRun","NotRun",null,null,evaluated.Errors,evaluated.Warnings,evaluated.BlockingIssues);
         var built=builder.Build(evaluated.Authority);
-        if(!built.IsValid||built.Authority is null)return new(false,evaluated.ReasonCode,built.ReasonCode,"NotRun",null,null,built.Errors,built.Warnings,built.BlockingIssues);
+        if(!built.IsValid||built.Authority is null)return new(false,evaluated.ReasonCode,built.ReasonCode,"NotRun",null,null,built.Errors,Merge(evaluated.Warnings,built.Warnings),built.BlockingIssues);
         var validation=validator.Validate(evaluated.Authority,built.Authority);
-        if(!validation.IsValid)return new(false,evaluated.ReasonCode,built.ReasonCode,validation.ReasonCode,null,validation,validation.Errors,validation.Warnings,validation.Errors);
-        return new(true,evaluated.ReasonCode,built.ReasonCode,validation.ReasonCode,built.Authority,validation,[],built.Warnings,[]);
+        if(!validation.IsValid)return new(false,evaluated.ReasonCode,built.ReasonCode,validation.ReasonCode,null,validation,validation.Errors,Merge(evaluated.Warnings,built.Warnings,validation.Warnings),validation.Errors);
+        return new(true,evaluated.ReasonCode,built.ReasonCode,validation.ReasonCode,built.Authority,validation,[],Merge(evaluated.Warnings,built.Warnings,validation.Warnings),[]);
     }
+    private static string[] Merge(params IEnumerable<string>[] warnings)=>warnings.SelectMany(x=>x).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
 }
