@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
@@ -9,10 +11,12 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
     private readonly Phase7KnowledgeSectionAdapterRegistry registry;
     private readonly IPhase7KnowledgeMergeClassifier classifier;
     private readonly IPhase7SourceEligibilityPolicy sourceEligibility;
+    private readonly ILogger<Phase7KnowledgeResolver> logger;
     public Phase7KnowledgeResolver() : this(new Phase7KnowledgeSectionAdapterRegistry(),new Phase7KnowledgeMergeClassifier(),new Phase7SourceEligibilityPolicy()) { }
     public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry) : this(registry,new Phase7KnowledgeMergeClassifier(),new Phase7SourceEligibilityPolicy()) { }
     public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry,IPhase7KnowledgeMergeClassifier classifier) : this(registry,classifier,new Phase7SourceEligibilityPolicy()) { }
-    public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry,IPhase7KnowledgeMergeClassifier classifier,IPhase7SourceEligibilityPolicy sourceEligibility) { this.registry=registry;this.classifier=classifier;this.sourceEligibility=sourceEligibility; }
+    public Phase7KnowledgeResolver(Phase7KnowledgeSectionAdapterRegistry registry,IPhase7KnowledgeMergeClassifier classifier,IPhase7SourceEligibilityPolicy sourceEligibility,
+        ILogger<Phase7KnowledgeResolver>? logger=null) { this.registry=registry;this.classifier=classifier;this.sourceEligibility=sourceEligibility;this.logger=logger??NullLogger<Phase7KnowledgeResolver>.Instance; }
 
     public ResolvedNarrationKnowledge Resolve(CertifiedKnowledgePayload payload, FamilyNarrationProfile profile)
         => Resolve(payload, profile, null);
@@ -27,7 +31,7 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
         if (sourcePool.Count == 0) issues.Add("P7KNOWLEDGE_SOURCE_REGISTRY_EMPTY");
         Read(payload.EvergreenJson, Phase7KnowledgeOrigin.Evergreen, payload.EvergreenPayloadId ?? payload.PayloadId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties,entities);
         Read(payload.RawDataJson, Phase7KnowledgeOrigin.Event, payload.EventId, payload, candidates, warnings, issues,adapterDiagnostics,unknownSections,unknownProperties,entities);
-        WriteCultureDiagnostic(diagnosticPath,payload,profile,candidates,[]);
+        var diagnosticFailureType=WriteCultureDiagnostic(diagnosticPath,payload,profile,candidates,[]);
 
         var merged = new Dictionary<string,Phase7AdapterClaimCandidate>(StringComparer.Ordinal);
         var decisions=new List<Phase7KnowledgeMergeDecision>();
@@ -81,7 +85,8 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
             return ResolveClaim(candidate, disposition, payload, issues, warnings);
         }).OrderBy(x=>x.Claim.ClaimId,StringComparer.Ordinal).ToArray();
         var claims=resolvedClaims.Select(x=>x.Claim).ToArray();
-        WriteCultureDiagnostic(diagnosticPath,payload,profile,candidates,resolvedClaims);
+        var finalDiagnosticFailureType=WriteCultureDiagnostic(diagnosticPath,payload,profile,candidates,resolvedClaims);
+        diagnosticFailureType??=finalDiagnosticFailureType;
         var claimIdsBySemantic = claims.ToDictionary(x => x.SemanticIdentity, x => x.ClaimId, StringComparer.Ordinal);
         decisions = decisions.Select(d => d.Classification == Phase7KnowledgeMergeClassification.Contradictory
             ? d
@@ -162,13 +167,27 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
                 };
             }).OrderBy(x=>x.SemanticIdentity,StringComparer.Ordinal).ToArray(),
             ClaimSupportEvidence=supportEvidence,KnowledgeEntities=entities.GroupBy(x=>x.KnowledgeId,StringComparer.Ordinal).Select(x=>x.First()).OrderBy(x=>x.KnowledgeId,StringComparer.Ordinal).ToArray() };
-        return result with { DeterministicChecksum=Phase7Determinism.Hash(result with { DeterministicChecksum="" }) };
+        result=result with { DeterministicChecksum=Phase7Determinism.Hash(result with { DeterministicChecksum="" }) };
+        // Diagnostic warnings are deliberately appended after the authority checksum is
+        // computed: observability must not alter the resolved knowledge identity.
+        return diagnosticFailureType is null ? result : result with
+        {
+            Warnings=result.Warnings.Append($"P7CULTURE_DEBUG_WRITE_FAILED:{diagnosticFailureType}")
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()
+        };
     }
 
-    private void WriteCultureDiagnostic(string? path,CertifiedKnowledgePayload payload,FamilyNarrationProfile profile,
+    private string? WriteCultureDiagnostic(string? path,CertifiedKnowledgePayload payload,FamilyNarrationProfile profile,
         IReadOnlyList<Phase7AdapterClaimCandidate> extracted,IReadOnlyList<ResolvedClaim> resolved)
     {
-        if(string.IsNullOrWhiteSpace(path))return;
+        if(string.IsNullOrWhiteSpace(path))return null;
+        const string relativePath="07-narration/debug/culture-required-evidence-debug.json";
+        var normalizedPath=path.Replace('\\','/');
+        var ownershipConfirmed=normalizedPath.EndsWith(relativePath,StringComparison.Ordinal);
+        var parent=Path.GetDirectoryName(path)!;
+        logger.LogInformation("P7CULTURE_DEBUG_PATH ExecutionRootOwnershipConfirmed={ExecutionRootOwnershipConfirmed} RelativeDiagnosticPath={RelativeDiagnosticPath} ParentDirectoryExistsBeforeCreation={ParentDirectoryExistsBeforeCreation}",
+            ownershipConfirmed,relativePath,Directory.Exists(parent));
+        logger.LogInformation("P7CULTURE_DEBUG_WRITE_ATTEMPTED RelativeDiagnosticPath={RelativeDiagnosticPath}",relativePath);
         try
         {
             var sourcePool=Phase7KnowledgeSourcePool.Get(payload);
@@ -218,10 +237,18 @@ public sealed class Phase7KnowledgeResolver : IPhase7KnowledgeResolver
                     nonAuthoritativeSourceCandidates=culture.Where(c=>sourceRows.Any(s=>s.candidateId==CandidateId(c)&&s.sourceExistsInPool&&!s.certified)).Select(CandidateId).Distinct().Order().ToArray(),
                     lowConfidenceCandidates=culture.Where(c=>sourceRows.Any(s=>s.candidateId==CandidateId(c)&&s.sourceExistsInPool&&s.confidence<0.8m)).Select(CandidateId).Distinct().Order().ToArray(),
                     missingNamedTraditionSummaries=knownPaths.Where(p=>!culture.Any(c=>c.ApprovedFieldPath.Equals(p,StringComparison.OrdinalIgnoreCase))).Select(p=>p+": "+PathPresence(payload,p)).ToArray()}};
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            Directory.CreateDirectory(parent);
+            logger.LogInformation("P7CULTURE_DEBUG_DIRECTORY_READY RelativeDiagnosticPath={RelativeDiagnosticPath} ParentDirectoryExistsAfterCreation={ParentDirectoryExistsAfterCreation}",relativePath,Directory.Exists(parent));
             File.WriteAllText(path,JsonSerializer.Serialize(doc,new JsonSerializerOptions{WriteIndented=true}));
+            var length=new FileInfo(path).Length;
+            logger.LogInformation("P7CULTURE_DEBUG_WRITTEN RelativeDiagnosticPath={RelativeDiagnosticPath} FinalFileLength={FinalFileLength}",relativePath,length);
+            return null;
         }
-        catch(Exception) { /* A temporary diagnostic must never alter API success/failure behavior. */ }
+        catch(Exception ex)
+        {
+            logger.LogWarning(ex,"P7CULTURE_DEBUG_WRITE_FAILED DiagnosticPath={DiagnosticPath}",relativePath);
+            return ex.GetType().Name;
+        }
     }
     private static string CandidateId(Phase7AdapterClaimCandidate c)=>"p7candidate-"+Phase7Determinism.Hash(new{c.KnowledgeId,c.SemanticIdentity,c.Origin,c.ApprovedFieldPath})[..24];
     private static bool IsNamedSummary(Phase7AdapterClaimCandidate c)=>c.ApprovedFieldPath.EndsWith(".summary",StringComparison.OrdinalIgnoreCase)&&!string.IsNullOrEmpty(Phase7CulturalClaimPolicy.ResolveCulturalTradition(c.ApprovedFieldPath));
