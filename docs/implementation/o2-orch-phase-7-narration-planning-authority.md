@@ -2,27 +2,33 @@
 
 ## Architecture
 
-P7.1B-BA is a deterministic, read-only authority boundary between committed Scene Knowledge Packets and any future Narration Draft Authority. Its input evaluator accepts only the typed committed Phase 6/P7.1A/P7.1B-A join and a checksum-bound packet collection. Downstream narration generators are expected to consume `NarrationPlanningAuthority`, rather than Story Frames or Knowledge Authority directly.
+P7.1B-BA is a deterministic, read-only authority boundary between committed Scene Knowledge Packets and any future Narration Draft Authority. Contract version `rc2-phase7-narration-planning.v1` accepts only the typed committed Phase 6/P7.1A/P7.1B-A join, a checksum-bound packet collection, and its successful `P7PACKET_VALID` validation. The evaluator recomputes validation, collection, and individual packet checksums and reruns the real packet validator; an outer collection checksum alone is never sufficient.
 
 ## Contracts
 
-`Phase7NarrationPlanningInputAuthority` carries the published Story Frame and Knowledge authorities, packet collection, family profile, execution/profile identity, Phase 4–7 lineage, and runtime compatibility evidence. `NarrationPlanningAuthority` contains independent Long and Short scene plans plus diagnostics. Every scene binds its Story Frame, packet identity/checksum, governed claims, qualifications, timing, constraints, visual targets, and both transition edges.
+`Phase7NarrationPlanningInputAuthority` carries non-null published Story Frame and Knowledge authorities, packet validation, packet collection, family profile, execution/profile identity, Phase 4–7 lineage, and runtime compatibility evidence. `NarrationPlanningAuthority` contains independent Long and Short scene plans plus reconciled diagnostics. Every scene binds its Story Frame/source-scene lineage, packet identity/checksum, all three governed claim partitions, claim-specific qualifications, timing, constraints, visual targets, and both transition edges.
 
 The contracts contain claim identifiers and declarative policies only. **No narration text is produced in P7.1B-BA.**
 
 ## Planning model
 
-Narrative goals are deterministically composed from scene role, section, viewer-question identity, learning-objective identity, required-claim identifiers, and profile identity. Constraints govern sentence bounds, reading-time target, pauses, emphasis, claim order, and visual synchronization. They neither contain generated narration nor depend on provider state.
+`NarrationPlanningGoal` and `NarrationPlanningStrategy` are typed, checksum-bound declarative records; no pipe-delimited intent strings remain. Primary references come only from exactly one governed, resolved Primary resolution with resolved claims. Supporting references come from governed non-Primary resolutions in authored reference order. A missing Primary is a deterministic blocker and is never guessed from collection position.
 
-Incoming and outgoing transition identifiers are computed from adjacent Story Frame lineage. Variant opening and closing edges use explicit null endpoints. Long and Short packet sequences are planned independently; Short is never truncated from Long.
+The injected `INarrationPlanningConstraintPolicy` uses language, variant, duration bounds, family profile, scene role/section, and claim counts to govern coherent minimum/preferred/maximum sentence counts, bounded reading time, pauses, emphasis, claim order, and visual synchronization. English and Hindi are evaluated independently through typed policy rates rather than builder constants.
+
+Incoming and outgoing transition identities bind execution, variant, kind, endpoint IDs/checksums, upstream `TransitionOut`/`TransitionIn`, and packet lineage. Variant opening and closing edges use explicit null endpoints; internal edges follow adjacent authored Story Frames. Long and Short packets, Story Frames, planning identities, transitions, and reference resolutions remain variant-local; Short is independently planned and is never truncated from Long.
 
 ## Validation
 
-`NarrationPlanningValidator` exposes the required fourteen named gates: input authority, coverage, scene planning, packet lineage, viewer question, learning objective, narrative goal, transitions, constraints, required claims, safety, culture, location/time, and determinism. A failure produces stable gate errors and an invalid verdict.
+`NarrationPlanningValidator` executes contract, input identity, profile, language, coverage, scene, packet lineage, viewer-question, learning-objective, goal, transition, constraint, Required/Optional/Deferred reconciliation, safety, cultural, location/time, astrology, human-review, Long/Short independence, diagnostics, authority-checksum, and determinism gates. Required and Optional partitions exclude human-review material; Deferred remains unavailable for factual drafting. Safety rules, editorial constraints, prohibited claims, and cultural/astrology/location/date-time qualifications reconcile to exact claim IDs.
 
 ## Determinism
 
-Each scene checksum binds execution, variant, Story Frame, packet identity/checksum, ordered required-claim IDs, planning constraints, and transition IDs. Authority and diagnostics checksums use the repository canonical SHA-256 serializer. No provider, prompt, narration, audio, or subtitle state participates.
+`NarrationPlanningCanonicalizer` is shared by builder and validator for planning IDs, complete scene semantics, transitions, diagnostics, authority identity/checksum, and validation checksum. Semantically unordered sets and dictionaries are ordinally normalized while scene, governed reference, and visual synchronization order is preserved.
+
+Focused correction tests cover the RC2 contract, typed model, English/Hindi constraint determinism and coherence, injected-policy construction, and provider-type isolation. Existing P7.1A and P7.1B-A regression suites remain the governing regression totals; the committed real-shape packet fixture is not yet present, so this document makes no fabricated 12 Long / 4 Short certification claim.
+
+Azure OpenAI calls = **0**. Azure Speech calls = **0**. The foundation produces no narration prose, provider prompt, physical publication, transaction, manifest, validation JSON, audio, subtitle, image, or video output.
 
 ## Remaining work
 
