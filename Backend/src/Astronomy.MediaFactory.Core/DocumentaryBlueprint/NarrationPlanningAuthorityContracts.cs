@@ -52,8 +52,10 @@ public sealed record NarrationPlanningScene(string PlanningId, string SceneId, s
     int EstimatedReadingTime, IReadOnlyList<string> VisualSynchronizationTargets,
     NarrationPlanningTransition IncomingTransition, NarrationPlanningTransition OutgoingTransition,
     string DeterministicChecksum);
-public sealed record NarrationPlanningDiagnostics(int PacketCount, int PlanningSceneCount, int RequiredClaimCount,
-    int OptionalClaimCount, int DeferredClaimCount, int WarningCount, int ErrorCount,
+public sealed record NarrationPlanningDiagnostics(int PacketCount, int PlanningSceneCount, int LongPlanningSceneCount,
+    int ShortPlanningSceneCount, int PrimaryReferenceCount, int SupportingReferenceCount, int RequiredReferenceCount,
+    int ResolvedReferenceCount, int DeferredReferenceCount, int TransitionCount, int BlockingIssueCount,
+    int FailedGateCount, int RequiredClaimCount, int OptionalClaimCount, int DeferredClaimCount, int WarningCount, int ErrorCount,
     IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, string DeterministicChecksum);
 public sealed record NarrationPlanningAuthority(string ContractVersion, string AuthorityId, string ExecutionId,
     string PlanId, string EventId, string Language, string ProfileId, string ProfileVersion,
@@ -61,7 +63,13 @@ public sealed record NarrationPlanningAuthority(string ContractVersion, string A
     IReadOnlyList<NarrationPlanningScene> LongScenes, IReadOnlyList<NarrationPlanningScene> ShortScenes,
     NarrationPlanningDiagnostics Diagnostics, IReadOnlyDictionary<string,string> Phase4To7Lineage,
     IReadOnlyDictionary<string,string> RuntimeCompatibilityEvidence, string DeterministicChecksum);
-public interface INarrationPlanningAuthorityBuilder { NarrationPlanningAuthority Build(Phase7NarrationPlanningInputAuthority input); }
+public sealed record NarrationPlanningAuthorityBuildResult(bool IsValid, NarrationPlanningAuthority? Authority,
+    string ReasonCode, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings,
+    IReadOnlyList<string> BlockingIssues);
+public interface INarrationPlanningAuthorityBuilder
+{
+    NarrationPlanningAuthorityBuildResult Build(Phase7NarrationPlanningInputAuthority input);
+}
 public sealed record NarrationPlanningValidationGate(string Name, bool Passed, IReadOnlyList<string> Errors);
 public sealed record NarrationPlanningValidation(bool IsValid, string ReasonCode,
     IReadOnlyList<NarrationPlanningValidationGate> Gates, IReadOnlyList<string> Errors, string DeterministicChecksum);
