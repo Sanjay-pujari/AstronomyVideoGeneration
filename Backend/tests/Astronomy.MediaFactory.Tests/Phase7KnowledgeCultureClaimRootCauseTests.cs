@@ -17,7 +17,13 @@ public sealed class Phase7KnowledgeCultureClaimRootCauseTests
     [Fact] public void ResolveCulturalTradition_EmptyPath_UnknownMetadata_ReturnsEmpty()=>Assert.Empty(ResolveTradition("","unsupported"));
     [Fact] public void ResolveCulturalTradition_ValidCanonicalPath_UsesPath()=>Assert.Equal("Greek",Phase7CulturalClaimPolicy.ResolveCulturalTradition("cultureAndMythology.greek.summary"));
     [Fact] public void ResolveCulturalTradition_PathHasPriorityOverMetadata()=>Assert.Equal("Greek",ResolveTradition("cultureAndMythology.greek.summary","roman"));
-    [Fact] public void ResolveCulturalTradition_NonblankMalformedPath_StillThrows()=>Assert.Throws<ArgumentException>(()=>ResolveTradition("not-a-governed-path","greek"));
+    [Fact] public void ResolveCulturalTradition_ValidRegionalTraditionsPath_ReturnsEmpty()=>Assert.Empty(Phase7CulturalClaimPolicy.ResolveCulturalTradition("regionalTraditions.summary"));
+    [Fact] public void ResolveCulturalTradition_ValidRegionalTraditionsPath_UsesMetadataFallback()=>Assert.Equal("Greek",ResolveTradition("regionalTraditions.summary","greek"));
+    [Fact] public void ResolveCulturalTradition_ValidIdentityPath_ReturnsEmpty()=>Assert.Empty(Phase7CulturalClaimPolicy.ResolveCulturalTradition("identity.summary"));
+    [Fact] public void ResolveCulturalTradition_UnknownCultureBranch_ReturnsEmpty()=>Assert.Empty(Phase7CulturalClaimPolicy.ResolveCulturalTradition("cultureAndMythology.unknown.summary"));
+    [Fact] public void ResolveCulturalTradition_UnknownCultureBranch_UsesMetadataFallback()=>Assert.Equal("Roman",ResolveTradition("cultureAndMythology.unknown.summary","roman"));
+    [Fact] public void ResolveCulturalTradition_OtherBranch_RemainsEmpty()=>Assert.Empty(Phase7CulturalClaimPolicy.ResolveCulturalTradition("cultureAndMythology.other.summary"));
+    [Fact] public void ResolveCulturalTradition_GenuinelyMalformedPath_StillThrows()=>Assert.Throws<ArgumentException>(()=>ResolveTradition("cultureAndMythology.indian (Hindu).summary","greek"));
     [Fact] public void ResolveCanonicalCulturalTradition_DiagnosticIdentityFallback_DoesNotThrow()
     {
         var resolution=Safe();var claim=Required(resolution);
