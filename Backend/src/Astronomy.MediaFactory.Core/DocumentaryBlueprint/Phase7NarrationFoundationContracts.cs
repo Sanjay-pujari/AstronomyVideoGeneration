@@ -394,7 +394,11 @@ public sealed record SceneKnowledgePacket(string PacketId, string ExecutionId, s
     public string ViewerQuestionResolutionReason { get; init; } = "CertifiedClaimAndSceneRole";
     public string ViewerQuestionResolutionChecksum { get; init; } = "";
     public IReadOnlyList<string> VisualPlanningLineage { get; init; } = [];
+    public IReadOnlyList<Phase7PacketReferenceResolution> ReferenceResolutions { get; init; } = [];
+    public Phase7SceneSectionAuthorityResolution? SectionAuthority { get; init; }
 }
+public sealed record Phase7PacketReferenceResolution(string ReferenceId, bool IsPrimary, bool IsRequired,
+    Phase7KnowledgeReferenceStatus Status, string ReasonCode, IReadOnlyList<string> ResolvedClaimIds);
 public enum Phase7KnowledgeReferenceStatus { Resolved, Deferred, Missing, Ambiguous, CrossVariantInvalid, Unsupported }
 public sealed record Phase7KnowledgeReferenceResolution(string ReferenceId, Phase7KnowledgeReferenceStatus Status,
     IReadOnlyList<CertifiedNarrationClaim> Claims, string ReasonCode);
@@ -413,6 +417,20 @@ public sealed record Phase7KnowledgeReferenceRequest(string ReferenceId, string 
     IReadOnlyList<string> OtherVariantReferenceIds);
 public sealed record Phase7SceneReferenceRequirement(string ReferenceId, string Variant, bool IsPrimary,
     bool IsRequired, string SourceAuthority, string SourcePointer);
+public sealed record Phase7SceneReferenceProjectionResult(bool IsValid,
+    IReadOnlyList<Phase7SceneReferenceRequirement> Requirements, string ReasonCode,
+    IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, bool CollectionOrderIsGoverning,
+    bool HumanReviewRequired);
+public interface IPhase7SceneReferenceCompatibilityPolicy
+{
+    Phase7SceneReferenceProjectionResult Project(StoryFrameAuthorityFrame frame);
+}
+public sealed record Phase7SceneSectionAuthorityResolution(bool IsValid, string SectionKey,
+    string NarrativeStage, string SceneRole, string SourceField, string ReasonCode);
+public interface IPhase7SceneSectionAuthorityResolver
+{
+    Phase7SceneSectionAuthorityResolution Resolve(StoryFrameAuthorityFrame frame, StoryFrameSceneIndex sourceScene);
+}
 public sealed record Phase7ScenePacketInputAuthority(PublishedPhase7KnowledgeAuthority Knowledge,
     PublishedStoryFrameAuthority StoryFrames, FamilyNarrationProfile FamilyProfile, string ExecutionId,
     string PlanId, string EventId, string EventFamily, string EventType, string Language, string ProfileId,
