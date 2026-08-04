@@ -17,7 +17,7 @@ public sealed class Phase7NarrationPlanningInputAuthorityEvaluator(
         var packets = request.SceneKnowledgePacketCollection;
         var all = packets.Long.Concat(packets.Short).ToArray();
         var checksum = Phase7Determinism.Hash(new { Long = packets.Long, Short = packets.Short });
-        if (packets.DeterministicChecksum != checksum || all.Count == 0 ||
+        if (packets.DeterministicChecksum != checksum || all.Length == 0 ||
             packets.Long.Any(x => x.Variant != "Long") || packets.Short.Any(x => x.Variant != "Short") ||
             all.Any(x => x.ExecutionId != request.ExecutionId || x.PlanId != request.PlanId || x.EventId != request.EventId))
             return new(false, null, "NARRATION_PLANNING_PACKET_COLLECTION_INVALID",
@@ -114,7 +114,7 @@ public sealed class NarrationPlanningValidator : INarrationPlanningValidator
         var checks = new Dictionary<string,bool>
         {
             [Names[0]] = authority.ExecutionId == input.ExecutionId && authority.ProfileId == input.ProfileId,
-            [Names[1]] = scenes.Count == packets.Length && packets.All(p => scenes.Count(s => s.PacketId == p.PacketId) == 1),
+            [Names[1]] = scenes.Length == packets.Length && packets.All(p => scenes.Count(s => s.PacketId == p.PacketId) == 1),
             [Names[2]] = scenes.All(s => !string.IsNullOrWhiteSpace(s.PlanningId) && !string.IsNullOrWhiteSpace(s.SceneId)),
             [Names[3]] = scenes.All(s => packets.Any(p => p.PacketId == s.PacketId && p.DeterministicChecksum == s.PacketChecksum && p.StoryFrameId == s.StoryFrameId)),
             [Names[4]] = scenes.All(s => !string.IsNullOrWhiteSpace(s.ViewerQuestion)),
