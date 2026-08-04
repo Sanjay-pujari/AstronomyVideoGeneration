@@ -3,9 +3,8 @@ using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
 /// <summary>
-/// Compatibility rule for the frozen Phase 6 contract, which exposes only an authored ordered list.
-/// Phase 6 documented the first item as the scene's governing reference and the remaining items as
-/// supporting requirements; consequently all are required and only the first is primary.
+/// Governed P7.1B compatibility mapping for the frozen Phase 6 contract, which exposes an authored
+/// ordered reference collection but no explicit serialized primary/required flags.
 /// </summary>
 public sealed class Phase7SceneReferenceCompatibilityPolicy : IPhase7SceneReferenceCompatibilityPolicy
 {
@@ -24,7 +23,8 @@ public sealed class Phase7SceneReferenceCompatibilityPolicy : IPhase7SceneRefere
     }
 }
 
-/// <summary>The frozen source-scene contract explicitly defines NarrativeStage as its profile slot.</summary>
+/// <summary>Governed P7.1B compatibility mapping for the frozen Phase 6 contract, which exposes
+/// NarrativeStage but no distinct serialized Phase 7 SectionKey.</summary>
 public sealed class Phase7SceneSectionAuthorityResolver : IPhase7SceneSectionAuthorityResolver
 {
     public Phase7SceneSectionAuthorityResolution Resolve(StoryFrameAuthorityFrame frame, StoryFrameSceneIndex source)

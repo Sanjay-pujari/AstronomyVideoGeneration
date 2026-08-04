@@ -760,6 +760,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7CertifiedKnowledgeSource, Astronomy.MediaFactory.Infrastructure.Persistence.Phase7CertifiedKnowledgeSource>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeResolver, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeResolver>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeReferenceResolver, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeReferenceResolver>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7SceneReferenceCompatibilityPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7SceneReferenceCompatibilityPolicy>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7SceneSectionAuthorityResolver, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7SceneSectionAuthorityResolver>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7InputAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7InputAuthorityEvaluator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7SceneKnowledgePacketBuilder, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7SceneKnowledgePacketBuilder>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7ScenePacketInputAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7ScenePacketInputAuthorityEvaluator>();
