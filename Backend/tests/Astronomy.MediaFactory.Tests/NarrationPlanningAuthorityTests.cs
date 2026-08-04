@@ -1,6 +1,7 @@
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 using FluentAssertions;
+using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -61,7 +62,15 @@ public sealed class NarrationPlanningValidatorTests
 }
 public sealed class NarrationPlanningDeterminismTests
 {
-    [Fact] public void Rebuild_is_byte_semantically_deterministic() { var x = NarrationPlanningTestData.Create(); new NarrationPlanningAuthorityBuilder().Build(x.Input).Should().Be(x.Plan); }
+    [Fact]
+    public void Rebuild_is_byte_semantically_deterministic()
+    {
+        var x = NarrationPlanningTestData.Create();
+        var rebuilt = new NarrationPlanningAuthorityBuilder().Build(x.Input);
+
+        JsonSerializer.SerializeToUtf8Bytes(rebuilt).Should()
+            .Equal(JsonSerializer.SerializeToUtf8Bytes(x.Plan));
+    }
 }
 public sealed class NarrationPlanningTransitionTests
 {
