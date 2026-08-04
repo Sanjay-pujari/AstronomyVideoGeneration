@@ -6,9 +6,9 @@ P7.1C-A is an in-memory authority boundary:
 
 `PublishedNarrationPlanningAuthority → Phase7NarrationDraftInputAuthority → deterministic claim realization → scene construction → independent validation → NarrationDraftAuthority`.
 
-The contract version is owned exclusively by `NarrationDraftContract.Version` (`rc2-phase7-narration-draft.v1`). The input evaluator consumes the committed P7.1B-BB evaluator, verifies committed planning identity, checksums, gates, physical readback state, manifest/evidence state, profile, language, lineage identity and runtime evidence, and preserves upstream warnings. It performs no write.
+The contract version is owned exclusively by `NarrationDraftContract.Version` (`rc2-phase7-narration-draft.v1`). The input evaluator accepts only the P7.1B-BB `NARRATION_PLANNING_REUSE_VALID` result. It independently canonicalizes the embedded and published diagnostics and verifies report, physical-validation, manifest, and publication-evidence checksums and their authority/validation linkages. It performs no write.
 
-The request carries only a typed `Phase7KnowledgeCommittedStateRequest`, never a caller-authored claim list. The P7.1A committed-state evaluator supplies `PublishedPhase7KnowledgeAuthority`; P7.1C-A then reconciles its execution/plan/event, knowledge authority identity/checksum, normalized language, claim checksum, unique claim identity and Required/Optional/Deferred planning partition before copying claims into its internal input authority. This is essential because planning scenes intentionally contain claim identities rather than fact text. It is not a second knowledge-resolution path.
+The request carries only a typed `Phase7KnowledgeCommittedStateRequest`, never a caller-authored claim list. Only the governed `P7KNOWLEDGE_VALID` committed-state result is accepted. P7.1C-A reconciles execution/plan/event, Phase 4 aggregate, Phase 5 publication, Phase 6 authority, P7.1A authority identities/checksums, normalized language, compatible knowledge runtime evidence, claim checksum, unique claim identity and planning partition before copying claims. It is not a second knowledge-resolution path.
 
 ## Deterministic realization and permitted transformations
 
@@ -26,15 +26,15 @@ English and Hindi punctuation, conjunction, sentence estimation, and reading rat
 
 Required claims are emitted once in planning order and may never be dropped. Optional claims are considered after Required claims and are omitted before a budget violation; Optional Human Review and incompletely qualified claims are also deterministically omitted. Deferred claims remain typed on the scene for audit but never enter a sentence or factual usage. A Required Human Review claim blocks construction. Conservative coalescing declines unless a future certified compatibility proof is supplied; it does not recreate P7.1A merge semantics.
 
-Openings come from viewer question (or the learning objective when absent). Every spoken opening, distinct closing, incoming `DestinationTransitionIn`, and outgoing `SourceTransitionOut` is represented by an identified, checksummed sentence and therefore participates in word, sentence, timing, diagnostics, and safety authority. Generic filler is not created. Long and Short scene lists are independently traversed, and identities bind their variant; neither variant reads or edits the other.
+Spoken order is incoming transition, opening, Required claims, Optional claims, closing, outgoing transition. Openings come from viewer question (or the learning objective when absent). Closing is separately authorized by the typed learning objective; it never falls back to either transition side. Incoming ownership selects only `DestinationTransitionIn`, while outgoing ownership selects only `SourceTransitionOut`. Every spoken component is represented by an identified, checksummed sentence and participates in word, sentence, timing, diagnostics, and safety authority. Generic filler is not created.
 
-Cultural, mythological, astrology, location, and date/time flags select the corresponding planning qualification requirements for the exact claim sentence. Safety validation evaluates typed usage and text, rejects prohibited strings, missing required qualification, Human Review use, unknown usage, and Deferred use. Sentence and scene checks enforce planning maxima; sentences are never truncated. Reading estimates and optional capacity belong to the timing policy rather than the builder.
+Cultural, mythological, astrology, location, and date/time flags select the corresponding planning requirement strings. In the v1 upstream contract these strings are both the canonical qualification identity and approved spoken text; no display-text-derived identifier is invented. Safety validation evaluates all sentence text and typed usage. Exact mandatory structural capacity is reserved before Optional selection. Complete scenes enforce minimum and maximum sentence, word, and reading-time bounds without padding or truncation.
 
 ## Checksums and validation
 
 `NarrationDraftCanonicalizer` owns sentence, scene, diagnostics, authority, validation checksums and deterministic IDs. Semantic sets are ordinally normalized; authored scene order, sentence order, visual-target order, and authority-local Long/Short order remain intact. Dictionary evidence is ordinally normalized. No time, random value, path, current culture, or provider state contributes.
 
-The validator executes 27 uniquely named gates. It independently reconstructs planning scene coverage and Required/Optional/Deferred use rather than trusting a recomputed checksum alone. It also checks lineage, sentence identity/checksum, qualifications, typed safety, transition variant ownership, timing, diagnostics, authority checksum, and deterministic identity.
+The validator executes 27 uniquely named gates. Its DeterminismGate is a structural identity check, not by itself a full determinism proof. Byte determinism and Long/Short mutation isolation require focused serializer and mutation tests; the documentation does not substitute for that evidence.
 
 ## Provider isolation and DI
 

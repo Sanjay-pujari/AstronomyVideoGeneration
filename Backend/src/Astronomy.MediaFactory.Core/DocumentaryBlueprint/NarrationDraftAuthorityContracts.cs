@@ -19,6 +19,7 @@ public static class NarrationDraftReasonCodes
         ClaimAuthorityMissing="NARRATION_DRAFT_COMMITTED_CLAIM_AUTHORITY_MISSING",
         ClaimAuthorityInvalid="NARRATION_DRAFT_COMMITTED_CLAIM_AUTHORITY_INVALID",
         ClaimLineageStale="NARRATION_DRAFT_CLAIM_LINEAGE_STALE",
+        UnsupportedKnowledgeResult="NARRATION_DRAFT_UNSUPPORTED_KNOWLEDGE_EVALUATION_RESULT",
         ClaimChecksumMismatch="NARRATION_DRAFT_CLAIM_CHECKSUM_MISMATCH",
         UnknownPlanningClaim="NARRATION_DRAFT_UNKNOWN_PLANNING_CLAIM",
         ClaimPartitionMismatch="NARRATION_DRAFT_CLAIM_PARTITION_MISMATCH";
@@ -78,7 +79,8 @@ public sealed record NarrationDraftAuthorityBuildResult(bool IsValid,NarrationDr
     IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,IReadOnlyList<string> BlockingIssues);
 
 public sealed record NarrationDraftTimingRequest(string Language,int MinimumDurationSeconds,int TargetDurationSeconds,int MaximumDurationSeconds,
-    int PreferredSentenceCount,int MinimumSentenceCount,int MaximumSentenceCount,int RequiredClaimCount,int OptionalClaimCount,string ProfilePacing);
+    int PreferredSentenceCount,int MinimumSentenceCount,int MaximumSentenceCount,int RequiredClaimCount,int OptionalClaimCount,string ProfilePacing,
+    int MandatoryStructuralSentenceCount=0);
 public sealed record NarrationDraftTimingBudget(int TargetWords,int MinimumWords,int MaximumWords,decimal TargetReadingTimeSeconds,
     decimal MinimumSentenceDurationSeconds,int PermittedOptionalClaimCapacity,decimal WordsPerMinute);
 public interface INarrationDraftLanguagePolicy { bool Supports(string language);string Terminate(string text,string language);string OpeningBridge(string question,string objective,string language);string Conjunction(string language);decimal EstimateReadingTime(string text,string language);bool PreservesProtectedTokens(string certified,string realized); }
@@ -87,7 +89,10 @@ public interface INarrationDraftRealizationPolicy { string Realize(CertifiedNarr
 public interface INarrationDraftClaimCoalescingPolicy { bool CanCoalesce(NarrationPlanningScene scene,CertifiedNarrationClaim first,CertifiedNarrationClaim second,int maximumWords); }
 public interface INarrationDraftOpeningPolicy { string Create(NarrationPlanningScene scene,string language); }
 public interface INarrationDraftClosingPolicy { string Create(NarrationPlanningScene scene,bool hasNext,string language); }
-public interface INarrationDraftTransitionPhrasePolicy { NarrationDraftTransitionPhrase? Create(NarrationPlanningTransition transition,string language); }
+public enum NarrationDraftTransitionOwnership { IncomingDestination, OutgoingSource }
+public sealed record NarrationDraftTransitionPhraseRequest(NarrationPlanningTransition Transition,
+    NarrationDraftTransitionOwnership Ownership,string Variant,string Language);
+public interface INarrationDraftTransitionPhrasePolicy { NarrationDraftTransitionPhrase? Create(NarrationDraftTransitionPhraseRequest request); }
 public interface INarrationDraftSafetyValidator { IReadOnlyList<string> Validate(NarrationPlanningScene planning,NarrationDraftScene draft,IReadOnlyDictionary<string,CertifiedNarrationClaim> claims); }
 public interface INarrationDraftAuthorityBuilder { NarrationDraftAuthorityBuildResult Build(Phase7NarrationDraftInputAuthority input); }
 public interface INarrationDraftValidator { NarrationDraftValidation Validate(Phase7NarrationDraftInputAuthority input,NarrationDraftAuthority authority); }
