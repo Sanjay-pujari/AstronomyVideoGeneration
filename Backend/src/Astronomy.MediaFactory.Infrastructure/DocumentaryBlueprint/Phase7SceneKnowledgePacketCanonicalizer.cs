@@ -2,6 +2,36 @@ using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
+/// <summary>
+/// Immutable checksum evidence for a certified claim.  This deliberately is not the public
+/// authority contract: hashing may normalize unordered membership without manufacturing a new
+/// <see cref="CertifiedNarrationClaim"/> that appears to be certified.
+/// </summary>
+internal sealed record Phase7ClaimChecksumProjection(
+    string ClaimId,
+    string SemanticIdentity,
+    string Domain,
+    string Text,
+    IReadOnlyList<string> SourceIds,
+    IReadOnlyList<string> KnowledgeReferenceIds,
+    decimal Confidence,
+    bool IsApproximate,
+    bool IsLocationDependent,
+    bool IsDateTimeDependent,
+    bool IsCultural,
+    bool IsMythological,
+    bool IsAstrologyRelated,
+    bool RequiresQualification,
+    bool RequiresHumanReview,
+    string Language,
+    Phase7ClaimDisposition Disposition,
+    string ProvenancePrecision,
+    string SelectionReason,
+    bool WeatherDependent,
+    bool MoonDependent,
+    bool Uncertain,
+    string Checksum);
+
 /// <summary>Canonical projection for packet content whose contract semantics are unordered.</summary>
 public static class Phase7SceneKnowledgePacketCanonicalizer
 {
@@ -43,20 +73,33 @@ public static class Phase7SceneKnowledgePacketCanonicalizer
     public static string ComputeChecksum(SceneKnowledgePacket packet) =>
         Phase7Determinism.Hash(ChecksumProjection(packet with { DeterministicChecksum = "" }));
 
-    // Source/reference membership is semantically unordered for packet hashing.  Copies exist only in
-    // this private projection and can therefore never escape into serialized packet authority.
-    private static SceneKnowledgePacket ChecksumProjection(SceneKnowledgePacket packet)
+    // The packet shell has empty claim partitions. Claim authority is represented exclusively by the
+    // dedicated immutable projections, which can never escape as CertifiedNarrationClaim instances.
+    private static object ChecksumProjection(SceneKnowledgePacket packet)
     {
-        static CertifiedNarrationClaim Claim(CertifiedNarrationClaim claim) => claim with
+        static Phase7ClaimChecksumProjection Claim(CertifiedNarrationClaim claim) => new(
+            claim.ClaimId, claim.SemanticIdentity, claim.Domain, claim.Text,
+            claim.SourceIds.Order(StringComparer.Ordinal).ToArray(),
+            claim.KnowledgeReferenceIds.Order(StringComparer.Ordinal).ToArray(),
+            claim.Confidence, claim.IsApproximate, claim.IsLocationDependent,
+            claim.IsDateTimeDependent, claim.IsCultural, claim.IsMythological,
+            claim.IsAstrologyRelated, claim.RequiresQualification, claim.RequiresHumanReview,
+            claim.Language, claim.Disposition, claim.ProvenancePrecision, claim.SelectionReason,
+            claim.WeatherDependent, claim.MoonDependent, claim.Uncertain, claim.Checksum);
+
+        static Phase7ClaimChecksumProjection[] Claims(IEnumerable<CertifiedNarrationClaim> claims) =>
+            claims.OrderBy(x => x.ClaimId, StringComparer.Ordinal).Select(Claim).ToArray();
+
+        var shell = Canonicalize(packet) with
         {
-            SourceIds = claim.SourceIds.Order(StringComparer.Ordinal).ToArray(),
-            KnowledgeReferenceIds = claim.KnowledgeReferenceIds.Order(StringComparer.Ordinal).ToArray()
+            RequiredClaims = [], OptionalClaims = [], DeferredClaims = []
         };
-        return Canonicalize(packet) with
-        {
-            RequiredClaims = packet.RequiredClaims.OrderBy(x => x.ClaimId, StringComparer.Ordinal).Select(Claim).ToArray(),
-            OptionalClaims = packet.OptionalClaims.OrderBy(x => x.ClaimId, StringComparer.Ordinal).Select(Claim).ToArray(),
-            DeferredClaims = packet.DeferredClaims.OrderBy(x => x.ClaimId, StringComparer.Ordinal).Select(Claim).ToArray()
-        };
+        return new PacketChecksumProjection(shell, Claims(packet.RequiredClaims),
+            Claims(packet.OptionalClaims), Claims(packet.DeferredClaims));
     }
+
+    private sealed record PacketChecksumProjection(SceneKnowledgePacket Packet,
+        IReadOnlyList<Phase7ClaimChecksumProjection> RequiredClaims,
+        IReadOnlyList<Phase7ClaimChecksumProjection> OptionalClaims,
+        IReadOnlyList<Phase7ClaimChecksumProjection> DeferredClaims);
 }
