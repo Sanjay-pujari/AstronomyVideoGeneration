@@ -5,6 +5,7 @@ using System.Text.Json;
 namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 public static class Phase7FoundationContract { public const string Version = "rc2-phase7-foundation.v1"; }
+public static class Phase7ScenePacketContract { public const string Version = "o2-orch-phase7.1b-a.v1"; }
 public enum KnowledgeDomainStatus { Available, Missing, NotApplicable, Deferred, RequiresHumanReview }
 public enum NarrationKnowledgeDomainKey { Identity, Appearance, Recognition, RecognitionGeometry, ScientificStructure, PhysicalCharacteristics, KeyObjects, DeepSkyObjects, Orbit, Rotation, Atmosphere, Surface, Moons, Rings, Exploration, Lifecycle, Variability, Multiplicity, Distance, Scale, Formation, Evolution, StarFormation, History, CultureAndMythology, RegionalTraditions, AstrologyClarification, Observation, Timing, Visibility, LocationDependence, WeatherDependence, MoonInterference, Safety, Equipment, Astrophotography, ImagingAppearance, ScientificSignificance, Geometry, ContactTimeline, VisibilityFootprint, ParentBody, Radiant, ActivityRate, Uncertainty, OrbitalMotion, ArtificialNaturalDistinction, LocalizedContent, EditorialSafety, InterestingFacts }
 public static class NarrationKnowledgeDomains
@@ -400,10 +401,40 @@ public sealed record Phase7KnowledgeReferenceResolution(string ReferenceId, Phas
 public interface IPhase7KnowledgeReferenceResolver
 {
     IReadOnlyList<Phase7KnowledgeReferenceResolution> Resolve(IReadOnlyList<string> referenceIds, ResolvedNarrationKnowledge knowledge, bool optional = false);
+    Phase7KnowledgeReferenceResolution Resolve(Phase7KnowledgeReferenceRequest request, Phase7ScenePacketInputAuthority authority);
 }
 public interface IPhase7SceneKnowledgePacketBuilder
 {
     IReadOnlyList<SceneKnowledgePacket> Build(Phase7CommittedInputAuthority authority, string variant);
+    IReadOnlyList<SceneKnowledgePacket> Build(Phase7ScenePacketInputAuthority authority, string variant);
+}
+
+public sealed record Phase7KnowledgeReferenceRequest(string ReferenceId, string Variant, bool Optional,
+    IReadOnlyList<string> OtherVariantReferenceIds);
+public sealed record Phase7ScenePacketInputAuthority(PublishedPhase7KnowledgeAuthority Knowledge,
+    PublishedStoryFrameAuthority StoryFrames, FamilyNarrationProfile FamilyProfile, string ExecutionId,
+    string PlanId, string EventId, string EventFamily, string EventType, string Language, string ProfileId,
+    string ProfileVersion, IReadOnlyList<StoryFrameAuthorityFrame> LongStoryFrames,
+    IReadOnlyList<StoryFrameAuthorityFrame> ShortStoryFrames, IReadOnlyList<StoryFrameSceneIndex> LongSourceScenes,
+    IReadOnlyList<StoryFrameSceneIndex> ShortSourceScenes, IReadOnlyDictionary<string,string> LineageEvidence,
+    IReadOnlyDictionary<string,string> RuntimeCompatibilityEvidence);
+public sealed record Phase7ScenePacketInputAuthorityRequest(string ExecutionRoot, string ExecutionId, string PlanId,
+    string EventId, string Language, string ProfileId, string ProfileVersion);
+public sealed record Phase7ScenePacketInputAuthorityEvaluation(bool IsValid, Phase7ScenePacketInputAuthority? Authority,
+    string ReasonCode, IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings);
+public interface IPhase7ScenePacketInputAuthorityEvaluator
+{
+    Task<Phase7ScenePacketInputAuthorityEvaluation> EvaluateAsync(Phase7ScenePacketInputAuthorityRequest request,
+        CancellationToken cancellationToken = default);
+}
+public sealed record Phase7SceneKnowledgePacketValidationGate(string Name, bool Passed, IReadOnlyList<string> Errors);
+public sealed record Phase7SceneKnowledgePacketValidation(bool IsValid, string ReasonCode,
+    IReadOnlyList<Phase7SceneKnowledgePacketValidationGate> Gates, IReadOnlyList<string> Errors,
+    string DeterministicChecksum);
+public interface IPhase7SceneKnowledgePacketValidator
+{
+    Phase7SceneKnowledgePacketValidation Validate(Phase7ScenePacketInputAuthority input,
+        IReadOnlyList<SceneKnowledgePacket> longPackets, IReadOnlyList<SceneKnowledgePacket> shortPackets);
 }
 
 public sealed record NarrationWordRange(int Minimum, int Preferred, int Maximum);

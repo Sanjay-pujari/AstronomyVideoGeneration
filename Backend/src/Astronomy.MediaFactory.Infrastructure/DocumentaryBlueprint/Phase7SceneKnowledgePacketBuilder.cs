@@ -18,18 +18,49 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         return frames.OrderBy(x => x.SceneNumber).ThenBy(x => x.FrameNumber).Select((frame, index) => BuildOne(input, frame, variant, order[Math.Min(index, order.Count - 1)], index)).ToArray();
     }
 
+    public IReadOnlyList<SceneKnowledgePacket> Build(Phase7ScenePacketInputAuthority authority, string variant)
+    {
+        var k = authority.Knowledge.KnowledgeAuthority;
+        var domains = k.Claims.GroupBy(x => x.Domain, StringComparer.Ordinal).OrderBy(x => x.Key, StringComparer.Ordinal)
+            .Select(x => new NarrationKnowledgeDomain(x.Key, KnowledgeDomainStatus.Available,
+                x.OrderBy(c => c.ClaimId, StringComparer.Ordinal).ToArray(), [])).ToArray();
+        var resolved = new ResolvedNarrationKnowledge(k.EventKnowledgePayloadId, k.EventKnowledgeChecksum,
+            k.SourceRegistryId, k.SourceRegistryChecksum, k.Language, domains, new Dictionary<string,string>(), [],
+            new Dictionary<string,string>(), k.Sources.Select(x => x.SourceId).Order(StringComparer.Ordinal).ToArray(),
+            k.Warnings, k.BlockingIssues, k.SemanticChecksum) { KnowledgeEntities = k.KnowledgeEntities,
+                ClaimSupportEvidence = k.ClaimSupportEvidence };
+        var legacy = new Phase7CommittedInputAuthority(authority.StoryFrames, authority.EventFamily, authority.EventType,
+            authority.Language, authority.ProfileId, authority.ProfileVersion, authority.EventId,
+            k.EventKnowledgePayloadId, k.EventKnowledgeChecksum, k.SourceRegistryId, k.SourceRegistryChecksum,
+            k.EvergreenPayloadId, k.EvergreenChecksum, authority.FamilyProfile, authority.LongStoryFrames,
+            authority.ShortStoryFrames, authority.LongSourceScenes, authority.ShortSourceScenes,
+            authority.LineageEvidence.Select(x => $"{x.Key}:{x.Value}").ToArray(),
+            authority.Knowledge.ArtifactPaths.Concat(authority.StoryFrames.ArtifactPaths).Distinct().ToArray(),
+            authority.RuntimeCompatibilityEvidence, resolved);
+        return Build(legacy, variant);
+    }
+
     private SceneKnowledgePacket BuildOne(Phase7CommittedInputAuthority input, StoryFrameAuthorityFrame frame, string variant, string section, int ordinal)
     {
+        var sourceScenes = variant == "Long" ? input.LongSourceScenes : input.ShortSourceScenes;
+        if (sourceScenes.Count(x => x.SceneId == frame.SceneId && x.SceneNumber == frame.SceneNumber) != 1)
+            throw new InvalidOperationException($"Story Frame '{frame.FrameId}' must have exactly one source-scene lineage row.");
         var candidateDomains = DomainTerms(section);
         var claims = input.Knowledge.Domains.Where(x => x.Status == KnowledgeDomainStatus.Available)
             .OrderByDescending(x => candidateDomains.Any(term => Normalize(x.Domain).Contains(term)))
-            .SelectMany(x => x.Claims).DistinctBy(x => x.ClaimId).ToArray();
+            .SelectMany(x => x.Claims).DistinctBy(x => x.ClaimId)
+            .OrderBy(x => x.ClaimId, StringComparer.Ordinal).ToArray();
         var resolutions = referenceResolver.Resolve(frame.KnowledgeReferenceIds, input.Knowledge);
         var referenced = resolutions.Where(x=>x.Status==Phase7KnowledgeReferenceStatus.Resolved).SelectMany(x=>x.Claims)
             .DistinctBy(x=>x.ClaimId).Select(x=>x with { SelectionReason="ExactStoryFrameReference" }).ToArray();
-        var selected = (referenced.Length > 0 ? referenced : claims.Where(x => candidateDomains.Any(term => Normalize(x.Domain).Contains(term))).Take(3).Select(x=>x with { SelectionReason="FamilySceneSectionRequirement" }).ToArray());
-        if (selected.Length == 0) selected = claims.Take(1).ToArray();
-        var optional = claims.Except(selected).Take(2).ToArray();
+        var selected = (referenced.Length > 0 ? referenced : claims.Where(x => candidateDomains.Any(term => Normalize(x.Domain).Contains(term))).Take(3).Select(x=>x with { SelectionReason="FamilySceneSectionRequirement" }).ToArray())
+            .Where(x => x.Disposition == Phase7ClaimDisposition.Required && !x.RequiresHumanReview).ToArray();
+        if (selected.Length == 0) selected = claims.Where(x => x.Disposition == Phase7ClaimDisposition.Required && !x.RequiresHumanReview).Take(1).ToArray();
+        var optional = claims.Where(x => x.Disposition == Phase7ClaimDisposition.Optional && !x.RequiresHumanReview)
+            .Where(x => candidateDomains.Any(term => Normalize(x.Domain).Contains(term))).Take(2).ToArray();
+        var deferred = claims.Where(x => x.Disposition == Phase7ClaimDisposition.Deferred).ToArray();
+        var review = claims.Where(x => x.Disposition == Phase7ClaimDisposition.HumanReview || x.RequiresHumanReview)
+            .Where(x => candidateDomains.Any(term => Normalize(x.Domain).Contains(term))).ToArray();
         var sourceValues = new[] { frame.NarrativeIntent, frame.VisualIntent, frame.Subject }.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
         var placeholders = sourceValues.Where(x => Placeholder.IsMatch(x)).ToArray();
         var unsafeClaims = selected.Concat(optional).Where(x => UnsafeTime.IsMatch(x.Text)).ToArray();
@@ -41,7 +72,8 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         var objective = Objective(section, subject);
         var question = ViewerQuestion(section, subject);
         var target = Math.Max(1, (int)Math.Round(frame.EstimatedDuration));
-        var packetId = $"packet-{variant.ToLowerInvariant()}-{Phase7Determinism.Hash(new { input.StoryFrameAuthority.Authority.ExecutionId, frame.FrameId })[..20]}";
+        var storyChecksum = Phase7Determinism.Hash(frame);
+        var packetId = $"packet-{variant.ToLowerInvariant()}-{Phase7Determinism.Hash(new { input.StoryFrameAuthority.Authority.ExecutionId, variant, frame.FrameId, storyChecksum, required=selected.Select(x=>x.ClaimId).Order(), optional=optional.Select(x=>x.ClaimId).Order(), contract=Phase7ScenePacketContract.Version })[..20]}";
         var lineage = new SortedDictionary<string,string>(StringComparer.Ordinal)
         {
             ["sourceNarrativeIntent"] = frame.NarrativeIntent, ["sourceVisualIntent"] = frame.VisualIntent,
@@ -50,20 +82,23 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         var draft = new SceneKnowledgePacket(packetId, input.StoryFrameAuthority.Authority.ExecutionId,
             input.StoryFrameAuthority.Authority.PlanId, input.StoryFrameAuthority.Authority.EventId, input.EventFamily,
             input.Language, input.FamilyProfile.ProfileId, input.FamilyProfile.ContractVersion, variant, frame.FrameId,
-            Phase7Determinism.Hash(frame), frame.SceneId, Phase7Determinism.Hash(new { frame.SceneId, frame.SceneNumber, frame.SceneRole }),
+            storyChecksum, frame.SceneId, Phase7Determinism.Hash(new { frame.SceneId, frame.SceneNumber, frame.SceneRole }),
             frame.SceneNumber, frame.FrameNumber, frame.NarrativeStage, frame.SceneRole, section,
             frame.ViewerQuestionIds.FirstOrDefault() ?? "", question, frame.LearningObjectiveIds.FirstOrDefault() ?? "", objective,
-            selected, optional, [], selected.Where(x => x.IsCultural).Select(x => x.Text).ToArray(), input.FamilyProfile.SafetyRules,
+            selected, optional, deferred, selected.Concat(optional).Where(x => x.IsCultural && x.RequiresQualification).Select(x => x.Text).ToArray(), input.FamilyProfile.SafetyRules,
             ["Use only packet claims as factual authority.","Do not generate an unqualified location or exact-time assertion."],
             ["Unsupported factual claims", "Universal exact viewing time without location and date"], input.Knowledge.LocalizedVocabulary,
             input.Knowledge.ProtectedTerms, input.Knowledge.PronunciationHints,
-            selected.Concat(optional).SelectMany(x=>x.KnowledgeReferenceIds).Where(IsVisualIdentity).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(), frame.KnowledgeReferenceIds,
+            selected.Concat(optional).SelectMany(x=>x.KnowledgeReferenceIds).Where(IsVisualIdentity)
+                .Where(x=>input.Knowledge.KnowledgeEntities.Any(e=>e.KnowledgeId==x)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(), frame.KnowledgeReferenceIds,
             selected.Concat(optional).SelectMany(x => x.SourceIds).Distinct(StringComparer.Ordinal).ToArray(), target,
             Math.Max(1,(int)Math.Floor(target * .8)), Math.Max(target,(int)Math.Ceiling(target * 1.2)),
             selected.Any(x => x.IsLocationDependent), selected.Any(x => x.IsDateTimeDependent),
             selected.Where(x => x.IsApproximate).Select(x => $"Claim {x.ClaimId} is approximate.").ToArray(),
-            selected.Any(x => x.RequiresHumanReview), placeholders.Select(x => $"Resolved upstream placeholder: {x}").ToArray(), blocking,
-            lineage, "") { ResolvedViewerQuestionText=question, VisualPlanningLineage=frame.ImageRequirements.Concat(frame.BrollRequirements).Distinct(StringComparer.Ordinal).ToArray() };
+            review.Length > 0, placeholders.Select(x => $"Resolved upstream placeholder: {x}").Concat(review.Select(x => $"Human review context excluded: {x.ClaimId}")).ToArray(), blocking,
+            lineage, "") { ResolvedViewerQuestionText=question,
+                ViewerQuestionResolutionReason=frame.ViewerQuestionIds.Count>0?"CertifiedPhase6ViewerQuestionIdentity":"GovernedFamilySceneRoleFallback",
+                VisualPlanningLineage=frame.ImageRequirements.Concat(frame.BrollRequirements).Distinct(StringComparer.Ordinal).ToArray() };
         draft = draft with { ViewerQuestionResolutionChecksum=Phase7Determinism.Hash(new { draft.SourceViewerQuestionId, question, section, claimIds=selected.Select(x=>x.ClaimId) }) };
         return draft with { DeterministicChecksum = Phase7Determinism.Hash(draft with { DeterministicChecksum = "" }) };
     }

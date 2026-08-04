@@ -762,6 +762,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeReferenceResolver, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeReferenceResolver>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7InputAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7InputAuthorityEvaluator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7SceneKnowledgePacketBuilder, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7SceneKnowledgePacketBuilder>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7ScenePacketInputAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7ScenePacketInputAuthorityEvaluator>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7SceneKnowledgePacketValidator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7SceneKnowledgePacketValidator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningBuilder>(sp =>
         {
             var options = configuration.GetSection(Astronomy.MediaFactory.Core.DocumentaryBlueprint.Phase7NarrationOptions.SectionName)
