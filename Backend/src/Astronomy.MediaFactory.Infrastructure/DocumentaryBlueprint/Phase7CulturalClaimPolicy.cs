@@ -25,9 +25,9 @@ public static class Phase7CulturalClaimPolicy
                 nameof(Phase7CulturalClaimPolicy), "resolved-claim", "phase7.cultural-claim-policy");
             var parts=canonicalPath
                 .Split('.',StringSplitOptions.RemoveEmptyEntries);
-            if(parts.Length<3 || !parts[0].Equals("cultureAndMythology",StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("P7KNOWLEDGE_FIELD_PATH_INVALID", nameof(approvedFieldPath));
-            if(SupportedTraditions.TryGetValue(parts[1],out var fromPath)) return fromPath;
+            if(parts.Length>=3
+                && parts[0].Equals("cultureAndMythology",StringComparison.OrdinalIgnoreCase)
+                && SupportedTraditions.TryGetValue(parts[1],out var fromPath)) return fromPath;
         }
         if(metadata is not null && metadata.TryGetValue("traditionIdentity",out var declared)
             && SupportedTraditions.TryGetValue(declared,out var fromMetadata)) return fromMetadata;
