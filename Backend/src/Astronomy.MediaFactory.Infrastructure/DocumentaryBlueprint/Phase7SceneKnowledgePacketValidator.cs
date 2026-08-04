@@ -34,11 +34,21 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         Check("PrimaryReferenceGate", all.All(p => input.ReferenceRequirements.TryGetValue(p.StoryFrameId,out var req) &&
             req.Count(r=>r.IsPrimary)==1 && req.Where(r=>r.IsPrimary).All(r=>r.Variant==p.Variant && p.KnowledgeReferenceIds.Contains(r.ReferenceId,StringComparer.Ordinal) &&
                 p.ReferenceResolutions.Any(x=>x.ReferenceId==r.ReferenceId&&x.IsPrimary&&x.Status==Phase7KnowledgeReferenceStatus.Resolved&&x.ResolvedClaimIds.Count>0))), "A governed primary reference is missing, unresolved, or cross-variant.");
-        Check("RequiredReferenceResolutionGate", all.All(p => input.ReferenceRequirements.TryGetValue(p.StoryFrameId,out var req) &&
-            req.Where(r=>r.IsRequired).All(r => p.ReferenceResolutions.Any(x => x.ReferenceId==r.ReferenceId && x.IsRequired &&
-                x.Status==Phase7KnowledgeReferenceStatus.Resolved && x.ResolvedClaimIds.Count>0 &&
-                x.ResolvedClaimIds.Any(id => p.RequiredClaims.Any(c => c.ClaimId==id && !c.RequiresHumanReview &&
-                    c.Disposition==Phase7ClaimDisposition.Required && HasRequiredEvidence(c,input))))))), "A required reference did not bind an exact Required packet claim.");
+        Check("RequiredReferenceResolutionGate", all.All(p =>
+            input.ReferenceRequirements.TryGetValue(p.StoryFrameId, out var requirements) &&
+            requirements.Where(requirement => requirement.IsRequired).All(requirement =>
+                p.ReferenceResolutions.Any(resolution =>
+                    resolution.ReferenceId == requirement.ReferenceId &&
+                    resolution.IsRequired &&
+                    resolution.Status == Phase7KnowledgeReferenceStatus.Resolved &&
+                    resolution.ResolvedClaimIds.Count > 0 &&
+                    resolution.ResolvedClaimIds.Any(claimId =>
+                        p.RequiredClaims.Any(claim =>
+                            claim.ClaimId == claimId &&
+                            !claim.RequiresHumanReview &&
+                            claim.Disposition == Phase7ClaimDisposition.Required &&
+                            HasRequiredEvidence(claim, input)))))),
+            "A required reference did not bind an exact Required packet claim.");
         Check("PacketBlockingIssueGate", all.All(p=>p.BlockingIssues.Count==0), "A packet contains a blocking issue.");
         Check("ClaimPartitionGate", all.All(Partitions), "A claim occurs in multiple partitions or has the wrong disposition.");
         Check("RequiredClaimEvidenceGate", all.SelectMany(p=>p.RequiredClaims).All(c => authorityClaims.TryGetValue(c.ClaimId,out var a) && a.SemanticIdentity==c.SemanticIdentity && input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e=>e.ClaimId==c.ClaimId&&e.SemanticIdentity==c.SemanticIdentity&&c.SourceIds.Contains(e.SourceId,StringComparer.Ordinal)&&e.SourceEligibility==Phase7SourceEligibility.EligibleForRequiredClaim&&!e.RequiresHumanReview&&e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField)), "A required claim lacks exact Required-eligible evidence.");
