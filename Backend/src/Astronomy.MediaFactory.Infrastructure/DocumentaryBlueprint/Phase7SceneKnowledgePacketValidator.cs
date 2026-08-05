@@ -16,7 +16,26 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         IReadOnlyList<SceneKnowledgePacket> longPackets, IReadOnlyList<SceneKnowledgePacket> shortPackets)
     {
         var failures = new Dictionary<string,List<string>>(StringComparer.Ordinal);
+        var packetFailures = new List<Phase7ScenePacketFailureSummary>();
         void Check(string gate, bool valid, string error) { if (!valid) (failures.TryGetValue(gate, out var e) ? e : failures[gate] = []).Add(error); }
+        void PacketFail(SceneKnowledgePacket p, string gate, string code, string? referenceId = null, string? claimId = null, string? blocking = null, IEnumerable<string>? extraClaims = null)
+        {
+            var parts = new SortedDictionary<string,string>(StringComparer.Ordinal)
+            {
+                ["reasonCode"] = code, ["gate"] = gate, ["variant"] = p.Variant, ["packetId"] = p.PacketId, ["storyFrameId"] = p.StoryFrameId,
+                ["sourceSceneId"] = p.SourceSceneId, ["sceneNumber"] = p.SceneNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["frameNumber"] = p.FrameNumber.ToString(System.Globalization.CultureInfo.InvariantCulture), ["sectionKey"] = p.SectionKey
+            };
+            if (!string.IsNullOrWhiteSpace(referenceId)) parts["referenceId"] = referenceId!;
+            if (!string.IsNullOrWhiteSpace(claimId)) parts["claimId"] = claimId!;
+            if (extraClaims is not null) parts["candidateClaimIds"] = string.Join(",", extraClaims.Order(StringComparer.Ordinal));
+            var message = code + ":" + string.Join(";", parts.Select(x => x.Key + "=" + x.Value));
+            (failures.TryGetValue(gate, out var e) ? e : failures[gate] = []).Add(message);
+            packetFailures.Add(new(p.Variant, p.PacketId, p.StoryFrameId, p.SourceSceneId, p.SceneNumber, p.FrameNumber, p.SectionKey,
+                [gate], [code], string.IsNullOrWhiteSpace(referenceId) ? [] : [referenceId!],
+                string.IsNullOrWhiteSpace(claimId) ? (extraClaims?.Order(StringComparer.Ordinal).ToArray() ?? []) : [claimId!],
+                string.IsNullOrWhiteSpace(blocking) ? [] : [blocking!]));
+        }
         var all = longPackets.Concat(shortPackets).ToArray();
         var expected = input.LongStoryFrames.Concat(input.ShortStoryFrames).ToArray();
         var authorityClaims = input.Knowledge.KnowledgeAuthority.Claims.ToDictionary(x => x.ClaimId, StringComparer.Ordinal);
@@ -31,25 +50,28 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         Check("LanguageGate", all.All(p => string.Equals(p.Language, input.Language, StringComparison.OrdinalIgnoreCase)), "Language mismatch.");
         Check("SectionAuthorityGate", all.All(p=>p.SectionAuthority is { IsValid:true } a && a.SectionKey==p.SectionKey &&
             (p.Variant=="Long"?input.LongSourceScenes:input.ShortSourceScenes).Any(s=>s.SceneId==p.SourceSceneId&&s.NarrativeStage==a.NarrativeStage&&s.SceneRole==a.SceneRole)), "Packet section is not resolver-derived source-scene authority.");
-        Check("PrimaryReferenceGate", all.All(p => input.ReferenceRequirements.TryGetValue(p.StoryFrameId,out var req) &&
-            req.Count(r=>r.IsPrimary)==1 && req.Where(r=>r.IsPrimary).All(r=>r.Variant==p.Variant && p.KnowledgeReferenceIds.Contains(r.ReferenceId,StringComparer.Ordinal) &&
-                p.ReferenceResolutions.Any(x=>x.ReferenceId==r.ReferenceId&&x.IsPrimary&&x.Status==Phase7KnowledgeReferenceStatus.Resolved&&x.ResolvedClaimIds.Count>0))), "A governed primary reference is missing, unresolved, or cross-variant.");
-        Check("RequiredReferenceResolutionGate", all.All(p =>
-            input.ReferenceRequirements.TryGetValue(p.StoryFrameId, out var requirements) &&
-            requirements.Where(requirement => requirement.IsRequired).All(requirement =>
-                p.ReferenceResolutions.Any(resolution =>
-                    resolution.ReferenceId == requirement.ReferenceId &&
-                    resolution.IsRequired &&
-                    resolution.Status == Phase7KnowledgeReferenceStatus.Resolved &&
-                    resolution.ResolvedClaimIds.Count > 0 &&
-                    resolution.ResolvedClaimIds.Any(claimId =>
-                        p.RequiredClaims.Any(claim =>
-                            claim.ClaimId == claimId &&
-                            !claim.RequiresHumanReview &&
-                            claim.Disposition == Phase7ClaimDisposition.Required &&
-                            HasRequiredEvidence(claim, input)))))),
-            "A required reference did not bind an exact Required packet claim.");
-        Check("PacketBlockingIssueGate", all.All(p=>p.BlockingIssues.Count==0), "A packet contains a blocking issue.");
+        foreach (var p in all.OrderBy(x=>x.Variant,StringComparer.Ordinal).ThenBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber))
+        {
+            if (!input.ReferenceRequirements.TryGetValue(p.StoryFrameId,out var req)) { PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_COUNT_INVALID"); continue; }
+            var prim=req.Where(r=>r.IsPrimary).OrderBy(r=>r.ReferenceId,StringComparer.Ordinal).ToArray();
+            if (prim.Length!=1) { PacketFail(p,"PrimaryReferenceGate", prim.Length>1?"P7PACKET_PRIMARY_REFERENCE_AMBIGUOUS":"P7PACKET_PRIMARY_REFERENCE_COUNT_INVALID"); continue; }
+            var r=prim[0]; var res=p.ReferenceResolutions.FirstOrDefault(x=>x.ReferenceId==r.ReferenceId);
+            if (r.Variant!=p.Variant) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_VARIANT_MISMATCH",r.ReferenceId);
+            else if (!p.KnowledgeReferenceIds.Contains(r.ReferenceId,StringComparer.Ordinal)) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_NOT_IN_PACKET",r.ReferenceId);
+            else if (res is null || res.Status!=Phase7KnowledgeReferenceStatus.Resolved) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_UNRESOLVED",r.ReferenceId);
+            else if (res.ResolvedClaimIds.Count==0) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_NO_CLAIMS",r.ReferenceId);
+        }
+        foreach (var p in all.OrderBy(x=>x.Variant,StringComparer.Ordinal).ThenBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber))
+        if (input.ReferenceRequirements.TryGetValue(p.StoryFrameId, out var requirements))
+        foreach (var requirement in requirements.Where(r=>r.IsRequired).OrderBy(r=>r.ReferenceId,StringComparer.Ordinal))
+        {
+            var resolution=p.ReferenceResolutions.FirstOrDefault(r=>r.ReferenceId==requirement.ReferenceId);
+            if (resolution is null || resolution.Status != Phase7KnowledgeReferenceStatus.Resolved)
+                PacketFail(p,"RequiredReferenceResolutionGate","P7PACKET_REQUIRED_REFERENCE_UNRESOLVED",requirement.ReferenceId);
+            else if (!resolution.ResolvedClaimIds.Any(id => p.RequiredClaims.Any(c=>c.ClaimId==id && !c.RequiresHumanReview && c.Disposition==Phase7ClaimDisposition.Required && HasRequiredEvidence(c,input))))
+                PacketFail(p,"RequiredReferenceResolutionGate","P7PACKET_REQUIRED_REFERENCE_NO_ELIGIBLE_REQUIRED_CLAIM",requirement.ReferenceId, extraClaims: resolution.ResolvedClaimIds);
+        }
+        foreach (var p in all.OrderBy(x=>x.Variant,StringComparer.Ordinal).ThenBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber)) foreach (var b in p.BlockingIssues.Order(StringComparer.Ordinal)) PacketFail(p,"PacketBlockingIssueGate", b.Split(':')[0] is { Length: >0 } c ? c : "P7PACKET_BLOCKING_ISSUE", blocking: b);
         Check("ClaimPartitionGate", all.All(Partitions), "A claim occurs in multiple partitions or has the wrong disposition.");
         Check("RequiredClaimEvidenceGate", all.SelectMany(p=>p.RequiredClaims).All(c => authorityClaims.TryGetValue(c.ClaimId,out var a) && a.SemanticIdentity==c.SemanticIdentity && input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e=>e.ClaimId==c.ClaimId&&e.SemanticIdentity==c.SemanticIdentity&&c.SourceIds.Contains(e.SourceId,StringComparer.Ordinal)&&e.SourceEligibility==Phase7SourceEligibility.EligibleForRequiredClaim&&!e.RequiresHumanReview&&e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField)), "A required claim lacks exact Required-eligible evidence.");
         Check("OptionalClaimEvidenceGate", all.SelectMany(p=>p.OptionalClaims).All(c => authorityClaims.TryGetValue(c.ClaimId,out var a) && a.SemanticIdentity==c.SemanticIdentity && Phase7SceneKnowledgePacketBuilder.HasOptionalEvidence(c,input)), "An optional claim lacks exact eligible evidence.");
@@ -64,7 +86,7 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         Check("SafetyRuleGate", all.All(p => input.FamilyProfile.SafetyRules.All(p.SafetyRules.Contains)), "An applicable safety rule is absent.");
         Check("CulturalQualificationGate", all.SelectMany(p=>p.RequiredClaims.Concat(p.OptionalClaims)).Where(c=>c.IsCultural).All(c=>c.RequiresQualification), "Cultural context is unqualified.");
         Check("AstrologySeparationGate", all.SelectMany(p=>p.RequiredClaims.Concat(p.OptionalClaims)).Where(c=>c.IsAstrologyRelated).All(c=>c.RequiresQualification), "Astrology is not separated from astronomy.");
-        Check("LocationTimeSafetyGate", all.SelectMany(p=>p.RequiredClaims.Concat(p.OptionalClaims)).Where(c=>c.IsLocationDependent||c.IsDateTimeDependent).All(c=>c.RequiresQualification), "Location/time claim is unqualified.");
+        foreach (var p in all.OrderBy(x=>x.Variant,StringComparer.Ordinal).ThenBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber)) foreach (var c in p.RequiredClaims.Concat(p.OptionalClaims).Where(c=>c.IsLocationDependent||c.IsDateTimeDependent).OrderBy(c=>c.ClaimId,StringComparer.Ordinal)) if (!LocationTimeSafe(c,input)) PacketFail(p,"LocationTimeSafetyGate","P7PACKET_LOCATION_TIME_QUALIFICATION_MISSING", claimId: c.ClaimId);
         Check("DurationGate", all.All(p=>p.MinimumDurationSeconds>0&&p.MinimumDurationSeconds<=p.TargetDurationSeconds&&p.TargetDurationSeconds<=p.MaximumDurationSeconds), "Duration bounds are invalid.");
         var entityIds=input.Knowledge.KnowledgeAuthority.KnowledgeEntities.Select(x=>x.KnowledgeId).ToHashSet(StringComparer.Ordinal);
         Check("VisualEvidenceGate", all.SelectMany(p=>p.VisualEvidenceIds).All(entityIds.Contains), "Visual evidence is not a certified object identity.");
@@ -75,13 +97,17 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
         Check("LongShortIndependenceGate", !ReferenceEquals(longPackets,shortPackets)&&!longPackets.Select(x=>x.PacketId).Intersect(shortPackets.Select(x=>x.PacketId),StringComparer.Ordinal).Any()&&longPackets.All(x=>longFrameIds.Contains(x.StoryFrameId)&&!shortFrameIds.Contains(x.StoryFrameId)&&OwnsRequirements(x,"Long"))&&shortPackets.All(x=>shortFrameIds.Contains(x.StoryFrameId)&&!longFrameIds.Contains(x.StoryFrameId)&&OwnsRequirements(x,"Short")), "Long and Short packet identity/authority crossed variants.");
         Check("DeterminismGate", all.All(p=>p.DeterministicChecksum==Phase7SceneKnowledgePacketCanonicalizer.ComputeChecksum(p)), "Packet checksum mismatch.");
         var gates=GateNames.Select(n=>new Phase7SceneKnowledgePacketValidationGate(n,!failures.ContainsKey(n),failures.GetValueOrDefault(n)??[])).ToArray();
-        var errors=gates.SelectMany(x=>x.Errors).ToArray();
+        var errors=gates.SelectMany(x=>x.Errors).Order(StringComparer.Ordinal).ToArray();
         var draft=new Phase7SceneKnowledgePacketValidation(errors.Length==0,errors.Length==0?"P7PACKET_VALID":"P7PACKET_INVALID",gates,errors,"");
-        return draft with{DeterministicChecksum=Phase7Determinism.Hash(draft with{DeterministicChecksum=""})};
+        return draft with{TotalGateCount=gates.Length, FailureSummaries=packetFailures.OrderBy(x=>x.Variant,StringComparer.Ordinal).ThenBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber).ThenBy(x=>string.Join(",",x.ReasonCodes),StringComparer.Ordinal).ToArray(), DeterministicChecksum=Phase7Determinism.Hash(draft with{DeterministicChecksum=""})};
     }
     private static bool Ordered(IEnumerable<SceneKnowledgePacket> p)=>p.SequenceEqual(p.OrderBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber));
     private static bool ClaimIdentical(CertifiedNarrationClaim left, CertifiedNarrationClaim right) =>
         Phase7Determinism.Hash(left) == Phase7Determinism.Hash(right);
+    private static bool LocationTimeSafe(CertifiedNarrationClaim claim, Phase7ScenePacketInputAuthority input) =>
+        !(claim.IsLocationDependent || claim.IsDateTimeDependent) ||
+        Phase7KnowledgePolicyFacts.Scoped(input.Knowledge.KnowledgeAuthority, claim) ||
+        Phase7KnowledgePolicyFacts.Qualified(input.Knowledge.KnowledgeAuthority, claim);
     private static bool HasRequiredEvidence(CertifiedNarrationClaim claim, Phase7ScenePacketInputAuthority input) =>
         input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e => e.ClaimId==claim.ClaimId &&
             e.SemanticIdentity==claim.SemanticIdentity && claim.SourceIds.Contains(e.SourceId,StringComparer.Ordinal) &&

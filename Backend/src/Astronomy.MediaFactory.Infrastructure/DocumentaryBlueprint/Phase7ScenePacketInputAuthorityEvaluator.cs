@@ -85,7 +85,7 @@ public sealed class Phase7ScenePacketInputAuthorityEvaluator(
             return Bad("P7PACKET_REFERENCE_REQUIREMENTS_UNRESOLVED", "The governed compatibility policy could not classify every scene reference.",
                 projections.SelectMany(x => x.result.Errors), projections.SelectMany(x => x.result.Warnings));
         var requirements = projections.ToDictionary(x => x.frame.FrameId,
-            x => x.result.Requirements, StringComparer.Ordinal);
+            x => x.result.Requirements.Select(r => r with { IsRequired = HasRequiredBinding(k, r.ReferenceId) }).ToArray(), StringComparer.Ordinal);
         var authority = new Phase7ScenePacketInputAuthority(knowledge.Authority, p, profile.Profile,
             request.ExecutionId, request.PlanId, request.EventId, k.EventFamily, k.EventType, request.Language,
             k.ProfileId, k.ProfileVersion, longs, shorts,
@@ -95,6 +95,15 @@ public sealed class Phase7ScenePacketInputAuthorityEvaluator(
         return new(true, authority, "P7PACKET_INPUT_VALID", [], knowledge.Warnings.Concat(phase6.Warnings)
             .Concat(projections.SelectMany(x => x.result.Warnings)).Distinct().ToArray());
     }
+
+    private static bool HasRequiredBinding(PublishedPhase7KnowledgeAuthority authority, string referenceId) =>
+        authority.KnowledgeAuthority.Claims.Any(c => c.KnowledgeReferenceIds.Contains(referenceId, StringComparer.Ordinal) &&
+            c.Disposition == Phase7ClaimDisposition.Required && !c.RequiresHumanReview &&
+            authority.KnowledgeAuthority.ClaimSupportEvidence.Any(e => e.ClaimId == c.ClaimId &&
+                e.SemanticIdentity == c.SemanticIdentity && c.SourceIds.Contains(e.SourceId, StringComparer.Ordinal) &&
+                e.SourceEligibility == Phase7SourceEligibility.EligibleForRequiredClaim && !e.RequiresHumanReview &&
+                e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField) &&
+            (!(c.IsLocationDependent || c.IsDateTimeDependent) || Phase7KnowledgePolicyFacts.Scoped(authority.KnowledgeAuthority, c) || Phase7KnowledgePolicyFacts.Qualified(authority.KnowledgeAuthority, c)));
 
     private static Phase7ScenePacketInputAuthorityEvaluation Bad(string code, string detail,
         IEnumerable<string>? errors = null, IEnumerable<string>? warnings = null) =>

@@ -45,6 +45,8 @@ public sealed record Phase7AuthorityStageResult(
     public int ShortCount { get; init; }
     public int FailedGateCount { get; init; }
     public int PassedGateCount { get; init; }
+    public int TotalGateCount { get; init; }
+    public IReadOnlyList<Phase7ScenePacketFailureSummary> PacketFailureSummaries { get; init; } = [];
 }
 
 public sealed record Phase7ProviderIsolationSnapshot(DateTimeOffset CapturedAtUtc);

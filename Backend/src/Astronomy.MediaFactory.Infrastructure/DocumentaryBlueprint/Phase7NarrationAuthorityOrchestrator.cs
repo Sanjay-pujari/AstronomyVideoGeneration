@@ -83,7 +83,7 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
         packetCollection = packetCollection with { DeterministicChecksum = NarrationPlanningCanonicalizer.PacketCollectionChecksum(packetCollection) };
         Add(new("SceneKnowledgePackets", "P7.1B-A Scene Knowledge Packets", packetValidation.IsValid, packetValidation.IsValid ? "Valid" : "Failed",
             packetValidation.ReasonCode, false, false, false, [], packetInput.Warnings, packetValidation.Errors, packetValidation.Errors)
-        { LongCount = longPackets.Count, ShortCount = shortPackets.Count, FailedGateCount = packetValidation.Gates.Count(g => !g.Passed), PassedGateCount = packetValidation.Gates.Count(g => g.Passed) });
+        { LongCount = longPackets.Count, ShortCount = shortPackets.Count, FailedGateCount = packetValidation.Gates.Count(g => !g.Passed), PassedGateCount = packetValidation.Gates.Count(g => g.Passed), TotalGateCount = packetValidation.Gates.Count, PacketFailureSummaries = packetValidation.FailureSummaries });
         if (!packetValidation.IsValid) return Finish(false);
 
         var planningRequest = new Phase7NarrationPlanningInputAuthorityRequest(request.ExecutionRoot, request.ExecutionId, request.PlanId,
