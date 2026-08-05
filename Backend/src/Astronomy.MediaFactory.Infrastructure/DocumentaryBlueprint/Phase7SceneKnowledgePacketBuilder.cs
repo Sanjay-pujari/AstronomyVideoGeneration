@@ -44,7 +44,7 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         var otherIds = (variant == "Long" ? input.ShortStoryFrames : input.LongStoryFrames)
             .SelectMany(x => x.KnowledgeReferenceIds).Distinct(StringComparer.Ordinal).ToArray();
         var resolved = requirements.Select(r => (Requirement:r, Resolution:resolver.Resolve(
-            new Phase7KnowledgeReferenceRequest(r.ReferenceId, r.Variant, !r.IsRequired, otherIds), input))).ToArray();
+            new Phase7KnowledgeReferenceRequest(r.ReferenceId, r.Variant, !r.IsRequired, otherIds) { SectionKey = section }, input))).ToArray();
         var exactRequired = resolved.Where(x => x.Requirement.IsRequired && x.Resolution.Status == Phase7KnowledgeReferenceStatus.Resolved)
             .SelectMany(x => x.Resolution.Claims.Where(c => x.Resolution.EligibleRequiredClaimIds.Contains(c.ClaimId, StringComparer.Ordinal)))
             .DistinctBy(x => x.ClaimId, StringComparer.Ordinal);
