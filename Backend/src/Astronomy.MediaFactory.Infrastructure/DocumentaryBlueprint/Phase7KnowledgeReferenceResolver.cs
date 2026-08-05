@@ -141,16 +141,18 @@ public sealed class Phase7KnowledgeReferenceIdentityBridge : IPhase7KnowledgeRef
             || Try(index.Where(x => x.KnowledgeEntityIds.Intersect(candidates, StringComparer.Ordinal).Any()), "P7PACKET_REFERENCE_RESOLVED_KNOWLEDGE_ENTITY");
         if (matches.Length == 0)
         {
-            var scope = compatibilityPolicy.Resolve(normalized.AuthorityNamespace, pointer, sectionKey, variant);
+            var scope = compatibilityPolicy.Resolve(new Phase7ReferenceCompatibilityRequest(normalized.AuthorityNamespace, pointer, sectionKey, variant, Phase7ReferenceRole.Required, true));
             if (scope.IsSupported)
             {
                 bool InScope(Phase7CommittedClaimEvidenceIndexEntry x) =>
                     x.Origins.Intersect(scope.AllowedOrigins).Any() &&
                     (scope.AllowedDomains.Count == 0 || scope.AllowedDomains.Contains(x.SemanticIdentity, StringComparer.Ordinal) || scope.AllowedDomains.Contains(x.SemanticIdentity.Split(':')[0], StringComparer.Ordinal) || scope.AllowedDomains.Contains(x.SemanticIdentity.Split('.')[0], StringComparer.Ordinal) || scope.AllowedDomains.Contains(x.Disposition.ToString(), StringComparer.Ordinal) || scope.AllowedDomains.Contains(GetClaimDomain(authority, x.ClaimId), StringComparer.Ordinal)) &&
+                    scope.AllowedDispositions.Contains(x.Disposition) &&
                     x.AuthorityCanonicalApprovedFieldPaths.Any(p => scope.AllowedApprovedFieldPrefixes.Any(prefix => p == prefix || IsDescendant(prefix, p)));
-                Try(index.Where(InScope), scope.ReasonCode);
+                Try(Rank(index.Where(InScope), scope, authority, true), scope.ReasonCode);
             }
         }
+        if (matches.Length > 0) matches = Rank(matches, compatibilityPolicy.Resolve(new Phase7ReferenceCompatibilityRequest(normalized.AuthorityNamespace, pointer, sectionKey, variant, Phase7ReferenceRole.Required, true)), authority, true);
         if (matches.Length > 0 && string.Equals(normalized.AuthorityNamespace, "production-event-intelligence", StringComparison.Ordinal))
         {
             var eventMatches = matches.Where(x => x.Origins.Contains(Phase7KnowledgeOrigin.Event)).ToArray();
@@ -170,6 +172,35 @@ public sealed class Phase7KnowledgeReferenceIdentityBridge : IPhase7KnowledgeRef
             .Concat(matches.Select(x=>$"candidateClaimId={x.ClaimId};disposition={x.Disposition};origins={string.Join('|',x.Origins)}"))
             .ToArray();
         return new(claimIds.Length>0, normalized.OriginalReferenceId, pointer, paths, entities, claimIds, method, claimIds.Length>0 ? method : "P7REF_REFERENCE_UNRESOLVED", evidence) { CanonicalReferenceIds = candidates };
+    }
+
+    private static Phase7CommittedClaimEvidenceIndexEntry[] Rank(IEnumerable<Phase7CommittedClaimEvidenceIndexEntry> source, Phase7ReferenceCompatibilityScope scope, Phase7ScenePacketInputAuthority authority, bool required)
+    {
+        var claims = authority.Knowledge.KnowledgeAuthority.Claims.ToDictionary(c => c.ClaimId, StringComparer.Ordinal);
+        int PrefixRank(Phase7CommittedClaimEvidenceIndexEntry x)
+        {
+            var prefixes = scope.PreferredApprovedFieldPrefixes.Count > 0 ? scope.PreferredApprovedFieldPrefixes : scope.AllowedApprovedFieldPrefixes;
+            for (var i = 0; i < prefixes.Count; i++)
+                if (x.AuthorityCanonicalApprovedFieldPaths.Any(p => p == prefixes[i] || IsDescendant(prefixes[i], p))) return i;
+            return int.MaxValue;
+        }
+        int DomainRank(Phase7CommittedClaimEvidenceIndexEntry x)
+        {
+            var d = GetClaimDomain(authority, x.ClaimId);
+            var i = scope.AllowedDomains.ToList().FindIndex(v => string.Equals(v, d, StringComparison.Ordinal));
+            return i < 0 ? int.MaxValue : i;
+        }
+        int PrecisionRank(Phase7CommittedClaimEvidenceIndexEntry x) => x.ProvenancePrecision.Contains(Phase7ProvenancePrecision.ExactClaim) ? 0 : x.ProvenancePrecision.Contains(Phase7ProvenancePrecision.ExactKnowledgeEntity) ? 1 : x.ProvenancePrecision.Contains(Phase7ProvenancePrecision.ExactApprovedField) ? 2 : 3;
+        return source
+            .OrderBy(x => required && IsRequiredEligible(claims[x.ClaimId], authority) ? 0 : 1)
+            .ThenBy(PrefixRank)
+            .ThenBy(DomainRank)
+            .ThenBy(x => x.Origins.Contains(Phase7KnowledgeOrigin.Event) ? 0 : 1)
+            .ThenBy(PrecisionRank)
+            .ThenByDescending(x => claims.TryGetValue(x.ClaimId, out var c) ? c.Confidence : 0m)
+            .ThenBy(x => x.SemanticIdentity, StringComparer.Ordinal)
+            .ThenBy(x => x.ClaimId, StringComparer.Ordinal)
+            .ToArray();
     }
 
     internal static bool IsRequiredEligible(CertifiedNarrationClaim c, Phase7ScenePacketInputAuthority input) =>
@@ -204,10 +235,11 @@ public sealed class Phase7KnowledgeReferenceResolver : IPhase7KnowledgeReference
         if (!normalized.IsValid) return new(request.ReferenceId, Phase7KnowledgeReferenceStatus.Unsupported, [], normalized.ReasonCode) { OriginalReferenceId = normalized.OriginalReferenceId };
         var requestVariant = Enum.TryParse<Phase7NarrationVariant>(request.Variant, out var parsedVariant) ? parsedVariant : Phase7NarrationVariant.Long;
         var bridged = bridge.Resolve(normalized, authority, request.SectionKey, requestVariant);
-        var claims = authority.Knowledge.KnowledgeAuthority.Claims.Where(c => bridged.CandidateClaimIds.Contains(c.ClaimId, StringComparer.Ordinal)).OrderBy(c => c.ClaimId, StringComparer.Ordinal).ToArray();
+        var claimMap = authority.Knowledge.KnowledgeAuthority.Claims.ToDictionary(c => c.ClaimId, StringComparer.Ordinal);
+        var claims = bridged.CandidateClaimIds.Where(claimMap.ContainsKey).Select(id => claimMap[id]).ToArray();
         var status = claims.Length > 0 ? Phase7KnowledgeReferenceStatus.Resolved : (request.Optional ? Phase7KnowledgeReferenceStatus.Deferred : Phase7KnowledgeReferenceStatus.Missing);
         var reason = claims.Length > 0 ? bridged.ReasonCode : (request.Optional ? "P7REF_APPROVED_PATH_UNMAPPED" : "P7PACKET_REQUIRED_REFERENCE_UNRESOLVED");
-        var eligible = claims.Where(c => Phase7KnowledgeReferenceIdentityBridge.IsRequiredEligible(c, authority)).Select(c => c.ClaimId).Order(StringComparer.Ordinal).ToArray();
+        var eligible = claims.Where(c => Phase7KnowledgeReferenceIdentityBridge.IsRequiredEligible(c, authority)).Select(c => c.ClaimId).ToArray();
         return new(request.ReferenceId, status, claims, reason) { OriginalReferenceId = normalized.OriginalReferenceId, NormalizedReferenceId = normalized.AuthorityNamespace + "#" + normalized.CanonicalJsonPointer, CanonicalJsonPointer = normalized.CanonicalJsonPointer, ResolutionMethod = bridged.ResolutionMethod, MatchedApprovedFieldPaths = bridged.MatchedApprovedFieldPaths, MatchedKnowledgeEntityIds = bridged.MatchedKnowledgeEntityIds, CandidateClaimIds = bridged.CandidateClaimIds, EligibleRequiredClaimIds = eligible, Evidence = bridged.Evidence };
     }
 }

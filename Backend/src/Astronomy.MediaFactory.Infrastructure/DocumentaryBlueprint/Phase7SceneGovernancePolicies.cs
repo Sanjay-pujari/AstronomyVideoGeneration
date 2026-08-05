@@ -11,62 +11,72 @@ public sealed class Phase7SceneReferenceCompatibilityPolicy : IPhase7SceneRefere
     public const string Reason = "P7PACKET_REFERENCE_COMPAT_PHASE6_ORDERED_PRIMARY";
 
     public Phase7ReferenceCompatibilityScope Resolve(string authorityNamespace, string canonicalJsonPointer,
-        string sectionKey, Phase7NarrationVariant variant)
-    {
-        var section = sectionKey ?? "";
-        if (!string.Equals(authorityNamespace, "production-event-intelligence", StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(canonicalJsonPointer))
-            return Unsupported(authorityNamespace, canonicalJsonPointer, section, "P7PACKET_REQUIRED_REFERENCE_UNRESOLVED");
+        string sectionKey, Phase7NarrationVariant variant) =>
+        Resolve(new Phase7ReferenceCompatibilityRequest(authorityNamespace, canonicalJsonPointer, sectionKey, variant,
+            Phase7ReferenceRole.Required, true));
 
-        var domains = DomainsFor(section);
-        if (canonicalJsonPointer == "/primaryObjects")
-            return Scope(authorityNamespace, canonicalJsonPointer, section, domains, PrimaryObjectPrefixes(section),
-                "P7PACKET_REFERENCE_COMPAT_PHASE6_PRIMARY_OBJECTS_SCOPE");
-        if (canonicalJsonPointer == "/scientificContext")
-            return Scope(authorityNamespace, canonicalJsonPointer, section, domains, ScientificContextPrefixes(section),
-                "P7PACKET_REFERENCE_COMPAT_PHASE6_SCIENTIFIC_CONTEXT_SCOPE");
-        return Unsupported(authorityNamespace, canonicalJsonPointer, section, "P7PACKET_REQUIRED_REFERENCE_UNRESOLVED");
+    public Phase7ReferenceCompatibilityScope Resolve(Phase7ReferenceCompatibilityRequest request)
+    {
+        var ns = request.AuthorityNamespace ?? "";
+        var pointer = request.CanonicalJsonPointer ?? "";
+        var section = request.SectionKey ?? "";
+        if (!string.Equals(ns, "production-event-intelligence", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(pointer))
+            return Unsupported(ns, pointer, section, "P7PACKET_REQUIRED_REFERENCE_UNRESOLVED");
+
+        if (pointer == "/primaryObjects")
+            return Scope(request, DomainsFor(section), PrimaryPreferred(section).Concat(PrimaryFallback(section)).ToArray(),
+                PrimaryPreferred(section), "P7PACKET_REFERENCE_COMPAT_PHASE6_PRIMARY_OBJECTS_SCOPE");
+        if (pointer == "/scientificContext")
+            return Scope(request, DomainsFor(section), ScientificPreferred(section).Concat(ScientificFallback(section)).ToArray(),
+                ScientificPreferred(section), "P7PACKET_REFERENCE_COMPAT_PHASE6_SCIENTIFIC_CONTEXT_SCOPE");
+        return Unsupported(ns, pointer, section, "P7PACKET_REQUIRED_REFERENCE_UNRESOLVED");
     }
 
-    private static Phase7ReferenceCompatibilityScope Scope(string ns, string pointer, string section,
-        IReadOnlyList<string> domains, IReadOnlyList<string> prefixes, string reason) =>
-        new(true, ns, pointer, section, domains, prefixes, [Phase7KnowledgeOrigin.Event],
-            "Phase7SceneReferenceCompatibilityPolicy", "phase7.scene-reference-compatibility.v1", reason);
+    private static Phase7ReferenceCompatibilityScope Scope(Phase7ReferenceCompatibilityRequest r,
+        IReadOnlyList<string> domains, IReadOnlyList<string> allowed, IReadOnlyList<string> preferred, string reason) =>
+        new(true, domains, Canon(allowed), Canon(preferred), [Phase7ClaimDisposition.Required, Phase7ClaimDisposition.Optional],
+            r.IsRequired, "Phase7SceneReferenceCompatibilityPolicy", "phase7.scene-reference-compatibility.v2", reason)
+        { AuthorityNamespace = r.AuthorityNamespace, CanonicalJsonPointer = r.CanonicalJsonPointer, SectionKey = r.SectionKey, AllowedOrigins = [Phase7KnowledgeOrigin.Event] };
 
     private static Phase7ReferenceCompatibilityScope Unsupported(string ns, string pointer, string section, string reason) =>
-        new(false, ns, pointer, section, [], [], [], "Phase7SceneReferenceCompatibilityPolicy",
-            "phase7.scene-reference-compatibility.v1", reason);
+        new(false, [], [], [], [], false, "Phase7SceneReferenceCompatibilityPolicy", "phase7.scene-reference-compatibility.v2", reason)
+        { AuthorityNamespace = ns, CanonicalJsonPointer = pointer, SectionKey = section, AllowedOrigins = [] };
 
+    private static string[] Canon(IEnumerable<string> prefixes) => prefixes.Select(p => p.StartsWith("/", StringComparison.Ordinal) ? p : "/" + p.TrimEnd('.').Replace('.', '/')).Distinct(StringComparer.Ordinal).ToArray();
     private static IReadOnlyList<string> DomainsFor(string sectionKey) => sectionKey switch
     {
-        "Wonder" => ["Identity", "Recognition", "InterestingFacts", "ScientificSignificance"],
-        "Recognition" => ["Identity", "Recognition", "RecognitionGeometry", "PhysicalCharacteristics"],
-        "Discovery" => ["KeyObjects", "ScientificStructure", "ScientificSignificance", "DeepSkyObjects"],
-        "Science" => ["ScientificStructure", "PhysicalCharacteristics", "Formation", "Evolution", "ScientificSignificance", "StarFormation", "Distance"],
-        "History" => ["History"],
-        "Culture" => ["CultureAndMythology", "RegionalTraditions", "AstrologyClarification"],
-        "ModernAstronomy" => ["ScientificSignificance", "ScientificStructure", "Astrophotography", "ImagingAppearance"],
-        "Clarification" => ["ScientificSignificance", "ScientificStructure", "AstrologyClarification"],
-        "Observation" => ["Observation", "Visibility", "Timing", "LocationDependence", "Equipment", "Recognition"],
-        "Astrophotography" => ["Astrophotography", "ImagingAppearance", "Observation", "Equipment"],
-        "Inspiration" => ["InterestingFacts", "ScientificSignificance", "CultureAndMythology"],
+        "Wonder" => ["Identity", "Recognition", "ScientificStructure", "Observation"],
+        "Recognition" => ["Identity", "Recognition", "RecognitionGeometry", "PhysicalCharacteristics", "ScientificStructure", "Observation"],
+        "Science" => ["ScientificStructure", "PhysicalCharacteristics", "Formation", "Evolution", "StarFormation", "Distance"],
+        "ModernAstronomy" => ["ScientificSignificance", "ScientificStructure", "History", "Astrophotography", "ImagingAppearance"],
+        "Inspiration" => ["Identity", "Recognition", "Observation", "InterestingFacts", "ScientificStructure"],
+        "Culture" => ["CultureAndMythology", "RegionalTraditions", "History", "Identity"],
+        _ => ["Identity", "Recognition", "ScientificStructure", "Observation", "History", "CultureAndMythology"]
+    };
+    private static IReadOnlyList<string> PrimaryPreferred(string s) => s switch
+    {
+        "Wonder" => ["identity.", "objects.objectName", "scientific.summary", "observation.orionBeltIdentification"],
+        "Science" => ["scientific.summary", "scientific.majorStars", "scientific.orionBeltStars", "objects.objectName"],
+        "ModernAstronomy" => ["scientific.summary", "history.modernInterpretation", "scientific.majorStars", "objects.objectName"],
+        "Inspiration" => ["identity.", "objects.objectName", "observation.nakedEyeRecognition", "observation.orionBeltIdentification", "scientific.summary"],
+        "Culture" => ["cultureAndMythology.", "history.ancientRecognition", "identity.", "objects.objectName"],
+        _ => ["scientific.summary", "objects.objectName", "identity."]
+    };
+    private static IReadOnlyList<string> PrimaryFallback(string s) => s switch
+    {
+        "Wonder" => ["scientific.majorStars", "scientific.orionBeltStars", "observation.nakedEyeRecognition"],
+        "Science" => ["observation.orionBeltIdentification", "observation.nakedEyeRecognition"],
         _ => []
     };
-
-    private static IReadOnlyList<string> PrimaryObjectPrefixes(string sectionKey) => sectionKey switch
+    private static IReadOnlyList<string> ScientificPreferred(string s) => s switch
     {
-        "Wonder" => ["/scientific/astronomicalImportance", "/scientific/approximatePosition"],
-        "Discovery" => ["/scientific/majorStars", "/scientific/orionBeltStars", "/scientific/majorDeepSkyObjects"],
-        "Observation" => ["/observation/nakedEyeRecognition", "/observation/orionBeltIdentification", "/observation/binocularGuidance", "/observation/telescopeGuidance"],
-        "History" => ["/history/historicalCataloguing", "/history/ancientRecognition", "/history/navigationSeasonalImportance"],
-        _ => ["/scientific/majorStars", "/scientific/orionBeltStars", "/scientific/majorDeepSkyObjects", "/scientific/astronomicalImportance", "/scientific/approximatePosition", "/observation/nakedEyeRecognition", "/observation/orionBeltIdentification", "/history/historicalCataloguing"]
+        "Recognition" => ["scientific.summary", "scientific.orionBeltStars", "observation.orionBeltIdentification", "observation.nakedEyeRecognition", "scientific.majorStars", "objects.objectName"],
+        _ => ["scientific.summary", "scientific.majorStars", "scientific.orionBeltStars", "objects.objectName"]
     };
-
-    private static IReadOnlyList<string> ScientificContextPrefixes(string sectionKey) => sectionKey switch
+    private static IReadOnlyList<string> ScientificFallback(string s) => s switch
     {
-        "Recognition" => ["/scientific/approximatePosition", "/scientific/relativeSizeNote", "/scientific/neighboringConstellations"],
-        "Clarification" => ["/scientific/starFormationContext", "/scientific/distanceCautions", "/astrologyRelationships/westernZodiacNotes"],
-        _ => ["/scientific/summary", "/scientific/astronomicalImportance", "/scientific/approximatePosition", "/scientific/starFormationContext", "/scientific/distanceCautions"]
+        "Recognition" => [],
+        _ => ["observation.orionBeltIdentification", "observation.nakedEyeRecognition"]
     };
 
     public Phase7SceneReferenceProjectionResult Project(StoryFrameAuthorityFrame frame)

@@ -497,20 +497,34 @@ public sealed record Phase7SceneReferenceProjectionResult(bool IsValid,
     IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, bool CollectionOrderIsGoverning,
     bool HumanReviewRequired);
 public enum Phase7NarrationVariant { Long, Short }
-public sealed record Phase7ReferenceCompatibilityScope(
-    bool IsSupported,
+public enum Phase7ReferenceRole { Primary, Required, Optional }
+public sealed record Phase7ReferenceCompatibilityRequest(
     string AuthorityNamespace,
     string CanonicalJsonPointer,
     string SectionKey,
+    Phase7NarrationVariant Variant,
+    Phase7ReferenceRole Role,
+    bool IsRequired);
+public sealed record Phase7ReferenceCompatibilityScope(
+    bool IsSupported,
     IReadOnlyList<string> AllowedDomains,
     IReadOnlyList<string> AllowedApprovedFieldPrefixes,
-    IReadOnlyList<Phase7KnowledgeOrigin> AllowedOrigins,
+    IReadOnlyList<string> PreferredApprovedFieldPrefixes,
+    IReadOnlyList<Phase7ClaimDisposition> AllowedDispositions,
+    bool PreferRequiredEligible,
     string PolicyId,
     string PolicyVersion,
-    string ReasonCode);
+    string ReasonCode)
+{
+    public string AuthorityNamespace { get; init; } = "";
+    public string CanonicalJsonPointer { get; init; } = "";
+    public string SectionKey { get; init; } = "";
+    public IReadOnlyList<Phase7KnowledgeOrigin> AllowedOrigins { get; init; } = [];
+}
 public interface IPhase7SceneReferenceCompatibilityPolicy
 {
     Phase7SceneReferenceProjectionResult Project(StoryFrameAuthorityFrame frame);
+    Phase7ReferenceCompatibilityScope Resolve(Phase7ReferenceCompatibilityRequest request);
     Phase7ReferenceCompatibilityScope Resolve(string authorityNamespace, string canonicalJsonPointer,
         string sectionKey, Phase7NarrationVariant variant);
 }
