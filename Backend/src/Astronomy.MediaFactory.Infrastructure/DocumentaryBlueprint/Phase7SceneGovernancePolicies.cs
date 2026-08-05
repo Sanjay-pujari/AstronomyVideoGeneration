@@ -56,7 +56,7 @@ public sealed class Phase7SceneReferenceCompatibilityPolicy : IPhase7SceneRefere
     private static IReadOnlyList<string> PrimaryObjectPrefixes(string sectionKey) => sectionKey switch
     {
         "Wonder" => ["/scientific/astronomicalImportance", "/scientific/approximatePosition"],
-        "Discovery" => ["/scientific/majorStars", "/scientific/orionBeltStars", "/scientific/majorDeepSkyObjects", "/scientific/astronomicalImportance"],
+        "Discovery" => ["/scientific/majorStars", "/scientific/orionBeltStars", "/scientific/majorDeepSkyObjects"],
         "Observation" => ["/observation/nakedEyeRecognition", "/observation/orionBeltIdentification", "/observation/binocularGuidance", "/observation/telescopeGuidance"],
         "History" => ["/history/historicalCataloguing", "/history/ancientRecognition", "/history/navigationSeasonalImportance"],
         _ => ["/scientific/majorStars", "/scientific/orionBeltStars", "/scientific/majorDeepSkyObjects", "/scientific/astronomicalImportance", "/scientific/approximatePosition", "/observation/nakedEyeRecognition", "/observation/orionBeltIdentification", "/history/historicalCataloguing"]
@@ -65,7 +65,7 @@ public sealed class Phase7SceneReferenceCompatibilityPolicy : IPhase7SceneRefere
     private static IReadOnlyList<string> ScientificContextPrefixes(string sectionKey) => sectionKey switch
     {
         "Recognition" => ["/scientific/approximatePosition", "/scientific/relativeSizeNote", "/scientific/neighboringConstellations"],
-        "Clarification" => ["/scientific/astronomicalImportance", "/scientific/starFormationContext", "/scientific/distanceCautions", "/astrologyRelationships/westernZodiacNotes"],
+        "Clarification" => ["/scientific/starFormationContext", "/scientific/distanceCautions", "/astrologyRelationships/westernZodiacNotes"],
         _ => ["/scientific/summary", "/scientific/astronomicalImportance", "/scientific/approximatePosition", "/scientific/starFormationContext", "/scientific/distanceCautions"]
     };
 
