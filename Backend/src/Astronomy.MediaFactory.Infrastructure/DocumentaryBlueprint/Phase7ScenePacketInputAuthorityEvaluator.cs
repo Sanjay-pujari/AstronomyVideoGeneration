@@ -85,7 +85,7 @@ public sealed class Phase7ScenePacketInputAuthorityEvaluator(
             return Bad("P7PACKET_REFERENCE_REQUIREMENTS_UNRESOLVED", "The governed compatibility policy could not classify every scene reference.",
                 projections.SelectMany(x => x.result.Errors), projections.SelectMany(x => x.result.Warnings));
         var requirements = projections.ToDictionary(x => x.frame.FrameId,
-            x => x.result.Requirements.Select(r => r with { IsRequired = HasRequiredBinding(k, r.ReferenceId) }).ToArray(), StringComparer.Ordinal);
+            x => x.result.Requirements.Select(r => r with { IsRequired = HasRequiredBinding(knowledge.Authority, r.ReferenceId) }).ToArray(), StringComparer.Ordinal);
         var authority = new Phase7ScenePacketInputAuthority(knowledge.Authority, p, profile.Profile,
             request.ExecutionId, request.PlanId, request.EventId, k.EventFamily, k.EventType, request.Language,
             k.ProfileId, k.ProfileVersion, longs, shorts,

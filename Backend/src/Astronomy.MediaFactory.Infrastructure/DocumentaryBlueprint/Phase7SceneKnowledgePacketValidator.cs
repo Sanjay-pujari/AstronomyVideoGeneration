@@ -55,11 +55,11 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
             if (!input.ReferenceRequirements.TryGetValue(p.StoryFrameId,out var req)) { PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_COUNT_INVALID"); continue; }
             var prim=req.Where(r=>r.IsPrimary).OrderBy(r=>r.ReferenceId,StringComparer.Ordinal).ToArray();
             if (prim.Length!=1) { PacketFail(p,"PrimaryReferenceGate", prim.Length>1?"P7PACKET_PRIMARY_REFERENCE_AMBIGUOUS":"P7PACKET_PRIMARY_REFERENCE_COUNT_INVALID"); continue; }
-            var r=prim[0]; var res=p.ReferenceResolutions.FirstOrDefault(x=>x.ReferenceId==r.ReferenceId);
-            if (r.Variant!=p.Variant) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_VARIANT_MISMATCH",r.ReferenceId);
-            else if (!p.KnowledgeReferenceIds.Contains(r.ReferenceId,StringComparer.Ordinal)) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_NOT_IN_PACKET",r.ReferenceId);
-            else if (res is null || res.Status!=Phase7KnowledgeReferenceStatus.Resolved) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_UNRESOLVED",r.ReferenceId);
-            else if (res.ResolvedClaimIds.Count==0) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_NO_CLAIMS",r.ReferenceId);
+            var primaryRequirement=prim[0]; var res=p.ReferenceResolutions.FirstOrDefault(x=>x.ReferenceId==primaryRequirement.ReferenceId);
+            if (primaryRequirement.Variant!=p.Variant) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_VARIANT_MISMATCH",primaryRequirement.ReferenceId);
+            else if (!p.KnowledgeReferenceIds.Contains(primaryRequirement.ReferenceId,StringComparer.Ordinal)) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_NOT_IN_PACKET",primaryRequirement.ReferenceId);
+            else if (res is null || res.Status!=Phase7KnowledgeReferenceStatus.Resolved) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_UNRESOLVED",primaryRequirement.ReferenceId);
+            else if (res.ResolvedClaimIds.Count==0) PacketFail(p,"PrimaryReferenceGate","P7PACKET_PRIMARY_REFERENCE_NO_CLAIMS",primaryRequirement.ReferenceId);
         }
         foreach (var p in all.OrderBy(x=>x.Variant,StringComparer.Ordinal).ThenBy(x=>x.SceneNumber).ThenBy(x=>x.FrameNumber))
         if (input.ReferenceRequirements.TryGetValue(p.StoryFrameId, out var requirements))
