@@ -46,7 +46,8 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         var resolved = requirements.Select(r => (Requirement:r, Resolution:resolver.Resolve(
             new Phase7KnowledgeReferenceRequest(r.ReferenceId, r.Variant, !r.IsRequired, otherIds), input))).ToArray();
         var exactRequired = resolved.Where(x => x.Requirement.IsRequired && x.Resolution.Status == Phase7KnowledgeReferenceStatus.Resolved)
-            .SelectMany(x => x.Resolution.Claims).DistinctBy(x => x.ClaimId, StringComparer.Ordinal);
+            .SelectMany(x => x.Resolution.Claims.Where(c => x.Resolution.EligibleRequiredClaimIds.Contains(c.ClaimId, StringComparer.Ordinal)))
+            .DistinctBy(x => x.ClaimId, StringComparer.Ordinal);
         var exactOptional = resolved.Where(x => !x.Requirement.IsRequired && x.Resolution.Status == Phase7KnowledgeReferenceStatus.Resolved)
             .SelectMany(x => x.Resolution.Claims).DistinctBy(x => x.ClaimId, StringComparer.Ordinal);
         var allowedDomains = DomainTerms(section, source.SceneRole, source.NarrativeStage, frame.LearningObjectiveIds);
@@ -64,8 +65,8 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         var review = authorityClaims.Where(c => Relevant(c) && (c.RequiresHumanReview || c.Disposition == Phase7ClaimDisposition.HumanReview)).ToArray();
         var blocking = resolved.Where(x => x.Requirement.IsRequired && x.Resolution.Status != Phase7KnowledgeReferenceStatus.Resolved)
             .Select(x => $"{x.Resolution.ReasonCode}:{x.Requirement.ReferenceId}").ToList();
-        foreach (var item in resolved.Where(x => x.Requirement.IsRequired &&
-            !x.Resolution.Claims.Any(c => required.Any(r => r.ClaimId == c.ClaimId))))
+        foreach (var item in resolved.Where(x => x.Requirement.IsRequired && x.Resolution.Status == Phase7KnowledgeReferenceStatus.Resolved &&
+            !x.Resolution.EligibleRequiredClaimIds.Any(id => required.Any(r => r.ClaimId == id))))
             blocking.Add($"P7PACKET_REQUIRED_REFERENCE_NO_ELIGIBLE_REQUIRED_CLAIM:{item.Requirement.ReferenceId}");
         var primaries = resolved.Where(x => x.Requirement.IsPrimary).ToArray();
         if (primaries.Length != 1 || primaries[0].Requirement.Variant != variant ||
@@ -99,7 +100,10 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
         { SourceViewerQuestionId=frame.ViewerQuestionIds.FirstOrDefault()??"",ResolvedViewerQuestionText=question,
           ViewerQuestionResolutionReason=questionReason,VisualPlanningLineage=frame.ImageRequirements.Concat(frame.BrollRequirements).Distinct(StringComparer.Ordinal).ToArray(),
           SectionAuthority=sectionAuthority,
-          ReferenceResolutions=resolved.Select(x=>new Phase7PacketReferenceResolution(x.Requirement.ReferenceId,x.Requirement.IsPrimary,x.Requirement.IsRequired,x.Resolution.Status,x.Resolution.ReasonCode,x.Resolution.Claims.Select(c=>c.ClaimId).Order(StringComparer.Ordinal).ToArray())).ToArray() };
+          ReferenceResolutions=resolved.Select(x=>new Phase7PacketReferenceResolution(x.Requirement.ReferenceId,x.Requirement.IsPrimary,x.Requirement.IsRequired,x.Resolution.Status,x.Resolution.ReasonCode,x.Resolution.Claims.Select(c=>c.ClaimId).Order(StringComparer.Ordinal).ToArray())
+          { OriginalReferenceId=x.Resolution.OriginalReferenceId, NormalizedReferenceId=x.Resolution.NormalizedReferenceId, CanonicalJsonPointer=x.Resolution.CanonicalJsonPointer, ResolutionMethod=x.Resolution.ResolutionMethod,
+            MatchedApprovedFieldPaths=x.Resolution.MatchedApprovedFieldPaths, MatchedKnowledgeEntityIds=x.Resolution.MatchedKnowledgeEntityIds, CandidateClaimIds=x.Resolution.CandidateClaimIds,
+            EligibleRequiredClaimIds=x.Resolution.EligibleRequiredClaimIds, Evidence=x.Resolution.Evidence }).ToArray() };
         draft=draft with { ViewerQuestionResolutionChecksum=Phase7Determinism.Hash(new { draft.SourceViewerQuestionId,question,questionReason,section,variant,claimIds=required.Select(x=>x.ClaimId).Order(StringComparer.Ordinal) }) };
         draft = Phase7SceneKnowledgePacketCanonicalizer.Canonicalize(draft);
         draft = draft with { PacketId=Phase7SceneKnowledgePacketCanonicalizer.ComputePacketId(draft) };
