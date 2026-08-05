@@ -436,6 +436,8 @@ public interface IPhase7KnowledgeReferenceIdentityBridge
 {
     Phase7KnowledgeReferenceIdentityBridgeResult Resolve(Phase7KnowledgeReferenceNormalizationResult normalized,
         Phase7ScenePacketInputAuthority authority);
+    Phase7KnowledgeReferenceIdentityBridgeResult Resolve(Phase7KnowledgeReferenceNormalizationResult normalized,
+        Phase7ScenePacketInputAuthority authority, string sectionKey, Phase7NarrationVariant variant);
     Phase7KnowledgeReferenceIdentityBridgeResult Resolve(string phase6ReferenceId, PublishedPhase7KnowledgeAuthority authority);
 }
 public sealed record Phase7KnowledgeReferenceIdentityBridgeResult(bool IsValid, string SourceReferenceId,
@@ -484,16 +486,33 @@ public interface IPhase7SceneKnowledgePacketBuilder
 }
 
 public sealed record Phase7KnowledgeReferenceRequest(string ReferenceId, string Variant, bool Optional,
-    IReadOnlyList<string> OtherVariantReferenceIds);
+    IReadOnlyList<string> OtherVariantReferenceIds)
+{
+    public string SectionKey { get; init; } = "";
+}
 public sealed record Phase7SceneReferenceRequirement(string ReferenceId, string Variant, bool IsPrimary,
     bool IsRequired, string SourceAuthority, string SourcePointer);
 public sealed record Phase7SceneReferenceProjectionResult(bool IsValid,
     IReadOnlyList<Phase7SceneReferenceRequirement> Requirements, string ReasonCode,
     IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, bool CollectionOrderIsGoverning,
     bool HumanReviewRequired);
+public enum Phase7NarrationVariant { Long, Short }
+public sealed record Phase7ReferenceCompatibilityScope(
+    bool IsSupported,
+    string AuthorityNamespace,
+    string CanonicalJsonPointer,
+    string SectionKey,
+    IReadOnlyList<string> AllowedDomains,
+    IReadOnlyList<string> AllowedApprovedFieldPrefixes,
+    IReadOnlyList<Phase7KnowledgeOrigin> AllowedOrigins,
+    string PolicyId,
+    string PolicyVersion,
+    string ReasonCode);
 public interface IPhase7SceneReferenceCompatibilityPolicy
 {
     Phase7SceneReferenceProjectionResult Project(StoryFrameAuthorityFrame frame);
+    Phase7ReferenceCompatibilityScope Resolve(string authorityNamespace, string canonicalJsonPointer,
+        string sectionKey, Phase7NarrationVariant variant);
 }
 public sealed record Phase7SceneSectionAuthorityResolution(bool IsValid, string SectionKey,
     string NarrativeStage, string SceneRole, string SourceField, string ReasonCode);

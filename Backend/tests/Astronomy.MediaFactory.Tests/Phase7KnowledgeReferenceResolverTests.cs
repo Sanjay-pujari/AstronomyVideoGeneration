@@ -275,3 +275,72 @@ public sealed class Phase7RealAuthorityEvidenceReconciliationTests
     private static Phase7ClaimSupportEvidence MakeEvidence(string claimId, string path) => new(claimId, "semantic-" + claimId, "source-a", "knowledge-" + claimId, path, Phase7ProvenancePrecision.ExactApprovedField, "orion-adapter", Phase7KnowledgeOrigin.Event, "CommittedFixture", null, .9m) { SourceEligibility = Phase7SourceEligibility.EligibleForRequiredClaim, AdapterVersion = "fixture" };
     private static Phase7ClaimResolutionDiagnostic Diag(string claimId, string path) => new("Identity", true, "candidate-" + claimId, "semantic-" + claimId, path, "value", Phase7ClaimDisposition.Required, false, "", false, [], ["source-a"], new Dictionary<string,string>{{"source-a","EligibleForRequiredClaim"}}, Phase7ProvenancePrecision.ExactApprovedField, "Resolved") { ClaimId = claimId, KnowledgeEntityId = "knowledge-" + claimId, Origin = Phase7KnowledgeOrigin.Event };
 }
+
+public sealed class Phase7CompatibilityScopeRealShapeTests
+{
+    [Theory]
+    [InlineData("production-event-intelligence#/primaryObjects", "Wonder", "orion-importance")]
+    [InlineData("production-event-intelligence#/primaryObjects", "Discovery", "orion-belt")]
+    [InlineData("production-event-intelligence#/primaryObjects", "Observation", "orion-binoculars")]
+    [InlineData("production-event-intelligence#/primaryObjects", "History", "orion-history")]
+    [InlineData("production-event-intelligence#/scientificContext", "Recognition", "orion-position")]
+    [InlineData("production-event-intelligence#/scientificContext", "Clarification", "orion-zodiac")]
+    public void FrozenPhase6BroadReferencesResolveGovernedSectionScopes(string referenceId, string sectionKey, string expectedClaimId)
+    {
+        var resolver = new Phase7KnowledgeReferenceResolver();
+        var result = resolver.Resolve(new Phase7KnowledgeReferenceRequest(referenceId, "Long", false, []) { SectionKey = sectionKey }, Authority());
+
+        Assert.Equal(Phase7KnowledgeReferenceStatus.Resolved, result.Status);
+        Assert.Equal(expectedClaimId, Assert.Single(result.CandidateClaimIds));
+        Assert.Equal([expectedClaimId], result.EligibleRequiredClaimIds);
+        Assert.StartsWith("P7PACKET_REFERENCE_COMPAT_PHASE6_", result.ResolutionMethod);
+    }
+
+    [Fact]
+    public void CompatibilityScopePreservesDeterministicAuthorityIdentitiesAndVariantIndependence()
+    {
+        var resolver = new Phase7KnowledgeReferenceResolver();
+        var authority = Authority();
+        var longResult = resolver.Resolve(new Phase7KnowledgeReferenceRequest("production-event-intelligence#/primaryObjects", "Long", false, []) { SectionKey = "Discovery" }, authority);
+        var shortResult = resolver.Resolve(new Phase7KnowledgeReferenceRequest("production-event-intelligence#/scientificContext", "Short", false, []) { SectionKey = "Recognition" }, authority);
+
+        Assert.Equal(["orion-belt"], longResult.CandidateClaimIds);
+        Assert.Equal(["orion-position"], shortResult.CandidateClaimIds);
+        Assert.Same(authority.Knowledge.KnowledgeAuthority.Claims.Single(c => c.ClaimId == "orion-belt"), Assert.Single(longResult.Claims));
+        Assert.Same(authority.Knowledge.KnowledgeAuthority.Claims.Single(c => c.ClaimId == "orion-position"), Assert.Single(shortResult.Claims));
+    }
+
+    private static Phase7ScenePacketInputAuthority Authority()
+    {
+        var claims = new[]
+        {
+            Claim("orion-importance", "ScientificSignificance"),
+            Claim("orion-position", "PhysicalCharacteristics"),
+            Claim("orion-belt", "KeyObjects"),
+            Claim("orion-binoculars", "Observation"),
+            Claim("orion-history", "History"),
+            Claim("orion-zodiac", "AstrologyClarification")
+        };
+        var evidence = new[]
+        {
+            Evidence("orion-importance", "ScientificSignificance", "scientific.astronomicalImportance"),
+            Evidence("orion-position", "PhysicalCharacteristics", "scientific.approximatePosition"),
+            Evidence("orion-belt", "KeyObjects", "scientific.orionBeltStars"),
+            Evidence("orion-binoculars", "Observation", "observation.binocularGuidance"),
+            Evidence("orion-history", "History", "history.historicalCataloguing"),
+            Evidence("orion-zodiac", "AstrologyClarification", "astrologyRelationships.westernZodiacNotes")
+        };
+        var k = new Phase7KnowledgeAuthority("v", "ka", "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", "p6", "c6", "idx", "ic", "p4", "c4", "p5", "payload", "pc", "Certified", "eg", "egc", "Reviewed", "eg.json", "reg", "rc", [], [], claims, [], evidence, [], [], new(0,0,0,0), [], [], [], [], "checksum", new Dictionary<string,string>());
+        var published = new PublishedPhase7KnowledgeAuthority(k, [], new Dictionary<string,string>(), new Dictionary<string,string>(), new Dictionary<string,long>(), [], [], "pub", false, true, true, new Dictionary<string,string>(), new Dictionary<string,string>());
+        return new Phase7ScenePacketInputAuthority(published, null!, null!, "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", [], [], [], [], new Dictionary<string,string>(), new Dictionary<string,string>());
+    }
+
+    private static CertifiedNarrationClaim Claim(string id, string domain) =>
+        new(id, domain, "Sanitized real-shape Orion claim", ["source-a"], [], .9m, false, false, false, false, false, false, false, false, "en", "checksum")
+        { Disposition = Phase7ClaimDisposition.Required, SemanticIdentity = "semantic-" + id };
+
+    private static Phase7ClaimSupportEvidence Evidence(string claimId, string domain, string path) =>
+        new(claimId, "semantic-" + claimId, "source-a", "knowledge-" + claimId, path,
+            Phase7ProvenancePrecision.ExactApprovedField, "orion-adapter", Phase7KnowledgeOrigin.Event, domain, null, .9m)
+        { SourceEligibility = Phase7SourceEligibility.EligibleForRequiredClaim };
+}
