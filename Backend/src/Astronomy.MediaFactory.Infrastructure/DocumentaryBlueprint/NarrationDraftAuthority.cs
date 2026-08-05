@@ -146,7 +146,7 @@ public sealed class DeterministicNarrationDraftOpeningPolicy(INarrationDraftLang
 public sealed class DeterministicNarrationDraftClosingPolicy(INarrationDraftLanguagePolicy language):INarrationDraftClosingPolicy{public string Create(NarrationPlanningScene s,bool next,string l)=>string.IsNullOrWhiteSpace(s.LearningObjective)?"":language.Terminate(s.LearningObjective,l);}
 public sealed class DeterministicNarrationDraftTransitionPhrasePolicy(INarrationDraftLanguagePolicy language):INarrationDraftTransitionPhrasePolicy
 {
-    public NarrationDraftTransitionPhrase? Create(NarrationDraftTransitionPhraseRequest r){var t=r.Transition;var text=r.Ownership==NarrationDraftTransitionOwnership.IncomingDestination?t.DestinationTransitionIn:t.SourceTransitionOut;if(string.IsNullOrWhiteSpace(text)||t.Variant!=r.Variant)return null;var d=new NarrationDraftTransitionPhrase(t.TransitionId,t.Kind,language.Terminate(text,r.Language),t.Variant,[t.TransitionId],"");return d with{DeterministicChecksum=NarrationDraftCanonicalizer.ComputeTransitionPhraseChecksum(d)};}
+    public NarrationDraftTransitionPhrase? Create(NarrationDraftTransitionPhraseRequest r){var t=r.Transition;if(t.Kind!=NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition)return null;var text=r.Ownership==NarrationDraftTransitionOwnership.IncomingDestination?t.DestinationTransitionIn:t.SourceTransitionOut;if(string.IsNullOrWhiteSpace(text)||t.Variant!=r.Variant)return null;var d=new NarrationDraftTransitionPhrase(t.TransitionId,t.Kind,language.Terminate(text,r.Language),t.Variant,[t.TransitionId],"");return d with{DeterministicChecksum=NarrationDraftCanonicalizer.ComputeTransitionPhraseChecksum(d)};}
 }
 public sealed class NarrationDraftSafetyValidator:INarrationDraftSafetyValidator
 {
@@ -310,10 +310,13 @@ public sealed class NarrationDraftValidator(INarrationDraftSafetyValidator safet
         static bool ValidFlags(NarrationDraftSentence s)=>s.SentenceRole switch {"RequiredClaim"=>s.IsRequired&&!s.IsOptional&&!s.IsTransition,"OptionalClaim"=>!s.IsRequired&&s.IsOptional&&!s.IsTransition,"IncomingTransition" or "OutgoingTransition"=>!s.IsRequired&&!s.IsOptional&&s.IsTransition,"Opening" or "Closing"=>!s.IsRequired&&!s.IsOptional&&!s.IsTransition,_=>false};
         bool ValidTransitions(NarrationPlanningScene plan,NarrationDraftScene draft)
         {
-            bool One(NarrationDraftTransitionPhrase? phrase,NarrationPlanningTransition source,string? authored,string role,bool first)=>phrase is null
-                ? string.IsNullOrWhiteSpace(authored)&&draft.Sentences.All(s=>s.SentenceRole!=role)
-                : phrase.TransitionId==source.TransitionId&&phrase.Kind==source.Kind&&phrase.Variant==draft.Variant&&phrase.PlanningTransitionIds.SequenceEqual([source.TransitionId])&&phrase.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeTransitionPhraseChecksum(phrase)&&
-                  phrase.Text==new DeterministicNarrationDraftLanguagePolicy().Terminate(authored!,input.Language)&&draft.Sentences.Count(s=>s.SentenceRole==role&&s.IsTransition&&s.Text==phrase.Text&&s.ClaimIds.Count==0&&s.KnowledgeReferenceIds.Count==0)==1&&(!first||draft.Sentences[0].SentenceRole==role)&&(!first||draft.Sentences[0].Text==phrase.Text);
+            bool One(NarrationDraftTransitionPhrase? phrase,NarrationPlanningTransition source,string? authored,string role,bool first)
+            {
+                var mandatory=NarrationTransitionSentenceOwnership.MandatorySentenceCount(source,first);
+                if(mandatory==0)return phrase is null&&draft.Sentences.All(s=>s.SentenceRole!=role);
+                return phrase is not null&&!string.IsNullOrWhiteSpace(authored)&&phrase.TransitionId==source.TransitionId&&phrase.Kind==source.Kind&&phrase.Variant==draft.Variant&&phrase.PlanningTransitionIds.SequenceEqual([source.TransitionId])&&phrase.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeTransitionPhraseChecksum(phrase)&&
+                  phrase.Text==new DeterministicNarrationDraftLanguagePolicy().Terminate(authored,input.Language)&&draft.Sentences.Count(s=>s.SentenceRole==role&&s.IsTransition&&s.Text==phrase.Text&&s.ClaimIds.Count==0&&s.KnowledgeReferenceIds.Count==0)==1&&(!first||draft.Sentences[0].SentenceRole==role)&&(!first||draft.Sentences[0].Text==phrase.Text);
+            }
             return One(draft.IncomingTransitionPhrase,plan.IncomingTransition,plan.IncomingTransition.DestinationTransitionIn,"IncomingTransition",true)&&One(draft.OutgoingTransitionPhrase,plan.OutgoingTransition,plan.OutgoingTransition.SourceTransitionOut,"OutgoingTransition",false)&&
                 (draft.OutgoingTransitionPhrase is null||draft.Sentences[^1].SentenceRole=="OutgoingTransition");
         }
