@@ -101,7 +101,7 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
         Add(new("NarrationPlanningAuthority", "P7.1B-BA Narration Planning Authority", planningSuccess, planningSuccess ? "Valid" : "Failed",
             planningSuccess ? planningValidation!.ReasonCode : builtPlanning.ReasonCode, false, false, false, [],
             planningInput.Warnings.Concat(builtPlanning.Warnings).ToArray(), builtPlanning.Errors.Concat(planningValidation?.Errors ?? []).ToArray(), builtPlanning.BlockingIssues)
-        { LongCount = builtPlanning.Authority?.LongScenes.Count ?? 0, ShortCount = builtPlanning.Authority?.ShortScenes.Count ?? 0, FailedGateCount = planningValidation?.Gates.Count(g => !g.Passed) ?? 0, PassedGateCount = planningValidation?.Gates.Count(g => g.Passed) ?? 0 });
+        { LongCount = builtPlanning.Authority?.LongScenes.Count ?? 0, ShortCount = builtPlanning.Authority?.ShortScenes.Count ?? 0, FailedGateCount = planningValidation?.Gates.Count(g => !g.Passed) ?? 0, PassedGateCount = planningValidation?.Gates.Count(g => g.Passed) ?? 0, TotalGateCount = planningValidation?.Gates.Count ?? 0 });
         if (!planningSuccess) return Finish(false);
 
         var pub = await planningPublicationService.ExecuteAsync(new(planningRequest, builtPlanning.Authority, planningValidation, request.OverwriteExisting, request.RetryFailedOnly), token);

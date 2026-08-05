@@ -92,8 +92,9 @@ public sealed class NarrationPlanningDependencyInjectionTests
     [Fact]
     public void Builder_requires_governed_constraint_policy()
     {
-        var parameter = typeof(NarrationPlanningAuthorityBuilder).GetConstructors().Single().GetParameters().Single();
-        parameter.ParameterType.Should().Be<INarrationPlanningConstraintPolicy>();
+        var parameters = typeof(NarrationPlanningAuthorityBuilder).GetConstructors().Single().GetParameters();
+        parameters.Select(x => x.ParameterType).Should().Contain(typeof(INarrationPlanningConstraintPolicy));
+        parameters.Select(x => x.ParameterType).Should().Contain(typeof(INarrationPlanningDraftRealizabilityPolicy));
     }
 
     [Fact]
@@ -101,5 +102,69 @@ public sealed class NarrationPlanningDependencyInjectionTests
     {
         var names = typeof(NarrationPlanningAuthority).Assembly.GetTypes().Where(t => t.Namespace?.Contains("DocumentaryBlueprint") == true).Select(t => t.FullName!);
         names.Where(n => n.Contains("NarrationPlanningAuthority", StringComparison.Ordinal)).Should().NotContain(n => n.Contains("AzureOpenAI") || n.Contains("AzureSpeech"));
+    }
+}
+
+
+public sealed class NarrationPlanningDraftRealizabilityPolicyTests
+{
+    private static NarrationPlanningConstraints Constraints(int max) => new(1, Math.Min(2, max), max, 20, "Pause", [], "Claims", "Visuals");
+    private static NarrationPlanningTransition Transition(string kind, string? source, string? destination) =>
+        new("transition", "execution", "Long", "from", "from-sum", "to", "to-sum", kind, source, destination, "previous", "current", "next", "sum");
+
+    [Fact]
+    public void Impossible_scene_fails_draft_realizability_gate_budget()
+    {
+        var policy = new DeterministicNarrationPlanningDraftRealizabilityPolicy();
+        var result = policy.Evaluate(new("Long", "identity", ["c1", "c2", "c3", "c4", "c5", "c6"],
+            Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "out", "in"),
+            Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "out", "in"),
+            Constraints(6), [], [], [], []));
+
+        result.IsRealizable.Should().BeFalse();
+        result.ReasonCode.Should().Be("NARRATION_PLANNING_DRAFT_CAPACITY_INVALID");
+        result.MinimumMandatorySentenceCount.Should().Be(8);
+    }
+
+    [Fact]
+    public void Exact_capacity_passes()
+    {
+        var policy = new DeterministicNarrationPlanningDraftRealizabilityPolicy();
+        var result = policy.Evaluate(new("Long", "identity", ["c1", "c2", "c3", "c4"],
+            Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, null, "in"),
+            Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "out", null),
+            Constraints(6), [], [], [], []));
+
+        result.IsRealizable.Should().BeTrue();
+        result.MinimumMandatorySentenceCount.Should().Be(6);
+    }
+
+    [Fact]
+    public void Opening_and_closing_transitions_do_not_consume_mandatory_capacity()
+    {
+        var policy = new DeterministicNarrationPlanningDraftRealizabilityPolicy();
+        var result = policy.Evaluate(new("Long", "identity", ["c1", "c2", "c3", "c4", "c5", "c6"],
+            Transition(NarrationPlanningPolicyCatalog.VariantOpeningTransition, null, "opening"),
+            Transition(NarrationPlanningPolicyCatalog.VariantClosingTransition, "closing", null),
+            Constraints(6), [], [], [], []));
+
+        result.IsRealizable.Should().BeTrue();
+        result.MandatoryIncomingTransitionSentenceCount.Should().Be(0);
+        result.MandatoryOutgoingTransitionSentenceCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("in", null, 1)]
+    [InlineData(null, "out", 1)]
+    [InlineData(null, null, 0)]
+    public void Transition_ownership_counts_only_spoken_owned_phrases(string? incomingText, string? outgoingText, int expected)
+    {
+        var policy = new DeterministicNarrationPlanningDraftRealizabilityPolicy();
+        var result = policy.Evaluate(new("Long", "identity", [],
+            Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, null, incomingText),
+            Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, outgoingText, null),
+            Constraints(2), [], [], [], []));
+
+        (result.MandatoryIncomingTransitionSentenceCount + result.MandatoryOutgoingTransitionSentenceCount).Should().Be(expected);
     }
 }

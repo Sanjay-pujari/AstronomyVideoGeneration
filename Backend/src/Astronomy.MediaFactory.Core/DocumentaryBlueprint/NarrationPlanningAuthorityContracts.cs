@@ -57,6 +57,27 @@ public sealed record NarrationPlanningConstraints(int MinimumSentenceCount, int 
     int MaximumSentenceCount, int ReadingTimeTargetSeconds, string PauseStrategy, IReadOnlyList<string> EmphasisRules,
     string ClaimOrderingPolicy, string VisualSynchronizationPolicy);
 public interface INarrationPlanningConstraintPolicy { NarrationPlanningConstraints Resolve(NarrationPlanningConstraintRequest request); }
+public sealed record NarrationPlanningRealizabilityBudget(
+    int RequiredClaimSentenceCount, int MandatoryQualificationSentenceCount,
+    int MandatoryIncomingTransitionSentenceCount, int MandatoryOutgoingTransitionSentenceCount,
+    int MinimumStructuralSentenceCount, int MinimumMandatorySentenceCount, int MaximumSentenceCount,
+    bool IsRealizable, string ReasonCode);
+public sealed record NarrationPlanningDraftRealizabilityRequest(
+    string Variant, string SectionKey, IReadOnlyList<string> RequiredClaimIds,
+    NarrationPlanningTransition IncomingTransition, NarrationPlanningTransition OutgoingTransition,
+    NarrationPlanningConstraints Constraints, IReadOnlyList<string> LocationQualificationRequirements,
+    IReadOnlyList<string> TimeQualificationRequirements, IReadOnlyList<string> CulturalQualificationRequirements,
+    IReadOnlyList<string> AstrologyQualificationRequirements);
+public interface INarrationPlanningDraftRealizabilityPolicy
+{
+    NarrationPlanningRealizabilityBudget Evaluate(NarrationPlanningDraftRealizabilityRequest request);
+}
+public sealed record NarrationPlanningSceneRealizabilityDiagnostic(
+    string PlanningId, string Variant, int SceneNumber, string SceneId, string StoryFrameId, string SectionKey,
+    IReadOnlyList<string> RequiredClaimIds, int RequiredClaimSentenceCount, int IncomingTransitionSentenceCount,
+    int OutgoingTransitionSentenceCount, int MandatoryQualificationSentenceCount, int MinimumMandatorySentenceCount,
+    int MinimumSentenceCount, int PreferredSentenceCount, int MaximumSentenceCount, bool IsDraftRealizable,
+    IReadOnlyList<string> ReasonCodes);
 
 public sealed record NarrationPlanningTransition(string TransitionId, string ExecutionId, string Variant,
     string? FromStoryFrameId, string? FromStoryFrameChecksum, string? ToStoryFrameId, string? ToStoryFrameChecksum,
@@ -82,7 +103,7 @@ public sealed record NarrationPlanningDiagnostics(int PacketCount, int PlanningS
     int AmbiguousReferenceCount, int CrossVariantReferenceCount, int UnsupportedReferenceCount,
     int UnresolvedReferenceCount, int TransitionCount, int BlockingIssueCount,
     int FailedGateCount, int RequiredClaimCount, int OptionalClaimCount, int DeferredClaimCount, int WarningCount, int ErrorCount,
-    IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, string DeterministicChecksum);
+    IReadOnlyList<string> Warnings, IReadOnlyList<string> Errors, IReadOnlyList<NarrationPlanningSceneRealizabilityDiagnostic> RealizabilityDiagnostics, string DeterministicChecksum);
 public sealed record NarrationPlanningAuthority(string ContractVersion, string AuthorityId, string ExecutionId,
     string PlanId, string EventId, string Language, string ProfileId, string ProfileVersion,
     string StoryFrameAuthorityChecksum, string KnowledgeAuthorityChecksum, string PacketCollectionChecksum,
