@@ -4,15 +4,12 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Phase7NarrationAuthorityOrchestrationStaticTests
 {
-    private const string Orchestrator = "../../../../Backend/src/Astronomy.MediaFactory.Infrastructure/DocumentaryBlueprint/Phase7NarrationAuthorityOrchestrator.cs";
-    private const string Pipeline = "../../../../Backend/src/Astronomy.MediaFactory.Infrastructure/Persistence/ProductionPipelineExecutionService.cs";
-    private const string Registry = "../../../../Backend/src/Astronomy.MediaFactory.Infrastructure/Orchestration/RC2/Rc2PipelinePhaseRegistry.cs";
-    private const string Di = "../../../../Backend/src/Astronomy.MediaFactory.Infrastructure/Extensions/ServiceCollectionExtensions.cs";
-
     [Fact]
     public void Phase7Orchestrator_invokes_provider_free_authority_stages_in_governed_order()
     {
-        var source = File.ReadAllText(Orchestrator);
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
+            "DocumentaryBlueprint",
+            "Phase7NarrationAuthorityOrchestrator.cs"));
         var order = new[]
         {
             "knowledgeService.ExecuteAsync",
@@ -43,8 +40,13 @@ public sealed class Phase7NarrationAuthorityOrchestrationStaticTests
     [Fact]
     public void Public_phase_7_resolves_single_narration_authority_boundary()
     {
-        var pipeline = File.ReadAllText(Pipeline);
-        var registry = File.ReadAllText(Registry);
+        var pipeline = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
+            "Persistence",
+            "ProductionPipelineExecutionService.cs"));
+        var registry = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
+            "Orchestration",
+            "RC2",
+            "Rc2PipelinePhaseRegistry.cs"));
         Assert.Contains("7 => await ExecutePhase7NarrationAuthorityAsync", pipeline);
         Assert.Contains("(7, \"Narration Authority\"", pipeline);
         Assert.Contains("new(7, \"Narration Authority\")", registry);
@@ -53,7 +55,9 @@ public sealed class Phase7NarrationAuthorityOrchestrationStaticTests
     [Fact]
     public void Orchestrator_is_registered_once_as_scoped_service()
     {
-        var di = File.ReadAllText(Di);
+        var di = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
+            "Extensions",
+            "ServiceCollectionExtensions.cs"));
         var matches = Regex.Matches(di, "AddScoped<Astronomy\\.MediaFactory\\.Core\\.DocumentaryBlueprint\\.IPhase7NarrationAuthorityOrchestrator,");
         Assert.Single(matches);
     }
