@@ -26,7 +26,7 @@ public sealed class Phase7KnowledgeReferenceNormalizer : IPhase7KnowledgeReferen
     private static Phase7KnowledgeReferenceNormalizationResult Invalid(string original, string code) => new(false, original, "", "", [], code);
     private static bool IsValidJsonPointer(string pointer)
     {
-        if (!pointer.StartsWith('/', StringComparison.Ordinal)) return false;
+        if (!pointer.StartsWith("/", StringComparison.Ordinal)) return false;
         for (var i = 0; i < pointer.Length; i++)
             if (pointer[i] == '~' && (i + 1 >= pointer.Length || pointer[i + 1] is not ('0' or '1'))) return false;
         return true;
@@ -95,7 +95,7 @@ public sealed class Phase7KnowledgeReferenceIdentityBridge : IPhase7KnowledgeRef
     internal static bool IsRequiredEligible(CertifiedNarrationClaim c, Phase7ScenePacketInputAuthority input) =>
         c.Disposition == Phase7ClaimDisposition.Required && !c.RequiresHumanReview && string.Equals(c.Language, input.Language, StringComparison.OrdinalIgnoreCase) &&
         input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e => e.ClaimId == c.ClaimId && e.SemanticIdentity == c.SemanticIdentity && c.SourceIds.Contains(e.SourceId, StringComparer.Ordinal) && e.SourceEligibility == Phase7SourceEligibility.EligibleForRequiredClaim && !e.RequiresHumanReview && e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField);
-    private static string NormalizePointer(string id) { var s = id ?? ""; var hash = s.IndexOf('#'); if (hash >= 0) s = s[(hash + 1)..]; if (!s.StartsWith('/')) s = "/" + s; return s.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal); }
+    private static string NormalizePointer(string id) { var s = id ?? ""; var hash = s.IndexOf('#'); if (hash >= 0) s = s[(hash + 1)..]; if (!s.StartsWith("/", StringComparison.Ordinal)) s = "/" + s; return s.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal); }
     private static bool IsDescendant(string parent, string path) => path.Length > parent.Length && path.StartsWith(parent, StringComparison.Ordinal) && path[parent.Length] == '/';
 }
 
