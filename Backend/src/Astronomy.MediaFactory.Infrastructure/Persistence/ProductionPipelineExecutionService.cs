@@ -87,6 +87,7 @@ public sealed partial class ProductionPipelineExecutionService(
     IStoryFrameRuntimeIdentityProvider? storyFrameRuntimeIdentityProvider = null,
     IStoryFrameFileSystem? storyFrameFileSystem = null,
     IPhase7KnowledgeService? phase7KnowledgeService = null,
+    IPhase7NarrationAuthorityOrchestrator? phase7NarrationAuthorityOrchestrator = null,
     IFamilyNarrationProfileResolver? familyNarrationProfileResolver = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     // The action delegate and the generic phase-result writer are deliberately separate.
@@ -119,6 +120,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private readonly IPhase6InputAuthorityEvaluator _phase6InputAuthorityEvaluator = phase6InputAuthorityEvaluator
         ?? throw new ArgumentNullException(nameof(phase6InputAuthorityEvaluator));
     private readonly IPhase7KnowledgeService? _phase7KnowledgeService = phase7KnowledgeService;
+    private readonly IPhase7NarrationAuthorityOrchestrator? _phase7NarrationAuthorityOrchestrator = phase7NarrationAuthorityOrchestrator;
     private const string ValidPhase6ReuseReason = "Valid Phase 6 authority was reused; overwriteExisting=false.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -292,7 +294,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 4 => await ExecutePhase4Async(context, cancellationToken),
                 5 => await ExecutePhase5Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
                 6 => await ExecutePhase6Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
-                7 => await ExecutePhase7KnowledgeAsync(context,cancellationToken),
+                7 => await ExecutePhase7NarrationAuthorityAsync(context,cancellationToken),
                 _ => await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken)
             };
             phaseResults.Add(result);
@@ -376,7 +378,7 @@ public sealed partial class ProductionPipelineExecutionService(
         // Phase 5 is dispatched through ExecutePhase5Async; this placeholder is never invoked.
         (5, "Editorial Validation", static (_, _) => Task.FromResult<IReadOnlyList<string>>([])),
         (6, "Story Frames Authority", PhaseChronicleDocumentaryArchitectAsync),
-        (7, "Knowledge Authority", static (_,_) => throw new InvalidOperationException("P7KNOWLEDGE_DEDICATED_LIFECYCLE_REQUIRED")),
+        (7, "Narration Authority", static (_,_) => throw new InvalidOperationException("P7_NARRATION_AUTHORITY_DEDICATED_LIFECYCLE_REQUIRED")),
         (8, "Format-Aware Scene Asset Generation", PhaseGenerateSceneImagesAsync),
         (9, "Generate Long Scene Images", PhaseValidateLongSceneImagesAsync),
         (10, "Validate Scene Assets", PhaseValidateSceneAssetsAsync),
@@ -855,41 +857,38 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
-    private async Task<ProductionPhaseResult> ExecutePhase7KnowledgeAsync(ProductionPhaseContext context,CancellationToken cancellationToken)
+    private async Task<ProductionPhaseResult> ExecutePhase7NarrationAuthorityAsync(ProductionPhaseContext context,CancellationToken cancellationToken)
     {
         var started=DateTimeOffset.UtcNow;
-        if(_phase7KnowledgeService is null)
+        if(_phase7NarrationAuthorityOrchestrator is null)
         {
             var finished=DateTimeOffset.UtcNow;
-            return new(7,"Knowledge Authority",ProductionPhaseStatus.Failed,started,finished,(long)(finished-started).TotalMilliseconds,
-                [],[],null,[],["IPhase7KnowledgeService is not registered."],false,"P7.1A Knowledge Authority service unavailable.")
-                {ReasonCode="P7KNOWLEDGE_SERVICE_UNAVAILABLE"};
+            return new(7,"Narration Authority",ProductionPhaseStatus.Failed,started,finished,(long)(finished-started).TotalMilliseconds,
+                [],[],null,[],["IPhase7NarrationAuthorityOrchestrator is not registered."],false,"Phase 7 narration authority orchestrator unavailable.")
+                {ReasonCode="P7_NARRATION_AUTHORITY_SERVICE_UNAVAILABLE"};
         }
         var profileResolution=(familyNarrationProfileResolver ?? new FamilyNarrationProfileResolver())
             .Resolve(FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType),context.Request.Language);
         var canonicalProfile=profileResolution.Profile is null ? null : new Phase7CanonicalProfileIdentity(
             profileResolution.Profile.EventFamily,profileResolution.Profile.ProfileId,profileResolution.Profile.ContractVersion,context.Request.Language);
-        var request=new Phase7InputAuthorityRequest(context.OutputRoot,context.Request.PlanId.ToString("D"),context.Request.PlanId.ToString("D"),
-            context.EventId,context.Request.Language,canonicalProfile?.ProfileId??"",["Long","Short"])
+        var orchestrationRequest=new Phase7NarrationAuthorityOrchestrationRequest(context.OutputRoot,context.Request.PlanId.ToString("D"),
+            context.Request.PlanId.ToString("D"),context.EventId,context.Request.RegionId,context.Request.Language,
+            canonicalProfile?.ProfileId??"",canonicalProfile?.ProfileVersion??"",context.OverwriteExisting,context.RetryFailedOnly,
+            context.PipelineRequest.DependencyExpansionMode.ToString(),new Dictionary<string,string>(StringComparer.Ordinal),["Long","Short"])
         {
-            ExpectedProfileVersion = canonicalProfile?.ProfileVersion ?? "",
             EventType = context.Request.EventType,
             ContentCategory = context.ExecutionContext.Category,
             CanonicalProfileIdentity = canonicalProfile
         };
-        var result=await _phase7KnowledgeService.ExecuteAsync(request,context.OverwriteExisting,cancellationToken);
+        var result=await _phase7NarrationAuthorityOrchestrator.ExecuteAsync(orchestrationRequest,cancellationToken);
         var finishedUtc=DateTimeOffset.UtcNow;
-        var status=result.IsValid?(result.AlreadyPublished?ProductionPhaseStatus.Skipped:ProductionPhaseStatus.Succeeded):ProductionPhaseStatus.Failed;
-        var outputs=result.IsValid?new[]{
-            Path.Combine(context.OutputRoot,"07-narration","knowledge","knowledge-authority.json"),
-            Path.Combine(context.OutputRoot,"07-narration","knowledge","knowledge-resolution-report.json"),
-            Path.Combine(context.OutputRoot,"07-narration","knowledge","knowledge-diagnostics.json"),
-            Path.Combine(context.OutputRoot,"validation","phase-07-knowledge-validation.json"),
-            Path.Combine(context.OutputRoot,"phase-manifest.json"),Path.Combine(context.OutputRoot,".phase-07-knowledge-publication.json")}:[];
-        return new(7,"Knowledge Authority",status,started,finishedUtc,(long)(finishedUtc-started).TotalMilliseconds,
-            [],outputs,Path.Combine(context.OutputRoot,"validation","phase-07-knowledge-validation.json"),result.Warnings,result.Errors,!result.IsValid,result.ReasonCode)
-        {ReasonCode=result.ReasonCode,AlreadyPublished=result.AlreadyPublished,PublicationCommitted=result.PublicationCommitted,
-            CommittedStateValidationPassed=result.CommittedStateValidationPassed};
+        var status=result.Success?ProductionPhaseStatus.Succeeded:ProductionPhaseStatus.Failed;
+        return new(7,"Narration Authority",status,started,finishedUtc,(long)(finishedUtc-started).TotalMilliseconds,
+            [],result.GeneratedFiles,Path.Combine(context.OutputRoot,"validation","phase-07-narration-planning-validation.json"),
+            result.Warnings,result.Errors.Concat(result.BlockingIssues).Distinct(StringComparer.Ordinal).ToArray(),!result.Success,
+            result.Success?"Phase 7 narration authority chain completed.":$"Phase 7 narration authority failed at {result.FailedInternalStage}.")
+        {ReasonCode=result.ReasonCode,AlreadyPublished=result.StageResults.All(s=>s.Reused||s.Success),PublicationCommitted=result.StageResults.Any(s=>s.PublicationCommitted),
+            CommittedStateValidationPassed=result.Success, InternalStageResults=result.StageResults, Phase7NarrationAuthorityResult=result};
     }
 
     /// <summary>

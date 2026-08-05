@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Core;
 
@@ -430,6 +431,8 @@ public sealed record ProductionPhaseResult(
     public bool AlreadyPublished { get; init; }
     public bool PublicationCommitted { get; init; }
     public bool CommittedStateValidationPassed { get; init; }
+    public IReadOnlyList<Phase7AuthorityStageResult> InternalStageResults { get; init; } = [];
+    public Phase7NarrationAuthorityOrchestrationResult? Phase7NarrationAuthorityResult { get; init; }
 }
 
 /// <summary>Canonical classification for completion of a requested production-phase range.</summary>
