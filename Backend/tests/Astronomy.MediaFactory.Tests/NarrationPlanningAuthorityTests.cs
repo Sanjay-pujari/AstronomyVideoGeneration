@@ -85,6 +85,40 @@ public sealed class NarrationPlanningConstraintPolicyTests
         first.PreferredSentenceCount.Should().BeLessThanOrEqualTo(first.MaximumSentenceCount);
         first.ReadingTimeTargetSeconds.Should().BeInRange(15, 25);
     }
+
+    [Fact]
+    public void Transition_aware_policy_expands_duration_maximum_to_mandatory_floor()
+    {
+        var policy = new DefaultNarrationPlanningConstraintPolicy();
+        var profile = Profile();
+        var request = new NarrationPlanningConstraintRequest("en", "Long", 50, 45, 60, profile, "Explain", "Wonder",
+            6, 0, 0, 1, 0);
+
+        var result = policy.Resolve(request);
+
+        result.MinimumSentenceCount.Should().BeLessThanOrEqualTo(result.PreferredSentenceCount);
+        result.PreferredSentenceCount.Should().BeLessThanOrEqualTo(result.MaximumSentenceCount);
+        result.PreferredSentenceCount.Should().BeGreaterThanOrEqualTo(7);
+        result.MaximumSentenceCount.Should().BeGreaterThanOrEqualTo(7);
+    }
+
+    [Fact]
+    public void Opening_and_closing_transition_counts_are_not_mandatory_for_constraints()
+    {
+        var incoming = Transition(NarrationPlanningPolicyCatalog.VariantOpeningTransition, null, "opening");
+        var outgoing = Transition(NarrationPlanningPolicyCatalog.VariantClosingTransition, "closing", null);
+
+        NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(incoming, true).Should().Be(0);
+        NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(outgoing, false).Should().Be(0);
+    }
+
+    private static FamilyNarrationProfile Profile() => new("profile", "v1", "family", ["en", "hi"],
+        new(1, 2, 3, new(10, 20, 30), [], [], [], "open", "close"),
+        new(1, new(5, 10, 15), [], "hook", "discovery", "action", "close"),
+        [], [], [], [], [], [], [], new Dictionary<string,DurationRange>(), "certified-only", "checksum");
+
+    private static NarrationPlanningTransition Transition(string kind, string? source, string? destination) =>
+        new("transition", "execution", "Long", "from", "from-sum", "to", "to-sum", kind, source, destination, "previous", "current", "next", "sum");
 }
 
 public sealed class NarrationPlanningDependencyInjectionTests

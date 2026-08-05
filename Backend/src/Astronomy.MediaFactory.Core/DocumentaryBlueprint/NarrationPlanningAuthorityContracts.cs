@@ -52,7 +52,18 @@ public sealed record NarrationPlanningStrategy(string NarrativeStage, string Sce
 public sealed record NarrationClaimUsagePolicy(string Required, string Optional, string Deferred);
 public sealed record NarrationPlanningConstraintRequest(string Language, string Variant, int TargetDurationSeconds,
     int MinimumDurationSeconds, int MaximumDurationSeconds, FamilyNarrationProfile Profile, string SceneRole,
-    string SectionKey, int RequiredClaimCount, int OptionalClaimCount);
+    string SectionKey, int RequiredClaimCount, int OptionalClaimCount,
+    int MandatoryIncomingTransitionSentenceCount, int MandatoryOutgoingTransitionSentenceCount,
+    int MandatoryQualificationSentenceCount)
+{
+    public NarrationPlanningConstraintRequest(string Language, string Variant, int TargetDurationSeconds,
+        int MinimumDurationSeconds, int MaximumDurationSeconds, FamilyNarrationProfile Profile, string SceneRole,
+        string SectionKey, int RequiredClaimCount, int OptionalClaimCount)
+        : this(Language, Variant, TargetDurationSeconds, MinimumDurationSeconds, MaximumDurationSeconds, Profile,
+            SceneRole, SectionKey, RequiredClaimCount, OptionalClaimCount, 0, 0, 0)
+    {
+    }
+}
 public sealed record NarrationPlanningConstraints(int MinimumSentenceCount, int PreferredSentenceCount,
     int MaximumSentenceCount, int ReadingTimeTargetSeconds, string PauseStrategy, IReadOnlyList<string> EmphasisRules,
     string ClaimOrderingPolicy, string VisualSynchronizationPolicy);
