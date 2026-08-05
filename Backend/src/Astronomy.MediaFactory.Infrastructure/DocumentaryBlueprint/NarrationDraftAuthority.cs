@@ -135,7 +135,7 @@ public sealed class DeterministicNarrationDraftRealizationPolicy(INarrationDraft
 }
 internal static class NarrationDraftFactualRealization
 {
-    internal static string Expected(string certified,IReadOnlyList<string> qualifications,string language,INarrationDraftLanguagePolicy policy)=
+    internal static string Expected(string certified,IReadOnlyList<string> qualifications,string language,INarrationDraftLanguagePolicy policy)=>
         policy.Terminate(string.Join(" ",qualifications.Append(certified.Trim())).Trim(),language);
 }
 public sealed class ConservativeNarrationDraftClaimCoalescingPolicy:INarrationDraftClaimCoalescingPolicy{public bool CanCoalesce(NarrationPlanningScene s,CertifiedNarrationClaim a,CertifiedNarrationClaim b,int m)=>false;}
@@ -270,7 +270,7 @@ public sealed class NarrationDraftValidator(INarrationDraftSafetyValidator safet
         static bool ValidFlags(NarrationDraftSentence s)=>s.SentenceRole switch {"RequiredClaim"=>s.IsRequired&&!s.IsOptional&&!s.IsTransition,"OptionalClaim"=>!s.IsRequired&&s.IsOptional&&!s.IsTransition,"IncomingTransition" or "OutgoingTransition"=>!s.IsRequired&&!s.IsOptional&&s.IsTransition,"Opening" or "Closing"=>!s.IsRequired&&!s.IsOptional&&!s.IsTransition,_=>false};
         bool ValidTransitions(NarrationPlanningScene plan,NarrationDraftScene draft)
         {
-            bool One(NarrationDraftTransitionPhrase? phrase,NarrationPlanningTransition source,string? authored,string role,bool first)=phrase is null
+            bool One(NarrationDraftTransitionPhrase? phrase,NarrationPlanningTransition source,string? authored,string role,bool first)=>phrase is null
                 ? string.IsNullOrWhiteSpace(authored)&&draft.Sentences.All(s=>s.SentenceRole!=role)
                 : phrase.TransitionId==source.TransitionId&&phrase.Kind==source.Kind&&phrase.Variant==draft.Variant&&phrase.PlanningTransitionIds.SequenceEqual([source.TransitionId])&&phrase.DeterministicChecksum==NarrationDraftCanonicalizer.ComputeTransitionPhraseChecksum(phrase)&&
                   phrase.Text==new DeterministicNarrationDraftLanguagePolicy().Terminate(authored!,input.Language)&&draft.Sentences.Count(s=>s.SentenceRole==role&&s.IsTransition&&s.Text==phrase.Text&&s.ClaimIds.Count==0&&s.KnowledgeReferenceIds.Count==0)==1&&(!first||draft.Sentences[0].SentenceRole==role)&&(!first||draft.Sentences[0].Text==phrase.Text);
