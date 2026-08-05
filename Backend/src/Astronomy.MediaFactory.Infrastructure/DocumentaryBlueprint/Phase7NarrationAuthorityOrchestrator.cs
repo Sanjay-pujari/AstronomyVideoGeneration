@@ -13,7 +13,8 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
     INarrationPlanningValidator planningValidator,
     IPhase7NarrationPlanningPublicationService planningPublicationService,
     IPhase7NarrationPlanningCommittedStateEvaluator planningCommittedStateEvaluator,
-    IPhase7NarrationDraftAuthorityService draftAuthorityService) : IPhase7NarrationAuthorityOrchestrator
+    IPhase7NarrationDraftAuthorityService draftAuthorityService,
+    IPhase7ProviderIsolationAudit providerIsolationAudit) : IPhase7NarrationAuthorityOrchestrator
 {
     public async Task<Phase7NarrationAuthorityOrchestrationResult> ExecuteAsync(
         Phase7NarrationAuthorityOrchestrationRequest request, CancellationToken token = default)
@@ -32,6 +33,7 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
         int longDraft = 0, shortDraft = 0;
         string? draftValidationReason = null;
         IReadOnlyList<NarrationDraftValidationGate> draftGates = [];
+        var providerStart = providerIsolationAudit.CaptureStart();
 
         Phase7AuthorityStageResult Add(Phase7AuthorityStageResult stage)
         {
@@ -47,7 +49,7 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
             request.EventId, request.Language, request.ProfileId, request.ProfileVersion, stages, last, failed,
             files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.Ordinal).ToArray(),
             errors.Distinct(StringComparer.Ordinal).ToArray(), blockers.Distinct(StringComparer.Ordinal).ToArray(),
-            new(0,0,0,0,0,0,0), planningId, planningChecksum, draftId, draftChecksum, longDraft, shortDraft,
+            providerIsolationAudit.Complete(providerStart), planningId, planningChecksum, draftId, draftChecksum, longDraft, shortDraft,
             draftValidationReason, draftGates);
 
         var knowledgeRequest = new Phase7InputAuthorityRequest(request.ExecutionRoot, request.ExecutionId, request.PlanId,
@@ -61,12 +63,10 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
 
         var knowledgeCommitted = await knowledgeCommittedStateEvaluator.EvaluateAsync(new(request.ExecutionRoot, request.ExecutionId,
             request.PlanId, request.EventId, request.Language), token);
-        if (!knowledgeCommitted.IsValid || knowledgeCommitted.Authority is null)
-        {
-            Add(new("KnowledgeCommittedState", "P7.1A Committed-State Evaluation", false, "Failed",
-                knowledgeCommitted.ReasonCode, false, false, false, [], knowledgeCommitted.Warnings, knowledgeCommitted.Errors, knowledgeCommitted.Errors));
-            return Finish(false);
-        }
+        Add(new("KnowledgeCommittedState", "P7.1A Committed-State Evaluation", knowledgeCommitted.IsValid && knowledgeCommitted.Authority is not null,
+            knowledgeCommitted.IsValid && knowledgeCommitted.Authority is not null ? "Valid" : "Failed", knowledgeCommitted.ReasonCode,
+            false, false, knowledgeCommitted.IsValid && knowledgeCommitted.Authority is not null, [], knowledgeCommitted.Warnings, knowledgeCommitted.Errors, knowledgeCommitted.Errors));
+        if (!knowledgeCommitted.IsValid || knowledgeCommitted.Authority is null) return Finish(false);
 
         var packetInput = await packetInputEvaluator.EvaluateAsync(new(request.ExecutionRoot, request.ExecutionId, request.PlanId,
             request.EventId, request.Language, request.ProfileId, request.ProfileVersion), token);
@@ -104,19 +104,19 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
         { LongCount = builtPlanning.Authority?.LongScenes.Count ?? 0, ShortCount = builtPlanning.Authority?.ShortScenes.Count ?? 0, FailedGateCount = planningValidation?.Gates.Count(g => !g.Passed) ?? 0, PassedGateCount = planningValidation?.Gates.Count(g => g.Passed) ?? 0 });
         if (!planningSuccess) return Finish(false);
 
-        var pub = await planningPublicationService.ExecuteAsync(new(planningRequest, request.OverwriteExisting, request.RetryFailedOnly), token);
+        var pub = await planningPublicationService.ExecuteAsync(new(planningRequest, builtPlanning.Authority, planningValidation, request.OverwriteExisting, request.RetryFailedOnly), token);
         planningId = pub.AuthorityId; planningChecksum = pub.AuthorityChecksum;
-        Add(new("NarrationPlanningPublication", "P7.1B-BB Narration Planning Publication", pub.Success, pub.Reused ? "Reused" : pub.Success ? "Committed" : "Failed",
+        var publicationSucceeded = pub.Success && pub.PublicationCommitted && pub.CommittedStateValidationPassed;
+        Add(new("NarrationPlanningPublication", "P7.1B-BB Narration Planning Publication", publicationSucceeded,
+            pub.Reused ? "Reused" : publicationSucceeded ? "Committed" : pub.Success ? "PublishedPendingCommittedEvaluation" : "Failed",
             pub.ReasonCode, pub.Reused, pub.PublicationCommitted, pub.CommittedStateValidationPassed, pub.ArtifactPaths, pub.Warnings, pub.Errors, pub.Errors)
         { LongCount = pub.LongPlanningSceneCount, ShortCount = pub.ShortPlanningSceneCount });
-        if (!pub.Success) return Finish(false);
+        if (!publicationSucceeded) return Finish(false);
         var planningCommitted = await planningCommittedStateEvaluator.EvaluateAsync(planningRequest, token);
-        if (!planningCommitted.IsValid || planningCommitted.Authority is null)
-        {
-            Add(new("NarrationPlanningCommittedState", "P7.1B-BB Committed-State Evaluation", false, "Failed", planningCommitted.ReasonCode,
-                false, false, false, [], planningCommitted.Warnings, planningCommitted.Errors, planningCommitted.Errors));
-            return Finish(false);
-        }
+        Add(new("NarrationPlanningCommittedState", "P7.1B-BB Committed-State Evaluation", planningCommitted.IsValid && planningCommitted.Authority is not null,
+            planningCommitted.IsValid && planningCommitted.Authority is not null ? "Valid" : "Failed", planningCommitted.ReasonCode,
+            false, false, planningCommitted.IsValid && planningCommitted.Authority is not null, [], planningCommitted.Warnings, planningCommitted.Errors, planningCommitted.Errors));
+        if (!planningCommitted.IsValid || planningCommitted.Authority is null) return Finish(false);
 
         var draft = await draftAuthorityService.ExecuteAsync(new(planningRequest,
             new(request.ExecutionRoot, request.ExecutionId, request.PlanId, request.EventId, request.Language)), token);

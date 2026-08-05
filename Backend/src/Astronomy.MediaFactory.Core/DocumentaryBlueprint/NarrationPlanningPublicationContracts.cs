@@ -12,7 +12,10 @@ public static class NarrationPlanningPublicationReasonCodes
         InputInvalid="NARRATION_PLANNING_INPUT_INVALID", BuildInvalid="NARRATION_PLANNING_BUILD_INVALID",
         ValidationInvalid="NARRATION_PLANNING_VALIDATION_INVALID", TransactionFailed="NARRATION_PLANNING_TRANSACTION_FAILED",
         PhysicalReadbackInvalid="NARRATION_PLANNING_PHYSICAL_READBACK_INVALID", CommittedStateInvalid="NARRATION_PLANNING_COMMITTED_STATE_INVALID",
-        LineageStale="NARRATION_PLANNING_LINEAGE_STALE", LockUnavailable="NARRATION_PLANNING_LOCK_UNAVAILABLE";
+        LineageStale="NARRATION_PLANNING_LINEAGE_STALE", LockUnavailable="NARRATION_PLANNING_LOCK_UNAVAILABLE",
+        CandidateRequired="P7PLANPUB_CANDIDATE_REQUIRED", CandidateValidationRequired="P7PLANPUB_CANDIDATE_VALIDATION_REQUIRED",
+        CandidateValidationInvalid="P7PLANPUB_CANDIDATE_VALIDATION_INVALID", CandidateIdentityMismatch="P7PLANPUB_CANDIDATE_IDENTITY_MISMATCH",
+        CandidateChecksumMismatch="P7PLANPUB_CANDIDATE_CHECKSUM_MISMATCH", CandidateLineageMismatch="P7PLANPUB_CANDIDATE_LINEAGE_MISMATCH";
 }
 public static class NarrationPlanningArtifactPaths
 {
@@ -62,7 +65,12 @@ public sealed record PublishedNarrationPlanningAuthority(NarrationPlanningAuthor
     NarrationPlanningPublicationEvidence PublicationEvidence,IReadOnlyList<string> PhysicalArtifactPaths,
     IReadOnlyDictionary<string,string> PhysicalHashes,IReadOnlyList<string> CommittedStateDiagnostics);
 public sealed record Phase7NarrationPlanningPublicationRequest(Phase7NarrationPlanningInputAuthorityRequest Input,
-    bool OverwriteExisting=false,bool RetryFailedOnly=false);
+    NarrationPlanningAuthority? CandidateAuthority, NarrationPlanningValidation? CandidateValidation,
+    bool OverwriteExisting=false,bool RetryFailedOnly=false)
+{
+    public Phase7NarrationPlanningPublicationRequest(Phase7NarrationPlanningInputAuthorityRequest input, bool overwriteExisting=false, bool retryFailedOnly=false)
+        : this(input, null, null, overwriteExisting, retryFailedOnly) { }
+}
 public sealed record Phase7NarrationPlanningPublicationResult(bool Success,string ReasonCode,bool AlreadyPublished,bool Reused,
     bool PublicationCommitted,bool CommittedStateValidationPassed,string AuthorityId,string AuthorityChecksum,int LongPlanningSceneCount,
     int ShortPlanningSceneCount,int TotalPlanningSceneCount,IReadOnlyList<string> Warnings,IReadOnlyList<string> Errors,

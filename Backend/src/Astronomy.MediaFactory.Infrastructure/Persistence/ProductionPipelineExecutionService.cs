@@ -880,15 +880,54 @@ public sealed partial class ProductionPipelineExecutionService(
             ContentCategory = context.ExecutionContext.Category,
             CanonicalProfileIdentity = canonicalProfile
         };
-        var result=await _phase7NarrationAuthorityOrchestrator.ExecuteAsync(orchestrationRequest,cancellationToken);
-        var finishedUtc=DateTimeOffset.UtcNow;
-        var status=result.Success?ProductionPhaseStatus.Succeeded:ProductionPhaseStatus.Failed;
-        return new(7,"Narration Authority",status,started,finishedUtc,(long)(finishedUtc-started).TotalMilliseconds,
-            [],result.GeneratedFiles,Path.Combine(context.OutputRoot,"validation","phase-07-narration-planning-validation.json"),
-            result.Warnings,result.Errors.Concat(result.BlockingIssues).Distinct(StringComparer.Ordinal).ToArray(),!result.Success,
-            result.Success?"Phase 7 narration authority chain completed.":$"Phase 7 narration authority failed at {result.FailedInternalStage}.")
-        {ReasonCode=result.ReasonCode,AlreadyPublished=result.StageResults.All(s=>s.Reused||s.Success),PublicationCommitted=result.StageResults.Any(s=>s.PublicationCommitted),
-            CommittedStateValidationPassed=result.Success, InternalStageResults=result.StageResults, Phase7NarrationAuthorityResult=result};
+        try
+        {
+            var result=await _phase7NarrationAuthorityOrchestrator.ExecuteAsync(orchestrationRequest,cancellationToken);
+            var finishedUtc=DateTimeOffset.UtcNow;
+            var status=result.Success?ProductionPhaseStatus.Succeeded:ProductionPhaseStatus.Failed;
+            var physicalPublicationStages=result.StageResults.Where(stage=>stage.StageCode is "KnowledgeAuthority" or "NarrationPlanningPublication").ToArray();
+            var entirePhysicalAuthorityReused=physicalPublicationStages.Length==2&&physicalPublicationStages.All(stage=>stage.Reused);
+            var committedStateValidationPassed=physicalPublicationStages.Length==2&&physicalPublicationStages.All(stage=>stage.PublicationCommitted&&stage.CommittedStateValidationPassed);
+            return new(7,"Narration Authority",status,started,finishedUtc,(long)(finishedUtc-started).TotalMilliseconds,
+                [],result.GeneratedFiles,Path.Combine(context.OutputRoot,"validation","phase-07-narration-planning-validation.json"),
+                result.Warnings,result.Errors.Concat(result.BlockingIssues).Distinct(StringComparer.Ordinal).ToArray(),!result.Success,
+                result.Success?"Phase 7 narration authority chain completed.":$"Phase 7 narration authority failed at {result.FailedInternalStage}.")
+            {ReasonCode=result.ReasonCode,AlreadyPublished=entirePhysicalAuthorityReused,PublicationCommitted=physicalPublicationStages.Any(s=>s.PublicationCommitted),
+                CommittedStateValidationPassed=committedStateValidationPassed, InternalStageResults=result.StageResults, Phase7NarrationAuthorityResult=result};
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or JsonException or NotSupportedException or UnauthorizedAccessException)
+        {
+            var finishedUtc=DateTimeOffset.UtcNow;
+            var safeOutputs=DiscoverPhase7CommittedOutputs(context.OutputRoot);
+            return new(7,"Narration Authority",ProductionPhaseStatus.Failed,started,finishedUtc,(long)(finishedUtc-started).TotalMilliseconds,
+                [],safeOutputs,Path.Combine(context.OutputRoot,"validation","phase-07-narration-planning-validation.json"),
+                [],[ex.Message],true,"Phase 7 narration authority failed at governed exception boundary.")
+            {ReasonCode=Phase7NarrationAuthorityOrchestrationReasonCodes.UnhandledFailure};
+        }
+    }
+
+
+    private static IReadOnlyList<string> DiscoverPhase7CommittedOutputs(string outputRoot)
+    {
+        var candidates=new[]
+        {
+            Path.Combine(outputRoot,"07-narration","knowledge","knowledge-authority.json"),
+            Path.Combine(outputRoot,"07-narration","knowledge","knowledge-diagnostics.json"),
+            Path.Combine(outputRoot,"07-narration","knowledge","knowledge-resolution-report.json"),
+            Path.Combine(outputRoot,"07-narration","planning","narration-planning-authority.json"),
+            Path.Combine(outputRoot,"07-narration","planning","narration-planning-diagnostics.json"),
+            Path.Combine(outputRoot,"07-narration","planning","narration-planning-report.json"),
+            Path.Combine(outputRoot,"validation","phase-07-knowledge-validation.json"),
+            Path.Combine(outputRoot,"validation","phase-07-narration-planning-validation.json"),
+            Path.Combine(outputRoot,".phase-07-knowledge-publication.json"),
+            Path.Combine(outputRoot,".phase-07-narration-planning-publication.json"),
+            Path.Combine(outputRoot,"phase-manifest.json")
+        };
+        return candidates.Where(File.Exists).ToArray();
     }
 
     /// <summary>

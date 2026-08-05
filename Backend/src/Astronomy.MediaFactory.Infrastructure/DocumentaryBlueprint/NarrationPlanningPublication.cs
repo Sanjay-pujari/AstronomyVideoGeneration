@@ -226,16 +226,17 @@ public sealed class Phase7NarrationPlanningTransactionCoordinator(IPhase7Narrati
         }
         var evaluated=await inputEvaluator.EvaluateAsync(input,token);
         if(!evaluated.IsValid||evaluated.Authority is null)return Fail(NarrationPlanningPublicationReasonCodes.InputInvalid,evaluated.Errors.ToArray());
-        var built=builder.Build(evaluated.Authority);
-        if(!built.IsValid||built.Authority is null||built.Errors.Count>0||built.BlockingIssues.Count>0)return Fail(NarrationPlanningPublicationReasonCodes.BuildInvalid,[..built.Errors,..built.BlockingIssues]);
-        var authority=built.Authority;var semantic=validator.Validate(evaluated.Authority,authority);
-        if(!semantic.IsValid||semantic.ReasonCode!="NARRATION_PLANNING_VALID"||semantic.Errors.Count>0||semantic.Gates.Any(x=>!x.Passed)||semantic.DeterministicChecksum!=NarrationPlanningCanonicalizer.ValidationChecksum(semantic))
-            return Fail(NarrationPlanningPublicationReasonCodes.ValidationInvalid,semantic.Errors.ToArray());
+        var authority=request.CandidateAuthority;
+        if(authority is null)return Fail(NarrationPlanningPublicationReasonCodes.CandidateRequired,"A validated narration planning candidate authority is required.");
+        var semantic=request.CandidateValidation;
+        if(semantic is null)return Fail(NarrationPlanningPublicationReasonCodes.CandidateValidationRequired,"A candidate validation result is required.");
+        var candidateFailure=ValidateCandidate(input,evaluated.Authority,authority,semantic);
+        if(candidateFailure is not null)return candidateFailure;
         var tx=Guid.NewGuid().ToString("N");var root=Path.GetFullPath(input.ExecutionRoot);var narration=Path.Combine(root,"07-narration");
         var stage=Path.Combine(narration,".planning-staging-"+tx);var backup=Path.Combine(narration,".planning-backup-"+tx);
         try
         {
-            fs.CreateDirectory(stage);var report=Report(authority,semantic,built.Warnings,request.OverwriteExisting?"Overwrite":"Publish");
+            fs.CreateDirectory(stage);var report=Report(authority,semantic,[],request.OverwriteExisting?"Overwrite":"Publish");
             var stagedArtifacts=new List<NarrationPlanningArtifact>();
             async Task Write(string relative,object value)
             {
@@ -249,7 +250,7 @@ public sealed class Phase7NarrationPlanningTransactionCoordinator(IPhase7Narrati
             await Write(NarrationPlanningArtifactPaths.Diagnostics,diagnostics);fault.Inject(NarrationPlanningPublicationFaultPoint.AfterDiagnosticsStageWrite);
             await Write(NarrationPlanningArtifactPaths.Report,report);fault.Inject(NarrationPlanningPublicationFaultPoint.AfterReportStageWrite);
             var lineage=new Dictionary<string,string>{{"phase6AuthorityId",evaluated.Authority.PublishedStoryFrameAuthority.Authority.AuthorityId},{"phase6AuthorityChecksum",authority.StoryFrameAuthorityChecksum},{"phase7KnowledgeAuthorityId",evaluated.Authority.PublishedPhase7KnowledgeAuthority.KnowledgeAuthority.AuthorityId},{"phase7KnowledgeAuthorityChecksum",authority.KnowledgeAuthorityChecksum},{"packetCollectionChecksum",authority.PacketCollectionChecksum}};
-            var validationDraft=new NarrationPlanningPhysicalValidation(NarrationPlanningPublicationContract.ValidationVersion,authority.AuthorityId,authority.DeterministicChecksum,authority.ExecutionId,authority.PlanId,authority.EventId,authority.Language,authority.ProfileId,authority.ProfileVersion,"Candidate",semantic.Gates,semantic.Errors,[..built.Warnings,..authority.Diagnostics.Warnings],stagedArtifacts,lineage,false,false,""){CandidateReadbackPassed=true,CommittedReadbackPassed=false};
+            var validationDraft=new NarrationPlanningPhysicalValidation(NarrationPlanningPublicationContract.ValidationVersion,authority.AuthorityId,authority.DeterministicChecksum,authority.ExecutionId,authority.PlanId,authority.EventId,authority.Language,authority.ProfileId,authority.ProfileVersion,"Candidate",semantic.Gates,semantic.Errors,[..authority.Diagnostics.Warnings],stagedArtifacts,lineage,false,false,""){CandidateReadbackPassed=true,CommittedReadbackPassed=false};
             var validation=validationDraft with{DeterministicChecksum=NarrationPlanningPublicationCanonicalizer.ComputePhysicalValidationChecksum(validationDraft)};await Write(NarrationPlanningArtifactPaths.Validation,validation);fault.Inject(NarrationPlanningPublicationFaultPoint.AfterValidationStageWrite);
             var manifestDraft=new NarrationPlanningManifestEntry(7,"P7.1B-BB","NarrationPlanningAuthority",NarrationPlanningContract.Version,authority.ExecutionId,authority.PlanId,authority.EventId,authority.AuthorityId,authority.DeterministicChecksum,authority.Diagnostics.DeterministicChecksum,report.DeterministicChecksum,validation.DeterministicChecksum,lineage["phase6AuthorityId"],authority.StoryFrameAuthorityChecksum,lineage["phase7KnowledgeAuthorityId"],authority.KnowledgeAuthorityChecksum,authority.PacketCollectionChecksum,authority.ProfileId,authority.ProfileVersion,authority.Language,"Committed",clock.UtcNow,stagedArtifacts.ToArray(),"");
             var entry=manifestDraft with{DeterministicChecksum=NarrationPlanningPublicationCanonicalizer.ComputeManifestEntryChecksum(manifestDraft)};
@@ -286,11 +287,32 @@ public sealed class Phase7NarrationPlanningTransactionCoordinator(IPhase7Narrati
             fault.Inject(NarrationPlanningPublicationFaultPoint.BeforeCommittedReadback);var physical=await readback.ReadCommittedAsync(root,token);if(!physical.IsValid)throw new InvalidDataException(string.Join(";",physical.Errors));fault.Inject(NarrationPlanningPublicationFaultPoint.AfterCommittedReadback);
             var final=await committed.EvaluateAsync(input,token);if(!final.IsValid)throw new InvalidDataException(string.Join(";",final.Errors));
             fault.Inject(NarrationPlanningPublicationFaultPoint.BeforeBackupDeletion);fs.DeleteDirectory(backup);fs.DeleteDirectory(stage);
-            return Result(authority,NarrationPlanningPublicationReasonCodes.Committed,false,false,true,[..evaluated.Warnings,..built.Warnings],[]);
+            return Result(authority,NarrationPlanningPublicationReasonCodes.Committed,false,false,true,evaluated.Warnings,[]);
         }
         catch(Exception ex) when(ex is not OperationCanceledException)
         { if(fs.DirectoryExists(backup))Restore(root,backup);return Fail(NarrationPlanningPublicationReasonCodes.TransactionFailed,ex.Message); }
         finally{if(fs.DirectoryExists(stage))fs.DeleteDirectory(stage);if(fs.DirectoryExists(backup))fs.DeleteDirectory(backup);}
+    }
+
+    private Phase7NarrationPlanningPublicationResult? ValidateCandidate(Phase7NarrationPlanningInputAuthorityRequest input, Phase7NarrationPlanningInputAuthority evaluated, NarrationPlanningAuthority authority, NarrationPlanningValidation semantic)
+    {
+        if(!semantic.IsValid||semantic.Errors.Count>0||semantic.Gates.Any(x=>!x.Passed))
+            return Fail(NarrationPlanningPublicationReasonCodes.CandidateValidationInvalid, semantic.Errors.Count==0?"Candidate validation is invalid.":string.Join(";",semantic.Errors));
+        if(semantic.DeterministicChecksum!=NarrationPlanningCanonicalizer.ValidationChecksum(semantic))
+            return Fail(NarrationPlanningPublicationReasonCodes.CandidateChecksumMismatch,"Candidate validation checksum does not recompute.");
+        if(authority.DeterministicChecksum!=NarrationPlanningCanonicalizer.AuthorityChecksum(authority))
+            return Fail(NarrationPlanningPublicationReasonCodes.CandidateChecksumMismatch,"Candidate authority checksum does not recompute.");
+        var revalidated=validator.Validate(evaluated,authority);
+        if(revalidated.DeterministicChecksum!=semantic.DeterministicChecksum||revalidated.ReasonCode!=semantic.ReasonCode)
+            return Fail(NarrationPlanningPublicationReasonCodes.CandidateIdentityMismatch,"Candidate validation does not belong to the supplied authority.");
+        if(authority.ExecutionId!=input.ExecutionId||authority.PlanId!=input.PlanId||authority.EventId!=input.EventId||authority.PacketCollectionChecksum!=input.SceneKnowledgePacketCollection.DeterministicChecksum)
+            return Fail(NarrationPlanningPublicationReasonCodes.CandidateLineageMismatch,"Candidate input lineage does not match the current planning input.");
+        if(!string.Equals(authority.Language,input.Language,StringComparison.OrdinalIgnoreCase)||authority.ProfileId!=input.ProfileId||authority.ProfileVersion!=input.ProfileVersion)
+            return Fail(NarrationPlanningPublicationReasonCodes.CandidateLineageMismatch,"Candidate language or profile does not match the current planning input.");
+        if(authority.LongScenes.Count!=input.SceneKnowledgePacketCollection.Long.Count||authority.ShortScenes.Count!=input.SceneKnowledgePacketCollection.Short.Count)
+            return Fail(NarrationPlanningPublicationReasonCodes.CandidateIdentityMismatch,"Candidate Long/Short counts do not match validation lineage.");
+        if(authority.Diagnostics.FailedGateCount!=0)return Fail(NarrationPlanningPublicationReasonCodes.CandidateValidationInvalid,"Candidate has failed gates.");
+        return null;
     }
     private void Backup(string root,string backup,string relative,bool planning=false){var source=planning?Path.Combine(root,"07-narration","planning"):NarrationPlanningPublicationJson.Full(root,relative);if(planning){if(fs.DirectoryExists(source))fs.MoveDirectory(source,Path.Combine(backup,"planning"));}else if(fs.FileExists(source))fs.MoveFile(source,Path.Combine(backup,relative.Replace('/',Path.DirectorySeparatorChar)),true);}
     private void PublishFile(string stage,string root,string relative){var source=Path.Combine(stage,relative.Replace('/',Path.DirectorySeparatorChar));fs.MoveFile(source,NarrationPlanningPublicationJson.Full(root,relative),true);}

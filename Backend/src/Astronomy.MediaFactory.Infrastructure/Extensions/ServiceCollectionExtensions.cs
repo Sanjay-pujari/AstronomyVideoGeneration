@@ -783,6 +783,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationPlanningPublicationService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationPlanningPublicationService>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationDraftInputAuthorityEvaluator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationDraftInputAuthorityEvaluator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationDraftAuthorityService, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationDraftAuthorityService>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7ProviderIsolationAudit, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7ProviderIsolationAudit>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationAuthorityOrchestrator, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationAuthorityOrchestrator>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftLanguagePolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DeterministicNarrationDraftLanguagePolicy>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.INarrationDraftTimingPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DeterministicNarrationDraftTimingPolicy>();
