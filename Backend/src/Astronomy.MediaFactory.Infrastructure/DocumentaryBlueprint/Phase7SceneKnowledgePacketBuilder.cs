@@ -66,13 +66,13 @@ public sealed class Phase7SceneKnowledgePacketBuilder : IPhase7SceneKnowledgePac
             .Select(x => $"{x.Resolution.ReasonCode}:{x.Requirement.ReferenceId}").ToList();
         foreach (var item in resolved.Where(x => x.Requirement.IsRequired &&
             !x.Resolution.Claims.Any(c => required.Any(r => r.ClaimId == c.ClaimId))))
-            blocking.Add($"P7PACKET_REQUIRED_REFERENCE_HAS_NO_REQUIRED_CLAIM:{item.Requirement.ReferenceId}");
+            blocking.Add($"P7PACKET_REQUIRED_REFERENCE_NO_ELIGIBLE_REQUIRED_CLAIM:{item.Requirement.ReferenceId}");
         var primaries = resolved.Where(x => x.Requirement.IsPrimary).ToArray();
         if (primaries.Length != 1 || primaries[0].Requirement.Variant != variant ||
             primaries[0].Resolution.Status != Phase7KnowledgeReferenceStatus.Resolved ||
             primaries[0].Resolution.Claims.Count == 0)
-            blocking.Add($"P7PACKET_PRIMARY_REFERENCE_MISSING:{frame.FrameId}");
-        if (required.Length == 0) blocking.Add($"P7PACKET_REQUIRED_CLAIM_MISSING:{frame.FrameId}:{section}");
+            blocking.Add($"P7PACKET_PRIMARY_REFERENCE_UNRESOLVED:{frame.FrameId}");
+        if (required.Length == 0) blocking.Add($"P7PACKET_REQUIRED_REFERENCE_NO_ELIGIBLE_REQUIRED_CLAIM:{frame.FrameId}:{section}");
         var warnings = resolved.Where(x => !x.Requirement.IsRequired && x.Resolution.Status != Phase7KnowledgeReferenceStatus.Resolved)
             .Select(x => $"{x.Resolution.ReasonCode}:{x.Requirement.ReferenceId}").ToList();
         warnings.AddRange(review.Select(x => $"Human review context excluded: {x.ClaimId}"));

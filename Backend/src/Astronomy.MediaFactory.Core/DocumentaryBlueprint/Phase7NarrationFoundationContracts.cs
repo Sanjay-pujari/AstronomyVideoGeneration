@@ -452,9 +452,17 @@ public interface IPhase7ScenePacketInputAuthorityEvaluator
         CancellationToken cancellationToken = default);
 }
 public sealed record Phase7SceneKnowledgePacketValidationGate(string Name, bool Passed, IReadOnlyList<string> Errors);
+public sealed record Phase7ScenePacketFailureSummary(
+    string Variant, string PacketId, string StoryFrameId, string SourceSceneId, int SceneNumber, int FrameNumber,
+    string SectionKey, IReadOnlyList<string> FailedGateNames, IReadOnlyList<string> ReasonCodes,
+    IReadOnlyList<string> ReferenceIds, IReadOnlyList<string> ClaimIds, IReadOnlyList<string> BlockingIssues);
 public sealed record Phase7SceneKnowledgePacketValidation(bool IsValid, string ReasonCode,
     IReadOnlyList<Phase7SceneKnowledgePacketValidationGate> Gates, IReadOnlyList<string> Errors,
-    string DeterministicChecksum);
+    string DeterministicChecksum)
+{
+    public int TotalGateCount { get; init; } = Gates.Count;
+    public IReadOnlyList<Phase7ScenePacketFailureSummary> FailureSummaries { get; init; } = [];
+}
 public interface IPhase7SceneKnowledgePacketValidator
 {
     Phase7SceneKnowledgePacketValidation Validate(Phase7ScenePacketInputAuthority input,
