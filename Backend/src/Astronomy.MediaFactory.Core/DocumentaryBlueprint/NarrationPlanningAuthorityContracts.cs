@@ -94,6 +94,31 @@ public sealed record NarrationPlanningTransition(string TransitionId, string Exe
     string? FromStoryFrameId, string? FromStoryFrameChecksum, string? ToStoryFrameId, string? ToStoryFrameChecksum,
     string Kind, string? SourceTransitionOut, string? DestinationTransitionIn, string? PreviousPacketId,
     string? CurrentPacketId, string? NextPacketId, string DeterministicChecksum);
+
+public static class NarrationTransitionSentenceOwnership
+{
+    public static int MandatoryIncomingSentenceCount(NarrationPlanningTransition transition) =>
+        MandatorySentenceCount(transition, incoming: true);
+
+    public static int MandatoryOutgoingSentenceCount(NarrationPlanningTransition transition) =>
+        MandatorySentenceCount(transition, incoming: false);
+
+    public static int MandatorySentenceCount(NarrationPlanningTransition transition, bool incoming)
+    {
+        ArgumentNullException.ThrowIfNull(transition);
+        if (transition.Kind != NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition) return 0;
+        var text = incoming ? transition.DestinationTransitionIn : transition.SourceTransitionOut;
+        return string.IsNullOrWhiteSpace(text) ? 0 : 1;
+    }
+
+    public static int MandatoryQualificationSentenceCount(
+        IReadOnlyList<string> locationQualificationRequirements, IReadOnlyList<string> timeQualificationRequirements,
+        IReadOnlyList<string> culturalQualificationRequirements, IReadOnlyList<string> astrologyQualificationRequirements) =>
+        // P7.1C-A realizes qualification metadata as prefixes on the governed claim sentence; these do not
+        // create additional independently spoken mandatory sentences in the planning structural budget.
+        0;
+}
+
 public sealed record NarrationPlanningScene(string PlanningId, string SceneId, string Variant, string StoryFrameId,
     string StoryFrameChecksum, string SourceSceneChecksum, string PacketId, string PacketChecksum, string ViewerQuestion,
     string LearningObjective, NarrationPlanningGoal NarrativeGoal, IReadOnlyList<string> PrimaryKnowledgeReferences,

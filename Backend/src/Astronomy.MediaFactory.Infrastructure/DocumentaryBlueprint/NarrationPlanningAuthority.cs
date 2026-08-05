@@ -57,24 +57,6 @@ public sealed class Phase7NarrationPlanningInputAuthorityEvaluator(
         new(false, null, code, (upstream ?? []).Append(error).ToArray(), warnings);
 }
 
-public static class NarrationPlanningTransitionSentenceOwnership
-{
-    public static int MandatorySentenceCount(NarrationPlanningTransition transition, bool incoming)
-    {
-        ArgumentNullException.ThrowIfNull(transition);
-        if (transition.Kind != NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition) return 0;
-        var text = incoming ? transition.DestinationTransitionIn : transition.SourceTransitionOut;
-        return string.IsNullOrWhiteSpace(text) ? 0 : 1;
-    }
-
-    public static int MandatoryQualificationSentenceCount(
-        IReadOnlyList<string> locationQualificationRequirements, IReadOnlyList<string> timeQualificationRequirements,
-        IReadOnlyList<string> culturalQualificationRequirements, IReadOnlyList<string> astrologyQualificationRequirements) =>
-        // P7.1C-A realizes qualification metadata as prefixes on the governed claim sentence; these do not
-        // create additional independently spoken mandatory sentences in the planning structural budget.
-        0;
-}
-
 public sealed class DefaultNarrationPlanningConstraintPolicy : INarrationPlanningConstraintPolicy
 {
     public NarrationPlanningConstraints Resolve(NarrationPlanningConstraintRequest r)
@@ -100,9 +82,9 @@ public sealed class DeterministicNarrationPlanningDraftRealizabilityPolicy : INa
     public NarrationPlanningRealizabilityBudget Evaluate(NarrationPlanningDraftRealizabilityRequest r)
     {
         var required = r.RequiredClaimIds.Distinct(StringComparer.Ordinal).Count();
-        var incomingCount = NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(r.IncomingTransition, true);
-        var outgoingCount = NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(r.OutgoingTransition, false);
-        var mandatoryQualifications = NarrationPlanningTransitionSentenceOwnership.MandatoryQualificationSentenceCount(
+        var incomingCount = NarrationTransitionSentenceOwnership.MandatorySentenceCount(r.IncomingTransition, true);
+        var outgoingCount = NarrationTransitionSentenceOwnership.MandatorySentenceCount(r.OutgoingTransition, false);
+        var mandatoryQualifications = NarrationTransitionSentenceOwnership.MandatoryQualificationSentenceCount(
             r.LocationQualificationRequirements, r.TimeQualificationRequirements, r.CulturalQualificationRequirements,
             r.AstrologyQualificationRequirements);
         var minimumMandatory = required + mandatoryQualifications + incomingCount + outgoingCount;
@@ -301,8 +283,8 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
         var supporting = NarrationPlanningReferenceGovernance.GovernedSupportingReferences(p);
         var incoming = BuildIncomingTransition(input, variant, previous, p, next);
         var outgoing = BuildOutgoingTransition(input, variant, previous, p, next);
-        var mandatoryIncoming = NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(incoming, true);
-        var mandatoryOutgoing = NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(outgoing, false);
+        var mandatoryIncoming = NarrationTransitionSentenceOwnership.MandatorySentenceCount(incoming, true);
+        var mandatoryOutgoing = NarrationTransitionSentenceOwnership.MandatorySentenceCount(outgoing, false);
         const int mandatoryQualifications = 0;
         NarrationPlanningConstraints constraints;
         try { constraints = constraintPolicy.Resolve(new(input.Language, variant, p.TargetDurationSeconds, p.MinimumDurationSeconds,
@@ -451,9 +433,9 @@ public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolic
             {
                 var expected = constraintPolicy.Resolve(new(input.Language, s.Variant, p.TargetDurationSeconds, p.MinimumDurationSeconds,
                     p.MaximumDurationSeconds, input.FamilyNarrationProfile, p.SceneRole, p.SectionKey, p.RequiredClaims.Count, p.OptionalClaims.Count,
-                    NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(s.IncomingTransition, true),
-                    NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(s.OutgoingTransition, false),
-                    NarrationPlanningTransitionSentenceOwnership.MandatoryQualificationSentenceCount(s.LocationQualificationRequirements,
+                    NarrationTransitionSentenceOwnership.MandatorySentenceCount(s.IncomingTransition, true),
+                    NarrationTransitionSentenceOwnership.MandatorySentenceCount(s.OutgoingTransition, false),
+                    NarrationTransitionSentenceOwnership.MandatoryQualificationSentenceCount(s.LocationQualificationRequirements,
                         s.TimeQualificationRequirements, s.CulturalQualificationRequirements, s.AstrologyQualificationRequirements)));
                 return Phase7Determinism.Hash(expected) == Phase7Determinism.Hash(s.NarrationConstraints) && s.MinimumDuration == p.MinimumDurationSeconds &&
                     s.ExpectedDuration == p.TargetDurationSeconds && s.MaximumDuration == p.MaximumDurationSeconds &&

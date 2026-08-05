@@ -108,8 +108,8 @@ public sealed class NarrationPlanningConstraintPolicyTests
         var incoming = Transition(NarrationPlanningPolicyCatalog.VariantOpeningTransition, null, "opening");
         var outgoing = Transition(NarrationPlanningPolicyCatalog.VariantClosingTransition, "closing", null);
 
-        NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(incoming, true).Should().Be(0);
-        NarrationPlanningTransitionSentenceOwnership.MandatorySentenceCount(outgoing, false).Should().Be(0);
+        NarrationTransitionSentenceOwnership.MandatorySentenceCount(incoming, true).Should().Be(0);
+        NarrationTransitionSentenceOwnership.MandatorySentenceCount(outgoing, false).Should().Be(0);
     }
 
     private static FamilyNarrationProfile Profile() => new("profile", "v1", "family", ["en", "hi"],
