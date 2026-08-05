@@ -74,3 +74,74 @@ public sealed class NarrationDraftTimingPolicyTests
         result.PacketFailureSummaries.Should().BeEmpty();
     }
 }
+
+public sealed class NarrationDraftTransitionCapacityPolicyTests
+{
+    [Fact]
+    public void First_long_scene_uses_governed_successor_only_capacity()
+    {
+        var incoming = Transition(NarrationPlanningPolicyCatalog.VariantOpeningTransition, null, "opening text");
+        var outgoing = Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "successor out", null);
+
+        var result = MinimumMandatory(6, incoming, outgoing, 7);
+
+        result.Incoming.Should().Be(0);
+        result.Outgoing.Should().Be(1);
+        result.Minimum.Should().Be(7);
+        result.Valid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Internal_scene_uses_both_owned_successor_sides()
+    {
+        var incoming = Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, null, "successor in");
+        var outgoing = Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "successor out", null);
+
+        var result = MinimumMandatory(4, incoming, outgoing, 6);
+
+        result.Incoming.Should().Be(1);
+        result.Outgoing.Should().Be(1);
+        result.Minimum.Should().Be(6);
+        result.Valid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Final_scene_does_not_charge_variant_closing_capacity()
+    {
+        var incoming = Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, null, "successor in");
+        var outgoing = Transition(NarrationPlanningPolicyCatalog.VariantClosingTransition, "closing text", null);
+
+        var result = MinimumMandatory(5, incoming, outgoing, 6);
+
+        result.Incoming.Should().Be(1);
+        result.Outgoing.Should().Be(0);
+        result.Minimum.Should().Be(6);
+        result.Valid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Invalid_scene_with_two_owned_successors_exceeds_capacity()
+    {
+        var incoming = Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, null, "successor in");
+        var outgoing = Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "successor out", null);
+
+        var result = MinimumMandatory(6, incoming, outgoing, 7);
+
+        result.Minimum.Should().Be(8);
+        result.Valid.Should().BeFalse();
+        NarrationDraftReasonCodes.RequiredContentExceedsTimingCapacity.Should().Be("NARRATION_DRAFT_REQUIRED_CONTENT_EXCEEDS_TIMING_CAPACITY");
+    }
+
+    private static (int Incoming, int Outgoing, int Qualifications, int Minimum, bool Valid) MinimumMandatory(
+        int requiredClaimCount, NarrationPlanningTransition incoming, NarrationPlanningTransition outgoing, int maximum)
+    {
+        var mandatoryIncoming = NarrationTransitionSentenceOwnership.MandatorySentenceCount(incoming, true);
+        var mandatoryOutgoing = NarrationTransitionSentenceOwnership.MandatorySentenceCount(outgoing, false);
+        var mandatoryQualifications = NarrationTransitionSentenceOwnership.MandatoryQualificationSentenceCount([], [], [], []);
+        var minimum = requiredClaimCount + mandatoryIncoming + mandatoryOutgoing + mandatoryQualifications;
+        return (mandatoryIncoming, mandatoryOutgoing, mandatoryQualifications, minimum, minimum <= maximum);
+    }
+
+    private static NarrationPlanningTransition Transition(string kind, string? source, string? destination) =>
+        new("transition", "execution", "Long", "from", "from-sum", "to", "to-sum", kind, source, destination, "previous", "current", "next", "sum");
+}

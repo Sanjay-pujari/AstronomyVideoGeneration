@@ -195,10 +195,15 @@ public sealed class NarrationDraftAuthorityBuilder(INarrationDraftLanguagePolicy
         var outgoing=transitions.Create(new(p.OutgoingTransition,NarrationDraftTransitionOwnership.OutgoingSource,p.Variant,lang));
         var openingCandidate=openings.Create(p,lang);
         var closingCandidate=closings.Create(p,hasNext,lang);
-        var mandatoryTransitionCount=(incoming is null?0:1)+(outgoing is null?0:1);
-        var minimumMandatorySentenceCount=required.Count+mandatoryTransitionCount;
+        var requiredClaimCount=p.RequiredClaims.Distinct(StringComparer.Ordinal).Count();
+        var mandatoryIncoming=NarrationTransitionSentenceOwnership.MandatorySentenceCount(p.IncomingTransition,true);
+        var mandatoryOutgoing=NarrationTransitionSentenceOwnership.MandatorySentenceCount(p.OutgoingTransition,false);
+        var mandatoryQualificationCount=NarrationTransitionSentenceOwnership.MandatoryQualificationSentenceCount(
+            p.LocationQualificationRequirements,p.TimeQualificationRequirements,p.CulturalQualificationRequirements,p.AstrologyQualificationRequirements);
+        var mandatoryTransitionCount=mandatoryIncoming+mandatoryOutgoing;
+        var minimumMandatorySentenceCount=requiredClaimCount+mandatoryTransitionCount+mandatoryQualificationCount;
         if(minimumMandatorySentenceCount>p.NarrationConstraints.MaximumSentenceCount)
-            return(null,Fail(NarrationDraftReasonCodes.RequiredContentExceedsTimingCapacity,$"Required claims and owned transitions exceed the governed maximum: planningId={p.PlanningId};variant={p.Variant};required={required.Count};transitions={mandatoryTransitionCount};maximum={p.NarrationConstraints.MaximumSentenceCount}."));
+            return(null,Fail(NarrationDraftReasonCodes.RequiredContentExceedsTimingCapacity,$"Required claims and owned transitions exceed the governed maximum: planningId={p.PlanningId};variant={p.Variant};sectionKey={p.NarrativeGoal.SectionKey};requiredClaims={requiredClaimCount};mandatoryIncomingTransitions={mandatoryIncoming};mandatoryOutgoingTransitions={mandatoryOutgoing};mandatoryQualifications={mandatoryQualificationCount};minimumMandatorySentences={minimumMandatorySentenceCount};maximumSentences={p.NarrationConstraints.MaximumSentenceCount};incomingTransitionKind={p.IncomingTransition.Kind};outgoingTransitionKind={p.OutgoingTransition.Kind}."));
         var availableStructuralCapacity=p.NarrationConstraints.MaximumSentenceCount-minimumMandatorySentenceCount;
         var includeOpening=!string.IsNullOrWhiteSpace(openingCandidate)&&availableStructuralCapacity>0;
         if(includeOpening)availableStructuralCapacity--;
@@ -206,7 +211,7 @@ public sealed class NarrationDraftAuthorityBuilder(INarrationDraftLanguagePolicy
         var opening=includeOpening?openingCandidate:"";
         var closing=includeClosing?closingCandidate:"";
         var structural=mandatoryTransitionCount+(includeOpening?1:0)+(includeClosing?1:0);
-        var timingRequest=new NarrationDraftTimingPolicyRequest(lang,p.Variant,p.NarrativeGoal.SectionKey,p.MinimumDuration,p.ExpectedDuration,p.MaximumDuration,p.NarrationConstraints.PreferredSentenceCount,p.NarrationConstraints.MinimumSentenceCount,p.NarrationConstraints.MaximumSentenceCount,required.Count,p.OptionalClaims.Count,p.NarrationConstraints.PauseStrategy,structural);
+        var timingRequest=new NarrationDraftTimingPolicyRequest(lang,p.Variant,p.NarrativeGoal.SectionKey,p.MinimumDuration,p.ExpectedDuration,p.MaximumDuration,p.NarrationConstraints.PreferredSentenceCount,p.NarrationConstraints.MinimumSentenceCount,p.NarrationConstraints.MaximumSentenceCount,requiredClaimCount,p.OptionalClaims.Count,p.NarrationConstraints.PauseStrategy,structural);
         var decision=timing.Resolve(timingRequest);
         var budget=timing.Budget(timingRequest);
         var requiredWords=required.Sum(c=>DeterministicNarrationDraftLanguagePolicy.Count(realization.Realize(c,Qualifications(p,c),lang)));
