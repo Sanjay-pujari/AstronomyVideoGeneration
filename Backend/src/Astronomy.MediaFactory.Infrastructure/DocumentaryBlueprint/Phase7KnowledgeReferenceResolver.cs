@@ -113,14 +113,14 @@ public sealed class Phase7KnowledgeReferenceIdentityBridge : IPhase7KnowledgeRef
         Phase7CommittedClaimEvidenceIndexEntry[] matches = [];
         var method = "P7REF_REFERENCE_UNRESOLVED";
         bool Try(IEnumerable<Phase7CommittedClaimEvidenceIndexEntry> q, string m) { matches = q.OrderBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray(); if (matches.Length == 0) return false; method = m; return true; }
-        Try(index.Where(x => x.ClaimId == normalized.OriginalReferenceId || x.ClaimId == pointer), "P7PACKET_REFERENCE_RESOLVED_EXACT_CLAIM_ID")
-        || Try(index.Where(x => x.SemanticIdentity == normalized.OriginalReferenceId || x.SemanticIdentity == pointer || candidates.Contains(x.SemanticIdentity, StringComparer.Ordinal)), "P7PACKET_REFERENCE_RESOLVED_EXACT_SEMANTIC_IDENTITY")
-        || Try(index.Where(x => x.KnowledgeReferenceIds.Intersect(candidates, StringComparer.Ordinal).Any()), "P7PACKET_REFERENCE_RESOLVED_EXACT_KNOWLEDGE_REFERENCE")
-        || Try(index.Where(x => x.AuthorityCanonicalApprovedFieldPaths.Contains(pointer, StringComparer.Ordinal)), "P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD")
-        || Try(index.Where(x => x.ResolutionCanonicalApprovedFieldPaths.Contains(pointer, StringComparer.Ordinal)), "P7PACKET_REFERENCE_RESOLVED_RESOLUTION_APPROVED_FIELD")
-        || Try(index.Where(x => x.AuthorityCanonicalApprovedFieldPaths.Any(p => IsDescendant(pointer, p))), "P7PACKET_REFERENCE_RESOLVED_AUTHORITY_DESCENDANT")
-        || Try(index.Where(x => x.ResolutionCanonicalApprovedFieldPaths.Any(p => IsDescendant(pointer, p))), "P7PACKET_REFERENCE_RESOLVED_RESOLUTION_DESCENDANT")
-        || Try(index.Where(x => x.KnowledgeEntityIds.Intersect(candidates, StringComparer.Ordinal).Any()), "P7PACKET_REFERENCE_RESOLVED_KNOWLEDGE_ENTITY");
+        _ = Try(index.Where(x => x.ClaimId == normalized.OriginalReferenceId || x.ClaimId == pointer), "P7PACKET_REFERENCE_RESOLVED_EXACT_CLAIM_ID")
+            || Try(index.Where(x => x.SemanticIdentity == normalized.OriginalReferenceId || x.SemanticIdentity == pointer || candidates.Contains(x.SemanticIdentity, StringComparer.Ordinal)), "P7PACKET_REFERENCE_RESOLVED_EXACT_SEMANTIC_IDENTITY")
+            || Try(index.Where(x => x.KnowledgeReferenceIds.Intersect(candidates, StringComparer.Ordinal).Any()), "P7PACKET_REFERENCE_RESOLVED_EXACT_KNOWLEDGE_REFERENCE")
+            || Try(index.Where(x => x.AuthorityCanonicalApprovedFieldPaths.Contains(pointer, StringComparer.Ordinal)), "P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD")
+            || Try(index.Where(x => x.ResolutionCanonicalApprovedFieldPaths.Contains(pointer, StringComparer.Ordinal)), "P7PACKET_REFERENCE_RESOLVED_RESOLUTION_APPROVED_FIELD")
+            || Try(index.Where(x => x.AuthorityCanonicalApprovedFieldPaths.Any(p => IsDescendant(pointer, p))), "P7PACKET_REFERENCE_RESOLVED_AUTHORITY_DESCENDANT")
+            || Try(index.Where(x => x.ResolutionCanonicalApprovedFieldPaths.Any(p => IsDescendant(pointer, p))), "P7PACKET_REFERENCE_RESOLVED_RESOLUTION_DESCENDANT")
+            || Try(index.Where(x => x.KnowledgeEntityIds.Intersect(candidates, StringComparer.Ordinal).Any()), "P7PACKET_REFERENCE_RESOLVED_KNOWLEDGE_ENTITY");
         var claimIds = matches.Select(x=>x.ClaimId).ToArray();
         var paths = matches.SelectMany(x=>x.CanonicalApprovedFieldPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var entities = matches.SelectMany(x=>x.KnowledgeEntityIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
