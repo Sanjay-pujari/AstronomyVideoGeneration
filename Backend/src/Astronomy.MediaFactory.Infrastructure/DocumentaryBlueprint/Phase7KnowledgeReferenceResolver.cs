@@ -61,7 +61,7 @@ public sealed class Phase7ApprovedFieldPathCanonicalizer : IPhase7ApprovedFieldP
         }
         if (!s.StartsWith("/", StringComparison.Ordinal))
         {
-            if (s.Contains('/', StringComparison.Ordinal) || s.Contains("..", StringComparison.Ordinal) || s.StartsWith('.', StringComparison.Ordinal) || s.EndsWith('.', StringComparison.Ordinal))
+            if (s.Contains('/', StringComparison.Ordinal) || s.Contains("..", StringComparison.Ordinal) || s.StartsWith(".", StringComparison.Ordinal) || s.EndsWith(".", StringComparison.Ordinal))
                 return new(false, original, "", ns, origin, "P7REF_APPROVED_PATH_UNMAPPED");
             s = "/" + s.Replace('.', '/');
         }
