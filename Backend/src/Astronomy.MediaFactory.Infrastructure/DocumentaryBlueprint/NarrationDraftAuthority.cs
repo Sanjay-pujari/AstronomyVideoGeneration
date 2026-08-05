@@ -313,7 +313,7 @@ public sealed class Phase7NarrationDraftAuthorityService(IPhase7NarrationDraftIn
         var evaluated=await inputEvaluator.EvaluateAsync(request,token);
         if(!evaluated.IsValid||evaluated.Authority is null)return new(false,evaluated.ReasonCode,"NotRun","NotRun",null,null,evaluated.Errors,evaluated.Warnings,evaluated.BlockingIssues);
         var built=builder.Build(evaluated.Authority);
-        if(!built.IsValid||built.Authority is null)return new(false,evaluated.ReasonCode,built.ReasonCode,built.ReasonCode,null,null,built.Errors,Merge(evaluated.Warnings,built.Warnings),built.BlockingIssues) with { SceneFailureSummaries = built.SceneFailureSummaries };
+        if(!built.IsValid||built.Authority is null)return new Phase7NarrationDraftAuthorityServiceResult(false,evaluated.ReasonCode,built.ReasonCode,built.ReasonCode,null,null,built.Errors,Merge(evaluated.Warnings,built.Warnings),built.BlockingIssues) with { SceneFailureSummaries = built.SceneFailureSummaries };
         var validation=validator.Validate(evaluated.Authority,built.Authority);
         if(!validation.IsValid)return new(false,evaluated.ReasonCode,built.ReasonCode,validation.ReasonCode,built.Authority,validation,validation.Errors,Merge(evaluated.Warnings,built.Warnings,validation.Warnings),validation.Errors);
         return new(true,evaluated.ReasonCode,built.ReasonCode,validation.ReasonCode,built.Authority,validation,[],Merge(evaluated.Warnings,built.Warnings,validation.Warnings),[]);
