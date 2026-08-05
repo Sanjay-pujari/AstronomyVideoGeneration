@@ -3,9 +3,8 @@ namespace Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 public static class Phase7NarrationAuthorityOrchestrationReasonCodes
 {
     public const string Completed = "P7_NARRATION_AUTHORITY_COMPLETED";
-    public const string KnowledgeCommittedStateInvalid = "P7_NARRATION_AUTHORITY_KNOWLEDGE_COMMITTED_STATE_INVALID";
-    public const string PacketBuildInvalid = "P7_NARRATION_AUTHORITY_PACKET_BUILD_INVALID";
-    public const string PlanningBuildInvalid = "P7_NARRATION_AUTHORITY_PLANNING_BUILD_INVALID";
+    public const string ReuseValid = "P7_NARRATION_AUTHORITY_REUSE_VALID";
+    public const string UnhandledFailure = "P7_NARRATION_AUTHORITY_UNHANDLED_FAILURE";
 }
 
 public sealed record Phase7NarrationAuthorityOrchestrationRequest(
@@ -48,8 +47,15 @@ public sealed record Phase7AuthorityStageResult(
     public int PassedGateCount { get; init; }
 }
 
-public sealed record Phase7ProviderIsolationEvidence(int AzureOpenAiCalls, int PromptComposerCalls,
-    int NarrationGeneratorCalls, int TranslationCalls, int AzureSpeechCalls, int TtsCalls, int RenderingCalls);
+public sealed record Phase7ProviderIsolationSnapshot(DateTimeOffset CapturedAtUtc);
+public sealed record Phase7ProviderIsolationEvidence(bool RuntimeCountersAvailable, bool ProviderDependenciesInjected,
+    bool ProviderInvocationDetected, int AzureOpenAiCalls, int PromptComposerCalls, int NarrationGeneratorCalls,
+    int TranslationCalls, int AzureSpeechCalls, int TtsCalls, int RenderingCalls);
+public interface IPhase7ProviderIsolationAudit
+{
+    Phase7ProviderIsolationSnapshot CaptureStart();
+    Phase7ProviderIsolationEvidence Complete(Phase7ProviderIsolationSnapshot start);
+}
 
 public sealed record Phase7NarrationAuthorityOrchestrationResult(
     bool Success,
@@ -76,8 +82,14 @@ public sealed record Phase7NarrationAuthorityOrchestrationResult(
     string? DraftValidationReason,
     IReadOnlyList<NarrationDraftValidationGate> DraftGateStatuses)
 {
+    public bool KnowledgeAuthorityReused => StageResults.Any(s => s.StageCode == "KnowledgeAuthority" && s.Reused);
+    public bool PlanningAuthorityReused => StageResults.Any(s => s.StageCode == "NarrationPlanningPublication" && s.Reused);
+    public bool EntirePhysicalAuthorityReused => KnowledgeAuthorityReused && PlanningAuthorityReused;
+    public bool DraftValidationPassed => DraftGateStatuses.Count > 0 && DraftGateStatuses.All(g => g.Passed);
+    public int DraftPassedGateCount => DraftGateStatuses.Count(g => g.Passed);
+    public int DraftFailedGateCount => DraftGateStatuses.Count(g => !g.Passed);
     public string ReasonCode { get; init; } = Success
-        ? Phase7NarrationAuthorityOrchestrationReasonCodes.Completed
+        ? (EntirePhysicalAuthorityReused ? Phase7NarrationAuthorityOrchestrationReasonCodes.ReuseValid : Phase7NarrationAuthorityOrchestrationReasonCodes.Completed)
         : StageResults.LastOrDefault(s => !s.Success)?.ReasonCode ?? "P7_NARRATION_AUTHORITY_FAILED";
 }
 

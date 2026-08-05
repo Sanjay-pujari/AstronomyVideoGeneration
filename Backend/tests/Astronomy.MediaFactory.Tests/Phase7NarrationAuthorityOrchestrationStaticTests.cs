@@ -34,7 +34,9 @@ public sealed class Phase7NarrationAuthorityOrchestrationStaticTests
         Assert.DoesNotContain("NarrationGeneratorV5", source);
         Assert.DoesNotContain("NarrationPromptComposer", source);
         Assert.DoesNotContain("AzureSpeech", source);
-        Assert.Contains("new(0,0,0,0,0,0,0)", source);
+        Assert.DoesNotContain("new(0,0,0,0,0,0,0)", source);
+        Assert.Contains("IPhase7ProviderIsolationAudit", source);
+        Assert.Contains("builtPlanning.Authority, planningValidation", source);
     }
 
     [Fact]
@@ -50,6 +52,9 @@ public sealed class Phase7NarrationAuthorityOrchestrationStaticTests
         Assert.Contains("7 => await ExecutePhase7NarrationAuthorityAsync", pipeline);
         Assert.Contains("(7, \"Narration Authority\"", pipeline);
         Assert.Contains("new(7, \"Narration Authority\")", registry);
+        Assert.DoesNotContain("AlreadyPublished=result.StageResults.All(s=>s.Reused||s.Success)", pipeline);
+        Assert.DoesNotContain("CommittedStateValidationPassed=result.Success", pipeline);
+        Assert.Contains("P7_NARRATION_AUTHORITY_UNHANDLED_FAILURE", pipeline);
     }
 
     [Fact]
@@ -60,5 +65,7 @@ public sealed class Phase7NarrationAuthorityOrchestrationStaticTests
             "ServiceCollectionExtensions.cs"));
         var matches = Regex.Matches(di, "AddScoped<Astronomy\\.MediaFactory\\.Core\\.DocumentaryBlueprint\\.IPhase7NarrationAuthorityOrchestrator,");
         Assert.Single(matches);
+        var auditMatches = Regex.Matches(di, "AddScoped<Astronomy\\.MediaFactory\\.Core\\.DocumentaryBlueprint\\.IPhase7ProviderIsolationAudit,");
+        Assert.Single(auditMatches);
     }
 }
