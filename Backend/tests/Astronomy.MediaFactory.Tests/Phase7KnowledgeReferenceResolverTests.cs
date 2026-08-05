@@ -233,13 +233,22 @@ public sealed class Phase7RealAuthorityEvidenceReconciliationTests
         Assert.DoesNotContain(result.Evidence, x => x.StartsWith("matchingResolutionDiagnosticId=", StringComparison.Ordinal));
     }
 
+    private static Phase7ScenePacketInputAuthority MakeAuthority(IReadOnlyList<CertifiedNarrationClaim> claims, IReadOnlyList<Phase7ClaimSupportEvidence> evidence)
+    {
+        var k = new Phase7KnowledgeAuthority("v", "ka", "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", "p6", "c6", "idx", "ic", "p4", "c4", "p5", "payload", "pc", "Certified", "eg", "egc", "Reviewed", "eg.json", "reg", "rc", [], [], claims, [], evidence, [], [], new(0,0,0,0), [], [], [], [], "checksum", new Dictionary<string,string>());
+        var published = new PublishedPhase7KnowledgeAuthority(k, [], new Dictionary<string,string>(), new Dictionary<string,string>(), new Dictionary<string,long>(), [], [], "pub", false, true, true, new Dictionary<string,string>(), new Dictionary<string,string>());
+        return new Phase7ScenePacketInputAuthority(published, null!, null!, "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", [], [], [], [], new Dictionary<string,string>(), new Dictionary<string,string>());
+    }
+
     private static Phase7ScenePacketInputAuthority RealCommittedShapeAuthority(bool includeResolutionOnly = false)
     {
         var claims = new[] { MakeClaim("orion-claim-primary-objects", []), MakeClaim("orion-claim-scientific-context", []), MakeClaim("orion-claim-both", []) }
-            .Concat(includeResolutionOnly ? [MakeClaim("orion-claim-resolution-only", [])] : []).ToArray();
+            .Concat(includeResolutionOnly ? [MakeClaim("orion-claim-resolution-only", [])] : Array.Empty<CertifiedNarrationClaim>()).ToArray();
         var evidence = new[] { MakeEvidence("orion-claim-primary-objects", "/primaryObjects"), MakeEvidence("orion-claim-scientific-context", "/scientificContext"), MakeEvidence("orion-claim-both", "/both") };
         var resolutionEvidence = includeResolutionOnly ? [MakeEvidence("orion-claim-resolution-only", "/resolutionOnly"), MakeEvidence("orion-claim-both", "/both")] : Array.Empty<Phase7ClaimSupportEvidence>();
-        var diagnostics = includeResolutionOnly ? [Diag("orion-claim-resolution-only", "/resolutionOnly"), Diag("orion-claim-both", "/both")] : [Diag("orion-claim-primary-objects", "/primaryObjects"), Diag("orion-claim-scientific-context", "/scientificContext")];
+        var diagnostics = includeResolutionOnly
+            ? [Diag("orion-claim-resolution-only", "/resolutionOnly"), Diag("orion-claim-both", "/both")]
+            : new[] { Diag("orion-claim-primary-objects", "/primaryObjects"), Diag("orion-claim-scientific-context", "/scientificContext") };
         var k = new Phase7KnowledgeAuthority("v", "ka", "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", "p6", "c6", "idx", "ic", "p4", "c4", "p5", "payload", "pc", "Certified", "eg", "egc", "Reviewed", "eg.json", "reg", "rc", [], [], claims, [], evidence, [], [], new(0,0,0,0), [], [], [], [], "checksum", new Dictionary<string,string>());
         var r = new ResolvedNarrationKnowledge("payload", "pc", "reg", "rc", "en", [new("Identity", KnowledgeDomainStatus.Available, claims, [])], new Dictionary<string,string>(), [], new Dictionary<string,string>(), ["source-a"], [], [], "knowledge-checksum") { ClaimSupportEvidence = resolutionEvidence, ClaimResolutionDiagnostics = diagnostics };
         return new Phase7ScenePacketInputAuthority(new PublishedPhase7KnowledgeAuthority(k, [], new Dictionary<string,string>(), new Dictionary<string,string>(), new Dictionary<string,long>(), [], [], "pub", false, true, true, new Dictionary<string,string>(), new Dictionary<string,string>()) { ResolvedNarrationKnowledge = r }, null!, null!, "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", [], [], [], [], new Dictionary<string,string>(), new Dictionary<string,string>());
