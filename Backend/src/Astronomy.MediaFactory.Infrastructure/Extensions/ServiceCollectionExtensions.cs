@@ -760,6 +760,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7CertifiedKnowledgeSource, Astronomy.MediaFactory.Infrastructure.Persistence.Phase7CertifiedKnowledgeSource>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeResolver, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeResolver>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeReferenceNormalizer, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeReferenceNormalizer>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7ApprovedFieldPathCanonicalizer, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7ApprovedFieldPathCanonicalizer>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7CommittedClaimEvidenceIndexBuilder, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7CommittedClaimEvidenceIndexBuilder>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeReferenceIdentityBridge, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeReferenceIdentityBridge>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7KnowledgeReferenceResolver, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7KnowledgeReferenceResolver>();
         services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7SceneReferenceCompatibilityPolicy, Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7SceneReferenceCompatibilityPolicy>();

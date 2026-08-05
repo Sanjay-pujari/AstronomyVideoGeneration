@@ -45,7 +45,7 @@ public sealed class Phase7KnowledgeReferenceIdentityBridgeTests
             new Phase7KnowledgeReferenceRequest("production-event-intelligence#/primaryObjects", "Long", false, []), authority);
 
         Assert.Equal(Phase7KnowledgeReferenceStatus.Resolved, result.Status);
-        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_APPROVED_FIELD", result.ReasonCode);
+        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD", result.ReasonCode);
         Assert.Equal("claim-primary", Assert.Single(result.Claims).ClaimId);
     }
 
@@ -59,7 +59,7 @@ public sealed class Phase7KnowledgeReferenceIdentityBridgeTests
         var result = new Phase7KnowledgeReferenceResolver().Resolve(
             new Phase7KnowledgeReferenceRequest("production-event-intelligence#/primaryObjects", "Long", false, []), authority);
 
-        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_COLLECTION_DESCENDANT", result.ReasonCode);
+        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_AUTHORITY_DESCENDANT", result.ReasonCode);
         Assert.Equal(["claim-descendant"], result.Claims.Select(x => x.ClaimId).ToArray());
     }
 
@@ -71,7 +71,7 @@ public sealed class Phase7KnowledgeReferenceIdentityBridgeTests
 
         var exact = new Phase7KnowledgeReferenceResolver().Resolve(new Phase7KnowledgeReferenceRequest("production-event-intelligence#/scientificContext", "Long", false, []), authority);
 
-        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_APPROVED_FIELD", exact.ReasonCode);
+        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD", exact.ReasonCode);
         Assert.Equal(["claim-summary"], exact.Claims.Select(x => x.ClaimId).ToArray());
     }
 
@@ -187,4 +187,64 @@ public sealed class Phase7GovernedReferenceResolutionBehaviorTests
         var published = new PublishedPhase7KnowledgeAuthority(k, [], new Dictionary<string,string>(), new Dictionary<string,string>(), new Dictionary<string,long>(), [], [], "pub", false, true, true, new Dictionary<string,string>(), new Dictionary<string,string>());
         return new Phase7ScenePacketInputAuthority(published, null!, null!, "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", [], [], [], [], new Dictionary<string,string>(), new Dictionary<string,string>());
     }
+}
+
+
+public sealed class Phase7RealAuthorityEvidenceReconciliationTests
+{
+    [Fact]
+    public void RealCommittedShape_PrimaryObjectsAndScientificContextResolveThroughProductionResolver()
+    {
+        var authority = RealCommittedShapeAuthority();
+        var resolver = new Phase7KnowledgeReferenceResolver(new Phase7KnowledgeReferenceNormalizer(),
+            new Phase7KnowledgeReferenceIdentityBridge(new Phase7KnowledgeReferenceNormalizer(),
+                new Phase7CommittedClaimEvidenceIndexBuilder(new Phase7ApprovedFieldPathCanonicalizer())));
+
+        var primary = resolver.Resolve(new Phase7KnowledgeReferenceRequest("production-event-intelligence#/primaryObjects", "Long", false, []), authority);
+        var scientific = resolver.Resolve(new Phase7KnowledgeReferenceRequest("production-event-intelligence#/scientificContext", "Long", false, []), authority);
+
+        Assert.Equal(Phase7KnowledgeReferenceStatus.Resolved, primary.Status);
+        Assert.NotEmpty(primary.CandidateClaimIds);
+        Assert.Contains("/primaryObjects", primary.MatchedApprovedFieldPaths);
+        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD", primary.ResolutionMethod);
+        Assert.Equal(Phase7KnowledgeReferenceStatus.Resolved, scientific.Status);
+        Assert.NotEmpty(scientific.CandidateClaimIds);
+        Assert.Contains("/scientificContext", scientific.MatchedApprovedFieldPaths);
+        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD", scientific.ResolutionMethod);
+    }
+
+    [Fact]
+    public void ReconciliationPrecedence_AuthorityResolutionAndBothPathsAreDeterministic()
+    {
+        var authority = RealCommittedShapeAuthority(includeResolutionOnly:true);
+        var resolver = new Phase7KnowledgeReferenceResolver();
+        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD", resolver.Resolve(new("production-event-intelligence#/primaryObjects", "Long", false, []), authority).ResolutionMethod);
+        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_RESOLUTION_APPROVED_FIELD", resolver.Resolve(new("production-event-intelligence#/resolutionOnly", "Long", false, []), authority).ResolutionMethod);
+        Assert.Equal("P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD", resolver.Resolve(new("production-event-intelligence#/both", "Long", false, []), authority).ResolutionMethod);
+    }
+
+    [Fact]
+    public void NoSyntheticOnlySuccess_RequiresCommittedShapeResolutionReportFixture()
+    {
+        var synthetic = MakeAuthority([MakeClaim("claim-synthetic", [])], [MakeEvidence("claim-synthetic", "/primaryObjects")]);
+        Assert.Null(synthetic.Knowledge.ResolvedNarrationKnowledge);
+        var result = new Phase7KnowledgeReferenceResolver().Resolve(new("production-event-intelligence#/primaryObjects", "Long", false, []), synthetic);
+        Assert.Equal(Phase7KnowledgeReferenceStatus.Resolved, result.Status);
+        Assert.DoesNotContain(result.Evidence, x => x.StartsWith("matchingResolutionDiagnosticId=", StringComparison.Ordinal));
+    }
+
+    private static Phase7ScenePacketInputAuthority RealCommittedShapeAuthority(bool includeResolutionOnly = false)
+    {
+        var claims = new[] { MakeClaim("orion-claim-primary-objects", []), MakeClaim("orion-claim-scientific-context", []), MakeClaim("orion-claim-both", []) }
+            .Concat(includeResolutionOnly ? [MakeClaim("orion-claim-resolution-only", [])] : []).ToArray();
+        var evidence = new[] { MakeEvidence("orion-claim-primary-objects", "/primaryObjects"), MakeEvidence("orion-claim-scientific-context", "/scientificContext"), MakeEvidence("orion-claim-both", "/both") };
+        var resolutionEvidence = includeResolutionOnly ? [MakeEvidence("orion-claim-resolution-only", "/resolutionOnly"), MakeEvidence("orion-claim-both", "/both")] : Array.Empty<Phase7ClaimSupportEvidence>();
+        var diagnostics = includeResolutionOnly ? [Diag("orion-claim-resolution-only", "/resolutionOnly"), Diag("orion-claim-both", "/both")] : [Diag("orion-claim-primary-objects", "/primaryObjects"), Diag("orion-claim-scientific-context", "/scientificContext")];
+        var k = new Phase7KnowledgeAuthority("v", "ka", "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", "p6", "c6", "idx", "ic", "p4", "c4", "p5", "payload", "pc", "Certified", "eg", "egc", "Reviewed", "eg.json", "reg", "rc", [], [], claims, [], evidence, [], [], new(0,0,0,0), [], [], [], [], "checksum", new Dictionary<string,string>());
+        var r = new ResolvedNarrationKnowledge("payload", "pc", "reg", "rc", "en", [new("Identity", KnowledgeDomainStatus.Available, claims, [])], new Dictionary<string,string>(), [], new Dictionary<string,string>(), ["source-a"], [], [], "knowledge-checksum") { ClaimSupportEvidence = resolutionEvidence, ClaimResolutionDiagnostics = diagnostics };
+        return new Phase7ScenePacketInputAuthority(new PublishedPhase7KnowledgeAuthority(k, [], new Dictionary<string,string>(), new Dictionary<string,string>(), new Dictionary<string,long>(), [], [], "pub", false, true, true, new Dictionary<string,string>(), new Dictionary<string,string>()) { ResolvedNarrationKnowledge = r }, null!, null!, "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", [], [], [], [], new Dictionary<string,string>(), new Dictionary<string,string>());
+    }
+    private static CertifiedNarrationClaim MakeClaim(string id, IReadOnlyList<string> refs) => new(id, "Identity", "Sanitized committed-shape Orion evidence", ["source-a"], refs, .9m, false, false, false, false, false, false, false, false, "en", "checksum") { Disposition = Phase7ClaimDisposition.Required, SemanticIdentity = "semantic-" + id };
+    private static Phase7ClaimSupportEvidence MakeEvidence(string claimId, string path) => new(claimId, "semantic-" + claimId, "source-a", "knowledge-" + claimId, path, Phase7ProvenancePrecision.ExactApprovedField, "orion-adapter", Phase7KnowledgeOrigin.Event, "CommittedFixture", null, .9m) { SourceEligibility = Phase7SourceEligibility.EligibleForRequiredClaim, AdapterVersion = "fixture" };
+    private static Phase7ClaimResolutionDiagnostic Diag(string claimId, string path) => new("Identity", true, "candidate-" + claimId, "semantic-" + claimId, path, "value", Phase7ClaimDisposition.Required, false, "", false, [], ["source-a"], new Dictionary<string,string>{{"source-a","EligibleForRequiredClaim"}}, Phase7ProvenancePrecision.ExactApprovedField, "Resolved") { ClaimId = claimId, KnowledgeEntityId = "knowledge-" + claimId, Origin = Phase7KnowledgeOrigin.Event };
 }
