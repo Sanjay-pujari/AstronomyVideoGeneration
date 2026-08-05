@@ -88,9 +88,22 @@ public sealed record Phase7NarrationAuthorityOrchestrationResult(
     public bool DraftValidationPassed => DraftGateStatuses.Count > 0 && DraftGateStatuses.All(g => g.Passed);
     public int DraftPassedGateCount => DraftGateStatuses.Count(g => g.Passed);
     public int DraftFailedGateCount => DraftGateStatuses.Count(g => !g.Passed);
-    public string ReasonCode { get; init; } = Success
-        ? (EntirePhysicalAuthorityReused ? Phase7NarrationAuthorityOrchestrationReasonCodes.ReuseValid : Phase7NarrationAuthorityOrchestrationReasonCodes.Completed)
-        : StageResults.LastOrDefault(s => !s.Success)?.ReasonCode ?? "P7_NARRATION_AUTHORITY_FAILED";
+    public string ReasonCode { get; init; } = ResolveReasonCode(Success, StageResults);
+
+    private static string ResolveReasonCode(bool success, IReadOnlyList<Phase7AuthorityStageResult> stageResults)
+    {
+        if (!success)
+        {
+            return stageResults.LastOrDefault(s => !s.Success)?.ReasonCode ?? "P7_NARRATION_AUTHORITY_FAILED";
+        }
+
+        var knowledgeAuthorityReused = stageResults.Any(s => s.StageCode == "KnowledgeAuthority" && s.Reused);
+        var planningAuthorityReused = stageResults.Any(s => s.StageCode == "NarrationPlanningPublication" && s.Reused);
+
+        return knowledgeAuthorityReused && planningAuthorityReused
+            ? Phase7NarrationAuthorityOrchestrationReasonCodes.ReuseValid
+            : Phase7NarrationAuthorityOrchestrationReasonCodes.Completed;
+    }
 }
 
 public interface IPhase7NarrationAuthorityOrchestrator
