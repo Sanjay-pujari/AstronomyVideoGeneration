@@ -145,3 +145,129 @@ public sealed class NarrationDraftTransitionCapacityPolicyTests
     private static NarrationPlanningTransition Transition(string kind, string? source, string? destination) =>
         new("transition", "execution", "Long", "from", "from-sum", "to", "to-sum", kind, source, destination, "previous", "current", "next", "sum");
 }
+
+public sealed class NarrationDraftTransitionRealizationTests
+{
+    [Theory]
+    [InlineData(NarrationPlanningPolicyCatalog.VariantOpeningTransition, NarrationDraftTransitionOwnership.IncomingDestination, null)]
+    [InlineData(NarrationPlanningPolicyCatalog.VariantClosingTransition, NarrationDraftTransitionOwnership.OutgoingSource, null)]
+    public void Non_successor_transitions_do_not_create_draft_transition_phrases(string kind, NarrationDraftTransitionOwnership ownership, string? expected)
+    {
+        var policy = new DeterministicNarrationDraftTransitionPhrasePolicy(new DeterministicNarrationDraftLanguagePolicy());
+        var phrase = policy.Create(new(Transition(kind, "source text", "destination text"), ownership, "Long", "en"));
+        phrase?.Text.Should().Be(expected);
+        phrase.Should().BeNull();
+    }
+
+    [Fact]
+    public void Successor_transition_requires_owned_authored_text()
+    {
+        var policy = new DeterministicNarrationDraftTransitionPhrasePolicy(new DeterministicNarrationDraftLanguagePolicy());
+        policy.Create(new(Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "", ""), NarrationDraftTransitionOwnership.IncomingDestination, "Long", "en")).Should().BeNull();
+        policy.Create(new(Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "source text", null), NarrationDraftTransitionOwnership.OutgoingSource, "Long", "en")).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void First_scene_builder_realizes_only_outgoing_successor_transition()
+    {
+        var result = Build(6, Transition(NarrationPlanningPolicyCatalog.VariantOpeningTransition, null, "variant opening text"),
+            Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "successor out", null), 7, false);
+
+        result.IsValid.Should().BeTrue();
+        var scene = result.Authority!.LongScenes.Single();
+        scene.IncomingTransitionPhrase.Should().BeNull();
+        scene.OutgoingTransitionPhrase.Should().NotBeNull();
+        scene.RequiredClaimUsage.Should().HaveCount(6);
+        scene.SentenceCount.Should().Be(7);
+        scene.Sentences.Count(x => x.IsTransition).Should().Be(1);
+        scene.Sentences.Should().NotContain(x => x.SentenceRole == "IncomingTransition");
+    }
+
+    [Fact]
+    public void Internal_scene_builder_realizes_both_successor_transitions()
+    {
+        var result = Build(4, Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, null, "successor in"),
+            Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, "successor out", null), 6, false);
+
+        result.IsValid.Should().BeTrue();
+        var scene = result.Authority!.LongScenes.Single();
+        scene.IncomingTransitionPhrase.Should().NotBeNull();
+        scene.OutgoingTransitionPhrase.Should().NotBeNull();
+        scene.RequiredClaimUsage.Should().HaveCount(4);
+        scene.SentenceCount.Should().Be(6);
+        scene.Sentences.Count(x => x.IsTransition).Should().Be(2);
+    }
+
+    [Fact]
+    public void Final_scene_builder_keeps_variant_closing_out_of_transition_roles()
+    {
+        var result = Build(5, Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, null, "successor in"),
+            Transition(NarrationPlanningPolicyCatalog.VariantClosingTransition, "variant closing text", null), 8, true);
+
+        result.IsValid.Should().BeTrue();
+        var scene = result.Authority!.LongScenes.Single();
+        scene.IncomingTransitionPhrase.Should().NotBeNull();
+        scene.OutgoingTransitionPhrase.Should().BeNull();
+        scene.Closing.Should().NotBeBlank();
+        scene.Sentences.Should().NotContain(x => x.SentenceRole == "OutgoingTransition");
+        scene.Sentences.Count(x => x.IsTransition).Should().Be(1);
+    }
+
+    [Fact]
+    public void Builder_and_validator_enforce_successor_transition_sentence_invariant()
+    {
+        var result = Build(4, Transition(NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition, null, "successor in"),
+            Transition(NarrationPlanningPolicyCatalog.VariantClosingTransition, "variant closing text", null), 8, true);
+        var input = LastInput!;
+        var authority = result.Authority!;
+        var validation = new NarrationDraftValidator(new NarrationDraftSafetyValidator()).Validate(input, authority);
+
+        validation.IsValid.Should().BeTrue();
+        foreach (var pair in input.NarrationPlanningAuthority.LongScenes.Zip(authority.LongScenes))
+        {
+            var expectedTransitionSentenceCount = NarrationTransitionSentenceOwnership.MandatorySentenceCount(pair.First.IncomingTransition, true) +
+                NarrationTransitionSentenceOwnership.MandatorySentenceCount(pair.First.OutgoingTransition, false);
+            pair.Second.Sentences.Count(x => x.IsTransition).Should().Be(expectedTransitionSentenceCount);
+            pair.Second.Sentences.Where(x => x.IsTransition).Should().OnlyContain(x => x.SentenceRole is "IncomingTransition" or "OutgoingTransition");
+            if (pair.First.IncomingTransition.Kind == NarrationPlanningPolicyCatalog.VariantOpeningTransition)
+                pair.Second.Sentences.Should().NotContain(x => x.IsTransition && x.SentenceRole == "IncomingTransition");
+            if (pair.First.OutgoingTransition.Kind == NarrationPlanningPolicyCatalog.VariantClosingTransition)
+                pair.Second.Sentences.Should().NotContain(x => x.IsTransition && x.SentenceRole == "OutgoingTransition");
+        }
+    }
+
+    private static Phase7NarrationDraftInputAuthority? LastInput { get; set; }
+
+    private static NarrationDraftAuthorityBuildResult Build(int required, NarrationPlanningTransition incoming, NarrationPlanningTransition outgoing, int maximum, bool includeClosing)
+    {
+        var claims = Enumerable.Range(1, required).Select(i => new CertifiedNarrationClaim($"claim-{i}", "Identity", $"Certified claim {i} has exact text", ["source"], [$"ref-{i}"], .99m, false, false, false, false, false, false, false, false, "en", "sum")).ToArray();
+        var scene = Scene(required, incoming, outgoing, maximum, includeClosing);
+        var diagnostics = new NarrationPlanningDiagnostics(1, 1, 1, 0, 0, 0, required, required, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, [], [], [], "");
+        diagnostics = diagnostics with { DeterministicChecksum = NarrationPlanningCanonicalizer.DiagnosticsChecksum(diagnostics) };
+        var authority = new NarrationPlanningAuthority(NarrationPlanningContract.Version, "", "execution", "plan", "event", "en", "profile", "v1", "story-sum", "knowledge-sum", "packet-sum", [scene], [], diagnostics, new Dictionary<string, string>(), new Dictionary<string, string>(), "");
+        authority = authority with { AuthorityId = NarrationPlanningCanonicalizer.AuthorityId(authority) };
+        authority = authority with { DeterministicChecksum = NarrationPlanningCanonicalizer.AuthorityChecksum(authority) };
+        LastInput = new Phase7NarrationDraftInputAuthority(null!, authority, diagnostics, null!, null!, null!, null!, Profile(), "execution", "plan", "event", "en", "profile", "v1", new Dictionary<string, string>(), new Dictionary<string, string>()) { CertifiedClaims = claims };
+        return new NarrationDraftAuthorityBuilder(new DeterministicNarrationDraftLanguagePolicy(), new DeterministicNarrationDraftTimingPolicy(), new DeterministicNarrationDraftRealizationPolicy(), new DeterministicNarrationDraftOpeningPolicy(new DeterministicNarrationDraftLanguagePolicy()), new DeterministicNarrationDraftClosingPolicy(new DeterministicNarrationDraftLanguagePolicy()), new DeterministicNarrationDraftTransitionPhrasePolicy(new DeterministicNarrationDraftLanguagePolicy()), new NarrationDraftSafetyValidator()).Build(LastInput);
+    }
+
+    private static NarrationPlanningScene Scene(int required, NarrationPlanningTransition incoming, NarrationPlanningTransition outgoing, int maximum, bool includeClosing)
+    {
+        var goal = new NarrationPlanningGoal("First", "Wonder", "question", "objective", Enumerable.Range(1, required).Select(i => $"claim-{i}").ToArray(), "profile", NarrationPlanningPolicyCatalog.GoalPolicy, "");
+        goal = goal with { DeterministicChecksum = NarrationPlanningCanonicalizer.GoalChecksum(goal) };
+        var strategy = new NarrationPlanningStrategy("Opening", "First", "Wonder", NarrationPlanningPolicyCatalog.OpeningMode, NarrationPlanningPolicyCatalog.DevelopmentMode, NarrationPlanningPolicyCatalog.ClosingMode, NarrationPlanningPolicyCatalog.ClaimIntroductionPolicy, NarrationPlanningPolicyCatalog.OptionalClaimUsagePolicy, NarrationPlanningPolicyCatalog.DeferredClaimPolicy, NarrationPlanningPolicyCatalog.CallbackPolicy, "");
+        strategy = strategy with { DeterministicChecksum = NarrationPlanningCanonicalizer.StrategyChecksum(strategy) };
+        var scene = new NarrationPlanningScene("", "scene", "Long", "frame", "frame-sum", "source-sum", "packet", "packet-sum", "What should we notice?", includeClosing ? "Closing learning objective" : "", goal, [], [], goal.RequiredClaimIds, [], [], strategy, new(NarrationPlanningPolicyCatalog.RequiredClaimUsage, NarrationPlanningPolicyCatalog.OptionalClaimUsage, NarrationPlanningPolicyCatalog.DeferredClaimUsage), new(1, required, maximum, 1, "SemanticBeatBoundaries", [], "RequiredInPacketOrder", "Visual"), [], [], [], [], [], [], [], [], 1, 1, 100, required, 1, [], incoming, outgoing, "");
+        scene = scene with { PlanningId = NarrationPlanningCanonicalizer.PlanningId(scene) };
+        return scene with { DeterministicChecksum = NarrationPlanningCanonicalizer.SceneChecksum(scene) };
+    }
+
+    private static NarrationPlanningTransition Transition(string kind, string? source, string? destination)
+    {
+        var transition = new NarrationPlanningTransition("", "execution", "Long", "from", "from-sum", "to", "to-sum", kind, source, destination, "previous", "current", "next", "");
+        transition = transition with { TransitionId = NarrationPlanningCanonicalizer.TransitionId(transition) };
+        return transition with { DeterministicChecksum = NarrationPlanningCanonicalizer.TransitionChecksum(transition) };
+    }
+
+    private static FamilyNarrationProfile Profile() => new("profile", "v1", "event", ["en"], new(1, new(1, 50, 100), [], "", "", "", ""), new(1, new(1, 50, 100), [], "", "", "", ""), [], [], [], [], [], [], [], new Dictionary<string, DurationRange>(), "", "sum");
+}
