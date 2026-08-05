@@ -402,6 +402,15 @@ public sealed record Phase7PacketReferenceResolution(string ReferenceId, bool Is
 public enum Phase7KnowledgeReferenceStatus { Resolved, Deferred, Missing, Ambiguous, CrossVariantInvalid, Unsupported }
 public sealed record Phase7KnowledgeReferenceResolution(string ReferenceId, Phase7KnowledgeReferenceStatus Status,
     IReadOnlyList<CertifiedNarrationClaim> Claims, string ReasonCode);
+
+public interface IPhase7KnowledgeReferenceIdentityBridge
+{
+    Phase7KnowledgeReferenceIdentityBridgeResult Resolve(string phase6ReferenceId, PublishedPhase7KnowledgeAuthority authority);
+}
+public sealed record Phase7KnowledgeReferenceIdentityBridgeResult(bool IsValid, string SourceReferenceId,
+    IReadOnlyList<string> CanonicalReferenceIds, IReadOnlyList<string> ApprovedFieldPaths,
+    IReadOnlyList<string> KnowledgeEntityIds, IReadOnlyList<string> ClaimIds, string ReasonCode,
+    IReadOnlyList<string> Evidence);
 public interface IPhase7KnowledgeReferenceResolver
 {
     IReadOnlyList<Phase7KnowledgeReferenceResolution> Resolve(IReadOnlyList<string> referenceIds, ResolvedNarrationKnowledge knowledge, bool optional = false);
