@@ -72,6 +72,27 @@ public sealed class DefaultNarrationPlanningConstraintPolicy : INarrationPlannin
     }
 }
 
+public sealed class DeterministicNarrationPlanningDraftRealizabilityPolicy : INarrationPlanningDraftRealizabilityPolicy
+{
+    public NarrationPlanningRealizabilityBudget Evaluate(NarrationPlanningDraftRealizabilityRequest r)
+    {
+        static int CountOwned(NarrationPlanningTransition t, bool incoming)
+        {
+            if (t.Kind != NarrationPlanningPolicyCatalog.StoryFrameSuccessorTransition) return 0;
+            var text = incoming ? t.DestinationTransitionIn : t.SourceTransitionOut;
+            return string.IsNullOrWhiteSpace(text) ? 0 : 1;
+        }
+        var required = r.RequiredClaimIds.Distinct(StringComparer.Ordinal).Count();
+        var incomingCount = CountOwned(r.IncomingTransition, true);
+        var outgoingCount = CountOwned(r.OutgoingTransition, false);
+        const int mandatoryQualifications = 0;
+        var minimumMandatory = required + mandatoryQualifications + incomingCount + outgoingCount;
+        var ok = minimumMandatory <= r.Constraints.MaximumSentenceCount;
+        return new(required, mandatoryQualifications, incomingCount, outgoingCount, 0, minimumMandatory,
+            r.Constraints.MaximumSentenceCount, ok, ok ? "NARRATION_PLANNING_DRAFT_CAPACITY_VALID" : "NARRATION_PLANNING_DRAFT_CAPACITY_INVALID");
+    }
+}
+
 public static class NarrationPlanningCanonicalizer
 {
     public static string PacketCollectionChecksum(SceneKnowledgePacketCollection c) => Phase7Determinism.Hash(new { c.Long, c.Short });
@@ -169,7 +190,7 @@ public static class NarrationPlanningReferenceGovernance
     }
 }
 
-public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstraintPolicy constraintPolicy) : INarrationPlanningAuthorityBuilder
+public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstraintPolicy constraintPolicy, INarrationPlanningDraftRealizabilityPolicy realizabilityPolicy) : INarrationPlanningAuthorityBuilder
 {
     public NarrationPlanningAuthorityBuildResult Build(Phase7NarrationPlanningInputAuthority input)
     {
@@ -198,6 +219,7 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
         if (!shortResult.IsValid) return shortResult.Failure!;
         var longs = longResult.Scenes!; var shorts = shortResult.Scenes!;
         var scenes = longs.Concat(shorts).ToArray();
+        var realizabilityDiagnostics = RealizabilityDiagnostics(longs, shorts);
         var warnings = packets.SelectMany(p => p.Warnings).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var references = packets.SelectMany(p => p.ReferenceResolutions).ToArray();
         var dd = new NarrationPlanningDiagnostics(packets.Length, scenes.Length, longs.Count, shorts.Count,
@@ -210,7 +232,7 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
             references.Count(x => x.Status == Phase7KnowledgeReferenceStatus.Unsupported),
             references.Count(x => x.Status is Phase7KnowledgeReferenceStatus.Missing or Phase7KnowledgeReferenceStatus.Ambiguous or Phase7KnowledgeReferenceStatus.CrossVariantInvalid or Phase7KnowledgeReferenceStatus.Unsupported), scenes.Length * 2,
             packets.Sum(x => x.BlockingIssues.Count), 0, scenes.Sum(x => x.RequiredClaims.Count),
-            scenes.Sum(x => x.OptionalClaims.Count), scenes.Sum(x => x.DeferredClaims.Count), warnings.Length, 0, warnings, [], "");
+            scenes.Sum(x => x.OptionalClaims.Count), scenes.Sum(x => x.DeferredClaims.Count), warnings.Length, 0, warnings, [], realizabilityDiagnostics, "");
         var diagnostics = dd with { DeterministicChecksum = NarrationPlanningCanonicalizer.DiagnosticsChecksum(dd) };
         var draft = new NarrationPlanningAuthority(NarrationPlanningContract.Version, "", input.ExecutionId, input.PlanId,
             input.EventId, input.Language, input.ProfileId, input.ProfileVersion,
@@ -234,6 +256,23 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
             scenes.Add(result.Scene!);
         }
         return (true, scenes, null);
+    }
+
+    private IReadOnlyList<NarrationPlanningSceneRealizabilityDiagnostic> RealizabilityDiagnostics(
+        IReadOnlyList<NarrationPlanningScene> longs, IReadOnlyList<NarrationPlanningScene> shorts) =>
+        longs.Select((s, i) => Diagnostic(s, i + 1)).Concat(shorts.Select((s, i) => Diagnostic(s, i + 1)))
+            .OrderBy(x => x.Variant, StringComparer.Ordinal).ThenBy(x => x.SceneNumber).ToArray();
+
+    private NarrationPlanningSceneRealizabilityDiagnostic Diagnostic(NarrationPlanningScene s, int sceneNumber)
+    {
+        var b = realizabilityPolicy.Evaluate(new(s.Variant, s.NarrativeGoal.SectionKey, s.RequiredClaims,
+            s.IncomingTransition, s.OutgoingTransition, s.NarrationConstraints, s.LocationQualificationRequirements,
+            s.TimeQualificationRequirements, s.CulturalQualificationRequirements, s.AstrologyQualificationRequirements));
+        return new(s.PlanningId, s.Variant, sceneNumber, s.SceneId, s.StoryFrameId, s.NarrativeGoal.SectionKey,
+            s.RequiredClaims, b.RequiredClaimSentenceCount, b.MandatoryIncomingTransitionSentenceCount,
+            b.MandatoryOutgoingTransitionSentenceCount, b.MandatoryQualificationSentenceCount, b.MinimumMandatorySentenceCount,
+            s.NarrationConstraints.MinimumSentenceCount, s.NarrationConstraints.PreferredSentenceCount,
+            s.NarrationConstraints.MaximumSentenceCount, b.IsRealizable, b.IsRealizable ? [] : [b.ReasonCode, "NARRATION_PLANNING_SCENE_REQUIRED_CONTENT_EXCEEDS_CAPACITY"]);
     }
 
     private (bool IsValid, NarrationPlanningScene? Scene, NarrationPlanningAuthorityBuildResult? Failure) BuildScene(
@@ -271,6 +310,12 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
             p.MinimumDurationSeconds, p.TargetDurationSeconds, p.MaximumDurationSeconds, constraints.PreferredSentenceCount,
             constraints.ReadingTimeTargetSeconds, p.VisualEvidenceIds, incoming, outgoing, "");
         draft = draft with { PlanningId = NarrationPlanningCanonicalizer.PlanningId(draft) };
+        var budget = realizabilityPolicy.Evaluate(new(draft.Variant, draft.NarrativeGoal.SectionKey, draft.RequiredClaims,
+            draft.IncomingTransition, draft.OutgoingTransition, draft.NarrationConstraints, draft.LocationQualificationRequirements,
+            draft.TimeQualificationRequirements, draft.CulturalQualificationRequirements, draft.AstrologyQualificationRequirements));
+        if (!budget.IsRealizable)
+            return (false, null, Failure("NARRATION_PLANNING_SCENE_REQUIRED_CONTENT_EXCEEDS_CAPACITY",
+                $"Required claims and owned transitions exceed planning capacity: planningId={draft.PlanningId};variant={draft.Variant};sectionKey={draft.NarrativeGoal.SectionKey};requiredClaims={budget.RequiredClaimSentenceCount};incomingTransitions={budget.MandatoryIncomingTransitionSentenceCount};outgoingTransitions={budget.MandatoryOutgoingTransitionSentenceCount};mandatoryQualifications={budget.MandatoryQualificationSentenceCount};minimumMandatorySentences={budget.MinimumMandatorySentenceCount};maximumSentences={budget.MaximumSentenceCount}.", [p]));
         return (true, draft with { DeterministicChecksum = NarrationPlanningCanonicalizer.SceneChecksum(draft) }, null);
     }
 
@@ -322,9 +367,9 @@ public sealed class NarrationPlanningAuthorityBuilder(INarrationPlanningConstrai
     }
 }
 
-public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolicy constraintPolicy) : INarrationPlanningValidator
+public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolicy constraintPolicy, INarrationPlanningDraftRealizabilityPolicy realizabilityPolicy) : INarrationPlanningValidator
 {
-    private static readonly string[] Names = ["ContractGate", "InputAuthorityGate", "ProfileGate", "LanguageGate", "PlanningCoverageGate", "ScenePlanningGate", "SceneAuthorityGate", "ViewerQuestionGate", "LearningObjectiveGate", "NarrativeGoalGate", "StrategyGate", "TransitionGate", "ConstraintPolicyGate", "ClaimUsagePolicyGate", "RequiredClaimPlanningGate", "OptionalClaimPlanningGate", "DeferredClaimPlanningGate", "SafetyPlanningGate", "CulturalPlanningGate", "LocationTimePlanningGate", "AstrologyPlanningGate", "HumanReviewPlanningGate", "LongShortIndependenceGate", "DiagnosticsGate", "AuthorityChecksumGate", "DeterminismGate"];
+    private static readonly string[] Names = ["ContractGate", "InputAuthorityGate", "ProfileGate", "LanguageGate", "PlanningCoverageGate", "ScenePlanningGate", "SceneAuthorityGate", "ViewerQuestionGate", "LearningObjectiveGate", "NarrativeGoalGate", "StrategyGate", "TransitionGate", "ConstraintPolicyGate", "ClaimUsagePolicyGate", "RequiredClaimPlanningGate", "OptionalClaimPlanningGate", "DeferredClaimPlanningGate", "SafetyPlanningGate", "CulturalPlanningGate", "LocationTimePlanningGate", "AstrologyPlanningGate", "HumanReviewPlanningGate", "LongShortIndependenceGate", "DraftRealizabilityGate", "DiagnosticsGate", "AuthorityChecksumGate", "DeterminismGate"];
 
     public NarrationPlanningValidation Validate(Phase7NarrationPlanningInputAuthority input, NarrationPlanningAuthority authority)
     {
@@ -453,12 +498,21 @@ public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolic
             [Names[20]] = scenes.All(s => HasPacket(s) && ExactQualifications(s.AstrologyQualificationRequirements, packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Where(c => c.IsAstrologyRelated).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.AstrologyQualificationPrefix)),
             [Names[21]] = scenes.All(s => HasPacket(s) && !packets[s.PacketId].RequiredClaims.Concat(packets[s.PacketId].OptionalClaims).Any(c => c.RequiresHumanReview) && ExactQualifications(s.HumanReviewRequirements, packets[s.PacketId].DeferredClaims.Where(c => c.RequiresHumanReview).Select(c => c.ClaimId), NarrationPlanningPolicyCatalog.HumanReviewPrefix)),
             [Names[22]] = authority.LongScenes.All(s => input.SceneKnowledgePacketCollection.Long.Any(p => p.PacketId == s.PacketId) && HasPacket(s) && packets[s.PacketId].Variant == "Long" && NarrationPlanningReferenceGovernance.HasValidatedVariantOwnership(input, packets[s.PacketId])) && authority.ShortScenes.All(s => input.SceneKnowledgePacketCollection.Short.Any(p => p.PacketId == s.PacketId) && HasPacket(s) && packets[s.PacketId].Variant == "Short" && NarrationPlanningReferenceGovernance.HasValidatedVariantOwnership(input, packets[s.PacketId])) && !input.SceneKnowledgePacketCollection.Long.Select(s => s.PacketId).Intersect(input.SceneKnowledgePacketCollection.Short.Select(s => s.PacketId), StringComparer.Ordinal).Any() && !authority.LongScenes.Select(s => s.PacketId).Intersect(authority.ShortScenes.Select(s => s.PacketId), StringComparer.Ordinal).Any() && !authority.LongScenes.Select(s => s.PlanningId).Intersect(authority.ShortScenes.Select(s => s.PlanningId), StringComparer.Ordinal).Any(),
-            [Names[23]] = DiagnosticsValid(input, authority.Diagnostics, scenes, packets.Values), [Names[24]] = authority.AuthorityId == NarrationPlanningCanonicalizer.AuthorityId(authority with { AuthorityId = "", DeterministicChecksum = "" }) && authority.DeterministicChecksum == NarrationPlanningCanonicalizer.AuthorityChecksum(authority),
-            [Names[25]] = scenes.All(s => s.DeterministicChecksum == NarrationPlanningCanonicalizer.SceneChecksum(s))
+            [Names[23]] = scenes.All(s => realizabilityPolicy.Evaluate(new(s.Variant, s.NarrativeGoal.SectionKey, s.RequiredClaims, s.IncomingTransition, s.OutgoingTransition, s.NarrationConstraints, s.LocationQualificationRequirements, s.TimeQualificationRequirements, s.CulturalQualificationRequirements, s.AstrologyQualificationRequirements)).IsRealizable), [Names[24]] = DiagnosticsValid(input, authority.Diagnostics, scenes, packets.Values), [Names[25]] = authority.AuthorityId == NarrationPlanningCanonicalizer.AuthorityId(authority with { AuthorityId = "", DeterministicChecksum = "" }) && authority.DeterministicChecksum == NarrationPlanningCanonicalizer.AuthorityChecksum(authority),
+            [Names[26]] = scenes.All(s => s.DeterministicChecksum == NarrationPlanningCanonicalizer.SceneChecksum(s))
         };
         var gates = Names.Select(n => new NarrationPlanningValidationGate(n, checks[n], checks[n] ? [] : [$"{n} failed."])).ToArray();
         var errors = gates.SelectMany(g => g.Errors).ToArray();
-        var draft = new NarrationPlanningValidation(errors.Length == 0, errors.Length == 0 ? "NARRATION_PLANNING_VALID" : "NARRATION_PLANNING_INVALID", gates, errors, "");
+        var draftRealizabilityFailed = !checks["DraftRealizabilityGate"];
+        if (draftRealizabilityFailed)
+        {
+            var details = scenes.Select(s => (Scene: s, Budget: realizabilityPolicy.Evaluate(new(s.Variant, s.NarrativeGoal.SectionKey, s.RequiredClaims, s.IncomingTransition, s.OutgoingTransition, s.NarrationConstraints, s.LocationQualificationRequirements, s.TimeQualificationRequirements, s.CulturalQualificationRequirements, s.AstrologyQualificationRequirements))))
+                .Where(x => !x.Budget.IsRealizable)
+                .Select(x => $"NARRATION_PLANNING_SCENE_REQUIRED_CONTENT_EXCEEDS_CAPACITY: planningId={x.Scene.PlanningId};variant={x.Scene.Variant};sectionKey={x.Scene.NarrativeGoal.SectionKey};requiredClaims={x.Budget.RequiredClaimSentenceCount};incomingTransitions={x.Budget.MandatoryIncomingTransitionSentenceCount};outgoingTransitions={x.Budget.MandatoryOutgoingTransitionSentenceCount};mandatoryQualifications={x.Budget.MandatoryQualificationSentenceCount};minimumMandatorySentences={x.Budget.MinimumMandatorySentenceCount};maximumSentences={x.Budget.MaximumSentenceCount}.")
+                .ToArray();
+            errors = errors.Concat(details).ToArray();
+        }
+        var draft = new NarrationPlanningValidation(errors.Length == 0, errors.Length == 0 ? "NARRATION_PLANNING_VALID" : draftRealizabilityFailed ? "NARRATION_PLANNING_DRAFT_CAPACITY_INVALID" : "NARRATION_PLANNING_INVALID", gates, errors, "");
         return draft with { DeterministicChecksum = NarrationPlanningCanonicalizer.ValidationChecksum(draft) };
     }
 
@@ -476,7 +530,8 @@ public sealed class NarrationPlanningValidator(INarrationPlanningConstraintPolic
             d.UnresolvedReferenceCount == d.MissingReferenceCount + d.AmbiguousReferenceCount + d.CrossVariantReferenceCount + d.UnsupportedReferenceCount && d.TransitionCount == scenes.Count * 2 &&
             d.BlockingIssueCount == packets.Sum(p => p.BlockingIssues.Count) && d.FailedGateCount == 0 &&
             d.RequiredClaimCount == scenes.Sum(s => s.RequiredClaims.Count) && d.OptionalClaimCount == scenes.Sum(s => s.OptionalClaims.Count) &&
-            d.DeferredClaimCount == scenes.Sum(s => s.DeferredClaims.Count) && d.WarningCount == d.Warnings.Count && d.ErrorCount == d.Errors.Count &&
+            d.DeferredClaimCount == scenes.Sum(s => s.DeferredClaims.Count) && d.WarningCount == d.Warnings.Count && d.ErrorCount == d.Errors.Count && d.RealizabilityDiagnostics.Count == scenes.Count &&
+            d.RealizabilityDiagnostics.All(x => x.IsDraftRealizable && x.MinimumMandatorySentenceCount <= x.MaximumSentenceCount) &&
             d.DeterministicChecksum == NarrationPlanningCanonicalizer.DiagnosticsChecksum(d);
     }
 }
