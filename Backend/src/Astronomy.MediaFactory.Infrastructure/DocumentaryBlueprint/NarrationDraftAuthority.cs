@@ -193,20 +193,43 @@ public sealed class NarrationDraftAuthorityBuilder(INarrationDraftLanguagePolicy
         if(required.Any(x=>!string.Equals(x.Language,lang,StringComparison.OrdinalIgnoreCase)))return(null,Fail(NarrationDraftReasonCodes.CertifiedLanguageClaimMissing,"A Required claim has no certified text in the planning language."));
         var incoming=transitions.Create(new(p.IncomingTransition,NarrationDraftTransitionOwnership.IncomingDestination,p.Variant,lang));
         var outgoing=transitions.Create(new(p.OutgoingTransition,NarrationDraftTransitionOwnership.OutgoingSource,p.Variant,lang));
-        var opening=openings.Create(p,lang);var closing=closings.Create(p,hasNext,lang);
-        var structural=(incoming is null?0:1)+(outgoing is null?0:1);
+        var openingCandidate=openings.Create(p,lang);
+        var closingCandidate=closings.Create(p,hasNext,lang);
+        var mandatoryTransitionCount=(incoming is null?0:1)+(outgoing is null?0:1);
+        var minimumMandatorySentenceCount=required.Count+mandatoryTransitionCount;
+        if(minimumMandatorySentenceCount>p.NarrationConstraints.MaximumSentenceCount)
+            return(null,Fail(NarrationDraftReasonCodes.RequiredContentExceedsTimingCapacity,$"Required claims and owned transitions exceed the governed maximum: planningId={p.PlanningId};variant={p.Variant};required={required.Count};transitions={mandatoryTransitionCount};maximum={p.NarrationConstraints.MaximumSentenceCount}."));
+        var availableStructuralCapacity=p.NarrationConstraints.MaximumSentenceCount-minimumMandatorySentenceCount;
+        var includeOpening=!string.IsNullOrWhiteSpace(openingCandidate)&&availableStructuralCapacity>0;
+        if(includeOpening)availableStructuralCapacity--;
+        var includeClosing=!string.IsNullOrWhiteSpace(closingCandidate)&&availableStructuralCapacity>0;
+        var opening=includeOpening?openingCandidate:"";
+        var closing=includeClosing?closingCandidate:"";
+        var structural=mandatoryTransitionCount+(includeOpening?1:0)+(includeClosing?1:0);
         var timingRequest=new NarrationDraftTimingPolicyRequest(lang,p.Variant,p.NarrativeGoal.SectionKey,p.MinimumDuration,p.ExpectedDuration,p.MaximumDuration,p.NarrationConstraints.PreferredSentenceCount,p.NarrationConstraints.MinimumSentenceCount,p.NarrationConstraints.MaximumSentenceCount,required.Count,p.OptionalClaims.Count,p.NarrationConstraints.PauseStrategy,structural);
         var decision=timing.Resolve(timingRequest);
         var budget=timing.Budget(timingRequest);
         var requiredWords=required.Sum(c=>DeterministicNarrationDraftLanguagePolicy.Count(realization.Realize(c,Qualifications(p,c),lang)));
-        if(required.Count+structural>decision.MaximumSentenceCount||requiredWords>budget.MaximumWords)
+        if(minimumMandatorySentenceCount>decision.MaximumSentenceCount||requiredWords>budget.MaximumWords)
             return(null,Fail(NarrationDraftReasonCodes.RequiredContentExceedsTimingCapacity,"Required factual realization exceeds the governed maximum."));
         var sentences=new List<NarrationDraftSentence>();
         if(incoming is not null)AddSentence(incoming.Text,"IncomingTransition",[],[],false,false,true,[]);
         if(!string.IsNullOrWhiteSpace(opening))AddSentence(opening,"Opening",[],[],false,false,false,p.VisualSynchronizationTargets);
         var usages=new List<NarrationDraftClaimUsage>();
         foreach(var c in required){var q=Qualifications(p,c);if(c.RequiresQualification&&q.Count==0)return(null,Fail(NarrationDraftReasonCodes.QualificationMissing,$"Qualification authority is missing: {c.ClaimId}"));var text=realization.Realize(c,q,lang);if(!ExactRealization(c.Text,q,text,lang))return(null,Fail(NarrationDraftReasonCodes.SafetyInvalid,$"Certified claim realization changed: {c.ClaimId}"));var s=AddSentence(text,"RequiredClaim",[c.ClaimId],q,true,false,false,c.KnowledgeReferenceIds);usages.Add(Usage(c.ClaimId,"Required",s,q));}
-        var optionalUsages=new List<NarrationDraftClaimUsage>();var optionalCapacity=Math.Max(0,decision.MaximumSentenceCount-required.Count-structural);foreach(var id in p.OptionalClaims.Order(StringComparer.Ordinal).Take(optionalCapacity)){if(!catalog.TryGetValue(id,out var c)||c.RequiresHumanReview||!SameLanguage(c.Language,lang))continue;var q=Qualifications(p,c);if(c.RequiresQualification&&q.Count==0)continue;var text=realization.Realize(c,q,lang);if(!ExactRealization(c.Text,q,text,lang))continue;if(sentences.Sum(x=>DeterministicNarrationDraftLanguagePolicy.Count(x.Text))+DeterministicNarrationDraftLanguagePolicy.Count(text)>budget.MaximumWords)continue;var s=AddSentence(text,"OptionalClaim",[id],q,false,true,false,c.KnowledgeReferenceIds);optionalUsages.Add(Usage(id,"Optional",s,q));}
+        var optionalUsages=new List<NarrationDraftClaimUsage>();
+        foreach(var id in p.OptionalClaims.Order(StringComparer.Ordinal))
+        {
+            var remainingStructuralAfterOption=(includeClosing?1:0)+(outgoing is null?0:1);
+            if(sentences.Count+remainingStructuralAfterOption>=decision.MaximumSentenceCount)break;
+            if(optionalUsages.Count>=budget.PermittedOptionalClaimCapacity)break;
+            if(!catalog.TryGetValue(id,out var c)||c.RequiresHumanReview||!SameLanguage(c.Language,lang))continue;
+            var q=Qualifications(p,c);if(c.RequiresQualification&&q.Count==0)continue;
+            var text=realization.Realize(c,q,lang);if(!ExactRealization(c.Text,q,text,lang))continue;
+            var projectedWords=sentences.Sum(x=>DeterministicNarrationDraftLanguagePolicy.Count(x.Text))+DeterministicNarrationDraftLanguagePolicy.Count(text)+(includeClosing?DeterministicNarrationDraftLanguagePolicy.Count(closing):0)+(outgoing is null?0:DeterministicNarrationDraftLanguagePolicy.Count(outgoing.Text));
+            if(projectedWords>budget.MaximumWords)continue;
+            var s=AddSentence(text,"OptionalClaim",[id],q,false,true,false,c.KnowledgeReferenceIds);optionalUsages.Add(Usage(id,"Optional",s,q));
+        }
         if(!string.IsNullOrWhiteSpace(closing))AddSentence(closing,"Closing",[],[],false,false,false,p.VisualSynchronizationTargets);
         if(outgoing is not null)AddSentence(outgoing.Text,"OutgoingTransition",[],[],false,false,true,[]);
         var governed=GovernedSentences(sentences);
