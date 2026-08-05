@@ -42,6 +42,16 @@ public sealed class Phase7ApprovedFieldPathCanonicalizer : IPhase7ApprovedFieldP
         var s = original.Trim();
         if (string.IsNullOrWhiteSpace(s)) return new(false, original, "", "", origin, "P7REF_APPROVED_PATH_BLANK");
         var ns = "production-event-intelligence";
+        var originSeparator = s.IndexOf(':');
+        if (originSeparator > 0 && s.IndexOf('#') < 0)
+        {
+            var originPrefix = s[..originSeparator];
+            if (Enum.TryParse<Phase7KnowledgeOrigin>(originPrefix, ignoreCase: false, out var parsedOrigin))
+            {
+                origin ??= parsedOrigin;
+                s = s[(originSeparator + 1)..];
+            }
+        }
         var hash = s.IndexOf('#');
         if (hash >= 0)
         {
@@ -50,7 +60,11 @@ public sealed class Phase7ApprovedFieldPathCanonicalizer : IPhase7ApprovedFieldP
             if (ns.Length == 0) ns = "production-event-intelligence";
         }
         if (!s.StartsWith("/", StringComparison.Ordinal))
-            return new(false, original, "", ns, origin, "P7REF_APPROVED_PATH_UNMAPPED");
+        {
+            if (s.Contains('/', StringComparison.Ordinal) || s.Contains("..", StringComparison.Ordinal) || s.StartsWith('.', StringComparison.Ordinal) || s.EndsWith('.', StringComparison.Ordinal))
+                return new(false, original, "", ns, origin, "P7REF_APPROVED_PATH_UNMAPPED");
+            s = "/" + s.Replace('.', '/');
+        }
         for (var i = 0; i < s.Length; i++)
             if (s[i] == '~' && (i + 1 >= s.Length || s[i + 1] is not ('0' or '1')))
                 return new(false, original, "", ns, origin, "P7REF_APPROVED_PATH_INVALID_JSON_POINTER");
@@ -121,8 +135,15 @@ public sealed class Phase7KnowledgeReferenceIdentityBridge : IPhase7KnowledgeRef
             || Try(index.Where(x => x.AuthorityCanonicalApprovedFieldPaths.Any(p => IsDescendant(pointer, p))), "P7PACKET_REFERENCE_RESOLVED_AUTHORITY_DESCENDANT")
             || Try(index.Where(x => x.ResolutionCanonicalApprovedFieldPaths.Any(p => IsDescendant(pointer, p))), "P7PACKET_REFERENCE_RESOLVED_RESOLUTION_DESCENDANT")
             || Try(index.Where(x => x.KnowledgeEntityIds.Intersect(candidates, StringComparer.Ordinal).Any()), "P7PACKET_REFERENCE_RESOLVED_KNOWLEDGE_ENTITY");
+        if (matches.Length > 0 && string.Equals(normalized.AuthorityNamespace, "production-event-intelligence", StringComparison.Ordinal))
+        {
+            var eventMatches = matches.Where(x => x.Origins.Contains(Phase7KnowledgeOrigin.Event)).ToArray();
+            if (eventMatches.Length > 0) matches = eventMatches;
+            else return new(false, normalized.OriginalReferenceId, pointer, [], [], [], method, "P7REF_REFERENCE_UNRESOLVED",
+                [ $"OriginalReferenceId={normalized.OriginalReferenceId}", $"AuthorityNamespace={normalized.AuthorityNamespace}", $"CanonicalJsonPointer={pointer}", "ResolutionReasonCode=P7REF_REFERENCE_UNRESOLVED", "RejectedCandidateReasons=EVENT_REFERENCE_WITHOUT_EVENT_ORIGIN_EVIDENCE" ]);
+        }
         var claimIds = matches.Select(x=>x.ClaimId).ToArray();
-        var paths = matches.SelectMany(x=>x.CanonicalApprovedFieldPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var paths = matches.SelectMany(x=>x.RawApprovedFieldPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var entities = matches.SelectMany(x=>x.KnowledgeEntityIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var evidence = new[] { $"originalReferenceId={normalized.OriginalReferenceId}", $"canonicalJsonPointer={pointer}", $"authorityNamespace={normalized.AuthorityNamespace}", $"resolutionMethod={method}" }
             .Concat(index.SelectMany(x=>x.RawApprovedFieldPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(x=>$"rawApprovedFieldPathConsidered={x}"))

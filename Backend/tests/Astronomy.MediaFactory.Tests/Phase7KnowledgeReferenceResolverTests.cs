@@ -131,6 +131,24 @@ public sealed class Phase7KnowledgeReferenceNormalizerTests
     }
 }
 
+public sealed class Phase7ApprovedFieldPathCanonicalizerTests
+{
+    [Theory]
+    [InlineData("primaryObjects", "/primaryObjects")]
+    [InlineData("scientificContext", "/scientificContext")]
+    [InlineData("Event:primaryObjects", "/primaryObjects")]
+    [InlineData("Event:/scientificContext", "/scientificContext")]
+    [InlineData("production-event-intelligence#/primaryObjects", "/primaryObjects")]
+    public void Canonicalize_CommittedOrionFormatsPreservesCanonicalPointer(string rawPath, string canonicalPointer)
+    {
+        var result = new Phase7ApprovedFieldPathCanonicalizer().Canonicalize(rawPath, Phase7KnowledgeOrigin.Event);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(canonicalPointer, result.CanonicalJsonPointer);
+        Assert.Equal(Phase7KnowledgeOrigin.Event, result.Origin);
+    }
+}
+
 public sealed class Phase7GovernedReferenceResolutionBehaviorTests
 {
     [Fact]
@@ -205,11 +223,11 @@ public sealed class Phase7RealAuthorityEvidenceReconciliationTests
 
         Assert.Equal(Phase7KnowledgeReferenceStatus.Resolved, primary.Status);
         Assert.NotEmpty(primary.CandidateClaimIds);
-        Assert.Contains("/primaryObjects", primary.MatchedApprovedFieldPaths);
+        Assert.Contains("primaryObjects", primary.MatchedApprovedFieldPaths);
         Assert.Equal("P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD", primary.ResolutionMethod);
         Assert.Equal(Phase7KnowledgeReferenceStatus.Resolved, scientific.Status);
         Assert.NotEmpty(scientific.CandidateClaimIds);
-        Assert.Contains("/scientificContext", scientific.MatchedApprovedFieldPaths);
+        Assert.Contains("scientificContext", scientific.MatchedApprovedFieldPaths);
         Assert.Equal("P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD", scientific.ResolutionMethod);
     }
 
@@ -244,7 +262,7 @@ public sealed class Phase7RealAuthorityEvidenceReconciliationTests
     {
         var claims = new[] { MakeClaim("orion-claim-primary-objects", []), MakeClaim("orion-claim-scientific-context", []), MakeClaim("orion-claim-both", []) }
             .Concat(includeResolutionOnly ? [MakeClaim("orion-claim-resolution-only", [])] : Array.Empty<CertifiedNarrationClaim>()).ToArray();
-        var evidence = new[] { MakeEvidence("orion-claim-primary-objects", "/primaryObjects"), MakeEvidence("orion-claim-scientific-context", "/scientificContext"), MakeEvidence("orion-claim-both", "/both") };
+        var evidence = new[] { MakeEvidence("orion-claim-primary-objects", "primaryObjects"), MakeEvidence("orion-claim-scientific-context", "scientificContext"), MakeEvidence("orion-claim-both", "/both") };
         var resolutionEvidence = includeResolutionOnly ? [MakeEvidence("orion-claim-resolution-only", "/resolutionOnly"), MakeEvidence("orion-claim-both", "/both")] : Array.Empty<Phase7ClaimSupportEvidence>();
         var diagnostics = includeResolutionOnly
             ? [Diag("orion-claim-resolution-only", "/resolutionOnly"), Diag("orion-claim-both", "/both")]
