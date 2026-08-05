@@ -398,19 +398,56 @@ public sealed record SceneKnowledgePacket(string PacketId, string ExecutionId, s
     public Phase7SceneSectionAuthorityResolution? SectionAuthority { get; init; }
 }
 public sealed record Phase7PacketReferenceResolution(string ReferenceId, bool IsPrimary, bool IsRequired,
-    Phase7KnowledgeReferenceStatus Status, string ReasonCode, IReadOnlyList<string> ResolvedClaimIds);
+    Phase7KnowledgeReferenceStatus Status, string ReasonCode, IReadOnlyList<string> ResolvedClaimIds)
+{
+    public string OriginalReferenceId { get; init; } = ReferenceId;
+    public string NormalizedReferenceId { get; init; } = ReferenceId;
+    public string CanonicalJsonPointer { get; init; } = "";
+    public string ResolutionMethod { get; init; } = "";
+    public IReadOnlyList<string> MatchedApprovedFieldPaths { get; init; } = [];
+    public IReadOnlyList<string> MatchedKnowledgeEntityIds { get; init; } = [];
+    public IReadOnlyList<string> CandidateClaimIds { get; init; } = [];
+    public IReadOnlyList<string> EligibleRequiredClaimIds { get; init; } = [];
+    public IReadOnlyList<string> Evidence { get; init; } = [];
+}
 public enum Phase7KnowledgeReferenceStatus { Resolved, Deferred, Missing, Ambiguous, CrossVariantInvalid, Unsupported }
 public sealed record Phase7KnowledgeReferenceResolution(string ReferenceId, Phase7KnowledgeReferenceStatus Status,
-    IReadOnlyList<CertifiedNarrationClaim> Claims, string ReasonCode);
+    IReadOnlyList<CertifiedNarrationClaim> Claims, string ReasonCode)
+{
+    public string OriginalReferenceId { get; init; } = ReferenceId;
+    public string NormalizedReferenceId { get; init; } = ReferenceId;
+    public string CanonicalJsonPointer { get; init; } = "";
+    public string ResolutionMethod { get; init; } = ReasonCode;
+    public IReadOnlyList<string> MatchedApprovedFieldPaths { get; init; } = [];
+    public IReadOnlyList<string> MatchedKnowledgeEntityIds { get; init; } = [];
+    public IReadOnlyList<string> CandidateClaimIds { get; init; } = [];
+    public IReadOnlyList<string> EligibleRequiredClaimIds { get; init; } = [];
+    public IReadOnlyList<string> Evidence { get; init; } = [];
+}
 
+public interface IPhase7KnowledgeReferenceNormalizer
+{
+    Phase7KnowledgeReferenceNormalizationResult Normalize(string referenceId);
+}
+public sealed record Phase7KnowledgeReferenceNormalizationResult(bool IsValid, string OriginalReferenceId,
+    string AuthorityNamespace, string CanonicalJsonPointer, IReadOnlyList<string> CanonicalIdentityCandidates,
+    string ReasonCode);
 public interface IPhase7KnowledgeReferenceIdentityBridge
 {
+    Phase7KnowledgeReferenceIdentityBridgeResult Resolve(Phase7KnowledgeReferenceNormalizationResult normalized,
+        Phase7ScenePacketInputAuthority authority);
     Phase7KnowledgeReferenceIdentityBridgeResult Resolve(string phase6ReferenceId, PublishedPhase7KnowledgeAuthority authority);
 }
 public sealed record Phase7KnowledgeReferenceIdentityBridgeResult(bool IsValid, string SourceReferenceId,
-    IReadOnlyList<string> CanonicalReferenceIds, IReadOnlyList<string> ApprovedFieldPaths,
-    IReadOnlyList<string> KnowledgeEntityIds, IReadOnlyList<string> ClaimIds, string ReasonCode,
-    IReadOnlyList<string> Evidence);
+    string CanonicalJsonPointer, IReadOnlyList<string> MatchedApprovedFieldPaths,
+    IReadOnlyList<string> MatchedKnowledgeEntityIds, IReadOnlyList<string> CandidateClaimIds,
+    string ResolutionMethod, string ReasonCode, IReadOnlyList<string> Evidence)
+{
+    public IReadOnlyList<string> CanonicalReferenceIds { get; init; } = [];
+    public IReadOnlyList<string> ApprovedFieldPaths => MatchedApprovedFieldPaths;
+    public IReadOnlyList<string> KnowledgeEntityIds => MatchedKnowledgeEntityIds;
+    public IReadOnlyList<string> ClaimIds => CandidateClaimIds;
+}
 public interface IPhase7KnowledgeReferenceResolver
 {
     IReadOnlyList<Phase7KnowledgeReferenceResolution> Resolve(IReadOnlyList<string> referenceIds, ResolvedNarrationKnowledge knowledge, bool optional = false);

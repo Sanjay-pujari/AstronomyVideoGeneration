@@ -17,6 +17,7 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
     {
         var failures = new Dictionary<string,List<string>>(StringComparer.Ordinal);
         var packetFailures = new List<Phase7ScenePacketFailureSummary>();
+        var packetFailureKeys = new HashSet<string>(StringComparer.Ordinal);
         void Check(string gate, bool valid, string error) { if (!valid) (failures.TryGetValue(gate, out var e) ? e : failures[gate] = []).Add(error); }
         void PacketFail(SceneKnowledgePacket p, string gate, string code, string? referenceId = null, string? claimId = null, string? blocking = null, IEnumerable<string>? extraClaims = null)
         {
@@ -29,6 +30,8 @@ public sealed class Phase7SceneKnowledgePacketValidator : IPhase7SceneKnowledgeP
             if (!string.IsNullOrWhiteSpace(referenceId)) parts["referenceId"] = referenceId!;
             if (!string.IsNullOrWhiteSpace(claimId)) parts["claimId"] = claimId!;
             if (extraClaims is not null) parts["candidateClaimIds"] = string.Join(",", extraClaims.Order(StringComparer.Ordinal));
+            var key = string.Join("|", p.Variant, p.StoryFrameId, referenceId ?? "", claimId ?? "", code);
+            if (!packetFailureKeys.Add(key)) return;
             var message = code + ":" + string.Join(";", parts.Select(x => x.Key + "=" + x.Value));
             (failures.TryGetValue(gate, out var e) ? e : failures[gate] = []).Add(message);
             packetFailures.Add(new(p.Variant, p.PacketId, p.StoryFrameId, p.SourceSceneId, p.SceneNumber, p.FrameNumber, p.SectionKey,
