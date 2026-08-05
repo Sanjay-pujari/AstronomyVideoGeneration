@@ -13,7 +13,16 @@ public static class NarrationDraftReasonCodes
         RequiredOverBudget="NARRATION_DRAFT_REQUIRED_CLAIMS_EXCEED_BUDGET", OptionalInvalid="NARRATION_DRAFT_OPTIONAL_CLAIM_INVALID",
         DeferredUsed="NARRATION_DRAFT_DEFERRED_CLAIM_USED", QualificationMissing="NARRATION_DRAFT_QUALIFICATION_MISSING",
         SafetyInvalid="NARRATION_DRAFT_SAFETY_INVALID", TransitionInvalid="NARRATION_DRAFT_TRANSITION_INVALID",
-        TimingInvalid="NARRATION_DRAFT_TIMING_INVALID", LanguageInvalid="NARRATION_DRAFT_LANGUAGE_INVALID",
+        TimingInvalid="NARRATION_DRAFT_TIMING_INVALID",
+        SceneSentenceCountBelowMinimum="NARRATION_DRAFT_SCENE_SENTENCE_COUNT_BELOW_MINIMUM",
+        SceneSentenceCountAboveMaximum="NARRATION_DRAFT_SCENE_SENTENCE_COUNT_ABOVE_MAXIMUM",
+        SceneDurationBelowMinimum="NARRATION_DRAFT_SCENE_DURATION_BELOW_MINIMUM",
+        SceneDurationAboveMaximum="NARRATION_DRAFT_SCENE_DURATION_ABOVE_MAXIMUM",
+        TransitionSentenceCountInvalid="NARRATION_DRAFT_TRANSITION_SENTENCE_COUNT_INVALID",
+        TimingPolicyUnresolved="NARRATION_DRAFT_TIMING_POLICY_UNRESOLVED",
+        RequiredContentExceedsTimingCapacity="NARRATION_DRAFT_REQUIRED_CONTENT_EXCEEDS_TIMING_CAPACITY",
+        InsufficientGovernedContentForMinimum="NARRATION_DRAFT_INSUFFICIENT_GOVERNED_CONTENT_FOR_MINIMUM",
+        LanguageInvalid="NARRATION_DRAFT_LANGUAGE_INVALID",
         CertifiedLanguageClaimMissing="NARRATION_DRAFT_CERTIFIED_LANGUAGE_CLAIM_MISSING",
         HumanReviewInvalid="NARRATION_DRAFT_HUMAN_REVIEW_CLAIM_INVALID",
         ClaimAuthorityMissing="NARRATION_DRAFT_COMMITTED_CLAIM_AUTHORITY_MISSING",
@@ -63,6 +72,13 @@ public sealed record NarrationDraftScene(string DraftSceneId,string PlanningId,s
     IReadOnlyList<string> AppliedQualifications,IReadOnlyList<string> AppliedSafetyRules,IReadOnlyList<string> AppliedEditorialConstraints,
     int WordCount,int SentenceCount,decimal EstimatedReadingTimeSeconds,int MinimumDurationSeconds,int TargetDurationSeconds,
     int MaximumDurationSeconds,string DeterministicChecksum);
+public sealed record NarrationDraftSceneFailureSummary(
+    string Variant,int SceneNumber,string SceneId,string StoryFrameId,string PlanningSceneId,string SectionKey,
+    int SentenceCount,int MinimumSentenceCount,int MaximumSentenceCount,decimal EstimatedDurationSeconds,
+    decimal MinimumDurationSeconds,decimal MaximumDurationSeconds,IReadOnlyList<string> RequiredClaimIds,
+    IReadOnlyList<string> RealizedRequiredClaimIds,IReadOnlyList<string> RealizedOptionalClaimIds,
+    IReadOnlyList<string> TransitionSentenceIds,IReadOnlyList<string> FailedGateNames,IReadOnlyList<string> ReasonCodes);
+
 public sealed record NarrationDraftDiagnostics(int PlanningSceneCount,int DraftSceneCount,int LongDraftSceneCount,int ShortDraftSceneCount,
     int SentenceCount,int RequiredClaimCount,int RequiredClaimUsageCount,int OptionalClaimCount,int OptionalClaimUsageCount,
     int DeferredClaimCount,int DeferredClaimUsageCount,int QualifiedClaimCount,int TransitionSentenceCount,int TotalWordCount,
@@ -76,15 +92,19 @@ public sealed record NarrationDraftValidationGate(string Name,bool Passed,IReadO
 public sealed record NarrationDraftValidation(bool IsValid,string ReasonCode,IReadOnlyList<NarrationDraftValidationGate> Gates,
     IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,string DeterministicChecksum);
 public sealed record NarrationDraftAuthorityBuildResult(bool IsValid,NarrationDraftAuthority? Authority,string ReasonCode,
-    IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,IReadOnlyList<string> BlockingIssues);
+    IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,IReadOnlyList<string> BlockingIssues)
+{ public IReadOnlyList<NarrationDraftSceneFailureSummary> SceneFailureSummaries { get; init; } = []; }
 
-public sealed record NarrationDraftTimingRequest(string Language,int MinimumDurationSeconds,int TargetDurationSeconds,int MaximumDurationSeconds,
+public sealed record NarrationDraftSceneTimingDecision(
+    string Variant,string SectionKey,int MinimumSentenceCount,int MaximumSentenceCount,
+    decimal MinimumDurationSeconds,decimal MaximumDurationSeconds,string PolicyId,string PolicyVersion);
+public sealed record NarrationDraftTimingPolicyRequest(string Language,string Variant,string SectionKey,int MinimumDurationSeconds,int TargetDurationSeconds,int MaximumDurationSeconds,
     int PreferredSentenceCount,int MinimumSentenceCount,int MaximumSentenceCount,int RequiredClaimCount,int OptionalClaimCount,string ProfilePacing,
     int MandatoryStructuralSentenceCount=0);
 public sealed record NarrationDraftTimingBudget(int TargetWords,int MinimumWords,int MaximumWords,decimal TargetReadingTimeSeconds,
     decimal MinimumSentenceDurationSeconds,int PermittedOptionalClaimCapacity,decimal WordsPerMinute);
 public interface INarrationDraftLanguagePolicy { bool Supports(string language);string Terminate(string text,string language);string OpeningBridge(string question,string objective,string language);string Conjunction(string language);decimal EstimateReadingTime(string text,string language);bool PreservesProtectedTokens(string certified,string realized); }
-public interface INarrationDraftTimingPolicy { NarrationDraftTimingBudget Resolve(NarrationDraftTimingRequest request); }
+public interface INarrationDraftTimingPolicy { NarrationDraftSceneTimingDecision Resolve(NarrationDraftTimingPolicyRequest request); NarrationDraftTimingBudget Budget(NarrationDraftTimingPolicyRequest request); }
 public interface INarrationDraftRealizationPolicy { string Realize(CertifiedNarrationClaim claim,IReadOnlyList<string> qualifications,string language); }
 public interface INarrationDraftClaimCoalescingPolicy { bool CanCoalesce(NarrationPlanningScene scene,CertifiedNarrationClaim first,CertifiedNarrationClaim second,int maximumWords); }
 public interface INarrationDraftOpeningPolicy { string Create(NarrationPlanningScene scene,string language); }
@@ -98,6 +118,7 @@ public interface INarrationDraftAuthorityBuilder { NarrationDraftAuthorityBuildR
 public interface INarrationDraftValidator { NarrationDraftValidation Validate(Phase7NarrationDraftInputAuthority input,NarrationDraftAuthority authority); }
 public sealed record Phase7NarrationDraftAuthorityServiceResult(bool Success,string InputEvaluationReason,string BuildReason,
     string ValidationReason,NarrationDraftAuthority? Authority,NarrationDraftValidation? Validation,
-    IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,IReadOnlyList<string> BlockingIssues);
+    IReadOnlyList<string> Errors,IReadOnlyList<string> Warnings,IReadOnlyList<string> BlockingIssues)
+{ public IReadOnlyList<NarrationDraftSceneFailureSummary> SceneFailureSummaries { get; init; } = []; }
 public interface IPhase7NarrationDraftAuthorityService { Task<Phase7NarrationDraftAuthorityServiceResult> ExecuteAsync(
     Phase7NarrationDraftInputAuthorityRequest request,CancellationToken cancellationToken=default); }
