@@ -34,10 +34,68 @@ public sealed class Phase7KnowledgeReferenceNormalizer : IPhase7KnowledgeReferen
     private static string DecodePointer(string pointer) => pointer.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal);
 }
 
+public sealed class Phase7ApprovedFieldPathCanonicalizer : IPhase7ApprovedFieldPathCanonicalizer
+{
+    public Phase7ApprovedFieldPathCanonicalizationResult Canonicalize(string approvedFieldPath, Phase7KnowledgeOrigin? origin = null)
+    {
+        var original = approvedFieldPath ?? "";
+        var s = original.Trim();
+        if (string.IsNullOrWhiteSpace(s)) return new(false, original, "", "", origin, "P7REF_APPROVED_PATH_BLANK");
+        var ns = "production-event-intelligence";
+        var hash = s.IndexOf('#');
+        if (hash >= 0)
+        {
+            ns = s[..hash];
+            s = s[(hash + 1)..];
+            if (ns.Length == 0) ns = "production-event-intelligence";
+        }
+        if (!s.StartsWith("/", StringComparison.Ordinal))
+            return new(false, original, "", ns, origin, "P7REF_APPROVED_PATH_UNMAPPED");
+        for (var i = 0; i < s.Length; i++)
+            if (s[i] == '~' && (i + 1 >= s.Length || s[i + 1] is not ('0' or '1')))
+                return new(false, original, "", ns, origin, "P7REF_APPROVED_PATH_INVALID_JSON_POINTER");
+        return new(true, original, s.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal), ns, origin, "P7REF_APPROVED_PATH_CANONICALIZED");
+    }
+}
+
+public sealed class Phase7CommittedClaimEvidenceIndexBuilder : IPhase7CommittedClaimEvidenceIndexBuilder
+{
+    private readonly IPhase7ApprovedFieldPathCanonicalizer canonicalizer;
+    public Phase7CommittedClaimEvidenceIndexBuilder(IPhase7ApprovedFieldPathCanonicalizer canonicalizer) => this.canonicalizer = canonicalizer;
+    public IReadOnlyList<Phase7CommittedClaimEvidenceIndexEntry> Build(Phase7ScenePacketInputAuthority authority)
+    {
+        var k = authority.Knowledge.KnowledgeAuthority;
+        var r = authority.Knowledge.ResolvedNarrationKnowledge;
+        return k.Claims.OrderBy(c => c.ClaimId, StringComparer.Ordinal).Select(c =>
+        {
+            var ae = k.ClaimSupportEvidence.Where(e => e.ClaimId == c.ClaimId || e.SemanticIdentity == c.SemanticIdentity).ToArray();
+            var re = (r?.ClaimSupportEvidence ?? Array.Empty<Phase7ClaimSupportEvidence>()).Where(e => e.ClaimId == c.ClaimId || e.SemanticIdentity == c.SemanticIdentity).ToArray();
+            var rd = (r?.ClaimResolutionDiagnostics ?? Array.Empty<Phase7ClaimResolutionDiagnostic>()).Where(d => d.ClaimId == c.ClaimId || d.SemanticIdentity == c.SemanticIdentity || d.SelectedClaimIds.Contains(c.ClaimId, StringComparer.Ordinal)).ToArray();
+            string[] Canon(IEnumerable<Phase7ClaimSupportEvidence> xs) => xs.Select(x => canonicalizer.Canonicalize(x.ApprovedFieldPath, x.Origin)).Where(x => x.IsValid).Select(x => x.CanonicalJsonPointer).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            var diagPaths = rd.Select(d => canonicalizer.Canonicalize(d.ApprovedFieldPath, d.Origin)).Where(x => x.IsValid).Select(x => x.CanonicalJsonPointer).ToArray();
+            var all = Canon(ae.Concat(re)).Concat(diagPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            return new Phase7CommittedClaimEvidenceIndexEntry(c.ClaimId, c.SemanticIdentity, all,
+                ae.Select(e => e.KnowledgeId).Concat(re.Select(e => e.KnowledgeId)).Concat(rd.Select(d => d.KnowledgeEntityId)).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                c.KnowledgeReferenceIds, c.SourceIds, c.Disposition, c.Language, c.RequiresHumanReview,
+                ae.Concat(re).Select(e => e.SourceEligibility).Distinct().OrderBy(x=>x.ToString()).ToArray(),
+                ae.Concat(re).Select(e => e.ProvenancePrecision).Concat(rd.Select(d=>d.ProvenancePrecision)).Distinct().OrderBy(x=>x.ToString()).ToArray(),
+                ae.Concat(re).Select(e => e.Origin).Concat(rd.Select(d=>d.Origin)).Distinct().OrderBy(x=>x.ToString()).ToArray())
+            {
+                AuthorityCanonicalApprovedFieldPaths = Canon(ae),
+                ResolutionCanonicalApprovedFieldPaths = Canon(re).Concat(diagPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                RawApprovedFieldPaths = ae.Select(e=>e.ApprovedFieldPath).Concat(re.Select(e=>e.ApprovedFieldPath)).Concat(rd.Select(d=>d.ApprovedFieldPath)).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                ResolutionDiagnosticIds = rd.Select(d=>d.CandidateId).Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()
+            };
+        }).ToArray();
+    }
+}
+
 public sealed class Phase7KnowledgeReferenceIdentityBridge : IPhase7KnowledgeReferenceIdentityBridge
 {
     private readonly IPhase7KnowledgeReferenceNormalizer normalizer;
-    public Phase7KnowledgeReferenceIdentityBridge(IPhase7KnowledgeReferenceNormalizer normalizer) => this.normalizer = normalizer;
+    private readonly IPhase7CommittedClaimEvidenceIndexBuilder indexBuilder;
+    public Phase7KnowledgeReferenceIdentityBridge(IPhase7KnowledgeReferenceNormalizer normalizer) : this(normalizer, new Phase7CommittedClaimEvidenceIndexBuilder(new Phase7ApprovedFieldPathCanonicalizer())) { }
+    public Phase7KnowledgeReferenceIdentityBridge(IPhase7KnowledgeReferenceNormalizer normalizer, IPhase7CommittedClaimEvidenceIndexBuilder indexBuilder) { this.normalizer = normalizer; this.indexBuilder = indexBuilder; }
 
     public Phase7KnowledgeReferenceIdentityBridgeResult Resolve(string phase6ReferenceId, PublishedPhase7KnowledgeAuthority authority)
     {
@@ -48,54 +106,38 @@ public sealed class Phase7KnowledgeReferenceIdentityBridge : IPhase7KnowledgeRef
 
     public Phase7KnowledgeReferenceIdentityBridgeResult Resolve(Phase7KnowledgeReferenceNormalizationResult normalized, Phase7ScenePacketInputAuthority authority)
     {
-        if (!normalized.IsValid) return new(false, normalized.OriginalReferenceId, normalized.CanonicalJsonPointer, [], [], [], normalized.ReasonCode, normalized.ReasonCode, [$"sourceReferenceId={normalized.OriginalReferenceId}"]);
-        var k = authority.Knowledge.KnowledgeAuthority;
+        if (!normalized.IsValid) return new(false, normalized.OriginalReferenceId, normalized.CanonicalJsonPointer, [], [], [], normalized.ReasonCode, normalized.ReasonCode, [$"originalReferenceId={normalized.OriginalReferenceId}"]);
         var pointer = normalized.CanonicalJsonPointer;
         var candidates = normalized.CanonicalIdentityCandidates;
-        var claimIds = new SortedSet<string>(StringComparer.Ordinal);
-        var paths = new SortedSet<string>(StringComparer.Ordinal);
-        var entities = new SortedSet<string>(StringComparer.Ordinal);
-        var method = "P7PACKET_REFERENCE_PATH_UNMAPPED";
-
-        bool AddClaims(IEnumerable<string> ids) { var before = claimIds.Count; foreach (var id in ids.Where(x => !string.IsNullOrWhiteSpace(x))) claimIds.Add(id); return claimIds.Count > before; }
-        bool AddPaths(IEnumerable<string> ps) { var before = paths.Count; foreach (var p in ps.Where(x => !string.IsNullOrWhiteSpace(x))) paths.Add(NormalizePointer(p)); return paths.Count > before; }
-        bool AddEntities(IEnumerable<string> es) { var before = entities.Count; foreach (var e in es.Where(x => !string.IsNullOrWhiteSpace(x))) entities.Add(e); return entities.Count > before; }
-
-        if (AddClaims(k.Claims.Where(c => c.ClaimId == normalized.OriginalReferenceId || c.ClaimId == pointer).Select(c => c.ClaimId))) method = "P7PACKET_REFERENCE_RESOLVED_EXACT_CLAIM_ID";
-        else if (AddClaims(k.Claims.Where(c => c.SemanticIdentity == normalized.OriginalReferenceId || c.SemanticIdentity == pointer || candidates.Contains(c.SemanticIdentity, StringComparer.Ordinal)).Select(c => c.ClaimId))) method = "P7PACKET_REFERENCE_RESOLVED_EXACT_SEMANTIC_IDENTITY";
-        else if (AddClaims(k.Claims.Where(c => c.KnowledgeReferenceIds.Intersect(candidates, StringComparer.Ordinal).Any()).Select(c => c.ClaimId))) method = "P7PACKET_REFERENCE_RESOLVED_EXACT_KNOWLEDGE_REFERENCE";
-        else
-        {
-            var exact = k.ClaimSupportEvidence.Where(e => NormalizePointer(e.ApprovedFieldPath) == pointer).ToArray();
-            if (exact.Length > 0) { AddClaims(exact.Select(e => e.ClaimId)); AddPaths(exact.Select(e => e.ApprovedFieldPath)); AddEntities(exact.Select(e => e.KnowledgeId)); method = "P7PACKET_REFERENCE_RESOLVED_APPROVED_FIELD"; }
-            else
-            {
-                var descendant = k.ClaimSupportEvidence.Where(e => IsDescendant(pointer, NormalizePointer(e.ApprovedFieldPath))).ToArray();
-                if (descendant.Length > 0) { AddClaims(descendant.Select(e => e.ClaimId)); AddPaths(descendant.Select(e => e.ApprovedFieldPath)); AddEntities(descendant.Select(e => e.KnowledgeId)); method = "P7PACKET_REFERENCE_RESOLVED_COLLECTION_DESCENDANT"; }
-                else
-                {
-                    var entityIds = k.KnowledgeEntities.Where(e => candidates.Contains(e.KnowledgeId, StringComparer.Ordinal)).Select(e => e.KnowledgeId).ToArray();
-                    var support = k.ClaimSupportEvidence.Where(e => entityIds.Contains(e.KnowledgeId, StringComparer.Ordinal)).ToArray();
-                    if (entityIds.Length > 0 || support.Length > 0) { AddEntities(entityIds.Concat(support.Select(e => e.KnowledgeId))); AddClaims(support.Select(e => e.ClaimId)); method = "P7PACKET_REFERENCE_RESOLVED_KNOWLEDGE_ENTITY"; }
-                }
-            }
-        }
-        var matched = k.Claims.Where(c => claimIds.Contains(c.ClaimId)).OrderBy(c => c.ClaimId, StringComparer.Ordinal).ToArray();
-        foreach (var e in k.ClaimSupportEvidence.Where(e => claimIds.Contains(e.ClaimId))) { AddPaths([e.ApprovedFieldPath]); AddEntities([e.KnowledgeId]); }
-        var eligible = matched.Where(c => IsRequiredEligible(c, authority)).Select(c => c.ClaimId).Order(StringComparer.Ordinal).ToArray();
-        var evidence = new[] { $"sourceReferenceId={normalized.OriginalReferenceId}", $"normalizedPointer={pointer}", $"resolutionMethod={method}" }
-            .Concat(paths.Select(x => $"matchedApprovedFieldPath={x}"))
-            .Concat(entities.Select(x => $"matchedKnowledgeEntityId={x}"))
-            .Concat(matched.Select(x => $"candidateClaimId={x.ClaimId};disposition={x.Disposition};requiresHumanReview={x.RequiresHumanReview};requiredEligible={eligible.Contains(x.ClaimId, StringComparer.Ordinal)}"))
+        var index = indexBuilder.Build(authority);
+        Phase7CommittedClaimEvidenceIndexEntry[] matches = [];
+        var method = "P7REF_REFERENCE_UNRESOLVED";
+        bool Try(IEnumerable<Phase7CommittedClaimEvidenceIndexEntry> q, string m) { matches = q.OrderBy(x=>x.ClaimId,StringComparer.Ordinal).ToArray(); if (matches.Length == 0) return false; method = m; return true; }
+        Try(index.Where(x => x.ClaimId == normalized.OriginalReferenceId || x.ClaimId == pointer), "P7PACKET_REFERENCE_RESOLVED_EXACT_CLAIM_ID")
+        || Try(index.Where(x => x.SemanticIdentity == normalized.OriginalReferenceId || x.SemanticIdentity == pointer || candidates.Contains(x.SemanticIdentity, StringComparer.Ordinal)), "P7PACKET_REFERENCE_RESOLVED_EXACT_SEMANTIC_IDENTITY")
+        || Try(index.Where(x => x.KnowledgeReferenceIds.Intersect(candidates, StringComparer.Ordinal).Any()), "P7PACKET_REFERENCE_RESOLVED_EXACT_KNOWLEDGE_REFERENCE")
+        || Try(index.Where(x => x.AuthorityCanonicalApprovedFieldPaths.Contains(pointer, StringComparer.Ordinal)), "P7PACKET_REFERENCE_RESOLVED_AUTHORITY_APPROVED_FIELD")
+        || Try(index.Where(x => x.ResolutionCanonicalApprovedFieldPaths.Contains(pointer, StringComparer.Ordinal)), "P7PACKET_REFERENCE_RESOLVED_RESOLUTION_APPROVED_FIELD")
+        || Try(index.Where(x => x.AuthorityCanonicalApprovedFieldPaths.Any(p => IsDescendant(pointer, p))), "P7PACKET_REFERENCE_RESOLVED_AUTHORITY_DESCENDANT")
+        || Try(index.Where(x => x.ResolutionCanonicalApprovedFieldPaths.Any(p => IsDescendant(pointer, p))), "P7PACKET_REFERENCE_RESOLVED_RESOLUTION_DESCENDANT")
+        || Try(index.Where(x => x.KnowledgeEntityIds.Intersect(candidates, StringComparer.Ordinal).Any()), "P7PACKET_REFERENCE_RESOLVED_KNOWLEDGE_ENTITY");
+        var claimIds = matches.Select(x=>x.ClaimId).ToArray();
+        var paths = matches.SelectMany(x=>x.CanonicalApprovedFieldPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var entities = matches.SelectMany(x=>x.KnowledgeEntityIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var evidence = new[] { $"originalReferenceId={normalized.OriginalReferenceId}", $"canonicalJsonPointer={pointer}", $"authorityNamespace={normalized.AuthorityNamespace}", $"resolutionMethod={method}" }
+            .Concat(index.SelectMany(x=>x.RawApprovedFieldPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(x=>$"rawApprovedFieldPathConsidered={x}"))
+            .Concat(index.SelectMany(x=>x.CanonicalApprovedFieldPaths).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(x=>$"canonicalApprovedFieldPathConsidered={x}"))
+            .Concat(paths.Select(x=>$"matchingPath={x}"))
+            .Concat(matches.SelectMany(x=>x.ResolutionDiagnosticIds).Select(x=>$"matchingResolutionDiagnosticId={x}"))
+            .Concat(entities.Select(x=>$"matchingKnowledgeEntityId={x}"))
+            .Concat(matches.Select(x=>$"candidateClaimId={x.ClaimId};disposition={x.Disposition};origins={string.Join('|',x.Origins)}"))
             .ToArray();
-        var idsOut = matched.Select(x => x.ClaimId).ToArray();
-        return new(idsOut.Length > 0, normalized.OriginalReferenceId, pointer, paths.ToArray(), entities.ToArray(), idsOut, method, idsOut.Length > 0 ? method : "P7PACKET_REFERENCE_PATH_UNMAPPED", evidence) { CanonicalReferenceIds = candidates };
+        return new(claimIds.Length>0, normalized.OriginalReferenceId, pointer, paths, entities, claimIds, method, claimIds.Length>0 ? method : "P7REF_REFERENCE_UNRESOLVED", evidence) { CanonicalReferenceIds = candidates };
     }
 
     internal static bool IsRequiredEligible(CertifiedNarrationClaim c, Phase7ScenePacketInputAuthority input) =>
         c.Disposition == Phase7ClaimDisposition.Required && !c.RequiresHumanReview && string.Equals(c.Language, input.Language, StringComparison.OrdinalIgnoreCase) &&
         input.Knowledge.KnowledgeAuthority.ClaimSupportEvidence.Any(e => e.ClaimId == c.ClaimId && e.SemanticIdentity == c.SemanticIdentity && c.SourceIds.Contains(e.SourceId, StringComparer.Ordinal) && e.SourceEligibility == Phase7SourceEligibility.EligibleForRequiredClaim && !e.RequiresHumanReview && e.ProvenancePrecision is Phase7ProvenancePrecision.ExactClaim or Phase7ProvenancePrecision.ExactKnowledgeEntity or Phase7ProvenancePrecision.ExactApprovedField);
-    private static string NormalizePointer(string id) { var s = id ?? ""; var hash = s.IndexOf('#'); if (hash >= 0) s = s[(hash + 1)..]; if (!s.StartsWith("/", StringComparison.Ordinal)) s = "/" + s; return s.Replace("~1", "/", StringComparison.Ordinal).Replace("~0", "~", StringComparison.Ordinal); }
     private static bool IsDescendant(string parent, string path) => path.Length > parent.Length && path.StartsWith(parent, StringComparison.Ordinal) && path[parent.Length] == '/';
 }
 
@@ -124,7 +166,7 @@ public sealed class Phase7KnowledgeReferenceResolver : IPhase7KnowledgeReference
         var bridged = bridge.Resolve(normalized, authority);
         var claims = authority.Knowledge.KnowledgeAuthority.Claims.Where(c => bridged.CandidateClaimIds.Contains(c.ClaimId, StringComparer.Ordinal)).OrderBy(c => c.ClaimId, StringComparer.Ordinal).ToArray();
         var status = claims.Length > 0 ? Phase7KnowledgeReferenceStatus.Resolved : (request.Optional ? Phase7KnowledgeReferenceStatus.Deferred : Phase7KnowledgeReferenceStatus.Missing);
-        var reason = claims.Length > 0 ? bridged.ReasonCode : (request.Optional ? "P7PACKET_REFERENCE_PATH_UNMAPPED" : "P7PACKET_REQUIRED_REFERENCE_UNRESOLVED");
+        var reason = claims.Length > 0 ? bridged.ReasonCode : (request.Optional ? "P7REF_APPROVED_PATH_UNMAPPED" : "P7REF_REFERENCE_UNRESOLVED");
         var eligible = claims.Where(c => Phase7KnowledgeReferenceIdentityBridge.IsRequiredEligible(c, authority)).Select(c => c.ClaimId).Order(StringComparer.Ordinal).ToArray();
         return new(request.ReferenceId, status, claims, reason) { OriginalReferenceId = normalized.OriginalReferenceId, NormalizedReferenceId = normalized.AuthorityNamespace + "#" + normalized.CanonicalJsonPointer, CanonicalJsonPointer = normalized.CanonicalJsonPointer, ResolutionMethod = bridged.ResolutionMethod, MatchedApprovedFieldPaths = bridged.MatchedApprovedFieldPaths, MatchedKnowledgeEntityIds = bridged.MatchedKnowledgeEntityIds, CandidateClaimIds = bridged.CandidateClaimIds, EligibleRequiredClaimIds = eligible, Evidence = bridged.Evidence };
     }

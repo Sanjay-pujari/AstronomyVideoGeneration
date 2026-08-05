@@ -448,6 +448,30 @@ public sealed record Phase7KnowledgeReferenceIdentityBridgeResult(bool IsValid, 
     public IReadOnlyList<string> KnowledgeEntityIds => MatchedKnowledgeEntityIds;
     public IReadOnlyList<string> ClaimIds => CandidateClaimIds;
 }
+
+public interface IPhase7ApprovedFieldPathCanonicalizer
+{
+    Phase7ApprovedFieldPathCanonicalizationResult Canonicalize(string approvedFieldPath,
+        Phase7KnowledgeOrigin? origin = null);
+}
+public sealed record Phase7ApprovedFieldPathCanonicalizationResult(bool IsValid, string OriginalPath,
+    string CanonicalJsonPointer, string AuthorityNamespace, Phase7KnowledgeOrigin? Origin, string ReasonCode);
+public interface IPhase7CommittedClaimEvidenceIndexBuilder
+{
+    IReadOnlyList<Phase7CommittedClaimEvidenceIndexEntry> Build(Phase7ScenePacketInputAuthority authority);
+}
+public sealed record Phase7CommittedClaimEvidenceIndexEntry(string ClaimId, string SemanticIdentity,
+    IReadOnlyList<string> CanonicalApprovedFieldPaths, IReadOnlyList<string> KnowledgeEntityIds,
+    IReadOnlyList<string> KnowledgeReferenceIds, IReadOnlyList<string> SourceIds,
+    Phase7ClaimDisposition Disposition, string Language, bool RequiresHumanReview,
+    IReadOnlyList<Phase7SourceEligibility> SourceEligibility,
+    IReadOnlyList<Phase7ProvenancePrecision> ProvenancePrecision, IReadOnlyList<Phase7KnowledgeOrigin> Origins)
+{
+    public IReadOnlyList<string> AuthorityCanonicalApprovedFieldPaths { get; init; } = [];
+    public IReadOnlyList<string> ResolutionCanonicalApprovedFieldPaths { get; init; } = [];
+    public IReadOnlyList<string> RawApprovedFieldPaths { get; init; } = [];
+    public IReadOnlyList<string> ResolutionDiagnosticIds { get; init; } = [];
+}
 public interface IPhase7KnowledgeReferenceResolver
 {
     IReadOnlyList<Phase7KnowledgeReferenceResolution> Resolve(IReadOnlyList<string> referenceIds, ResolvedNarrationKnowledge knowledge, bool optional = false);
