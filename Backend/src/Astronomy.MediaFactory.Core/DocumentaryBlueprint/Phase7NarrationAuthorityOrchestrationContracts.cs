@@ -47,6 +47,7 @@ public sealed record Phase7AuthorityStageResult(
     public int PassedGateCount { get; init; }
     public int TotalGateCount { get; init; }
     public IReadOnlyList<Phase7ScenePacketFailureSummary> PacketFailureSummaries { get; init; } = [];
+    public IReadOnlyList<NarrationDraftSceneFailureSummary> DraftSceneFailureSummaries { get; init; } = [];
 }
 
 public sealed record Phase7ProviderIsolationSnapshot(DateTimeOffset CapturedAtUtc);

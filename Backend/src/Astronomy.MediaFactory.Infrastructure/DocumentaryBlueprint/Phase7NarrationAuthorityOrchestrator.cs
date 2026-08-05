@@ -126,7 +126,7 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
         draftGates = draft.Validation?.Gates ?? [];
         Add(new("NarrationDraftAuthority", "P7.1C-A Narration Draft Authority", draft.Success, draft.Success ? "Valid" : "Failed",
             draft.Success ? draft.ValidationReason : FirstFailure(draft), false, false, false, [], draft.Warnings, draft.Errors, draft.BlockingIssues)
-        { LongCount = longDraft, ShortCount = shortDraft, FailedGateCount = draftGates.Count(g => !g.Passed), PassedGateCount = draftGates.Count(g => g.Passed) });
+        { LongCount = longDraft, ShortCount = shortDraft, FailedGateCount = draftGates.Count(g => !g.Passed), PassedGateCount = draftGates.Count(g => g.Passed), TotalGateCount = draftGates.Count, DraftSceneFailureSummaries = draft.SceneFailureSummaries });
         return Finish(draft.Success);
     }
 
