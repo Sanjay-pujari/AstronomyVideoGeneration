@@ -344,3 +344,113 @@ public sealed class Phase7CompatibilityScopeRealShapeTests
             Phase7ProvenancePrecision.ExactApprovedField, "orion-adapter", Phase7KnowledgeOrigin.Event, domain, null, .9m)
         { SourceEligibility = Phase7SourceEligibility.EligibleForRequiredClaim };
 }
+
+public sealed class Phase7SectionAwareRequiredClaimSelectionRegressionTests
+{
+    private const string OptionalId = "claim-26af7d31e9d9421e1988df56";
+
+    [Theory]
+    [InlineData("Wonder", "claim-identity")]
+    [InlineData("Science", "claim-summary")]
+    [InlineData("ModernAstronomy", "claim-modern")]
+    [InlineData("Inspiration", "claim-identity")]
+    [InlineData("Culture", "claim-culture")]
+    public void PrimaryObjects_SectionScope_SelectsRequiredBeforeOptionalScientificSignificance(string section, string expectedPrimary)
+    {
+        var result = Resolve("production-event-intelligence#/primaryObjects", section, "Long", Reordered:false);
+
+        Assert.Equal(Phase7KnowledgeReferenceStatus.Resolved, result.Status);
+        Assert.Equal(expectedPrimary, result.CandidateClaimIds[0]);
+        Assert.Contains(expectedPrimary, result.EligibleRequiredClaimIds);
+        Assert.DoesNotContain(OptionalId, result.EligibleRequiredClaimIds);
+    }
+
+    [Theory]
+    [InlineData("Long")]
+    [InlineData("Short")]
+    public void ScientificContext_Recognition_ResolvesRequiredRecognitionClaims(string variant)
+    {
+        var result = Resolve("production-event-intelligence#/scientificContext", "Recognition", variant, Reordered:false);
+
+        Assert.Equal(Phase7KnowledgeReferenceStatus.Resolved, result.Status);
+        Assert.StartsWith("claim-", result.CandidateClaimIds[0]);
+        Assert.NotEmpty(result.EligibleRequiredClaimIds);
+        Assert.DoesNotContain(OptionalId, result.EligibleRequiredClaimIds);
+    }
+
+    [Fact]
+    public void SectionAwareSelection_IsDeterministicUnderReorderedInput()
+    {
+        var first = Resolve("production-event-intelligence#/primaryObjects", "Science", "Long", Reordered:false);
+        var second = Resolve("production-event-intelligence#/primaryObjects", "Science", "Long", Reordered:true);
+
+        Assert.Equal(first.CandidateClaimIds, second.CandidateClaimIds);
+        Assert.Equal(first.EligibleRequiredClaimIds, second.EligibleRequiredClaimIds);
+    }
+
+    [Theory]
+    [InlineData("Wonder")]
+    [InlineData("Science")]
+    [InlineData("ModernAstronomy")]
+    [InlineData("Inspiration")]
+    public void OptionalScientificSignificance_CannotBecomeSoleRequiredCandidate(string section)
+    {
+        var result = Resolve("production-event-intelligence#/primaryObjects", section, "Long", Reordered:false);
+
+        Assert.NotEqual([OptionalId], result.EligibleRequiredClaimIds);
+        Assert.DoesNotContain(OptionalId, result.EligibleRequiredClaimIds);
+        Assert.Equal(Phase7ClaimDisposition.Optional, Claims().Single(c => c.ClaimId == OptionalId).Disposition);
+    }
+
+    private static Phase7KnowledgeReferenceResolution Resolve(string reference, string section, string variant, bool Reordered)
+    {
+        var claims = Claims();
+        var evidence = Evidence();
+        if (Reordered) { Array.Reverse(claims); Array.Reverse(evidence); }
+        return new Phase7KnowledgeReferenceResolver().Resolve(new Phase7KnowledgeReferenceRequest(reference, variant, false, []) { SectionKey = section }, Authority(claims, evidence));
+    }
+
+    private static CertifiedNarrationClaim[] Claims() =>
+    [
+        Claim(OptionalId, "ScientificSignificance", Phase7ClaimDisposition.Optional, .99m),
+        Claim("claim-identity", "Identity", Phase7ClaimDisposition.Required, .95m),
+        Claim("claim-summary", "ScientificStructure", Phase7ClaimDisposition.Required, .94m),
+        Claim("claim-major-stars", "ScientificStructure", Phase7ClaimDisposition.Required, .93m),
+        Claim("claim-belt-stars", "ScientificStructure", Phase7ClaimDisposition.Required, .92m),
+        Claim("claim-object-name", "Identity", Phase7ClaimDisposition.Required, .91m),
+        Claim("claim-naked-eye", "Recognition", Phase7ClaimDisposition.Required, .90m),
+        Claim("claim-belt-id", "Recognition", Phase7ClaimDisposition.Required, .89m),
+        Claim("claim-modern", "History", Phase7ClaimDisposition.Required, .88m),
+        Claim("claim-culture", "CultureAndMythology", Phase7ClaimDisposition.Required, .87m)
+    ];
+
+    private static Phase7ClaimSupportEvidence[] Evidence() =>
+    [
+        Ev(OptionalId, "scientific.astronomicalImportance", Phase7SourceEligibility.EligibleForOptionalClaim),
+        Ev("claim-identity", "identity.canonicalSubject"),
+        Ev("claim-summary", "scientific.summary"),
+        Ev("claim-major-stars", "scientific.majorStars"),
+        Ev("claim-belt-stars", "scientific.orionBeltStars"),
+        Ev("claim-object-name", "objects.objectName"),
+        Ev("claim-naked-eye", "observation.nakedEyeRecognition"),
+        Ev("claim-belt-id", "observation.orionBeltIdentification"),
+        Ev("claim-modern", "history.modernInterpretation"),
+        Ev("claim-culture", "cultureAndMythology.grecoRoman")
+    ];
+
+    private static CertifiedNarrationClaim Claim(string id, string domain, Phase7ClaimDisposition disposition, decimal confidence) =>
+        new(id, domain, "Sanitized Orion authority claim", ["source-a"], [], confidence, false, false, false, false, false, false, false, false, "en", "checksum")
+        { Disposition = disposition, SemanticIdentity = "semantic-" + id };
+
+    private static Phase7ClaimSupportEvidence Ev(string claimId, string path, Phase7SourceEligibility eligibility = Phase7SourceEligibility.EligibleForRequiredClaim) =>
+        new(claimId, "semantic-" + claimId, "source-a", "knowledge-" + claimId, path,
+            Phase7ProvenancePrecision.ExactApprovedField, "adapter", Phase7KnowledgeOrigin.Event, "test", null, .9m)
+        { SourceEligibility = eligibility };
+
+    private static Phase7ScenePacketInputAuthority Authority(IReadOnlyList<CertifiedNarrationClaim> claims, IReadOnlyList<Phase7ClaimSupportEvidence> evidence)
+    {
+        var k = new Phase7KnowledgeAuthority("v", "ka", "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", "p6", "c6", "idx", "ic", "p4", "c4", "p5", "payload", "pc", "Certified", "eg", "egc", "Reviewed", "eg.json", "reg", "rc", [], [], claims, [], evidence, [], [], new(0,0,0,0), [], [], [], [], "checksum", new Dictionary<string,string>());
+        var published = new PublishedPhase7KnowledgeAuthority(k, [], new Dictionary<string,string>(), new Dictionary<string,string>(), new Dictionary<string,long>(), [], [], "pub", false, true, true, new Dictionary<string,string>(), new Dictionary<string,string>());
+        return new Phase7ScenePacketInputAuthority(published, null!, null!, "ex", "pl", "ev", "fam", "type", "en", "profile", "v1", [], [], [], [], new Dictionary<string,string>(), new Dictionary<string,string>());
+    }
+}
