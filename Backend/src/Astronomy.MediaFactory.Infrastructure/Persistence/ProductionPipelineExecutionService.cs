@@ -906,7 +906,7 @@ public sealed partial class ProductionPipelineExecutionService(
             return new(7,"Narration Authority",ProductionPhaseStatus.Failed,started,finishedUtc,(long)(finishedUtc-started).TotalMilliseconds,
                 [],safeOutputs,Path.Combine(context.OutputRoot,"validation","phase-07-narration-planning-validation.json"),
                 [],[ex.Message],true,"Phase 7 narration authority failed at governed exception boundary.")
-            {ReasonCode=Phase7NarrationAuthorityOrchestrationReasonCodes.UnhandledFailure};
+            {ReasonCode="P7_NARRATION_AUTHORITY_UNHANDLED_FAILURE"};
         }
     }
 
