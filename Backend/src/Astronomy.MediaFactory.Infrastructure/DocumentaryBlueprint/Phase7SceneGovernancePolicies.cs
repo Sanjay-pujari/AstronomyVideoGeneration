@@ -45,8 +45,12 @@ public sealed class Phase7SceneReferenceCompatibilityPolicy : IPhase7SceneRefere
     private static string[] Canon(IEnumerable<string> prefixes) => prefixes.Select(p => p.StartsWith("/", StringComparison.Ordinal) ? p : "/" + p.TrimEnd('.').Replace('.', '/')).Distinct(StringComparer.Ordinal).ToArray();
     private static IReadOnlyList<string> DomainsFor(string sectionKey) => sectionKey switch
     {
-        "Wonder" => ["Identity", "Recognition", "ScientificStructure", "Observation"],
-        "Recognition" => ["Identity", "Recognition", "RecognitionGeometry", "PhysicalCharacteristics", "ScientificStructure", "Observation"],
+        "Wonder" => ["ScientificSignificance", "Identity", "Recognition", "ScientificStructure", "Observation"],
+        "Discovery" => ["KeyObjects", "ScientificStructure", "Identity", "Recognition", "Observation"],
+        "Observation" => ["Observation", "Recognition", "Identity", "ScientificStructure"],
+        "History" => ["History", "CultureAndMythology", "Identity", "ScientificStructure"],
+        "Recognition" => ["PhysicalCharacteristics", "Identity", "Recognition", "RecognitionGeometry", "ScientificStructure", "Observation"],
+        "Clarification" => ["AstrologyClarification", "ScientificStructure", "PhysicalCharacteristics", "Identity"],
         "Science" => ["ScientificStructure", "PhysicalCharacteristics", "Formation", "Evolution", "StarFormation", "Distance"],
         "ModernAstronomy" => ["ScientificSignificance", "ScientificStructure", "History", "Astrophotography", "ImagingAppearance"],
         "Inspiration" => ["Identity", "Recognition", "Observation", "InterestingFacts", "ScientificStructure"],
@@ -55,7 +59,10 @@ public sealed class Phase7SceneReferenceCompatibilityPolicy : IPhase7SceneRefere
     };
     private static IReadOnlyList<string> PrimaryPreferred(string s) => s switch
     {
-        "Wonder" => ["identity.", "objects.objectName", "scientific.summary", "observation.orionBeltIdentification"],
+        "Wonder" => ["scientific.astronomicalImportance", "identity.", "objects.objectName", "scientific.summary", "observation.orionBeltIdentification"],
+        "Discovery" => ["scientific.orionBeltStars", "scientific.majorStars", "objects.objectName", "identity."],
+        "Observation" => ["observation.binocularGuidance", "observation.nakedEyeRecognition", "observation.orionBeltIdentification"],
+        "History" => ["history.historicalCataloguing", "history.ancientRecognition", "cultureAndMythology.", "identity."],
         "Science" => ["scientific.summary", "scientific.majorStars", "scientific.orionBeltStars", "objects.objectName"],
         "ModernAstronomy" => ["scientific.summary", "history.modernInterpretation", "scientific.majorStars", "objects.objectName"],
         "Inspiration" => ["identity.", "objects.objectName", "observation.nakedEyeRecognition", "observation.orionBeltIdentification", "scientific.summary"],
@@ -70,7 +77,8 @@ public sealed class Phase7SceneReferenceCompatibilityPolicy : IPhase7SceneRefere
     };
     private static IReadOnlyList<string> ScientificPreferred(string s) => s switch
     {
-        "Recognition" => ["scientific.summary", "scientific.orionBeltStars", "observation.orionBeltIdentification", "observation.nakedEyeRecognition", "scientific.majorStars", "objects.objectName"],
+        "Recognition" => ["scientific.approximatePosition", "scientific.summary", "scientific.orionBeltStars", "observation.orionBeltIdentification", "observation.nakedEyeRecognition", "scientific.majorStars", "objects.objectName"],
+        "Clarification" => ["astrologyRelationships.westernZodiacNotes", "scientific.summary", "scientific.majorStars", "objects.objectName"],
         _ => ["scientific.summary", "scientific.majorStars", "scientific.orionBeltStars", "objects.objectName"]
     };
     private static IReadOnlyList<string> ScientificFallback(string s) => s switch
