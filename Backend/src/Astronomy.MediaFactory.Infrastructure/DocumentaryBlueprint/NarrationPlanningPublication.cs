@@ -106,13 +106,14 @@ public sealed class Phase7NarrationPlanningPhysicalReadback(IPhase7NarrationPlan
                 object? value=relative switch
                 {
                     NarrationPlanningArtifactPaths.Authority=>JsonSerializer.Deserialize<NarrationPlanningAuthority>(bytes,J),
+                    NarrationPlanningArtifactPaths.PacketCollection=>JsonSerializer.Deserialize<SceneKnowledgePacketCollection>(bytes,J),
                     NarrationPlanningArtifactPaths.Diagnostics=>JsonSerializer.Deserialize<NarrationPlanningDiagnosticsArtifact>(bytes,J),
                     NarrationPlanningArtifactPaths.Report=>JsonSerializer.Deserialize<NarrationPlanningPublicationReport>(bytes,J),
                     NarrationPlanningArtifactPaths.Validation=>JsonSerializer.Deserialize<NarrationPlanningPhysicalValidation>(bytes,J),
                     NarrationPlanningArtifactPaths.PublicationEvidence=>JsonSerializer.Deserialize<NarrationPlanningPublicationEvidence>(bytes,J),
                     _=>JsonNode.Parse(bytes)
                 }; if(value is null)throw new JsonException("Empty artifact");
-                var semantic=value switch { NarrationPlanningAuthority x=>x.DeterministicChecksum,NarrationPlanningDiagnosticsArtifact x=>x.DeterministicChecksum,
+                var semantic=value switch { NarrationPlanningAuthority x=>x.DeterministicChecksum,SceneKnowledgePacketCollection x=>x.DeterministicChecksum,NarrationPlanningDiagnosticsArtifact x=>x.DeterministicChecksum,
                     NarrationPlanningPublicationReport x=>x.DeterministicChecksum,NarrationPlanningPhysicalValidation x=>x.DeterministicChecksum,
                     NarrationPlanningPublicationEvidence x=>x.DeterministicChecksum,_=>NarrationPlanningPublicationJson.Sha(bytes)};
                 artifacts.Add(new(relative,NarrationPlanningPublicationJson.Sha(bytes),bytes.LongLength,semantic));
@@ -136,6 +137,7 @@ public sealed class Phase7NarrationPlanningCandidateReadback(IPhase7NarrationPla
             {
                 object value=relative switch {
                     NarrationPlanningArtifactPaths.Authority=>JsonSerializer.Deserialize<NarrationPlanningAuthority>(bytes,J)!,
+                    NarrationPlanningArtifactPaths.PacketCollection=>JsonSerializer.Deserialize<SceneKnowledgePacketCollection>(bytes,J)!,
                     NarrationPlanningArtifactPaths.Diagnostics=>JsonSerializer.Deserialize<NarrationPlanningDiagnosticsArtifact>(bytes,J)!,
                     NarrationPlanningArtifactPaths.Report=>JsonSerializer.Deserialize<NarrationPlanningPublicationReport>(bytes,J)!,
                     NarrationPlanningArtifactPaths.Validation=>JsonSerializer.Deserialize<NarrationPlanningPhysicalValidation>(bytes,J)!,
@@ -144,13 +146,14 @@ public sealed class Phase7NarrationPlanningCandidateReadback(IPhase7NarrationPla
                 if(value is null)throw new JsonException("Empty candidate artifact.");
                 var checksumValid=value switch {
                     NarrationPlanningAuthority x=>x.DeterministicChecksum==NarrationPlanningCanonicalizer.AuthorityChecksum(x),
+                    SceneKnowledgePacketCollection x=>x.DeterministicChecksum==NarrationPlanningCanonicalizer.PacketCollectionChecksum(x),
                     NarrationPlanningDiagnosticsArtifact x=>x.Diagnostics.DeterministicChecksum==NarrationPlanningCanonicalizer.DiagnosticsChecksum(x.Diagnostics)&&x.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputeDiagnosticsArtifactChecksum(x),
                     NarrationPlanningPublicationReport x=>x.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputeReportChecksum(x),
                     NarrationPlanningPhysicalValidation x=>x.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputePhysicalValidationChecksum(x),
                     NarrationPlanningPublicationEvidence x=>x.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputePublicationEvidenceChecksum(x),
                     _=>true };
                 if(!checksumValid)errors.Add("NARRATION_PLANNING_CANDIDATE_CHECKSUM_INVALID:"+relative);
-                string semantic=value switch { NarrationPlanningAuthority x=>x.DeterministicChecksum,
+                string semantic=value switch { NarrationPlanningAuthority x=>x.DeterministicChecksum,SceneKnowledgePacketCollection x=>x.DeterministicChecksum,
                     NarrationPlanningDiagnosticsArtifact x=>x.DeterministicChecksum,NarrationPlanningPublicationReport x=>x.DeterministicChecksum,
                     NarrationPlanningPhysicalValidation x=>x.DeterministicChecksum,NarrationPlanningPublicationEvidence x=>x.DeterministicChecksum,
                     _=>NarrationPlanningPublicationJson.Sha(bytes)};
@@ -190,14 +193,15 @@ public sealed class Phase7NarrationPlanningCommittedStateEvaluator(IPhase7Narrat
         {
             async Task<T> Get<T>(string p)=>(JsonSerializer.Deserialize<T>(await fs.ReadAsync(NarrationPlanningPublicationJson.Full(input.ExecutionRoot,p),token),J)??throw new JsonException(p));
             var a=await Get<NarrationPlanningAuthority>(NarrationPlanningArtifactPaths.Authority);var da=await Get<NarrationPlanningDiagnosticsArtifact>(NarrationPlanningArtifactPaths.Diagnostics);var d=da.Diagnostics;
+            var packets=await Get<SceneKnowledgePacketCollection>(NarrationPlanningArtifactPaths.PacketCollection);
             var r=await Get<NarrationPlanningPublicationReport>(NarrationPlanningArtifactPaths.Report);var v=await Get<NarrationPlanningPhysicalValidation>(NarrationPlanningArtifactPaths.Validation);
             var e=await Get<NarrationPlanningPublicationEvidence>(NarrationPlanningArtifactPaths.PublicationEvidence);
             var manifest=JsonNode.Parse(await fs.ReadAsync(NarrationPlanningPublicationJson.Full(input.ExecutionRoot,NarrationPlanningArtifactPaths.Manifest),token))?.AsObject()??throw new JsonException("manifest");
             var entries=manifest["phase7NarrationPlanningAuthorities"]?.Deserialize<NarrationPlanningManifestEntry[]>(J)??[];var me=entries.SingleOrDefault(x=>x.AuthorityId==a.AuthorityId)??throw new JsonException("planning manifest entry missing");
-            var checksumOk=a.DeterministicChecksum==NarrationPlanningCanonicalizer.AuthorityChecksum(a)&&d.DeterministicChecksum==NarrationPlanningCanonicalizer.DiagnosticsChecksum(d)&&da.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputeDiagnosticsArtifactChecksum(da)&&r.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputeReportChecksum(r)&&v.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputePhysicalValidationChecksum(v)&&e.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputePublicationEvidenceChecksum(e)&&me.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputeManifestEntryChecksum(me);
+            var checksumOk=a.DeterministicChecksum==NarrationPlanningCanonicalizer.AuthorityChecksum(a)&&packets.DeterministicChecksum==NarrationPlanningCanonicalizer.PacketCollectionChecksum(packets)&&d.DeterministicChecksum==NarrationPlanningCanonicalizer.DiagnosticsChecksum(d)&&da.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputeDiagnosticsArtifactChecksum(da)&&r.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputeReportChecksum(r)&&v.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputePhysicalValidationChecksum(v)&&e.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputePublicationEvidenceChecksum(e)&&me.DeterministicChecksum==NarrationPlanningPublicationCanonicalizer.ComputeManifestEntryChecksum(me);
             if(!checksumOk)return new(false,null,"NARRATION_PLANNING_COMMITTED_CHECKSUM_INVALID",["A deterministic checksum did not recompute."],[]);
             if(a.ExecutionId!=input.ExecutionId||a.PlanId!=input.PlanId||a.EventId!=input.EventId||!string.Equals(a.Language,input.Language,StringComparison.OrdinalIgnoreCase)||a.ProfileId!=input.ProfileId||a.ProfileVersion!=input.ProfileVersion)return new(false,null,NarrationPlanningPublicationReasonCodes.LineageStale,["Requested identity differs from committed identity."],[]);
-            if(a.PacketCollectionChecksum!=input.SceneKnowledgePacketCollection.DeterministicChecksum||e.PacketCollectionChecksum!=input.SceneKnowledgePacketCollection.DeterministicChecksum)return new(false,null,NarrationPlanningPublicationReasonCodes.LineageStale,["Packet collection lineage changed."],[]);
+            if(a.PacketCollectionChecksum!=packets.DeterministicChecksum||a.PacketCollectionChecksum!=input.SceneKnowledgePacketCollection.DeterministicChecksum||e.PacketCollectionChecksum!=input.SceneKnowledgePacketCollection.DeterministicChecksum)return new(false,null,NarrationPlanningPublicationReasonCodes.LineageStale,["Packet collection lineage changed."],[]);
             if(!v.CandidateReadbackPassed||!v.CommittedReadbackPassed||!v.PhysicalReadbackPassed||!v.CommittedStatePassed||v.Errors.Count>0||v.GateResults.Any(x=>!x.Passed)||e.State!="Committed"||!e.CommittedPhysical||me.PublicationStatus!="Committed"||e.ManifestEntryChecksum!=me.DeterministicChecksum||e.ValidationChecksum!=v.DeterministicChecksum)return new(false,null,NarrationPlanningPublicationReasonCodes.CommittedStateInvalid,["Validation, manifest, or publication evidence is not committed."],[]);
             var published=new PublishedNarrationPlanningAuthority(a,d,r,v,me,e,physical.Artifacts.Select(x=>x.RelativePath).ToArray(),physical.Artifacts.ToDictionary(x=>x.RelativePath,x=>x.PhysicalSha256),[]);
             return new(true,published,NarrationPlanningPublicationReasonCodes.ReuseValid,[],d.Warnings);
@@ -245,6 +249,7 @@ public sealed class Phase7NarrationPlanningTransactionCoordinator(IPhase7Narrati
                 stagedArtifacts.Add(new(relative,NarrationPlanningPublicationJson.Sha(bytes),bytes.LongLength,checksum));
             }
             await Write(NarrationPlanningArtifactPaths.Authority,authority);fault.Inject(NarrationPlanningPublicationFaultPoint.AfterAuthorityStageWrite);
+            await Write(NarrationPlanningArtifactPaths.PacketCollection,input.SceneKnowledgePacketCollection);
             var diagnosticsDraft=new NarrationPlanningDiagnosticsArtifact(NarrationPlanningPublicationContract.DiagnosticsVersion,authority.AuthorityId,authority.DeterministicChecksum,authority.ExecutionId,authority.PlanId,authority.EventId,authority.Language,authority.ProfileId,authority.ProfileVersion,authority.Diagnostics,"");
             var diagnostics=diagnosticsDraft with{DeterministicChecksum=NarrationPlanningPublicationCanonicalizer.ComputeDiagnosticsArtifactChecksum(diagnosticsDraft)};
             await Write(NarrationPlanningArtifactPaths.Diagnostics,diagnostics);fault.Inject(NarrationPlanningPublicationFaultPoint.AfterDiagnosticsStageWrite);

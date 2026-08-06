@@ -104,7 +104,8 @@ public sealed record DocumentaryNarrativeLifecycleResult(
 /// <summary>Thin production orchestration around the existing V5 narration generator.</summary>
 public sealed class DocumentaryNarrativeLifecycleIntegrationService(
     NarrationGeneratorV5 generator,
-    DocumentaryNarrativeAcceptanceCoordinator acceptanceCoordinator) : IDocumentaryNarrativeLifecycleIntegrationService
+    DocumentaryNarrativeAcceptanceCoordinator acceptanceCoordinator,
+    IPhase7NarrationRuntimeAuthorityLoader? runtimeAuthorityLoader = null) : IDocumentaryNarrativeLifecycleIntegrationService
 {
     public const int MaximumGenerationAttempts = 2;
     public const int MaximumRevisionAttempts = MaximumGenerationAttempts;
@@ -141,13 +142,47 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
 
         blueprintAuthority = await ReadBlueprintAuthorityAsync(request.ExecutionRoot, authority, errors, cancellationToken);
 
-        var longRequest = BuildCompositionRequest(request, authority, blueprintAuthority?.Long, blueprintAuthority?.Aggregate, "Long", new(480, 600, 900));
-        var shortRequest = BuildCompositionRequest(request, authority, blueprintAuthority?.Short, blueprintAuthority?.Aggregate, "Short", new(60, 90, 120));
+        Phase7NarrationRuntimeAuthority? runtimeAuthority = null;
+        var planningPath = Path.Combine(request.ExecutionRoot, NarrationPlanningArtifactPaths.Authority.Replace('/', Path.DirectorySeparatorChar));
+        NarrationPlanningAuthority? planningIdentity = null;
+        if (File.Exists(planningPath))
+            planningIdentity = JsonSerializer.Deserialize<NarrationPlanningAuthority>(await File.ReadAllTextAsync(planningPath, cancellationToken), JsonOptions);
+        var runtime = runtimeAuthorityLoader is null
+            ? new Phase7NarrationRuntimeAuthorityLoadResult(false, null, Phase7NarrationRuntimeAuthorityReasonCodes.Missing,
+                ["IPhase7NarrationRuntimeAuthorityLoader is not registered."])
+            : await runtimeAuthorityLoader.LoadAsync(new(request.ExecutionRoot, request.ExecutionId,
+                request.PlanId.ToString("D"), request.EventId, request.Language, request.ProfileId,
+                planningIdentity?.ProfileVersion ?? ""), cancellationToken);
+        if (!runtime.IsValid || runtime.Authority is null) errors.Add($"{runtime.ReasonCode}: {string.Join("; ", runtime.Errors)}");
+        else runtimeAuthority = runtime.Authority;
+        var runtimeDiagnosticsPath = Path.Combine(request.ExecutionRoot, "narration-v5", "runtime-authority-projection-diagnostics.json");
+        var runtimePlanning = runtimeAuthority?.PlanningAuthority.Authority;
+        await File.WriteAllTextAsync(runtimeDiagnosticsPath, JsonSerializer.Serialize(new
+        {
+            knowledgeAuthorityId = runtimeAuthority?.KnowledgeAuthority.KnowledgeAuthority.AuthorityId,
+            knowledgeAuthorityChecksum = runtimeAuthority?.KnowledgeAuthority.KnowledgeAuthority.SemanticChecksum,
+            planningAuthorityId = runtimePlanning?.AuthorityId, planningAuthorityChecksum = runtimePlanning?.DeterministicChecksum,
+            packetCollectionChecksum = runtimePlanning?.PacketCollectionChecksum,
+            packetArtifactPath = NarrationPlanningArtifactPaths.PacketCollection,
+            runtimeAuthorityCommittedStatePassed = runtime.IsValid,
+            longPlanningSceneCount = runtimePlanning?.LongScenes.Count ?? 0,
+            shortPlanningSceneCount = runtimePlanning?.ShortScenes.Count ?? 0,
+            longPacketCount = runtimeAuthority?.LongPackets.Count ?? 0,
+            shortPacketCount = runtimeAuthority?.ShortPackets.Count ?? 0,
+            requiredClaimCount = (runtimeAuthority?.LongPackets ?? []).Concat(runtimeAuthority?.ShortPackets ?? []).Sum(packet => packet.RequiredClaims.Count(claim => !claim.RequiresHumanReview)),
+            optionalClaimCount = (runtimeAuthority?.LongPackets ?? []).Concat(runtimeAuthority?.ShortPackets ?? []).Sum(packet => packet.OptionalClaims.Count(claim => !claim.RequiresHumanReview)),
+            deferredClaimsExcludedCount = (runtimeAuthority?.LongPackets ?? []).Concat(runtimeAuthority?.ShortPackets ?? []).Sum(packet => packet.DeferredClaims.Count),
+            humanReviewClaimsExcludedCount = (runtimeAuthority?.LongPackets ?? []).Concat(runtimeAuthority?.ShortPackets ?? []).Sum(packet => packet.RequiredClaims.Concat(packet.OptionalClaims).Count(claim => claim.RequiresHumanReview || claim.Disposition == Phase7ClaimDisposition.HumanReview)),
+            packetChecksumPassed = runtime.IsValid, planningChecksumPassed = runtime.IsValid,
+            factSource = "CommittedSceneKnowledgePacket", supplementalSource = "RequiredSemanticFactResolver",
+            errors = runtime.Errors
+        }, JsonOptions), cancellationToken);
+        generatedFiles.Add(runtimeDiagnosticsPath);
+
+        var longRequest = BuildCompositionRequest(request, authority, blueprintAuthority?.Long, blueprintAuthority?.Aggregate, runtimeAuthority, "Long", new(480, 600, 900));
+        var shortRequest = BuildCompositionRequest(request, authority, blueprintAuthority?.Short, blueprintAuthority?.Aggregate, runtimeAuthority, "Short", new(60, 90, 120));
         if (longRequest.OrderedScenes.Count == 0) errors.Add("Long narration has no governed Phase 6 scenes.");
         if (shortRequest.OrderedScenes.Count == 0) errors.Add("Short narration has no governed Phase 6 scenes.");
-        if (longRequest.OrderedScenes.All(scene => scene.RequiredFacts.Count == 0) &&
-            shortRequest.OrderedScenes.All(scene => scene.RequiredFacts.Count == 0))
-            warnings.Add("Composition-side required facts were not independently projected; NarrationGeneratorV5 will use its existing semantic fact resolution pipeline.");
 
         var longRequestPath = Path.Combine(request.ExecutionRoot, "narration-v5", "long", "narrative-composition-request.json");
         var shortRequestPath = Path.Combine(request.ExecutionRoot, "narration-v5", "short", "narrative-composition-request.json");
@@ -398,6 +433,12 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
     internal static DocumentaryNarrativeCompositionRequest BuildCompositionRequest(DocumentaryNarrativeLifecycleRequest request,
         StoryFramesAuthority? authority, DocumentaryBlueprintVariantArtifact? variantArtifact,
         DocumentaryBlueprintAggregate? aggregate, string variant, DocumentaryNarrativeDurationGuidance duration)
+        => BuildCompositionRequest(request, authority, variantArtifact, aggregate, null, variant, duration);
+
+    internal static DocumentaryNarrativeCompositionRequest BuildCompositionRequest(DocumentaryNarrativeLifecycleRequest request,
+        StoryFramesAuthority? authority, DocumentaryBlueprintVariantArtifact? variantArtifact,
+        DocumentaryBlueprintAggregate? aggregate, Phase7NarrationRuntimeAuthority? runtimeAuthority,
+        string variant, DocumentaryNarrativeDurationGuidance duration)
     {
         var safety = new[] { "Use only grounded astronomy facts; distinguish culture and mythology from science.",
             "Do not present astrology as scientific causation.", "Do not leak prompts, notes, or internal identifiers." };
@@ -409,21 +450,34 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             var ordered = group.OrderBy(frame => frame.FrameNumber).ToArray();
             var first = ordered[0];
             var blueprint = variantArtifact?.Blueprint.Scenes.SingleOrDefault(scene => scene.SceneId.Equals(first.SceneId, StringComparison.OrdinalIgnoreCase));
+            var planning = (variant.Equals("Long", StringComparison.OrdinalIgnoreCase) ? runtimeAuthority?.PlanningAuthority.Authority.LongScenes : runtimeAuthority?.PlanningAuthority.Authority.ShortScenes)
+                ?.SingleOrDefault(scene => scene.SceneId.Equals(first.SceneId, StringComparison.OrdinalIgnoreCase));
+            var packet = (variant.Equals("Long", StringComparison.OrdinalIgnoreCase) ? runtimeAuthority?.LongPackets : runtimeAuthority?.ShortPackets)
+                ?.SingleOrDefault(value => value.PacketId == planning?.PacketId);
+            var requiredIds = planning?.RequiredClaims.ToHashSet(StringComparer.Ordinal) ?? [];
+            var optionalIds = planning?.OptionalClaims.ToHashSet(StringComparer.Ordinal) ?? [];
+            var requiredFacts = packet?.RequiredClaims.Where(claim => requiredIds.Contains(claim.ClaimId) && !claim.RequiresHumanReview && claim.Disposition is not Phase7ClaimDisposition.Deferred and not Phase7ClaimDisposition.HumanReview)
+                .Select(claim => new DocumentaryNarrativeRequiredFact(claim.ClaimId, claim.Text, claim.KnowledgeReferenceIds, claim.SourceIds, claim.Confidence,
+                    claim.RequiresQualification ? ["Retain the certified qualification."] : [])).ToArray() ?? [];
+            var optionalFacts = packet?.OptionalClaims.Where(claim => optionalIds.Contains(claim.ClaimId) && !claim.RequiresHumanReview && claim.Disposition is not Phase7ClaimDisposition.Deferred and not Phase7ClaimDisposition.HumanReview)
+                .Select(claim => claim.Text).ToArray() ?? [];
             var purpose = blueprint is null ? string.Join(" ", ordered.Select(frame => frame.NarrativeIntent).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct())
                 : $"Purpose: {blueprint.SceneObjective.Summary} Viewer goal: {blueprint.SceneObjective.LearningGoal} " +
                   $"Takeaway: {blueprint.EditorialOutcome.ViewerTakeaway} Transition intent: {blueprint.Transition.TransitionIntent}";
-            return new DocumentaryNarrativeSceneInput(first.SceneNumber, first.SceneId, blueprint?.NarrativeStage.ToString() ?? first.NarrativeStage,
-                blueprint?.Title ?? first.SceneRole, blueprint?.ViewerQuestion.Text ?? string.Join("; ", ordered.SelectMany(frame => frame.ViewerQuestionIds).Distinct()),
-                blueprint?.SceneObjective.LearningGoal ?? string.Join("; ", ordered.SelectMany(frame => frame.LearningObjectiveIds).Distinct()), purpose,
-                [], [], [], safety, [],
+            return new DocumentaryNarrativeSceneInput(packet?.SceneNumber ?? first.SceneNumber, planning?.SceneId ?? first.SceneId, planning?.NarrativeGoal.SectionKey ?? blueprint?.NarrativeStage.ToString() ?? first.NarrativeStage,
+                blueprint?.Title ?? packet?.SceneRole ?? first.SceneRole, planning?.ViewerQuestion ?? blueprint?.ViewerQuestion.Text ?? string.Join("; ", ordered.SelectMany(frame => frame.ViewerQuestionIds).Distinct()),
+                planning?.LearningObjective ?? blueprint?.SceneObjective.LearningGoal ?? string.Join("; ", ordered.SelectMany(frame => frame.LearningObjectiveIds).Distinct()),
+                planning is null ? purpose : $"{planning.NarrativeGoal.SectionKey}: {packet?.SceneObjective}",
+                requiredFacts, optionalFacts, packet?.CulturalContext ?? [], (packet?.SafetyRules ?? []).Concat(planning?.SafetyRequirements ?? []).Concat(safety).Distinct().ToArray(), [],
                 string.Join(" ", ordered.Select(frame => frame.VisualIntent).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()),
-                blueprint?.EstimatedDurationSeconds ?? (int)Math.Round(ordered.Sum(frame => frame.EstimatedDuration)),
+                planning?.ExpectedDuration ?? packet?.TargetDurationSeconds ?? blueprint?.EstimatedDurationSeconds ?? (int)Math.Round(ordered.Sum(frame => frame.EstimatedDuration)),
                 index == 0 ? "" : $"Continue naturally from {groups[index - 1].Key}.",
-                blueprint?.Transition.TransitionIntent ?? string.Join(" ", ordered.Select(frame => frame.TransitionOut).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()))
+                planning is null ? blueprint?.Transition.TransitionIntent ?? string.Join(" ", ordered.Select(frame => frame.TransitionOut).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct())
+                    : string.Join(" ", new[] { planning.IncomingTransition.DestinationTransitionIn, planning.OutgoingTransition.SourceTransitionOut }.Where(value => !string.IsNullOrWhiteSpace(value))))
             {
-                BlueprintSceneId = blueprint?.SceneId ?? first.SceneId, StoryFrameId = first.FrameId,
-                SceneRole = blueprint?.SceneRole.ToString() ?? first.SceneRole,
-                NarrativeStage = blueprint?.NarrativeStage.ToString() ?? first.NarrativeStage,
+                BlueprintSceneId = blueprint?.SceneId ?? planning?.SceneId ?? first.SceneId, StoryFrameId = planning?.StoryFrameId ?? first.FrameId,
+                SceneRole = packet?.SceneRole ?? blueprint?.SceneRole.ToString() ?? first.SceneRole,
+                NarrativeStage = packet?.NarrativeStage ?? blueprint?.NarrativeStage.ToString() ?? first.NarrativeStage,
                 EditorialOutcome = blueprint is null ? "" : $"{blueprint.EditorialOutcome.ViewerTakeaway} {blueprint.EditorialOutcome.NarrativeContribution}",
                 EditorialPriority = blueprint?.EditorialPriority.ToString() ?? "",
                 BlueprintKnowledgeReferenceIds = blueprint?.KnowledgeReferences.Select(reference => reference.KnowledgeEntryId).ToArray() ?? [],
