@@ -54,6 +54,20 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
     public Task<string> PerformAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
         => RequestCompletionAsync(userPrompt, cancellationToken, systemPrompt);
 
+    public async Task<NarrationProviderCallResult> InvokeAsync(NarrationProviderCall request, CancellationToken cancellationToken)
+    {
+        // This is deliberately adjacent to RequestCompletionAsync: counters upstream may only use a
+        // successfully returned call result, never the existence of a request or output artifact.
+        var started = DateTime.UtcNow;
+        _logger.LogInformation("Narration provider call {ProviderCallId} attempt {AttemptId} variant {Variant} started for {Deployment}",
+            request.ProviderCallId, request.AttemptId, request.Variant, _options.ChatDeployment);
+        var response = await RequestCompletionAsync(request.UserPrompt, cancellationToken, request.SystemPrompt);
+        var result = NarrationProviderCallResult.Completed(request, ProviderName, ModelOrDeployment, started, DateTime.UtcNow, response);
+        _logger.LogInformation("Narration provider call {ProviderCallId} completed with {CharacterCount} characters and checksum {Checksum}",
+            result.ProviderCallId, result.ResponseCharacterCount, result.ResponseChecksum);
+        return result;
+    }
+
     public async Task<ScriptResult> GenerateAsync(ContractsContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
     {
         var prompt = _promptBuilder.Build(contentType, context, context.PromptFeedbackContext);
