@@ -115,7 +115,9 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         {
             var item = pair.item;
             var projection = ProviderSemanticProjection.Project(item);
-            AddSection(sb, 3, $"SCENE {pair.index + 1}", $"Purpose:\n{projection.Purpose}\n\nGrounded astronomy:\n{FormatProjectionList(projection.FactualStatements)}\n\nApproved names and terminology:\n{FormatProjectionList(projection.ObjectVocabulary)}\n\nPronunciation guidance:\n{FormatProjectionList(projection.Pronunciations)}\n\nScientific boundaries:\n{FormatList(item.ScientificBoundaries.Select(CleanSemanticText).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray())}\n\nObservation guidance:\n{FormatProjectionList(projection.ObservationStatements)}\n\nTransition:\n{projection.Transition}\n\nTone and pacing:\n{CleanSemanticText(item.Tone)}; {CleanSemanticText(item.Rhythm)}\n\nDuration guidance:\nApproximately {item.WordBudget.ToString(CultureInfo.InvariantCulture)} spoken words.");
+            var vocabularyBoundary = projection.ObjectVocabulary.Count < 2 ? string.Empty :
+                "\n\nNarration boundary:\nUse the approved names naturally as identification vocabulary. You may help the audience remember or recognize the names, but do not add scientific properties or relationships that are not included in Grounded astronomy.";
+            AddSection(sb, 3, $"SCENE {pair.index + 1}", $"Purpose:\n{projection.Purpose}\n\nGrounded astronomy:\n{FormatProjectionList(projection.FactualStatements)}\n\nApproved names and terminology:\n{FormatProjectionList(projection.ObjectVocabulary)}\n\nPronunciation guidance:\n{FormatProjectionList(projection.Pronunciations)}\n\nScientific boundaries:\n{FormatList(item.ScientificBoundaries.Select(CleanSemanticText).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray())}\n\nObservation guidance:\n{FormatProjectionList(projection.ObservationStatements)}{vocabularyBoundary}\n\nTransition:\n{projection.Transition}\n\nTone and pacing:\n{CleanSemanticText(item.Tone)}; {CleanSemanticText(item.Rhythm)}\n\nDuration guidance:\nApproximately {item.WordBudget.ToString(CultureInfo.InvariantCulture)} spoken words.");
         }
         AddSection(sb, 11, "NEGATIVE OUTPUT RULES", "Do not mention or repeat IDs, field names, labels, contracts, phases, validation, producer notes, internal instructions, data structures, scene role names, transition codes, or placeholder names. Scene numbers are mapping fields only and must never be spoken.");
         AddSection(sb, 12, "OUTPUT CONTRACT", new OutputContractSectionBuilder().Build());
@@ -221,10 +223,14 @@ public sealed record ProviderSemanticProjectionResult(
     IReadOnlyList<string> ObjectVocabulary, IReadOnlyList<string> Pronunciations,
     IReadOnlyList<string> UnsupportedFragments, IReadOnlyList<string> ObservationStatements);
 
+public sealed record ProviderSceneContextAssessment(bool Passed, string ReasonCode, bool PurposeMeaningful,
+    int FactualStatementCount, int ObservationStatementCount, int ObjectVocabularyCount, int UnsupportedFragmentCount,
+    bool RoleSupportsVocabularyOnlyContext, int SemanticCharacterCount, string? FailureReason);
+
 /// <summary>Last-mile projection only: committed inputs remain untouched while provider text is performer-safe.</summary>
 public static class ProviderSemanticProjection
 {
-    private static readonly Regex Internal = new(@"\b(?:Advance|Outcome)\d+\b|\bOrion Gold scene\b|\b(?:ScientificExplanation|Hook|Discovery|Observation|Takeaway|Closing)\b|certified evidence", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex Internal = new(@"\b(?:Advance|Outcome)\d+\b|\bOrion Gold scene\b|certified evidence|\bfor the\s+.+?\s+scene\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex SentenceVerb = new(@"\b(?:is|are|was|were|has|have|contains?|forms?|appears?|lies|marks?|shines?|moves?|rises?|sets?|can|will)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public static ProviderSemanticProjectionResult Project(NarrationRealizationResult realization)
@@ -237,15 +243,16 @@ public static class ProviderSemanticProjection
             if (string.IsNullOrWhiteSpace(value)) { unsupported.Add(sourceValue); continue; }
             if (fact.Label.Contains("pronunciation", StringComparison.OrdinalIgnoreCase) || fact.Label.Contains("alias", StringComparison.OrdinalIgnoreCase)) pronunciations.Add(value);
             else if (IsStatement(value)) facts.Add(value.TrimEnd('.') + ".");
-            else if (Regex.IsMatch(value, @"^[\p{L}][\p{L}'’ -]{0,40}$", RegexOptions.CultureInvariant) && value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 3) names.Add(value);
+            else if (IsCertifiedObjectName(fact) && Regex.IsMatch(value, @"^[\p{L}][\p{L}'’ -]{0,40}$", RegexOptions.CultureInvariant) && value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 3) names.Add(value);
             else unsupported.Add(value);
         }
-        var purpose = Clean(realization.NarrativePurpose);
-        if (string.IsNullOrWhiteSpace(purpose) || Internal.IsMatch(purpose))
-            purpose = facts.Count > 0 ? "Explain the astronomical meaning of the grounded details in natural viewer-facing language." : "Give the audience a clear, natural understanding of this part of Orion.";
+        var role = ResolveRole(realization);
+        var rawPurpose = realization.NarrativePurpose ?? string.Empty;
+        var purpose = Clean(rawPurpose);
+        if (string.IsNullOrWhiteSpace(purpose) || IsInternal(rawPurpose, role)) purpose = RoleAwarePurpose(role);
         var transition = realization.TransitionIntent is null ? "Continue naturally to the next astronomical idea." :
             $"Move naturally from {Clean(realization.TransitionIntent.FromConcept)} toward {Clean(realization.TransitionIntent.ToConcept)}.";
-        if (Internal.IsMatch(transition) || transition.Count(char.IsLetterOrDigit) < 20) transition = "Connect this understanding naturally to the next astronomical idea.";
+        if (IsInternal(transition, role) || transition.Count(char.IsLetterOrDigit) < 20) transition = "Connect this understanding naturally to the next astronomical idea.";
         var observations = realization.ObservationDetails
             .Select(fact => Clean(SemanticValue(fact) + (string.IsNullOrWhiteSpace(fact.Unit) ? string.Empty : " " + fact.Unit)))
             .Where(IsStatement)
@@ -254,8 +261,42 @@ public static class ProviderSemanticProjection
         return new(purpose, transition, facts, names, pronunciations, unsupported, observations);
     }
 
-    public static bool HasMeaningfulContext(ProviderSemanticProjectionResult projection)
-        => projection.FactualStatements.Count > 0 && projection.Purpose.Count(char.IsLetterOrDigit) >= 30;
+    public static ProviderSceneContextAssessment AssessMeaningfulContext(ProviderSemanticProjectionResult projection, NarrationRealizationResult realization)
+    {
+        var semanticCharacters = projection.Purpose.Count(char.IsLetterOrDigit);
+        var purposeMeaningful = semanticCharacters >= 30 && !IsInternal(projection.Purpose, ResolveRole(realization));
+        var supportsVocabulary = VocabularyRoles.Contains(ResolveRole(realization));
+        var reason = !purposeMeaningful ? "P7_PROVIDER_CONTEXT_NO_MEANINGFUL_PURPOSE"
+            : projection.FactualStatements.Count > 0 ? "P7_PROVIDER_CONTEXT_FACTUAL"
+            : projection.ObservationStatements.Count > 0 ? "P7_PROVIDER_CONTEXT_OBSERVATION"
+            : supportsVocabulary && projection.ObjectVocabulary.Count >= 2 ? "P7_PROVIDER_CONTEXT_VOCABULARY_LED_RECOGNITION"
+            : "P7_PROVIDER_CONTEXT_NO_APPROVED_SEMANTIC_INPUT";
+        var passed = purposeMeaningful && (projection.FactualStatements.Count > 0 || projection.ObservationStatements.Count > 0 || supportsVocabulary && projection.ObjectVocabulary.Count >= 2);
+        return new(passed, reason, purposeMeaningful, projection.FactualStatements.Count, projection.ObservationStatements.Count,
+            projection.ObjectVocabulary.Count, projection.UnsupportedFragments.Count, supportsVocabulary, semanticCharacters, passed ? null : reason);
+    }
+
+    public static bool HasMeaningfulContext(ProviderSemanticProjectionResult projection, NarrationRealizationResult realization)
+        => AssessMeaningfulContext(projection, realization).Passed;
+
+    private static readonly HashSet<string> VocabularyRoles = new(StringComparer.OrdinalIgnoreCase)
+        { "RecognitionGuide", "Orientation", "OpeningHook", "Identification", "Discovery" };
+    private static string ResolveRole(NarrationRealizationResult value) => new[] { value.ContentNature, value.BeatRole, value.NarrativeRole }
+        .FirstOrDefault(candidate => VocabularyRoles.Contains(candidate) || candidate.Equals("ScientificExplanation", StringComparison.OrdinalIgnoreCase)
+            || candidate.Equals("Observation", StringComparison.OrdinalIgnoreCase) || candidate.Equals("Closing", StringComparison.OrdinalIgnoreCase)
+            || candidate.Equals("Takeaway", StringComparison.OrdinalIgnoreCase)) ?? value.ContentNature;
+    private static bool IsInternal(string value, string role) => Internal.IsMatch(value) ||
+        (!string.IsNullOrWhiteSpace(role) && Regex.Matches(value, $@"\b{Regex.Escape(role)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Count > 1);
+    private static string RoleAwarePurpose(string role) => role.ToLowerInvariant() switch
+    {
+        "recognitionguide" => "Help the viewer recognize the subject by introducing the approved names and landmarks naturally.",
+        "openinghook" => "Create immediate curiosity about the astronomical subject using only the supplied grounded details.",
+        "orientation" => "Give the viewer a clear mental orientation to the astronomical subject and its approved identifying details.",
+        "scientificexplanation" => "Explain the scientific meaning of the supplied astronomy facts in clear, natural language.",
+        "observation" => "Help the viewer understand how to identify or observe the subject using only the supplied approved guidance.",
+        "closing" or "takeaway" => "Leave the viewer with a clear, memorable understanding of the supplied astronomical idea.",
+        _ => "Give the audience a clear, natural understanding of the supplied astronomical idea."
+    };
 
     private static string SemanticValue(RealizedSemanticFact fact)
     {
@@ -267,6 +308,8 @@ public static class ProviderSemanticProjection
     }
 
     private static bool IsStatement(string value) => value.Count(char.IsLetterOrDigit) >= 12 && (SentenceVerb.IsMatch(value) || value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 5);
+    private static bool IsCertifiedObjectName(RealizedSemanticFact fact) => fact.FactType.Equals("ObjectName", StringComparison.OrdinalIgnoreCase)
+        || fact.FactType.Equals("object", StringComparison.OrdinalIgnoreCase);
     private static string Clean(string? value) => Regex.Replace(Internal.Replace(value ?? string.Empty, string.Empty), @"\s{2,}", " ").Trim(' ', '-', ':', '.');
 }
 

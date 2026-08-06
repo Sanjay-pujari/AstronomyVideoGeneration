@@ -116,6 +116,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var performanceDiagnosticsPath = Path.Combine(documentaryScriptRoot, "performance-diagnostics.json");
         var providerFailureDiagnosticsPath = Path.Combine(narrationRoot, "provider-failure-diagnostics.json");
         var providerOutputValidationDiagnosticsPath = Path.Combine(narrationRoot, "provider-output-validation-diagnostics.json");
+        var providerSceneContextDiagnosticsPath = Path.Combine(narrationRoot, "provider-scene-context-diagnostics.json");
         var sceneIdentityDiagnosticsPath = Path.Combine(narrationRoot, "scene-identity-diagnostics.json");
         var narrationContextPath = Path.Combine(narrationRoot, "narration-context.json");
         var narrationRealizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-realization-diagnostics.json");
@@ -453,6 +454,28 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         bool anyProviderResponseParsed = false;
         bool providerOutputValidationStarted = false;
         bool providerOutputValidationPassed = false;
+        var providerSceneContextDiagnostics = requestedFormats.SelectMany(format => realizationResults
+            .Where(r => r.Format.Equals(format, StringComparison.OrdinalIgnoreCase))
+            .Select((realization, index) =>
+            {
+                var projection = ProviderSemanticProjection.Project(realization);
+                var assessment = ProviderSemanticProjection.AssessMeaningfulContext(projection, realization);
+                return new
+                {
+                    variant = format, sceneNumber = index + 1, sceneId = realization.SceneId,
+                    sourceSceneRole = realization.BeatRole, projectedPurpose = projection.Purpose,
+                    factualStatementCount = projection.FactualStatements.Count, factualStatements = projection.FactualStatements,
+                    objectVocabularyCount = projection.ObjectVocabulary.Count, objectVocabulary = projection.ObjectVocabulary,
+                    pronunciationCount = projection.Pronunciations.Count,
+                    observationStatementCount = projection.ObservationStatements.Count,
+                    unsupportedFragmentCount = projection.UnsupportedFragments.Count, unsupportedFragments = projection.UnsupportedFragments,
+                    roleSupportsVocabularyOnlyContext = assessment.RoleSupportsVocabularyOnlyContext,
+                    meaningfulContextPassed = assessment.Passed, meaningfulContextReasonCode = assessment.ReasonCode,
+                    promptSemanticCharacterCount = assessment.SemanticCharacterCount
+                };
+            })).ToArray();
+        await WriteAllTextUtf8Async(providerSceneContextDiagnosticsPath,
+            JsonSerializer.Serialize(new { scenes = providerSceneContextDiagnostics }, JsonOptions), cancellationToken);
         // A failed provider attempt must not leave a previous run's narration looking current.
         foreach (var artifact in new[] { narrationPath, longNarrationPath, shortNarrationPath })
             if (File.Exists(artifact)) File.Delete(artifact);
@@ -471,9 +494,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 
                 var formatRealizations = realizationResults.Where(r => r.Format.Equals(format, StringComparison.OrdinalIgnoreCase)).ToArray();
                 var projections = formatRealizations.Select(ProviderSemanticProjection.Project).ToArray();
-                var insufficient = projections.Select((projection, index) => (projection, index)).Where(x => !ProviderSemanticProjection.HasMeaningfulContext(x.projection)).ToArray();
+                var insufficient = projections.Select((projection, index) => (projection, realization: formatRealizations[index], index,
+                    assessment: ProviderSemanticProjection.AssessMeaningfulContext(projection, formatRealizations[index])))
+                    .Where(x => !x.assessment.Passed).ToArray();
                 if (insufficient.Length > 0)
-                    throw new NarrationProviderException("P7_PROVIDER_SCENE_CONTEXT_INSUFFICIENT", "PreProviderValidation", $"{format} scene context is insufficient for scene(s) {string.Join(", ", insufficient.Select(x => x.index + 1))}.", false);
+                    throw new NarrationProviderException("P7_PROVIDER_SCENE_CONTEXT_INSUFFICIENT", "PreProviderValidation",
+                        $"{format} scene context is insufficient: {string.Join("; ", insufficient.Select(x => $"scene={x.index + 1}, role={x.realization.BeatRole}, facts={x.assessment.FactualStatementCount}, observations={x.assessment.ObservationStatementCount}, approvedNames={x.assessment.ObjectVocabularyCount}, unsupportedFragments={x.assessment.UnsupportedFragmentCount}, reason={x.assessment.ReasonCode}"))}.", false);
                 var formatContext = narrationContext with { Formats = narrationContext.Formats.Where(f => f.Format.Equals(format, StringComparison.OrdinalIgnoreCase)).ToArray() };
                 var formatPrompt = composer.Compose(new NarrationPromptComposerInput(formatContext, [narrationContextPath], promptPreviewPath, promptDiagnosticsPath,
                     LanguageProfile: languageProfile, Realizations: formatRealizations)).PromptPreviewMarkdown;
@@ -1221,7 +1247,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         await WriteAllTextUtf8Async(narrationValidationDiagnosticsPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        var generatedFiles = new[] { sceneIdentityDiagnosticsPath, narrationContextPath, narrationRealizationDiagnosticsPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, sceneFactProjectionDiagnosticsPath, sceneSemanticProjectionDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, narrationValidationDiagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath, eventIdentityDiagnosticsPath, providerFailureDiagnosticsPath };
+        var generatedFiles = new[] { sceneIdentityDiagnosticsPath, narrationContextPath, narrationRealizationDiagnosticsPath, providerSceneContextDiagnosticsPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, sceneFactProjectionDiagnosticsPath, sceneSemanticProjectionDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, narrationValidationDiagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath, eventIdentityDiagnosticsPath, providerFailureDiagnosticsPath };
         return new NarrationGeneratorV5Result(generatedFiles.Where(File.Exists).ToArray());
     }
 
