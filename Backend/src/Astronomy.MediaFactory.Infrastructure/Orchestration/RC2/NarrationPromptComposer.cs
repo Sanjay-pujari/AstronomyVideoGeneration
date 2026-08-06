@@ -232,8 +232,9 @@ public static class ProviderSemanticProjection
         var facts = new List<string>(); var names = new List<string>(); var pronunciations = new List<string>(); var unsupported = new List<string>();
         foreach (var fact in realization.SpeakableFacts)
         {
-            var value = Clean(fact.Value + (string.IsNullOrWhiteSpace(fact.Unit) ? string.Empty : " " + fact.Unit));
-            if (string.IsNullOrWhiteSpace(value)) { unsupported.Add(fact.Value); continue; }
+            var sourceValue = SemanticValue(fact);
+            var value = Clean(sourceValue + (string.IsNullOrWhiteSpace(fact.Unit) ? string.Empty : " " + fact.Unit));
+            if (string.IsNullOrWhiteSpace(value)) { unsupported.Add(sourceValue); continue; }
             if (fact.Label.Contains("pronunciation", StringComparison.OrdinalIgnoreCase) || fact.Label.Contains("alias", StringComparison.OrdinalIgnoreCase)) pronunciations.Add(value);
             else if (IsStatement(value)) facts.Add(value.TrimEnd('.') + ".");
             else if (Regex.IsMatch(value, @"^[\p{L}][\p{L}'’ -]{0,40}$", RegexOptions.CultureInvariant) && value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 3) names.Add(value);
@@ -246,7 +247,7 @@ public static class ProviderSemanticProjection
             $"Move naturally from {Clean(realization.TransitionIntent.FromConcept)} toward {Clean(realization.TransitionIntent.ToConcept)}.";
         if (Internal.IsMatch(transition) || transition.Count(char.IsLetterOrDigit) < 20) transition = "Connect this understanding naturally to the next astronomical idea.";
         var observations = realization.ObservationDetails
-            .Select(fact => Clean(fact.Value + (string.IsNullOrWhiteSpace(fact.Unit) ? string.Empty : " " + fact.Unit)))
+            .Select(fact => Clean(SemanticValue(fact) + (string.IsNullOrWhiteSpace(fact.Unit) ? string.Empty : " " + fact.Unit)))
             .Where(IsStatement)
             .Select(value => value.TrimEnd('.') + ".")
             .ToArray();
@@ -255,6 +256,15 @@ public static class ProviderSemanticProjection
 
     public static bool HasMeaningfulContext(ProviderSemanticProjectionResult projection)
         => projection.FactualStatements.Count > 0 && projection.Purpose.Count(char.IsLetterOrDigit) >= 30;
+
+    private static string SemanticValue(RealizedSemanticFact fact)
+    {
+        if (string.IsNullOrWhiteSpace(fact.Value)) return fact.Label;
+
+        // Older callers supplied the speakable value in Label and an optional
+        // qualifier (now Value) as the fourth positional argument.
+        return IsStatement(Clean(fact.Label)) ? $"{fact.Label} {fact.Value}" : fact.Value;
+    }
 
     private static bool IsStatement(string value) => value.Count(char.IsLetterOrDigit) >= 12 && (SentenceVerb.IsMatch(value) || value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 5);
     private static string Clean(string? value) => Regex.Replace(Internal.Replace(value ?? string.Empty, string.Empty), @"\s{2,}", " ").Trim(' ', '-', ':', '.');
