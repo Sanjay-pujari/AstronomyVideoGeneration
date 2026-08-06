@@ -57,6 +57,19 @@ public sealed class ManifestReuseTests
         Assert.True(phase6["committedStateValidationPassed"]!.GetValue<bool>());
     }
 
+    [Fact]
+    public void ActivePhase7ManifestEntryIsReplacedByLatestFailure()
+    {
+        var existing = new JsonArray(CommittedHistory().Select(x => x!.DeepClone()).Append(
+            new JsonObject { ["phaseNo"] = 7, ["status"] = "Succeeded", ["reasonCode"] = "P7_NARRATIVE_LIFECYCLE_ACCEPTED" }).ToArray());
+        var failed = Result(7, ProductionPhaseStatus.Failed, "P7_NARRATIVE_LIFECYCLE_FAILED");
+
+        var active = Assert.Single(Merge(existing, failed).Where(x => x!["phaseNo"]!.GetValue<int>() == 7))!.AsObject();
+
+        Assert.Equal("Failed", active["status"]!.GetValue<string>());
+        Assert.Equal("P7_NARRATIVE_LIFECYCLE_FAILED", active["reasonCode"]!.GetValue<string>());
+    }
+
     private static JsonArray CommittedHistory() => new(Enumerable.Range(1, 6).Select(phase =>
         (JsonNode)new JsonObject { ["phaseNo"] = phase, ["phaseName"] = phase == 6 ? "Story Frames Authority" : $"Phase {phase}",
             ["status"] = "Succeeded", ["reasonCode"] = phase == 6 ? "P6AUTH_COMMITTED" : $"P{phase}COMMITTED" }).ToArray());

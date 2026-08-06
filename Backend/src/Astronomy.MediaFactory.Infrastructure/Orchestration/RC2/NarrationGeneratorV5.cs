@@ -1463,8 +1463,6 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                     throw new InvalidOperationException($"{format} provider response contains an invalid, duplicate, or unexpected scene number.");
                 var narrationText = scene.TryGetProperty("narrationText", out var textElement) ? textElement.GetString()?.Trim() : null;
                 if (string.IsNullOrWhiteSpace(narrationText)) throw new InvalidOperationException($"{format} scene {number} has empty narrationText.");
-                if (Regex.IsMatch(narrationText, @"\b(?:VQ|LO|CLM|CLAIM|KR|KNOWLEDGE)[-_]?[A-Z0-9]{2,}\b|\bAdvance\d{2,}\b|final narration remains owned|advance the certified", RegexOptions.IgnoreCase))
-                    throw new InvalidOperationException($"{format} scene {number} contains internal identifiers or placeholder narration.");
                 result[number] = narrationText;
             }
             if (Enumerable.Range(1, expectedCount).Any(number => !result.ContainsKey(number)))
@@ -2756,6 +2754,7 @@ public static class SpeakableContextPurityValidator
 
 public static class GeneratedNarrationValidator
 {
+    private static readonly Regex ProviderInternalIdentifierOrPlaceholder = new(@"\b(?:VQ|LO|CLM|CLAIM|KR|KNOWLEDGE)[-_]?[A-Z0-9]{2,}\b|\bAdvance\d{2,}\b|final narration remains owned|advance the certified", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex InternalRegionCode = new(@"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex PascalCaseSemanticKey = new(@"\b(?:PlanetPairingApparentLineOfSightGeometry|ApparentAlignmentExplanation|ObservationTiming|BinocularGuidance|NarrativeRole|TransitionIntent|FactType|CapabilityId|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+){2,})\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex IncompleteTransition = new(@"\bthrough the\s*[.!?]|\{[A-Za-z0-9_]+\}|<[^>]+>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -2771,6 +2770,7 @@ public static class GeneratedNarrationValidator
         foreach (var sentence in Regex.Split(text, @"(?<=[.!?।])\s+").Select(s => s.Trim()))
             Add(FactListFragment.Match(sentence), "StandaloneFactListFragment");
         Add(PlanningLeakage.Match(text), "PlanningLeakage");
+        Add(ProviderInternalIdentifierOrPlaceholder.Match(text), "ProviderInternalIdentifierOrPlaceholder");
         return failures;
         void Add(Match m, string rule) { if (m.Success) failures.Add(new NarrationPurityFailure(format, string.Empty, string.Empty, "generatedNarration", rule, m.Value, m.Value, "documentary-script", "narration", "Blocking")); }
     }
