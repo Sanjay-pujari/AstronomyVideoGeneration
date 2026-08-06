@@ -88,7 +88,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IStoryFrameFileSystem? storyFrameFileSystem = null,
     IPhase7KnowledgeService? phase7KnowledgeService = null,
     IPhase7NarrationAuthorityOrchestrator? phase7NarrationAuthorityOrchestrator = null,
-    IFamilyNarrationProfileResolver? familyNarrationProfileResolver = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IFamilyNarrationProfileResolver? familyNarrationProfileResolver = null,
+    IDocumentaryNarrativeLifecycleIntegrationService? documentaryNarrativeLifecycleIntegrationService = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     // The action delegate and the generic phase-result writer are deliberately separate.
     // Preserve the publication transaction selected by the Phase 3 action so the stable
@@ -121,6 +122,7 @@ public sealed partial class ProductionPipelineExecutionService(
         ?? throw new ArgumentNullException(nameof(phase6InputAuthorityEvaluator));
     private readonly IPhase7KnowledgeService? _phase7KnowledgeService = phase7KnowledgeService;
     private readonly IPhase7NarrationAuthorityOrchestrator? _phase7NarrationAuthorityOrchestrator = phase7NarrationAuthorityOrchestrator;
+    private readonly IDocumentaryNarrativeLifecycleIntegrationService? _documentaryNarrativeLifecycleIntegrationService = documentaryNarrativeLifecycleIntegrationService;
     private const string ValidPhase6ReuseReason = "Valid Phase 6 authority was reused; overwriteExisting=false.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private const double CalibratedShortNarrationSecondsPerWord = 32.328 / 57.0;
@@ -294,7 +296,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 4 => await ExecutePhase4Async(context, cancellationToken),
                 5 => await ExecutePhase5Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
                 6 => await ExecutePhase6Async(context, ResolvePhaseName(context, phase.No, phase.Name), cancellationToken),
-                7 => await ExecutePhase7NarrationAuthorityAsync(context,cancellationToken),
+                7 => await ExecutePhase7NarrativeLifecycleAsync(context,cancellationToken),
                 _ => await ExecutePhaseAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), phase.Action, cancellationToken)
             };
             phaseResults.Add(result);
@@ -857,6 +859,35 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
+    private async Task<ProductionPhaseResult> ExecutePhase7NarrativeLifecycleAsync(ProductionPhaseContext context,CancellationToken cancellationToken)
+    {
+        var started = DateTimeOffset.UtcNow;
+        if (_documentaryNarrativeLifecycleIntegrationService is null)
+            return await WritePhaseValidationAsync(context, 7, "Narration Studio V5", ProductionPhaseStatus.Failed,
+                [], [], [], ["IDocumentaryNarrativeLifecycleIntegrationService is not registered."],
+                "Phase 7 natural narration lifecycle is unavailable.", true, cancellationToken, started,
+                reasonCodeOverride: "P7_NARRATIVE_LIFECYCLE_UNAVAILABLE");
+
+        var profile = (familyNarrationProfileResolver ?? new FamilyNarrationProfileResolver())
+            .Resolve(FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType), context.Request.Language);
+        var lifecycleRequest = new DocumentaryNarrativeLifecycleRequest(context.OutputRoot,
+            context.Request.PlanId.ToString("D"), context.Request.PlanId, context.EventId,
+            FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType), context.Request.Language,
+            profile.Profile?.ProfileId ?? "default", (context.Request.ScheduledUtc ?? DateTimeOffset.UtcNow).Year,
+            context.Request.RegionId, context.Request);
+        var result = await _documentaryNarrativeLifecycleIntegrationService.ExecuteAsync(lifecycleRequest, cancellationToken);
+        var finished = DateTimeOffset.UtcNow;
+        return new ProductionPhaseResult(7, "Narration Studio V5",
+            result.Succeeded ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, finished,
+            (long)(finished-started).TotalMilliseconds, [], result.GeneratedFiles,
+            Path.Combine(context.OutputRoot, "narration-v5", "narration-validation-diagnostics.json"),
+            result.Warnings, result.Errors, !result.Succeeded,
+            result.Succeeded ? "Long and Short natural narration converged and were accepted." : "Natural narration lifecycle did not converge.")
+        { ReasonCode = result.Succeeded ? "P7_NARRATIVE_LIFECYCLE_ACCEPTED" : "P7_NARRATIVE_LIFECYCLE_REJECTED" };
+    }
+
+    // Compatibility-only authority chain. It may still produce knowledge/planning diagnostics,
+    // but exact-certified-sentence draft authority is not production Phase 7 acceptance.
     private async Task<ProductionPhaseResult> ExecutePhase7NarrationAuthorityAsync(ProductionPhaseContext context,CancellationToken cancellationToken)
     {
         var started=DateTimeOffset.UtcNow;
