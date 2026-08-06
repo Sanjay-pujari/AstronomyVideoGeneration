@@ -245,7 +245,11 @@ public static class ProviderSemanticProjection
         var transition = realization.TransitionIntent is null ? "Continue naturally to the next astronomical idea." :
             $"Move naturally from {Clean(realization.TransitionIntent.FromConcept)} toward {Clean(realization.TransitionIntent.ToConcept)}.";
         if (Internal.IsMatch(transition) || transition.Count(char.IsLetterOrDigit) < 20) transition = "Connect this understanding naturally to the next astronomical idea.";
-        var observations = realization.ObservationDetails.Select(Clean).Where(IsStatement).Select(v => v.TrimEnd('.') + ".").ToArray();
+        var observations = realization.ObservationDetails
+            .Select(fact => Clean(fact.Value + (string.IsNullOrWhiteSpace(fact.Unit) ? string.Empty : " " + fact.Unit)))
+            .Where(IsStatement)
+            .Select(value => value.TrimEnd('.') + ".")
+            .ToArray();
         return new(purpose, transition, facts, names, pronunciations, unsupported, observations);
     }
 
