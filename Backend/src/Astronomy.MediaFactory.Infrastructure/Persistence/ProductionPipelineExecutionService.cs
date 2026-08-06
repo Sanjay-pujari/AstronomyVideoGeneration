@@ -895,6 +895,37 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             var profile = (familyNarrationProfileResolver ?? new FamilyNarrationProfileResolver())
                 .Resolve(FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType), context.Request.Language);
+            if (_phase7NarrationAuthorityOrchestrator is null)
+                throw new InvalidOperationException("P7_RUNTIME_AUTHORITY_MISSING: IPhase7NarrationAuthorityOrchestrator is not registered.");
+            var canonicalProfile = profile.Profile is null ? null : new Phase7CanonicalProfileIdentity(
+                profile.Profile.EventFamily, profile.Profile.ProfileId, profile.Profile.ContractVersion, context.Request.Language);
+            var authorityRequest = new Phase7NarrationAuthorityOrchestrationRequest(context.OutputRoot,
+                context.Request.PlanId.ToString("D"), context.Request.PlanId.ToString("D"), context.EventId,
+                context.Request.RegionId, context.Request.Language, canonicalProfile?.ProfileId ?? "",
+                canonicalProfile?.ProfileVersion ?? "", context.OverwriteExisting, context.RetryFailedOnly,
+                context.PipelineRequest.DependencyExpansionMode.ToString(), new Dictionary<string,string>(StringComparer.Ordinal), ["Long","Short"])
+            {
+                EventType = context.Request.EventType,
+                ContentCategory = context.ExecutionContext.Category,
+                CanonicalProfileIdentity = canonicalProfile
+            };
+            var authorityPreparation = await _phase7NarrationAuthorityOrchestrator.ExecuteAsync(authorityRequest, cancellationToken);
+            var committedStages = authorityPreparation.StageResults
+                .Where(stage => stage.StageCode is "KnowledgeAuthority" or "NarrationPlanningPublication").ToArray();
+            if (!authorityPreparation.Success || committedStages.Length != 2 ||
+                committedStages.Any(stage => !stage.PublicationCommitted || !stage.CommittedStateValidationPassed))
+            {
+                var finished = DateTimeOffset.UtcNow;
+                var reasonCode = authorityPreparation.ReasonCode;
+                var authorityErrors = authorityPreparation.Errors.Concat(authorityPreparation.BlockingIssues).Distinct().ToArray();
+                var validationPath = await WriteCanonicalPhase7ValidationAsync(context, started, finished,
+                    ProductionPhaseStatus.Failed, reasonCode, "Phase 7 committed authority preparation failed.", null,
+                    authorityPreparation.Warnings, authorityErrors, cancellationToken);
+                return new ProductionPhaseResult(7, "Narration Studio V5", ProductionPhaseStatus.Failed, started, finished,
+                    (long)(finished-started).TotalMilliseconds, [], authorityPreparation.GeneratedFiles.Concat([validationPath]).ToArray(),
+                    validationPath, authorityPreparation.Warnings, authorityErrors, true, "Committed authority prerequisite failed.")
+                    { ReasonCode = reasonCode, InternalStageResults = authorityPreparation.StageResults };
+            }
             var lifecycleRequest = new DocumentaryNarrativeLifecycleRequest(context.OutputRoot,
                 context.Request.PlanId.ToString("D"), context.Request.PlanId, context.EventId,
                 FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType), context.Request.Language,

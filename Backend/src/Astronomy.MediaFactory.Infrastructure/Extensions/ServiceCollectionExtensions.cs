@@ -705,6 +705,8 @@ public static class ServiceCollectionExtensions
             Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationReleaseCandidatePublisher>();
         services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IDocumentaryNarrativeLifecycleIntegrationService,
             Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DocumentaryNarrativeLifecycleIntegrationService>();
+        services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IPhase7NarrationRuntimeAuthorityLoader,
+            Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.Phase7NarrationRuntimeAuthorityLoader>();
         services.AddScoped<Rc2ContentPlanningBatchOrchestrator>();
         services.AddScoped<IRc2ContentPlanningBatchOrchestrator>(provider => provider.GetRequiredService<Rc2ContentPlanningBatchOrchestrator>());
         services.AddScoped<IManualCategoryPreparationOrchestrator, ManualCategoryPreparationOrchestrator>();

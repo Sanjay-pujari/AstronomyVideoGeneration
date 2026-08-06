@@ -194,7 +194,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             placeholderCandidateCount = card.KnowledgeFacts?.Count(f => SceneFactCardGenerator.IsPlaceholderFact(f.Statement)) ?? 0,
             placeholderFactCount = card.Facts.Count(SceneFactCardGenerator.IsPlaceholderFact),
             duplicateFactCount = Math.Max(0, (card.KnowledgeFacts?.Count ?? 0) - card.Facts.Count), unresolvedReferenceIds = Array.Empty<string>(),
-            factProjectionSource = "Phase7CompositionRequest/CertifiedClaims", factProjectionPassed = card.Facts.Count > 0 && card.Facts.All(f => !SceneFactCardGenerator.IsPlaceholderFact(f))
+            factProjectionSource = "CommittedSceneKnowledgePacket", factProjectionPassed = card.Facts.Count > 0 && card.Facts.All(f => !SceneFactCardGenerator.IsPlaceholderFact(f))
         }).ToArray();
         var placeholderFactCount = projectionScenes.Sum(s => s.placeholderFactCount + s.placeholderCandidateCount);
         var sceneFactCardsDiagnostics = new { component = "SceneFactCardGenerator-v2", sceneFactCardsGenerated = longSceneFactCards.Cards.Count > 0 && shortSceneFactCards.Cards.Count > 0, longSceneCount = longSceneFactCards.Cards.Count, shortSceneCount = shortSceneFactCards.Cards.Count, placeholderFactCount, llmInputSource = "narration-context", proseExcluded = true, producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true };
@@ -1444,7 +1444,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                             scene.SceneRole, scene.NarrativeStage, scene.EditorialPriority, scene.TargetDurationSeconds,
                             packets.Where(packet => packet.SourceSceneId.Equals(scene.BlueprintSceneId, StringComparison.OrdinalIgnoreCase)
                                     || packet.StoryFrameId.Equals(scene.StoryFrameId, StringComparison.OrdinalIgnoreCase))
-                                .SelectMany(PacketFacts).ToArray(),
+                                .SelectMany(packet => PacketFacts(packet, scene)).ToArray(),
                             packets.Where(packet => packet.SourceSceneId.Equals(scene.BlueprintSceneId, StringComparison.OrdinalIgnoreCase)
                                     || packet.StoryFrameId.Equals(scene.StoryFrameId, StringComparison.OrdinalIgnoreCase))
                                 .SelectMany(packet => packet.KnowledgeReferenceIds).Distinct(StringComparer.Ordinal).ToArray()))
@@ -1486,14 +1486,29 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 
     private static IReadOnlyList<SceneKnowledgePacket> LoadSceneKnowledgePackets(string outputRoot, string format)
     {
-        var path = Path.Combine(outputRoot, "07-narration", format, "scene-knowledge-packets.json");
+        var path = Path.Combine(outputRoot, NarrationPlanningArtifactPaths.PacketCollection.Replace('/', Path.DirectorySeparatorChar));
         if (!File.Exists(path)) return [];
-        try { return JsonSerializer.Deserialize<SceneKnowledgePacket[]>(File.ReadAllText(path), JsonOptions) ?? []; }
+        try
+        {
+            var collection = JsonSerializer.Deserialize<SceneKnowledgePacketCollection>(File.ReadAllText(path), JsonOptions);
+            return format.Equals("long", StringComparison.OrdinalIgnoreCase) ? collection?.Long ?? [] : collection?.Short ?? [];
+        }
         catch (JsonException exception) { throw new InvalidOperationException($"P7_CERTIFIED_KNOWLEDGE_PROJECTION_FAILED: malformed scene knowledge packets '{NormalizePath(path)}'.", exception); }
     }
 
-    private static IEnumerable<SceneKnowledgeFact> PacketFacts(SceneKnowledgePacket packet)
-        => packet.RequiredClaims.Select(claim => ClaimFact(claim, true)).Concat(packet.OptionalClaims.Select(claim => ClaimFact(claim, false)));
+    private static IEnumerable<SceneKnowledgeFact> PacketFacts(SceneKnowledgePacket packet,
+        DocumentaryNarrativeSceneInput scene)
+    {
+        var required = scene.RequiredFacts.Select(fact => fact.ClaimId).ToHashSet(StringComparer.Ordinal);
+        var optional = scene.OptionalFacts.ToHashSet(StringComparer.Ordinal);
+        return packet.RequiredClaims.Where(claim => required.Contains(claim.ClaimId) && EligibleRuntimeClaim(claim))
+            .Select(claim => ClaimFact(claim, true))
+            .Concat(packet.OptionalClaims.Where(claim => optional.Contains(claim.Text) && EligibleRuntimeClaim(claim))
+                .Select(claim => ClaimFact(claim, false)));
+    }
+
+    private static bool EligibleRuntimeClaim(CertifiedNarrationClaim claim) => !claim.RequiresHumanReview &&
+        claim.Disposition is not Phase7ClaimDisposition.Deferred and not Phase7ClaimDisposition.HumanReview;
 
     private static SceneKnowledgeFact ClaimFact(CertifiedNarrationClaim claim, bool required)
         => new(claim.ClaimId, claim.Text, claim.KnowledgeReferenceIds, claim.SourceIds, claim.Confidence,

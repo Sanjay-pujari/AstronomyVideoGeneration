@@ -20,12 +20,13 @@ public static class NarrationPlanningPublicationReasonCodes
 public static class NarrationPlanningArtifactPaths
 {
     public const string Authority="07-narration/planning/narration-planning-authority.json";
+    public const string PacketCollection="07-narration/planning/scene-knowledge-packets.json";
     public const string Diagnostics="07-narration/planning/narration-planning-diagnostics.json";
     public const string Report="07-narration/planning/narration-planning-report.json";
     public const string Validation="validation/phase-07-narration-planning-validation.json";
     public const string Manifest="phase-manifest.json";
     public const string PublicationEvidence=".phase-07-narration-planning-publication.json";
-    public static readonly IReadOnlyList<string> Governed=[Authority,Diagnostics,Report,Validation,Manifest,PublicationEvidence];
+    public static readonly IReadOnlyList<string> Governed=[Authority,PacketCollection,Diagnostics,Report,Validation,Manifest,PublicationEvidence];
 }
 public sealed record NarrationPlanningArtifact(string RelativePath,string PhysicalSha256,long SizeBytes,string SemanticChecksum);
 public sealed record NarrationPlanningContentArtifactInventory(IReadOnlyList<NarrationPlanningArtifact> Artifacts);
