@@ -153,6 +153,72 @@ public sealed class NarrationProviderOutputTests
         Assert.DoesNotContain("SCENE-ID", prompt, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void RecognitionGuideWithCertifiedNamesPasses()
+    {
+        var realization = RecognitionGuide("RecognitionGuide: Explain the certified evidence for the RecognitionGuide scene.",
+            "Betelgeuse", "Bellatrix", "Alnitak", "Mintaka", "Alnilam", "Saiph", "Rigel");
+        var projection = ProviderSemanticProjection.Project(realization);
+        var assessment = ProviderSemanticProjection.AssessMeaningfulContext(projection, realization);
+
+        Assert.Equal(7, projection.ObjectVocabulary.Count);
+        Assert.Empty(projection.FactualStatements);
+        Assert.True(assessment.Passed);
+        Assert.True(assessment.RoleSupportsVocabularyOnlyContext);
+        Assert.Equal("P7_PROVIDER_CONTEXT_VOCABULARY_LED_RECOGNITION", assessment.ReasonCode);
+        Assert.DoesNotContain("RecognitionGuide", projection.Purpose);
+        Assert.DoesNotContain("certified evidence", projection.Purpose, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("scene", projection.Purpose, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RecognitionGuideWithOneNameFails()
+    {
+        var realization = RecognitionGuide("Help the viewer recognize the subject using its approved name.", "Betelgeuse");
+        Assert.False(ProviderSemanticProjection.AssessMeaningfulContext(ProviderSemanticProjection.Project(realization), realization).Passed);
+    }
+
+    [Fact]
+    public void UnsupportedFragmentsDoNotPass()
+    {
+        var realization = RecognitionGuide("Help the viewer recognize the subject using only approved identifying details.");
+        realization = realization with { SpeakableFacts = [new("token", "fragment", "Ori", null!), new("token", "fragment", "Orionis", null!), new("token", "fragment", "Fact1", null!)] };
+        var projection = ProviderSemanticProjection.Project(realization);
+        Assert.Equal(3, projection.UnsupportedFragments.Count);
+        Assert.False(ProviderSemanticProjection.AssessMeaningfulContext(projection, realization).Passed);
+    }
+
+    [Fact]
+    public void ScientificSceneStillRequiresMeaningButObservationPasses()
+    {
+        var scientific = RecognitionGuide("Explain the scientific meaning of the supplied astronomy details clearly.", "Betelgeuse", "Rigel")
+            with { ContentNature = "ScientificExplanation" };
+        Assert.False(ProviderSemanticProjection.AssessMeaningfulContext(ProviderSemanticProjection.Project(scientific), scientific).Passed);
+
+        var observation = scientific with { ContentNature = "Observation", SpeakableFacts = [],
+            ObservationDetails = [new("observation", "direction", "guidance", "Orion rises in the eastern sky", "after sunset")] };
+        Assert.True(ProviderSemanticProjection.AssessMeaningfulContext(ProviderSemanticProjection.Project(observation), observation).Passed);
+    }
+
+    [Fact]
+    public void VocabularyLedPromptContainsSafetyBoundaryAndNaturalTransition()
+    {
+        var realization = RecognitionGuide("RecognitionGuide: Explain the certified evidence for the RecognitionGuide scene.", "Betelgeuse", "Rigel")
+            with { TransitionIntent = new("Advance03", "Advance03", "Advance03") };
+        var context = new NarrationContextDocument("v", "test", [new NarrationFormatContext("long", [])]);
+        var prompt = new NarrationPromptComposer().Compose(new(context, [], "/tmp/prompt.md", "/tmp/prompt.json", Realizations: [realization])).PromptPreviewMarkdown;
+
+        Assert.Contains("do not add scientific properties or relationships", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Connect this understanding naturally", prompt);
+        Assert.DoesNotContain("Advance03", prompt);
+        Assert.DoesNotContain("RecognitionGuide", prompt);
+    }
+
+    private static NarrationRealizationResult RecognitionGuide(string purpose, params string[] names)
+        => new("long", "dbs-long-03-8be7d4bbb5deb5482f78", "RecognitionGuide", "authority", "RecognitionGuide", "Discovery", purpose,
+            names.Select(name => new RealizedSemanticFact("name", "ObjectName", name, null!)).ToArray(), [], [],
+            null, "calm", "measured", 100, null, null, [], "");
+
     private static IReadOnlyDictionary<int, string> Parse(string response, string format, int count)
         => (IReadOnlyDictionary<int, string>)typeof(NarrationGeneratorV5)
             .GetMethod("ParseProviderNarration", BindingFlags.NonPublic | BindingFlags.Static)!
