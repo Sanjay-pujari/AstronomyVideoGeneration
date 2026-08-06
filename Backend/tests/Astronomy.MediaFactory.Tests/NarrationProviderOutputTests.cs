@@ -172,6 +172,49 @@ public sealed class NarrationProviderOutputTests
     }
 
     [Fact]
+    public void HookNormalizesToOpeningHookAndSupportsRealOrionScene3()
+    {
+        var keys = Enumerable.Range(1, 7).Select(i => $"sceneFact{i}").ToArray();
+        var names = new[] { "Betelgeuse", "Bellatrix", "Alnitak", "Mintaka", "Alnilam", "Saiph", "Rigel" };
+        var realization = RecognitionGuide("Create curiosity about Orion by introducing its approved stellar names naturally.", names)
+            with { BeatRole = "Hook", ContentNature = "Constellation", SpeakableFacts = names.Select((name, i) =>
+                new RealizedSemanticFact("SpeakableFact", "ObjectName", $"scene Fact {i + 1}", name, null, keys[i])).ToArray() };
+
+        var projection = ProviderSemanticProjection.Project(realization);
+        var assessment = ProviderSemanticProjection.AssessMeaningfulContext(projection, realization);
+
+        Assert.Equal("OpeningHook", ProviderSemanticProjection.ResolveRole(realization));
+        Assert.Empty(projection.FactualStatements);
+        Assert.Equal(7, projection.ObjectVocabulary.Count);
+        Assert.Empty(projection.UnsupportedFragments);
+        Assert.True(assessment.RoleSupportsVocabularyOnlyContext);
+        Assert.True(assessment.Passed);
+        Assert.All(projection.ProjectedInputs!, input =>
+        {
+            Assert.Equal("ObjectName", input.SemanticFactType);
+            Assert.Equal("objectVocabulary", input.Classification);
+            Assert.Equal("CertifiedObjectName", input.ClassificationReason);
+        });
+    }
+
+    [Fact]
+    public void ProperNameShapeWithoutCertifiedTypeRemainsUnsupported()
+    {
+        var realization = RecognitionGuide("Help the viewer recognize the subject using only approved identifying details.") with
+        {
+            SpeakableFacts = [new("name", "sceneFact1", "scene Fact 1", "Betelgeuse"),
+                new("name", "unknown", "token", "Ori"), new("name", "unknown", "token", "Orionis"),
+                new("name", "unknown", "token", "Constellation")]
+        };
+
+        var projection = ProviderSemanticProjection.Project(realization);
+
+        Assert.Empty(projection.ObjectVocabulary);
+        Assert.Equal(4, projection.UnsupportedFragments.Count);
+        Assert.All(projection.ProjectedInputs!, input => Assert.Equal("UnapprovedSemanticFactType", input.ClassificationReason));
+    }
+
+    [Fact]
     public void RecognitionGuideWithOneNameFails()
     {
         var realization = RecognitionGuide("Help the viewer recognize the subject using its approved name.", "Betelgeuse");

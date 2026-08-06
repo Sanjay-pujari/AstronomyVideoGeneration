@@ -221,7 +221,11 @@ public sealed record NarrationPromptComposerOutput(string PromptPreviewMarkdown,
 public sealed record ProviderSemanticProjectionResult(
     string Purpose, string Transition, IReadOnlyList<string> FactualStatements,
     IReadOnlyList<string> ObjectVocabulary, IReadOnlyList<string> Pronunciations,
-    IReadOnlyList<string> UnsupportedFragments, IReadOnlyList<string> ObservationStatements);
+    IReadOnlyList<string> UnsupportedFragments, IReadOnlyList<string> ObservationStatements,
+    IReadOnlyList<ProviderProjectedInput>? ProjectedInputs = null);
+
+public sealed record ProviderProjectedInput(string Label, string? SourceFactKey, string SemanticFactType, string Value,
+    string Classification, string ClassificationReason);
 
 public sealed record ProviderSceneContextAssessment(bool Passed, string ReasonCode, bool PurposeMeaningful,
     int FactualStatementCount, int ObservationStatementCount, int ObjectVocabularyCount, int UnsupportedFragmentCount,
@@ -236,15 +240,18 @@ public static class ProviderSemanticProjection
     public static ProviderSemanticProjectionResult Project(NarrationRealizationResult realization)
     {
         var facts = new List<string>(); var names = new List<string>(); var pronunciations = new List<string>(); var unsupported = new List<string>();
+        var inputs = new List<ProviderProjectedInput>();
         foreach (var fact in realization.SpeakableFacts)
         {
             var sourceValue = SemanticValue(fact);
             var value = Clean(sourceValue + (string.IsNullOrWhiteSpace(fact.Unit) ? string.Empty : " " + fact.Unit));
-            if (string.IsNullOrWhiteSpace(value)) { unsupported.Add(sourceValue); continue; }
-            if (fact.Label.Contains("pronunciation", StringComparison.OrdinalIgnoreCase) || fact.Label.Contains("alias", StringComparison.OrdinalIgnoreCase)) pronunciations.Add(value);
-            else if (IsStatement(value)) facts.Add(value.TrimEnd('.') + ".");
-            else if (IsCertifiedObjectName(fact) && Regex.IsMatch(value, @"^[\p{L}][\p{L}'’ -]{0,40}$", RegexOptions.CultureInvariant) && value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 3) names.Add(value);
-            else unsupported.Add(value);
+            string classification, reason;
+            if (string.IsNullOrWhiteSpace(value)) { unsupported.Add(sourceValue); classification = "unsupportedFragment"; reason = "EmptyOrUnsafeValue"; }
+            else if (IsPronunciation(fact)) { pronunciations.Add(value); classification = "pronunciation"; reason = "CertifiedPronunciationOrAlias"; }
+            else if (IsStatement(value)) { facts.Add(value.TrimEnd('.') + "."); classification = "factualStatement"; reason = "SpeakableStatement"; }
+            else if (IsCertifiedObjectName(fact) && IsSafeObjectName(value)) { names.Add(value); classification = "objectVocabulary"; reason = "CertifiedObjectName"; }
+            else { unsupported.Add(value); classification = "unsupportedFragment"; reason = IsCertifiedObjectName(fact) ? "UnsafeObjectNameShape" : "UnapprovedSemanticFactType"; }
+            inputs.Add(new(fact.Label, fact.SourceFactKey, fact.FactType, value, classification, reason));
         }
         var role = ResolveRole(realization);
         var rawPurpose = realization.NarrativePurpose ?? string.Empty;
@@ -258,7 +265,10 @@ public static class ProviderSemanticProjection
             .Where(IsStatement)
             .Select(value => value.TrimEnd('.') + ".")
             .ToArray();
-        return new(purpose, transition, facts, names, pronunciations, unsupported, observations);
+        inputs.AddRange(realization.ObservationDetails.Select(fact => new ProviderProjectedInput(fact.Label, fact.SourceFactKey, fact.FactType,
+            Clean(SemanticValue(fact) + (string.IsNullOrWhiteSpace(fact.Unit) ? string.Empty : " " + fact.Unit)),
+            "observation", "CertifiedObservationStatement")));
+        return new(purpose, transition, facts, names, pronunciations, unsupported, observations, inputs);
     }
 
     public static ProviderSceneContextAssessment AssessMeaningfulContext(ProviderSemanticProjectionResult projection, NarrationRealizationResult realization)
@@ -281,10 +291,20 @@ public static class ProviderSemanticProjection
 
     private static readonly HashSet<string> VocabularyRoles = new(StringComparer.OrdinalIgnoreCase)
         { "RecognitionGuide", "Orientation", "OpeningHook", "Identification", "Discovery" };
-    private static string ResolveRole(NarrationRealizationResult value) => new[] { value.ContentNature, value.BeatRole, value.NarrativeRole }
+    public static string NormalizeProviderRole(string? role) => (role ?? string.Empty).Trim().ToLowerInvariant() switch
+    {
+        "hook" or "opening" or "openinghook" or "introhook" or "curiosityhook" => "OpeningHook",
+        "recognition" or "recognitionguide" => "RecognitionGuide",
+        "identification" => "Identification",
+        "orientation" => "Orientation", "discovery" => "Discovery", "scientificexplanation" => "ScientificExplanation",
+        "observation" => "Observation", "closing" => "Closing", "takeaway" => "Takeaway",
+        _ => role?.Trim() ?? string.Empty
+    };
+    public static string ResolveRole(NarrationRealizationResult value) => new[] { value.ContentNature, value.BeatRole, value.NarrativeRole }
+        .Select(NormalizeProviderRole)
         .FirstOrDefault(candidate => VocabularyRoles.Contains(candidate) || candidate.Equals("ScientificExplanation", StringComparison.OrdinalIgnoreCase)
             || candidate.Equals("Observation", StringComparison.OrdinalIgnoreCase) || candidate.Equals("Closing", StringComparison.OrdinalIgnoreCase)
-            || candidate.Equals("Takeaway", StringComparison.OrdinalIgnoreCase)) ?? value.ContentNature;
+            || candidate.Equals("Takeaway", StringComparison.OrdinalIgnoreCase)) ?? NormalizeProviderRole(value.ContentNature);
     private static bool IsInternal(string value, string role) => Internal.IsMatch(value) ||
         (!string.IsNullOrWhiteSpace(role) && Regex.Matches(value, $@"\b{Regex.Escape(role)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Count > 1);
     private static string RoleAwarePurpose(string role) => role.ToLowerInvariant() switch
@@ -310,6 +330,10 @@ public static class ProviderSemanticProjection
     private static bool IsStatement(string value) => value.Count(char.IsLetterOrDigit) >= 12 && (SentenceVerb.IsMatch(value) || value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 5);
     private static bool IsCertifiedObjectName(RealizedSemanticFact fact) => fact.FactType.Equals("ObjectName", StringComparison.OrdinalIgnoreCase)
         || fact.FactType.Equals("object", StringComparison.OrdinalIgnoreCase);
+    private static bool IsPronunciation(RealizedSemanticFact fact) => fact.FactType.Equals("Pronunciation", StringComparison.OrdinalIgnoreCase)
+        || fact.FactType.Equals("Alias", StringComparison.OrdinalIgnoreCase);
+    private static bool IsSafeObjectName(string value) => Regex.IsMatch(value, @"^[\p{L}][\p{L}'’ -]{0,40}$", RegexOptions.CultureInvariant)
+        && value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 3;
     private static string Clean(string? value) => Regex.Replace(Internal.Replace(value ?? string.Empty, string.Empty), @"\s{2,}", " ").Trim(' ', '-', ':', '.');
 }
 
