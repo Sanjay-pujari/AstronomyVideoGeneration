@@ -47,6 +47,9 @@ public sealed record DocumentaryNarrativeQualityResult(bool Passed, IReadOnlyLis
     IReadOnlyList<string> Warnings, int SceneCount, int EstimatedDurationSeconds);
 public sealed record DocumentaryNarrativeLifecycleAcceptanceResult(bool Accepted, string Reason,
     string? ReleaseCandidateId = null);
+internal sealed record NarrationGeneratorBlockingAssessment(bool GenerationCompleted, bool LongProduced,
+    bool ShortProduced, IReadOnlyList<string> BlockingErrors, IReadOnlyList<string> AdvisoryWarnings,
+    bool CanRetry = false);
 public sealed record DocumentaryNarrativeProviderCallEvidence(string Generator, string EntryMethod,
     int GeneratorInvocationCount, bool LongVariantProduced, bool ShortVariantProduced,
     IReadOnlyList<string> DiagnosticFiles)
@@ -87,7 +90,8 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         var revisions = new List<string>();
         var generatedFiles = new List<string>();
         var storyFramesPath = Path.Combine(request.ExecutionRoot, "06-story-frames", "story-frames.json");
-        var diagnosticsPath = Path.Combine(request.ExecutionRoot, "narration-v5", "narration-validation-diagnostics.json");
+        var diagnosticsPath = Path.Combine(request.ExecutionRoot, "narration-v5", "narrative-lifecycle-validation.json");
+        var generatorDiagnosticsPath = Path.Combine(request.ExecutionRoot, "narration-v5", "generator-validation-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath)!);
 
         StoryFramesAuthority? authority = null;
@@ -120,6 +124,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         var shortQuality = EmptyQuality("Generation was not attempted.");
         var crossErrors = new List<string>();
         var invocationCount = 0;
+        var generatorAssessment = new NarrationGeneratorBlockingAssessment(false, false, false, [], []);
 
         if (errors.Count == 0)
         {
@@ -134,19 +139,26 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
                 var shortRead = await ReadDraftAsync(request.ExecutionRoot, "short", shortRequest, cancellationToken);
                 longDraft = longRead.Draft;
                 shortDraft = shortRead.Draft;
-                longQuality = Validate(longDraft, longRequest, longRead.Errors, ReadGeneratorBlockingErrors(request.ExecutionRoot));
-                shortQuality = Validate(shortDraft, shortRequest, shortRead.Errors, ReadGeneratorBlockingErrors(request.ExecutionRoot));
+                generatorAssessment = AssessGeneratorResult(request.ExecutionRoot, true, true);
+                longQuality = Validate(longDraft, longRequest, longRead.Errors, generatorAssessment.BlockingErrors);
+                shortQuality = Validate(shortDraft, shortRequest, shortRead.Errors, generatorAssessment.BlockingErrors);
                 crossErrors = ValidateCrossVariant(longDraft, shortDraft).ToList();
                 var attemptErrors = longQuality.Errors.Select(x => "Long: " + x)
                     .Concat(shortQuality.Errors.Select(x => "Short: " + x)).Concat(crossErrors).ToArray();
                 revisions.Add(attemptErrors.Length == 0
                     ? $"Attempt {attempt} validation: Passed."
                     : $"Attempt {attempt} validation: Failed — {string.Join("; ", attemptErrors)}");
-                if (attemptErrors.Length == 0 || attempt == MaximumGenerationAttempts) break;
+                warnings.AddRange(generatorAssessment.AdvisoryWarnings);
+                if (attemptErrors.Length == 0 || attempt == MaximumGenerationAttempts ||
+                    !IsRepairable(attemptErrors, generatorAssessment)) break;
 
                 longRequest = longRequest with { RepairGuidance = attemptErrors };
                 shortRequest = shortRequest with { RepairGuidance = attemptErrors };
                 await PreserveAttemptDiagnosticsAsync(request.ExecutionRoot, attempt, cancellationToken);
+                await File.WriteAllTextAsync(Path.Combine(request.ExecutionRoot, "narration-v5", $"narrative-lifecycle-validation.attempt-{attempt}.json"),
+                    JsonSerializer.Serialize(new { schemaVersion = "1.0", request.ExecutionId, attempt,
+                        generatorBlockingAssessment = generatorAssessment, blockingErrors = attemptErrors,
+                        succeeded = false, generatedUtc = DateTimeOffset.UtcNow }, JsonOptions), cancellationToken);
                 await WriteCompositionRequestsAsync(longRequest, shortRequest, longRequestPath, shortRequestPath, cancellationToken);
             }
         }
@@ -173,6 +185,8 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             expectedShortSceneCount = shortRequest.OrderedScenes.Count, actualShortSceneCount = shortDraft?.Scenes.Count ?? 0,
             generator = nameof(NarrationGeneratorV5), entryMethod = nameof(NarrationGeneratorV5.BuildAndWriteDiagnosticsAsync),
             generatorInvocationCount = invocationCount,
+            generatorDiagnosticsPath,
+            generatorBlockingAssessment = generatorAssessment,
             longArtifactPath = Path.Combine(request.ExecutionRoot, "narration-v5", "long", "narration.json"),
             shortArtifactPath = Path.Combine(request.ExecutionRoot, "narration-v5", "short", "narration.json"),
             longQuality, shortQuality, crossVariantValidationResult = new { passed = crossErrors.Count == 0, errors = crossErrors },
@@ -188,7 +202,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             warnings.Distinct(StringComparer.Ordinal).ToArray(),
             new(nameof(NarrationGeneratorV5), nameof(NarrationGeneratorV5.BuildAndWriteDiagnosticsAsync), invocationCount,
                 longDraft is not null, shortDraft is not null, generated.GeneratedFiles),
-            generatedFiles.Distinct(StringComparer.Ordinal).ToArray());
+            generatedFiles.Where(File.Exists).Distinct(StringComparer.Ordinal).ToArray());
     }
 
     private async Task<NarrationGeneratorV5Result> InvokeGeneratorAsync(DocumentaryNarrativeLifecycleRequest request,
@@ -324,25 +338,45 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         return [];
     }
 
-    private static IReadOnlyList<string> ReadGeneratorBlockingErrors(string root)
+    internal static NarrationGeneratorBlockingAssessment AssessGeneratorResult(string root, bool longRequested, bool shortRequested)
     {
-        var path = Path.Combine(root, "narration-v5", "narration-validation-diagnostics.json");
-        if (!File.Exists(path)) return [];
+        var path = Path.Combine(root, "narration-v5", "generator-validation-diagnostics.json");
+        if (!File.Exists(path)) return new(false, false, false, ["Generator diagnostics artifact is missing."], []);
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(path));
-            if (!TryProperty(document.RootElement, "errors", out var errors) || errors.ValueKind != JsonValueKind.Array) return [];
-            return errors.EnumerateArray().Where(value => value.ValueKind == JsonValueKind.String)
-                .Select(value => "Generator blocking failure: " + value.GetString()).ToArray();
+            var rootElement = document.RootElement;
+            var blockers = new List<string>();
+            var advisory = new List<string>();
+            var longProduced = Boolean(rootElement, "longNarrationArtifactValid");
+            var shortProduced = Boolean(rootElement, "shortNarrationArtifactValid");
+            if (longRequested && !longProduced) blockers.Add("Requested Long narration artifact is missing or invalid.");
+            if (shortRequested && !shortProduced) blockers.Add("Requested Short narration artifact is missing or invalid.");
+            if (TryProperty(rootElement, "generationErrors", out var generationErrors) && generationErrors.ValueKind == JsonValueKind.Array)
+                blockers.AddRange(Strings(generationErrors));
+            if (Boolean(rootElement, "requiredSemanticFactResolutionBlocking")) blockers.Add("Required semantic fact resolution is blocking.");
+            if (TryProperty(rootElement, "languageValidationPassed", out _) && !Boolean(rootElement, "languageValidationPassed")) blockers.Add("Requested language validation failed.");
+            if (TryProperty(rootElement, "sceneMappingValid", out _) && !Boolean(rootElement, "sceneMappingValid")) blockers.Add("Canonical scene mapping is invalid.");
+            if (TryProperty(rootElement, "warnings", out var warnings) && warnings.ValueKind == JsonValueKind.Array) advisory.AddRange(Strings(warnings));
+            if (TryProperty(rootElement, "promptRecommendation", out var prompt) && prompt.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(prompt.GetString())) advisory.Add("Prompt recommendation: " + prompt.GetString());
+            if (TryProperty(rootElement, "auroraCertified", out _) && !Boolean(rootElement, "auroraCertified")) advisory.Add("Aurora certification was not achieved; this is advisory.");
+            return new(true, longProduced, shortProduced, blockers.Distinct().ToArray(), advisory.Distinct().ToArray(), Boolean(rootElement, "canRetry"));
         }
-        catch (JsonException) { return ["Generator diagnostics JSON is invalid."]; }
+        catch (JsonException) { return new(false, false, false, ["Generator diagnostics JSON is invalid."], []); }
     }
+
+    private static bool IsRepairable(IReadOnlyList<string> errors, NarrationGeneratorBlockingAssessment assessment) =>
+        assessment.CanRetry || errors.Any(error => new[] { "artifact", "missing scene", "duplicate", "leakage", "identical", "verbatim", "empty", "language" }
+            .Any(term => error.Contains(term, StringComparison.OrdinalIgnoreCase)));
+    private static bool Boolean(JsonElement element, string name) => TryProperty(element, name, out var value) && value.ValueKind == JsonValueKind.True;
+    private static IEnumerable<string> Strings(JsonElement array) => array.EnumerateArray().Where(value => value.ValueKind == JsonValueKind.String)
+        .Select(value => value.GetString()).Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!);
 
     private static async Task PreserveAttemptDiagnosticsAsync(string root, int attempt, CancellationToken cancellationToken)
     {
-        var path = Path.Combine(root, "narration-v5", "narration-validation-diagnostics.json");
+        var path = Path.Combine(root, "narration-v5", "generator-validation-diagnostics.json");
         if (File.Exists(path))
-            await File.WriteAllBytesAsync(Path.Combine(root, "narration-v5", $"narration-validation-diagnostics.attempt-{attempt}.json"),
+            await File.WriteAllBytesAsync(Path.Combine(root, "narration-v5", $"generator-validation-diagnostics.attempt-{attempt}.json"),
                 await File.ReadAllBytesAsync(path, cancellationToken), cancellationToken);
     }
 

@@ -50,8 +50,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         if (string.IsNullOrWhiteSpace(response.OutputRoot)) return NarrationGeneratorV5Result.Empty;
 
         var outputRoot = response.OutputRoot!;
-        var editorialPath = Path.Combine(outputRoot, "editorial", "editorial-contract.json");
-        var storyboardPath = Path.Combine(outputRoot, "creative", "creative-storyboard.json");
+        var canonicalInputs = ResolveCanonicalInputs(outputRoot, response);
+        var editorialPath = canonicalInputs.EditorialContractPath;
+        var storyboardPath = canonicalInputs.StoryStructurePath;
         var narrationRoot = Path.Combine(outputRoot, "narration-v5");
         Directory.CreateDirectory(narrationRoot);
         var planPath = Path.Combine(narrationRoot, "narration-plan.json");
@@ -110,7 +111,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var eventIdentityDiagnosticsPath = Path.Combine(narrationRoot, "event-identity-diagnostics.json");
         var familyProfileV1CompatibilityDiagnosticsPath = Path.Combine(narrationRoot, "family-profile-v1-compatibility-diagnostics.json");
         var validationPath = Path.Combine(narrationRoot, "generator-preflight-diagnostics.json");
-        var narrationValidationDiagnosticsPath = Path.Combine(narrationRoot, "narration-validation-diagnostics.json");
+        var narrationValidationDiagnosticsPath = Path.Combine(narrationRoot, "generator-validation-diagnostics.json");
         var promptPreviewPath = Path.Combine(narrationRoot, "prompt-preview.md");
         var promptDiagnosticsPath = Path.Combine(narrationRoot, "prompt-diagnostics.json");
         var promptQualityPath = Path.Combine(narrationRoot, "prompt-quality.json");
@@ -120,11 +121,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var styleContractPath = Path.Combine(styleRoot, "documentary-style-contract.json");
         var styleDiagnosticsPath = Path.Combine(styleRoot, "documentary-style-diagnostics.json");
 
-        var contract = ReadFirstJson(editorialPath);
-        var storyboard = ReadFirstJson(storyboardPath);
+        var contract = canonicalInputs.EditorialContract;
+        var storyboard = canonicalInputs.StoryStructure;
         var warnings = new List<string>();
-        if (!contract.HasValue) warnings.Add("Missing input file editorial/editorial-contract.json.");
-        if (!storyboard.HasValue) warnings.Add("Missing input file creative/creative-storyboard.json.");
+        if (!contract.HasValue) warnings.Add("Missing canonical Phase 5 editorial contract.");
+        if (!storyboard.HasValue) warnings.Add("Missing canonical Phase 4 narrative structure.");
 
         var languageRequested = FirstNonEmpty(request.Language, GetString(contract, "language"), GetString(storyboard, "language"));
         var languageProfile = LanguageProfileResolver.Resolve(languageRequested);
@@ -197,9 +198,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             : new Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Diagnostics.DocumentaryStyleDiagnostics(0, 0, 0, 0, styleWarnings, styleErrors, styleStopwatch.Elapsed.ToString("c"), DocumentaryStyleDirector.Version);
         await WriteAllTextUtf8Async(styleDiagnosticsPath, JsonSerializer.Serialize(styleDiagnostics, JsonOptions), cancellationToken);
 
-        var longDocumentaryContract = ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.long.json"));
-        var shortDocumentaryContract = ReadFirstJson(Path.Combine(outputRoot, "creative", "documentary-contract.short.json"));
-        var productionEventIntelligence = ReadFirstJson(Path.Combine(outputRoot, "plan-input", "production-event-intelligence.json"));
+        var longDocumentaryContract = canonicalInputs.LongBlueprint;
+        var shortDocumentaryContract = canonicalInputs.ShortBlueprint;
+        var productionEventIntelligence = canonicalInputs.ProductionEventIntelligence;
         var observationMetadata = ReadFirstJson(Path.Combine(outputRoot, "editorial", "observation-metadata.json"));
         var storyGraph = ReadFirstJson(Path.Combine(outputRoot, "editorial", "story-graph.json"));
         var canonicalEventIdentity = CanonicalEventIdentityResolver.Resolve(new CanonicalEventIdentityResolutionInput(
@@ -242,7 +243,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             storyGraph,
             productionEventIntelligence,
             observationMetadata,
-            ReadFirstJson(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")),
+            canonicalInputs.QuestionAnswerSet,
             languageProfile,
             productionPipelineRequest,
             canonicalEventIdentity);
@@ -561,6 +562,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         {
             phaseNo = 7,
             phaseName = PhaseName,
+            status = generationErrors.Count == 0 ? "Completed" : "Failed",
+            generationCompleted = generationErrors.Count == 0,
+            generationErrors,
             orchestrationVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
             pipelineVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion,
             phaseRegistryName = nameof(Rc2PipelinePhaseRegistry),
@@ -760,6 +764,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             phaseNo = 7,
             phaseName = PhaseName,
             validator = "AstroPulse-NarrationValidator-v3",
+            generationCompleted = generationErrors.Count == 0,
+            generationErrors,
             passed = validationStatusSucceeded && languageValidationPassed && generationErrors.Count == 0 && validationErrors.Length == 0 && !editorialReviewerDecision.Equals("Do Not Publish", StringComparison.OrdinalIgnoreCase) && professionalScores.OverallNarrationScore >= 80 && File.Exists(longSceneFactCardsPath) && File.Exists(shortSceneFactCardsPath) && File.Exists(longDocumentaryScriptPath) && File.Exists(shortDocumentaryScriptPath) && repeatedOpeningCount == 0 && duplicateSentenceCount == 0 && sceneMappingValid && wholeDocumentGenerationUsed && !visualInstructionLeakageDetected && generatedNarrationFailures.Length == 0 && !redundancy.ExceedsThreshold && !sharedSceneSourceUsed && !longShortSceneStructureIdentical && (!requestedFormats.Contains("long") || longGeneratedSceneCount == longExpectedSceneCount) && (!requestedFormats.Contains("short") || shortGeneratedSceneCount == shortExpectedSceneCount),
             editorialReviewerDecision,
             editorialReviewerReason,
@@ -969,20 +975,66 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var missing = new List<string>();
         var empty = new List<string>();
         void Require(string relative) { if (!File.Exists(Path.Combine(outputRoot, relative))) missing.Add(relative.Replace('\\','/')); }
-        Require(Path.Combine("editorial", "editorial-contract.json"));
-        Require(Path.Combine("creative", "creative-storyboard.json"));
-        if (requestedFormats.Contains("long", StringComparer.OrdinalIgnoreCase)) Require(Path.Combine("creative", "documentary-contract.long.json"));
-        if (requestedFormats.Contains("short", StringComparer.OrdinalIgnoreCase)) Require(Path.Combine("creative", "documentary-contract.short.json"));
-        if (contract is null) missing.Add("editorial/editorial-contract.json");
-        if (storyboard is null) missing.Add("creative/creative-storyboard.json");
-        if (requestedFormats.Contains("long", StringComparer.OrdinalIgnoreCase) && CountDocumentaryBeats(Path.Combine(outputRoot, "creative", "documentary-contract.long.json")) == 0) empty.Add("creative/documentary-contract.long.json:beats");
-        if (requestedFormats.Contains("short", StringComparer.OrdinalIgnoreCase) && CountDocumentaryBeats(Path.Combine(outputRoot, "creative", "documentary-contract.short.json")) == 0) empty.Add("creative/documentary-contract.short.json:beats");
+        void RequireEither(string canonical, string compatibility)
+        { if (!File.Exists(Path.Combine(outputRoot, canonical)) && !File.Exists(Path.Combine(outputRoot, compatibility))) missing.Add(canonical.Replace('\\','/')); }
+        RequireEither(Path.Combine("02-intelligence", "production-event-intelligence.json"), Path.Combine("plan-input", "production-event-intelligence.json"));
+        RequireEither(Path.Combine("04-blueprint", "documentary-blueprint.long.json"), Path.Combine("creative", "documentary-contract.long.json"));
+        RequireEither(Path.Combine("04-blueprint", "documentary-blueprint.short.json"), Path.Combine("creative", "documentary-contract.short.json"));
+        RequireEither(Path.Combine("05-editorial", "editorial-contract.json"), Path.Combine("editorial", "editorial-contract.json"));
+        RequireEither(Path.Combine("06-story-frames", "story-frames.json"), Path.Combine("story-frames", "long", "story-frame-manifest.json"));
+        var canonicalPhase6 = File.Exists(Path.Combine(outputRoot, "06-story-frames", "story-frames.json"));
+        if (canonicalPhase6 && requestedFormats.Contains("long", StringComparer.OrdinalIgnoreCase)) Require(Path.Combine("narration-v5", "long", "narrative-composition-request.json"));
+        if (canonicalPhase6 && requestedFormats.Contains("short", StringComparer.OrdinalIgnoreCase)) Require(Path.Combine("narration-v5", "short", "narrative-composition-request.json"));
+        if (contract is null) missing.Add("05-editorial/editorial-contract.json");
+        if (storyboard is null) missing.Add("canonical Phase 6 composition scene projection");
         if (string.IsNullOrWhiteSpace(languageResolved)) empty.Add("language");
         if (missing.Count == 0 && empty.Count == 0) return;
         Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
         File.WriteAllText(validationPath, JsonSerializer.Serialize(new { phaseNo = 7, phaseName = PhaseName, status = "Failed", pipelineVersion = Rc2PipelinePhaseRegistry.OrchestrationVersion, phaseRegistryName = nameof(Rc2PipelinePhaseRegistry), chronicleCorePhaseMapUsed = true, legacyPhaseMapUsed = false, languageRequested, languageResolved, languageProfileFound, languageProfileFallbackUsed, jsonEncoding = "UTF-8", unicodeEscapingDisabled = true, nativeScriptReadable = true, missingRequiredArtifacts = missing.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), emptyRequiredCollections = empty.ToArray(), unsafeSequenceOperationPrevented = true, error = missing.Count > 0 ? $"Phase 7 cannot start because {missing[0]} was not found. Run Documentary Architect before Narration Studio V5." : $"Phase 7 cannot start because required collection {empty[0]} is empty." }, JsonOptions), JsonUtf8NoBom);
         if (missing.Count > 0) throw new InvalidOperationException($"Phase 7 cannot start because {missing[0]} was not found. Run Documentary Architect before Narration Studio V5.");
         throw new InvalidOperationException($"Phase 7 cannot start because required collection {empty[0]} is empty.");
+    }
+
+    private sealed record NarrationV5CanonicalInputs(
+        string EditorialContractPath, string StoryStructurePath, JsonElement? EditorialContract,
+        JsonElement? StoryStructure, JsonElement? LongBlueprint, JsonElement? ShortBlueprint,
+        JsonElement? ProductionEventIntelligence, JsonElement? QuestionAnswerSet);
+
+    private static NarrationV5CanonicalInputs ResolveCanonicalInputs(string outputRoot, BatchGenerateFromPlansResponse response)
+    {
+        var editorialPath = PreferExisting(outputRoot, "05-editorial/editorial-contract.json", "editorial/editorial-contract.json");
+        var longBlueprintPath = PreferExisting(outputRoot, "04-blueprint/documentary-blueprint.long.json", "creative/documentary-contract.long.json");
+        var shortBlueprintPath = PreferExisting(outputRoot, "04-blueprint/documentary-blueprint.short.json", "creative/documentary-contract.short.json");
+        var intelligencePath = PreferExisting(outputRoot, "02-intelligence/production-event-intelligence.json", "plan-input/production-event-intelligence.json");
+        var questionsPath = PreferExisting(outputRoot, "03-questions/question-answer-set.json", "question-engine/question-answer-set.json");
+        var compositionPaths = new[] { "long", "short" }.Select(format =>
+            Path.Combine(outputRoot, "narration-v5", format, "narrative-composition-request.json")).ToArray();
+        var scenes = compositionPaths.Where(File.Exists).SelectMany(path =>
+        {
+            var composition = ReadTypedJson<DocumentaryNarrativeCompositionRequest>(path);
+            if (composition is null || composition.OrderedScenes.Count == 0)
+                throw new InvalidOperationException($"Canonical composition request '{NormalizePath(path)}' is invalid or has no scenes.");
+            return composition.OrderedScenes.Select(scene => new
+            {
+                sceneOrder = scene.SceneNumber, sceneId = scene.SceneId, purpose = scene.NarrationBrief,
+                narrationGoal = scene.NarrationBrief, viewerQuestion = scene.ViewerQuestion,
+                learningObjective = scene.LearningObjective, transition = scene.TransitionSeed
+            });
+        }).ToArray();
+        JsonElement? story = scenes.Length == 0 ? ReadFirstJson(Path.Combine(outputRoot, "creative", "creative-storyboard.json")) : JsonSerializer.SerializeToElement(new
+        {
+            language = response.ProductionPipelineRequest is ContentPlanProductionPipelineRequest request ? request.Language : null,
+            storyArc = "Hook → Discovery → Science → Observation → Takeaway", scenes
+        }, JsonOptions);
+        return new(editorialPath, scenes.Length == 0 ? Path.Combine(outputRoot, "creative", "creative-storyboard.json") : "06-story-frames/story-frames.json + narration-v5/{format}/narrative-composition-request.json",
+            ReadFirstJson(editorialPath), story, ReadFirstJson(longBlueprintPath), ReadFirstJson(shortBlueprintPath),
+            ReadFirstJson(intelligencePath), ReadFirstJson(questionsPath));
+    }
+
+    private static string PreferExisting(string root, string canonical, string compatibility)
+    {
+        var canonicalPath = Path.Combine(root, canonical.Replace('/', Path.DirectorySeparatorChar));
+        return File.Exists(canonicalPath) ? canonicalPath : Path.Combine(root, compatibility.Replace('/', Path.DirectorySeparatorChar));
     }
 
     private static int CountDocumentaryBeats(string path) => ReadArray(ReadFirstJson(path), "beats").Count;
@@ -1115,15 +1167,15 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                         .OrderBy(scene => scene.SceneNumber)
                         .Select(scene => new StoryFrameNarrationSource(scene.SceneId, scene.SceneNumber, scene.SceneId,
                             string.Join(" ", new[] { scene.Heading, scene.ViewerQuestion, scene.LearningObjective,
-                                scene.NarrationBrief, scene.VisualIntent, scene.TransitionSeed }.Where(value => !string.IsNullOrWhiteSpace(value))) + repair))
+                                scene.NarrationBrief, scene.TransitionSeed }.Where(value => !string.IsNullOrWhiteSpace(value))) + repair))
                         .ToArray());
                 }
+                throw new InvalidOperationException($"Canonical composition request '{NormalizePath(compositionPath)}' is invalid or has no ordered scenes.");
             }
         }
-        catch (JsonException)
+        catch (JsonException exception)
         {
-            // The generator's governed preflight will report unusable input; legacy callers may
-            // still resolve their existing manifest below.
+            throw new InvalidOperationException($"Canonical composition request '{NormalizePath(compositionPath)}' is malformed.", exception);
         }
         var manifestPath = Path.Combine(outputRoot, "story-frames", format, "story-frame-manifest.json");
         var manifest = ReadFirstJson(manifestPath);
