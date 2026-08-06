@@ -122,6 +122,19 @@ public sealed class NarrationProviderOutputTests
     }
 
     [Fact]
+    public void ObservationDetails_AreProjectedFromTheirValuesAndUnits()
+    {
+        var realization = new NarrationRealizationResult("long", "internal", "Observation", "authority", "ScientificExplanation", "Observation",
+            "Explain how to observe Orion.", [], [],
+            [new("observation", "direction", "Orion rises in the eastern sky", "after sunset")],
+            null, "calm", "measured", 100, null, null, [], "");
+
+        var projection = ProviderSemanticProjection.Project(realization);
+
+        Assert.Equal(["Orion rises in the eastern sky after sunset."], projection.ObservationStatements);
+    }
+
+    [Fact]
     public void RealizedProviderPrompt_HasNaturalSectionsAndNoInternalFactLabels()
     {
         var realization = new NarrationRealizationResult("long", "SCENE-ID", "Outcome04", "authority", "ScientificExplanation", "Advance04",
