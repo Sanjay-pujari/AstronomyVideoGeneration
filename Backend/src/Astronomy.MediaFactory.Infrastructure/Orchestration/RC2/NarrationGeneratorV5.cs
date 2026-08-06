@@ -48,7 +48,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     private static readonly UTF8Encoding JsonUtf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, Encoder = JavaScriptEncoder.Create(UnicodeRanges.All) };
 
-    public async Task<NarrationGeneratorV5Result> BuildAndWriteDiagnosticsAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, CancellationToken cancellationToken)
+    public Task<NarrationGeneratorV5Result> BuildAndWriteDiagnosticsAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response, CancellationToken cancellationToken)
+        => BuildAndWriteDiagnosticsAsync(request, response, null, cancellationToken);
+
+    public async Task<NarrationGeneratorV5Result> BuildAndWriteDiagnosticsAsync(BatchGenerateFromPlansRequest request, BatchGenerateFromPlansResponse response,
+        NarrationGeneratorV5AuthorityInput? authorityInput, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(response.OutputRoot)) return NarrationGeneratorV5Result.Empty;
 
@@ -118,6 +122,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var familyProfileV1CompatibilityDiagnosticsPath = Path.Combine(narrationRoot, "family-profile-v1-compatibility-diagnostics.json");
         var validationPath = Path.Combine(narrationRoot, "generator-preflight-diagnostics.json");
         var narrationValidationDiagnosticsPath = Path.Combine(narrationRoot, "generator-validation-diagnostics.json");
+        var compositionBridgeDiagnosticsPath = Path.Combine(narrationRoot, "composition-fact-bridge-diagnostics.json");
         var promptPreviewPath = Path.Combine(narrationRoot, "prompt-preview.md");
         var promptDiagnosticsPath = Path.Combine(narrationRoot, "prompt-diagnostics.json");
         var promptQualityPath = Path.Combine(narrationRoot, "prompt-quality.json");
@@ -172,6 +177,13 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 
         var longStoryFrames = LoadStoryFrames(outputRoot, "long");
         var shortStoryFrames = LoadStoryFrames(outputRoot, "short");
+        var authorityValidation = CommittedCompositionFactCardProjector.ValidateAndProject(authorityInput, longStoryFrames.Frames, shortStoryFrames.Frames,
+            producerNotesContract.Language, Rc2PipelinePhaseRegistry.OrchestrationVersion);
+        if (authorityInput is not null && !authorityValidation.Valid)
+        {
+            await WriteAllTextUtf8Async(compositionBridgeDiagnosticsPath, JsonSerializer.Serialize(authorityValidation.Diagnostics, JsonOptions), cancellationToken);
+            throw new InvalidOperationException($"{authorityValidation.ReasonCode}: {string.Join("; ", authorityValidation.Errors)}");
+        }
         var longRawNarrative = RawNarrativeGenerator.Build("long", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, longStoryFrames.Frames);
         var shortRawNarrative = RawNarrativeGenerator.Build("short", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, shortStoryFrames.Frames);
         await WriteAllTextUtf8Async(longRawNarrativePath, JsonSerializer.Serialize(longRawNarrative, JsonOptions), cancellationToken);
@@ -179,8 +191,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var rawNarrativeDiagnostics = new { component = "RawNarrativeGenerator-v1", longGenerated = longRawNarrative.Scenes.Count > 0, shortGenerated = shortRawNarrative.Scenes.Count > 0, longSceneCount = longRawNarrative.Scenes.Count, shortSceneCount = shortRawNarrative.Scenes.Count, deterministic = true, excludedFromLlmBoundary = true, producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true };
         await WriteAllTextUtf8Async(rawNarrativeDiagnosticsPath, JsonSerializer.Serialize(rawNarrativeDiagnostics, JsonOptions), cancellationToken);
 
-        var longSceneFactCards = SceneFactCardGenerator.Build("long", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, longStoryFrames.Frames);
-        var shortSceneFactCards = SceneFactCardGenerator.Build("short", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, shortStoryFrames.Frames);
+        var longProjectionFrames = authorityValidation.LongFrames ?? longStoryFrames.Frames;
+        var shortProjectionFrames = authorityValidation.ShortFrames ?? shortStoryFrames.Frames;
+        var longSceneFactCards = SceneFactCardGenerator.Build("long", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, longProjectionFrames);
+        var shortSceneFactCards = SceneFactCardGenerator.Build("short", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, shortProjectionFrames);
+        var longInitialFactCount = longSceneFactCards.Cards.Sum(card => card.Facts.Count);
+        var shortInitialFactCount = shortSceneFactCards.Cards.Sum(card => card.Facts.Count);
         await WriteAllTextUtf8Async(longSceneFactCardsPath, JsonSerializer.Serialize(longSceneFactCards, JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(shortSceneFactCardsPath, JsonSerializer.Serialize(shortSceneFactCards, JsonOptions), cancellationToken);
         var allFactCards = longSceneFactCards.Cards.Concat(shortSceneFactCards.Cards).ToArray();
@@ -328,8 +344,20 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 
         // Re-project the generic resolver collection onto its governed variant/scene cards. Composition claims remain
         // authoritative and resolver facts supplement only the beat they were resolved for.
-        longSceneFactCards = SceneFactCardGenerator.Build("long", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, longStoryFrames.Frames, semanticResolution);
-        shortSceneFactCards = SceneFactCardGenerator.Build("short", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, shortStoryFrames.Frames, semanticResolution);
+        longSceneFactCards = SceneFactCardGenerator.Build("long", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, longProjectionFrames, semanticResolution);
+        shortSceneFactCards = SceneFactCardGenerator.Build("short", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, shortProjectionFrames, semanticResolution);
+        var committedIds = authorityValidation.CommittedClaimIds;
+        var projectedIds = longSceneFactCards.Cards.Concat(shortSceneFactCards.Cards).SelectMany(card => card.SelectedClaimIds ?? []).ToHashSet(StringComparer.Ordinal);
+        var lostCommittedIds = committedIds.Where(id => !projectedIds.Contains(id)).ToArray();
+        await WriteAllTextUtf8Async(compositionBridgeDiagnosticsPath, JsonSerializer.Serialize(authorityValidation.Diagnostics with
+        {
+            LongInitialSceneCardFactCount = longInitialFactCount, ShortInitialSceneCardFactCount = shortInitialFactCount,
+            LongFinalSceneCardFactCount = longSceneFactCards.Cards.Sum(card => card.Facts.Count), ShortFinalSceneCardFactCount = shortSceneFactCards.Cards.Sum(card => card.Facts.Count),
+            CommittedClaimIdsProjectedToCards = projectedIds.Order().ToArray(), CommittedClaimIdsLost = lostCommittedIds,
+            BridgePassed = authorityValidation.Valid && lostCommittedIds.Length == 0
+        }, JsonOptions), cancellationToken);
+        if (lostCommittedIds.Length > 0)
+            throw new InvalidOperationException($"P7_COMMITTED_FACT_PROJECTION_LOSS: committed claims disappeared: {string.Join(", ", lostCommittedIds)}.");
         await WriteAllTextUtf8Async(longSceneFactCardsPath, JsonSerializer.Serialize(longSceneFactCards, JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(shortSceneFactCardsPath, JsonSerializer.Serialize(shortSceneFactCards, JsonOptions), cancellationToken);
 
@@ -979,6 +1007,22 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var validationStatusSucceeded = mandatoryBlockingFailures == 0 && narrationContextPurityFailures.Length == 0 && new[] { beatFidelityScore, professionalScores.ScientificAccuracyScore, transitionQualityScore, documentaryFlowScore, redundancy.Score, professionalScores.DocumentaryVoiceScore }.Min() >= 80;
         var validation = new
         {
+            compositionAuthorityProvided = authorityInput is not null,
+            compositionAuthorityValidated = authorityInput is null || authorityValidation.Valid,
+            compositionAuthoritySource = authorityValidation.Diagnostics.BridgeSource,
+            longCompositionSceneCount = authorityValidation.Diagnostics.LongCompositionSceneCount,
+            shortCompositionSceneCount = authorityValidation.Diagnostics.ShortCompositionSceneCount,
+            longCommittedRequiredFactCount = authorityValidation.Diagnostics.LongCompositionRequiredFactCount,
+            shortCommittedRequiredFactCount = authorityValidation.Diagnostics.ShortCompositionRequiredFactCount,
+            longCommittedOptionalFactCount = authorityValidation.Diagnostics.LongCompositionOptionalFactCount,
+            shortCommittedOptionalFactCount = authorityValidation.Diagnostics.ShortCompositionOptionalFactCount,
+            longCommittedFactsProjected = authorityInput is not null && longInitialFactCount > 0,
+            shortCommittedFactsProjected = authorityInput is not null && shortInitialFactCount > 0,
+            committedFactsPreservedAfterResolver = lostCommittedIds.Length == 0,
+            lostCommittedClaimIds = lostCommittedIds,
+            supplementalResolverFactCount = resolvedFactsAfterResolver.Length,
+            legacyFactFallbackUsed = authorityInput is null,
+            providerInvocationPreventedDueToFactProjectionFailure = lostCommittedIds.Length > 0,
             status = validationStatusSucceeded ? "Succeeded" : "Failed",
             reason = validationStatusSucceeded ? "Validation passed." : "Validation failed because blocking Phase 7 performance diagnostics or context purity checks failed.",
             phaseNo = 7,
@@ -3052,6 +3096,104 @@ public static class NarrationContextPurityValidator
 }
 
 
+
+public sealed record NarrationGeneratorV5AuthorityInput(
+    DocumentaryNarrativeCompositionRequest LongRequest,
+    DocumentaryNarrativeCompositionRequest ShortRequest);
+
+public sealed record CompositionFactBridgeDiagnostics(
+    int LongCompositionSceneCount, int ShortCompositionSceneCount,
+    int LongCompositionRequiredFactCount, int ShortCompositionRequiredFactCount,
+    int LongCompositionOptionalFactCount, int ShortCompositionOptionalFactCount,
+    int LongInitialSceneCardFactCount, int ShortInitialSceneCardFactCount,
+    int LongFinalSceneCardFactCount, int ShortFinalSceneCardFactCount,
+    IReadOnlyList<string> MissingCompositionSceneIds, IReadOnlyList<string> SceneIdMappingFailures,
+    IReadOnlyList<string> CommittedClaimIdsReceivedByGenerator,
+    IReadOnlyList<string> CommittedClaimIdsProjectedToCards, IReadOnlyList<string> CommittedClaimIdsLost,
+    string BridgeSource, bool BridgePassed);
+
+public sealed record CompositionProjectionResult(bool Valid, string ReasonCode, IReadOnlyList<string> Errors,
+    IReadOnlyList<StoryFrameNarrationSource>? LongFrames, IReadOnlyList<StoryFrameNarrationSource>? ShortFrames,
+    IReadOnlyList<string> CommittedClaimIds, CompositionFactBridgeDiagnostics Diagnostics);
+
+/// <summary>Projects the already-validated composition authority directly onto its governed story frames.</summary>
+public static class CommittedCompositionFactCardProjector
+{
+    public static CompositionProjectionResult ValidateAndProject(NarrationGeneratorV5AuthorityInput? input,
+        IReadOnlyList<StoryFrameNarrationSource> longFrames, IReadOnlyList<StoryFrameNarrationSource> shortFrames,
+        string language, string orchestrationVersion)
+    {
+        if (input is null)
+            return Result(true, "", [], null, null, [], "LegacyReconstructedContext");
+
+        var errors = new List<string>();
+        var mappingErrors = new List<string>();
+        var missing = new List<string>();
+        ValidatePair(input, errors);
+        var projectedLong = Project(input.LongRequest, "long", longFrames, errors, mappingErrors, missing);
+        var projectedShort = Project(input.ShortRequest, "short", shortFrames, errors, mappingErrors, missing);
+        var claims = input.LongRequest.OrderedScenes.Concat(input.ShortRequest.OrderedScenes)
+            .SelectMany(scene => scene.RequiredFacts).Select(fact => fact.ClaimId).Distinct(StringComparer.Ordinal).ToArray();
+        var mappingFailed = mappingErrors.Count > 0 || missing.Count > 0;
+        return Result(errors.Count == 0 && !mappingFailed, mappingFailed ? "P7_COMPOSITION_SCENE_MAPPING_FAILED" : "P7_COMPOSITION_AUTHORITY_HANDOFF_INVALID",
+            errors, projectedLong, projectedShort, claims, "CommittedCompositionAuthority", mappingErrors, missing, input);
+    }
+
+    private static void ValidatePair(NarrationGeneratorV5AuthorityInput input, List<string> errors)
+    {
+        var l = input.LongRequest; var s = input.ShortRequest;
+        if (!l.Variant.Equals("Long", StringComparison.OrdinalIgnoreCase) || !s.Variant.Equals("Short", StringComparison.OrdinalIgnoreCase)) errors.Add("Long and Short composition variants are required.");
+        if (l.OrderedScenes.Count == 0 || s.OrderedScenes.Count == 0) errors.Add("Both composition variants must contain scenes.");
+        if (l.ExecutionId != s.ExecutionId || l.PlanId != s.PlanId || l.EventId != s.EventId || l.Language != s.Language || l.ProfileId != s.ProfileId) errors.Add("Composition identity fields do not match across variants.");
+        if (l.OrderedScenes.Select(x => x.SceneId).Intersect(s.OrderedScenes.Select(x => x.SceneId), StringComparer.OrdinalIgnoreCase).Any()) errors.Add("Long and Short scene ownership overlaps.");
+        foreach (var scene in l.OrderedScenes.Concat(s.OrderedScenes))
+            if (scene.RequiredFacts.Count == 0 && !IsNonEducational(scene.SceneRole)) errors.Add($"Educational scene '{scene.SceneId}' has no committed required facts.");
+    }
+
+    private static StoryFrameNarrationSource[] Project(DocumentaryNarrativeCompositionRequest request, string variant,
+        IReadOnlyList<StoryFrameNarrationSource> frames, List<string> errors, List<string> mappings, List<string> missing)
+    {
+        var frameIds = frames.Select(frame => frame.SceneId).ToArray();
+        if (!request.OrderedScenes.Select(scene => scene.SceneId).SequenceEqual(frameIds, StringComparer.OrdinalIgnoreCase))
+            errors.Add($"{variant} composition scene sequence does not match the governed Story Frame sequence.");
+        return frames.Select(frame =>
+        {
+            var matches = request.OrderedScenes.Where(scene => scene.SceneId.Equals(frame.SceneId, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matches.Length != 1)
+            {
+                missing.Add($"{variant}:{frame.SceneId}"); mappings.Add($"{variant}:{frame.SceneId} matched {matches.Length} composition scenes");
+                return frame;
+            }
+            var scene = matches[0];
+            if (!string.IsNullOrWhiteSpace(scene.StoryFrameId) && !scene.StoryFrameId.Equals(frame.FrameId, StringComparison.OrdinalIgnoreCase) &&
+                !scene.BlueprintSceneId.Equals(frame.BlueprintSceneId, StringComparison.OrdinalIgnoreCase))
+                mappings.Add($"{variant}:{scene.SceneId} storyFrameId '{scene.StoryFrameId}' did not match '{frame.FrameId}'");
+            var required = scene.RequiredFacts.Select(f => new SceneKnowledgeFact(f.ClaimId, f.Fact, f.KnowledgeReferenceIds, f.SourceIds,
+                f.Confidence, f.QualificationRequirements, true));
+            var fallbackRefs = scene.RequiredFacts.SelectMany(f => f.KnowledgeReferenceIds).Concat(scene.BlueprintKnowledgeReferenceIds).Distinct(StringComparer.Ordinal).ToArray();
+            var optional = scene.OptionalFacts.Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => new SceneKnowledgeFact(
+                $"optional:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(f))).ToLowerInvariant()[..16]}", f,
+                fallbackRefs.Length > 0 ? fallbackRefs : ["committed-composition"], ["committed-composition"], 1m, [], false));
+            return frame with { KnowledgeFacts = (frame.KnowledgeFacts ?? []).Concat(required).Concat(optional)
+                .DistinctBy(f => f.ClaimId, StringComparer.Ordinal).ToArray(),
+                BlueprintKnowledgeReferenceIds = (frame.BlueprintKnowledgeReferenceIds ?? []).Concat(fallbackRefs).Distinct(StringComparer.Ordinal).ToArray() };
+        }).ToArray();
+    }
+
+    private static bool IsNonEducational(string role) => role.Contains("Hook", StringComparison.OrdinalIgnoreCase) || role.Contains("Open", StringComparison.OrdinalIgnoreCase) || role.Contains("Clos", StringComparison.OrdinalIgnoreCase) || role.Contains("Reflection", StringComparison.OrdinalIgnoreCase);
+
+    private static CompositionProjectionResult Result(bool valid, string reason, IReadOnlyList<string> errors,
+        IReadOnlyList<StoryFrameNarrationSource>? longFrames, IReadOnlyList<StoryFrameNarrationSource>? shortFrames,
+        IReadOnlyList<string> claims, string source, IReadOnlyList<string>? mapping = null, IReadOnlyList<string>? missing = null,
+        NarrationGeneratorV5AuthorityInput? input = null)
+    {
+        var d = new CompositionFactBridgeDiagnostics(input?.LongRequest.OrderedScenes.Count ?? 0, input?.ShortRequest.OrderedScenes.Count ?? 0,
+            input?.LongRequest.OrderedScenes.Sum(s => s.RequiredFacts.Count) ?? 0, input?.ShortRequest.OrderedScenes.Sum(s => s.RequiredFacts.Count) ?? 0,
+            input?.LongRequest.OrderedScenes.Sum(s => s.OptionalFacts.Count) ?? 0, input?.ShortRequest.OrderedScenes.Sum(s => s.OptionalFacts.Count) ?? 0,
+            0, 0, 0, 0, missing ?? [], mapping ?? [], claims, [], [], source, valid);
+        return new(valid, reason, errors.Concat(mapping ?? []).ToArray(), longFrames, shortFrames, claims, d);
+    }
+}
 
 public static class SceneFactCardGenerator
 {
