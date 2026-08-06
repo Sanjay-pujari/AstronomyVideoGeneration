@@ -47,9 +47,14 @@ public sealed class NarrationProviderOutputTests
     [Fact]
     public void ProviderResponse_CleansOnlyHarmlessWrappers()
     {
-        var parsed = Parse(""""```json
+        var parsed = Parse(
+            """
+            ```json
             {"variant":"Long","scenes":[{"sceneNumber":1,"narrationText":"Narration: \"Orion's Belt points across the winter sky.\""}]}
-            ```"""", "long", 1);
+            ```
+            """,
+            "long",
+            1);
         Assert.Equal("Orion's Belt points across the winter sky.", parsed[1]);
     }
 
