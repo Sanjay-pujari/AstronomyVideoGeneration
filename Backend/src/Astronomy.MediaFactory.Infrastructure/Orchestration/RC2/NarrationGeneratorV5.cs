@@ -31,6 +31,7 @@ using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Directors
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Libraries;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using DocumentaryNarrativeCompositionRequest = Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DocumentaryNarrativeCompositionRequest;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
