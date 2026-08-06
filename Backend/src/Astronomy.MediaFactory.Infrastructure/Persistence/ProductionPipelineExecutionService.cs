@@ -1005,6 +1005,13 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortCandidatePath = Path.Combine(releaseRoot, "short", "accepted-release-candidate.json");
         var narrationManifestPath = Path.Combine(releaseRoot, "narration-manifest.json");
         var narrationCertificationPath = Path.Combine(releaseRoot, "narration-certification.json");
+        var providerPerformancePath = Path.Combine(narrationRoot, "documentary-script", "performance-diagnostics.json");
+        JsonElement? providerEvidence = File.Exists(providerPerformancePath)
+            ? JsonDocument.Parse(await File.ReadAllTextAsync(providerPerformancePath, cancellationToken)).RootElement.Clone()
+            : null;
+        int EvidenceInt(string name) => providerEvidence is { ValueKind: JsonValueKind.Object } value && value.TryGetProperty(name, out var item) && item.TryGetInt32(out var number) ? number : 0;
+        bool EvidenceBool(string name) => providerEvidence is { ValueKind: JsonValueKind.Object } value && value.TryGetProperty(name, out var item) && item.ValueKind is JsonValueKind.True or JsonValueKind.False && item.GetBoolean();
+        string? EvidenceString(string name) => providerEvidence is { ValueKind: JsonValueKind.Object } value && value.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.String ? item.GetString() : null;
         var accepted = status == ProductionPhaseStatus.Succeeded && reasonCode == "P7_NARRATIVE_LIFECYCLE_ACCEPTED"
             && File.Exists(longCandidatePath) && File.Exists(shortCandidatePath) && File.Exists(narrationManifestPath)
             && File.Exists(narrationCertificationPath);
@@ -1023,16 +1030,17 @@ public sealed partial class ProductionPipelineExecutionService(
                 .Resolve(FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType), context.Request.Language)
                 .Profile?.ProfileId ?? "default",
             requestedVariants = new[] { "Long", "Short" },
-            generatorInvocationCount = lifecycleResult?.ProviderCallEvidence.GeneratorInvocationCount ?? 0,
+            generatorInvocationCount = lifecycleResult?.ProviderCallEvidence.GeneratorInvocationCount ?? EvidenceInt("generatorInvocationCount"),
             currentAttemptId = lifecycleResult?.StageEvidence?.CurrentAttemptId,
             preProviderValidationPassed = lifecycleResult?.StageEvidence?.PreProviderValidationPassed ?? false,
-            providerInvocationStarted = lifecycleResult?.StageEvidence?.ProviderInvocationStarted ?? false,
-            longProviderInvocationCount = lifecycleResult?.StageEvidence?.LongProviderInvocationCount ?? 0,
-            shortProviderInvocationCount = lifecycleResult?.StageEvidence?.ShortProviderInvocationCount ?? 0,
-            providerInvocationCompleted = lifecycleResult?.StageEvidence?.ProviderInvocationCompleted ?? false,
-            providerResponseParsed = lifecycleResult?.StageEvidence?.ProviderResponseParsed ?? false,
+            providerInvocationStarted = lifecycleResult?.StageEvidence?.ProviderInvocationStarted ?? EvidenceBool("providerInvocationStarted"),
+            longProviderInvocationCount = lifecycleResult?.StageEvidence?.LongProviderInvocationCount ?? EvidenceInt("longProviderInvocationCount"),
+            shortProviderInvocationCount = lifecycleResult?.StageEvidence?.ShortProviderInvocationCount ?? EvidenceInt("shortProviderInvocationCount"),
+            providerInvocationCompleted = lifecycleResult?.StageEvidence?.ProviderInvocationCompleted ?? EvidenceBool("providerInvocationCompleted"),
+            providerResponseParsed = lifecycleResult?.StageEvidence?.ProviderResponseParsed ?? EvidenceBool("providerResponseParsed"),
             postProviderValidationStarted = lifecycleResult?.StageEvidence?.PostProviderValidationStarted ?? false,
             postProviderValidationPassed = lifecycleResult?.StageEvidence?.PostProviderValidationPassed ?? false,
+            failedVariant = EvidenceString("failedVariant"), providerFailureReasonCode = EvidenceString("providerFailureReasonCode"),
             longGenerated = lifecycleResult?.LongDraft is not null, shortGenerated = lifecycleResult?.ShortDraft is not null,
             longValidated = lifecycleResult?.LongQuality.Passed ?? false, shortValidated = lifecycleResult?.ShortQuality.Passed ?? false,
             longNarrationPath = File.Exists(longPath) ? NormalizePath(longPath) : null,

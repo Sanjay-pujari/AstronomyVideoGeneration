@@ -101,6 +101,45 @@ public sealed class NarrationProviderOutputTests
         Assert.Contains("Write Short independently from Long", repaired);
     }
 
+    [Fact]
+    public void ObjectNamesAndFragmentaryTokens_AreNotGroundedStatements()
+    {
+        var realization = new NarrationRealizationResult("long", "internal", "Outcome04", "authority", "ScientificExplanation", "Advance04",
+            "Orion Gold scene 04 outcome Outcome04.",
+            [new("name", "object", "Betelgeuse", null), new("science", "statement", "Betelgeuse is a red supergiant", null),
+             new("token", "fragment", "Ori", null), new("token", "fragment", "Orionis", null), new("token", "fragment", "Constellation", null)],
+            [], [], new("Advance04", "Outcome04", "Advance04"), "calm", "measured", 100, null, null, [], "");
+
+        var projection = ProviderSemanticProjection.Project(realization);
+
+        Assert.Contains("Betelgeuse is a red supergiant.", projection.FactualStatements);
+        Assert.Contains("Betelgeuse", projection.ObjectVocabulary);
+        Assert.DoesNotContain("Ori", projection.FactualStatements);
+        Assert.DoesNotContain("Orionis", projection.FactualStatements);
+        Assert.DoesNotContain("Constellation", projection.FactualStatements);
+        Assert.DoesNotContain("Advance04", projection.Purpose);
+        Assert.DoesNotContain("Outcome04", projection.Transition);
+    }
+
+    [Fact]
+    public void RealizedProviderPrompt_HasNaturalSectionsAndNoInternalFactLabels()
+    {
+        var realization = new NarrationRealizationResult("long", "SCENE-ID", "Outcome04", "authority", "ScientificExplanation", "Advance04",
+            "Explain why Orion's apparent pattern has physical depth.",
+            [new("scene Fact1", "science", "Betelgeuse is a red supergiant", null)], [], [],
+            new("recognizing Orion's pattern", "understanding its physical depth", "Advance04"), "calm", "measured", 100, null, null, [], "");
+        var context = new NarrationContextDocument("v", "test", [new NarrationFormatContext("long", [])]);
+
+        var prompt = new NarrationPromptComposer().Compose(new NarrationPromptComposerInput(context, [], "/tmp/prompt.md", "/tmp/prompt.json", Realizations: [realization])).PromptPreviewMarkdown;
+
+        Assert.Contains("Grounded astronomy", prompt);
+        Assert.Contains("Betelgeuse is a red supergiant", prompt);
+        Assert.DoesNotContain("scene Fact1", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Advance04", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Outcome04", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("SCENE-ID", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static IReadOnlyDictionary<int, string> Parse(string response, string format, int count)
         => (IReadOnlyDictionary<int, string>)typeof(NarrationGeneratorV5)
             .GetMethod("ParseProviderNarration", BindingFlags.NonPublic | BindingFlags.Static)!

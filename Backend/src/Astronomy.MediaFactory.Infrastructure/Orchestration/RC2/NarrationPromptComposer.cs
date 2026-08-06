@@ -114,9 +114,10 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
         foreach (var pair in realizations.Select((item, index) => (item, index)))
         {
             var item = pair.item;
-            AddSection(sb, 3, $"SCENE {pair.index + 1}", $"Purpose:\n{CleanSemanticText(item.NarrativePurpose)}\n\nGrounded facts:\n{FormatSemanticFacts(item.SpeakableFacts)}\n\nScientific boundaries:\n{FormatList(item.ScientificBoundaries.Select(CleanSemanticText).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray())}\n\nObservation guidance:\n{FormatSemanticFacts(item.ObservationDetails)}\n\nTransition meaning:\n{FormatTransition(item.TransitionIntent)}\n\nTone and pacing:\n{CleanSemanticText(item.Tone)}; {CleanSemanticText(item.Rhythm)}\n\nDuration guidance:\nApproximately {item.WordBudget.ToString(CultureInfo.InvariantCulture)} spoken words.");
+            var projection = ProviderSemanticProjection.Project(item);
+            AddSection(sb, 3, $"SCENE {pair.index + 1}", $"Purpose:\n{projection.Purpose}\n\nGrounded astronomy:\n{FormatProjectionList(projection.FactualStatements)}\n\nApproved names and terminology:\n{FormatProjectionList(projection.ObjectVocabulary)}\n\nPronunciation guidance:\n{FormatProjectionList(projection.Pronunciations)}\n\nScientific boundaries:\n{FormatList(item.ScientificBoundaries.Select(CleanSemanticText).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray())}\n\nObservation guidance:\n{FormatProjectionList(projection.ObservationStatements)}\n\nTransition:\n{projection.Transition}\n\nTone and pacing:\n{CleanSemanticText(item.Tone)}; {CleanSemanticText(item.Rhythm)}\n\nDuration guidance:\nApproximately {item.WordBudget.ToString(CultureInfo.InvariantCulture)} spoken words.");
         }
-        AddSection(sb, 11, "NEGATIVE OUTPUT RULES", "Do not mention or repeat IDs, field names, labels, contracts, phases, validation, producer notes, internal instructions, JSON, scene role names, transition codes, or placeholder names. Never output Advance01, Advance02, final narration remains owned by Phase 7, Advance the certified intent, ViewerQuestionId, LearningObjectiveId, ClaimId, KnowledgeReferenceId, SceneId, or producer instructions.");
+        AddSection(sb, 11, "NEGATIVE OUTPUT RULES", "Do not mention or repeat IDs, field names, labels, contracts, phases, validation, producer notes, internal instructions, data structures, scene role names, transition codes, or placeholder names. Scene numbers are mapping fields only and must never be spoken.");
         AddSection(sb, 12, "OUTPUT CONTRACT", new OutputContractSectionBuilder().Build());
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }
@@ -168,6 +169,7 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     }));
 
     private static string FormatList(IReadOnlyList<string> values) => values.Count == 0 ? "none supplied" : string.Join("; ", values);
+    private static string FormatProjectionList(IReadOnlyList<string> values) => values.Count == 0 ? "none supplied" : string.Join("\n", values.Select(value => "- " + value));
     private static string FormatFacts(IReadOnlyList<NarrationFactV5> facts) => facts.Count == 0 ? "none supplied" : string.Join("; ", facts.Select(NormalizeFact));
 
     public static string NormalizeFact(NarrationFactV5 fact)
@@ -213,4 +215,45 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
 
 public sealed record NarrationPromptComposerInput(NarrationContextDocument NarrationContext, IReadOnlyList<string> InputFiles, string PromptPreviewPath, string PromptDiagnosticsPath, string PromptQualityPath = "", int PromptQualityThreshold = 80, LanguageProfile? LanguageProfile = null, IReadOnlyList<NarrationRealizationResult>? Realizations = null);
 public sealed record NarrationPromptComposerOutput(string PromptPreviewMarkdown, NarrationPromptDiagnostics Diagnostics, PromptQualityContract PromptQuality);
+
+public sealed record ProviderSemanticProjectionResult(
+    string Purpose, string Transition, IReadOnlyList<string> FactualStatements,
+    IReadOnlyList<string> ObjectVocabulary, IReadOnlyList<string> Pronunciations,
+    IReadOnlyList<string> UnsupportedFragments, IReadOnlyList<string> ObservationStatements);
+
+/// <summary>Last-mile projection only: committed inputs remain untouched while provider text is performer-safe.</summary>
+public static class ProviderSemanticProjection
+{
+    private static readonly Regex Internal = new(@"\b(?:Advance|Outcome)\d+\b|\bOrion Gold scene\b|\b(?:ScientificExplanation|Hook|Discovery|Observation|Takeaway|Closing)\b|certified evidence", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex SentenceVerb = new(@"\b(?:is|are|was|were|has|have|contains?|forms?|appears?|lies|marks?|shines?|moves?|rises?|sets?|can|will)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    public static ProviderSemanticProjectionResult Project(NarrationRealizationResult realization)
+    {
+        var facts = new List<string>(); var names = new List<string>(); var pronunciations = new List<string>(); var unsupported = new List<string>();
+        foreach (var fact in realization.SpeakableFacts)
+        {
+            var value = Clean(fact.Value + (string.IsNullOrWhiteSpace(fact.Unit) ? string.Empty : " " + fact.Unit));
+            if (string.IsNullOrWhiteSpace(value)) { unsupported.Add(fact.Value); continue; }
+            if (fact.Label.Contains("pronunciation", StringComparison.OrdinalIgnoreCase) || fact.Label.Contains("alias", StringComparison.OrdinalIgnoreCase)) pronunciations.Add(value);
+            else if (IsStatement(value)) facts.Add(value.TrimEnd('.') + ".");
+            else if (Regex.IsMatch(value, @"^[\p{L}][\p{L}'’ -]{0,40}$", RegexOptions.CultureInvariant) && value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 3) names.Add(value);
+            else unsupported.Add(value);
+        }
+        var purpose = Clean(realization.NarrativePurpose);
+        if (string.IsNullOrWhiteSpace(purpose) || Internal.IsMatch(purpose))
+            purpose = facts.Count > 0 ? "Explain the astronomical meaning of the grounded details in natural viewer-facing language." : "Give the audience a clear, natural understanding of this part of Orion.";
+        var transition = realization.TransitionIntent is null ? "Continue naturally to the next astronomical idea." :
+            $"Move naturally from {Clean(realization.TransitionIntent.FromConcept)} toward {Clean(realization.TransitionIntent.ToConcept)}.";
+        if (Internal.IsMatch(transition) || transition.Count(char.IsLetterOrDigit) < 20) transition = "Connect this understanding naturally to the next astronomical idea.";
+        var observations = realization.ObservationDetails.Select(Clean).Where(IsStatement).Select(v => v.TrimEnd('.') + ".").ToArray();
+        return new(purpose, transition, facts, names, pronunciations, unsupported, observations);
+    }
+
+    public static bool HasMeaningfulContext(ProviderSemanticProjectionResult projection)
+        => projection.FactualStatements.Count > 0 && projection.Purpose.Count(char.IsLetterOrDigit) >= 30;
+
+    private static bool IsStatement(string value) => value.Count(char.IsLetterOrDigit) >= 12 && (SentenceVerb.IsMatch(value) || value.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length >= 5);
+    private static string Clean(string? value) => Regex.Replace(Internal.Replace(value ?? string.Empty, string.Empty), @"\s{2,}", " ").Trim(' ', '-', ':', '.');
+}
+
 public sealed record NarrationPromptDiagnostics(string ComposerName, string OrchestrationVersion, IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles, int SceneCount, int PromptSectionCount, IReadOnlyList<string> ProhibitedInternalPhraseList, IReadOnlyList<string> MissingInputWarnings, bool ReadyForGeneration, bool LanguageInstructionPresent, string LanguageInstructionLocation, bool RequestedLanguageIncludedInSystemPrompt, bool RequestedLanguageIncludedInUserPrompt, bool LanguageExamplesUsed, bool EnglishDominatingExamplesDetected, string LanguageProfileSource, string TerminologyProfileSource);
