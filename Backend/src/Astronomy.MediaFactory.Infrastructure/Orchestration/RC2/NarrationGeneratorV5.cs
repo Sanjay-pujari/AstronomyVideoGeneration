@@ -10,6 +10,7 @@ using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.ExecutionContracts;
 using Astronomy.MediaFactory.Core.ExecutionValidation;
+using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Diagnostics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptComposer;
@@ -1096,6 +1097,34 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
 
     private static StoryFrameSource LoadStoryFrames(string outputRoot, string format)
     {
+        // Phase 7 lifecycle composition is a thin input seam over canonical Phase 6 authority.
+        // Prefer it when present; compatibility manifests remain available to non-production callers.
+        var compositionPath = Path.Combine(outputRoot, "narration-v5", format, "narrative-composition-request.json");
+        try
+        {
+            if (File.Exists(compositionPath))
+            {
+                var composition = JsonSerializer.Deserialize<DocumentaryNarrativeCompositionRequest>(
+                    File.ReadAllText(compositionPath), JsonOptions);
+                if (composition is not null && composition.OrderedScenes.Count > 0)
+                {
+                    var repair = composition.RepairGuidance.Count == 0
+                        ? string.Empty
+                        : " Correction guidance: " + string.Join("; ", composition.RepairGuidance);
+                    return new StoryFrameSource(compositionPath, composition.OrderedScenes
+                        .OrderBy(scene => scene.SceneNumber)
+                        .Select(scene => new StoryFrameNarrationSource(scene.SceneId, scene.SceneNumber, scene.SceneId,
+                            string.Join(" ", new[] { scene.Heading, scene.ViewerQuestion, scene.LearningObjective,
+                                scene.NarrationBrief, scene.VisualIntent, scene.TransitionSeed }.Where(value => !string.IsNullOrWhiteSpace(value))) + repair))
+                        .ToArray());
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // The generator's governed preflight will report unusable input; legacy callers may
+            // still resolve their existing manifest below.
+        }
         var manifestPath = Path.Combine(outputRoot, "story-frames", format, "story-frame-manifest.json");
         var manifest = ReadFirstJson(manifestPath);
         var files = ReadArray(manifest, "files").Select(e => ValueToString(e) ?? string.Empty).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();

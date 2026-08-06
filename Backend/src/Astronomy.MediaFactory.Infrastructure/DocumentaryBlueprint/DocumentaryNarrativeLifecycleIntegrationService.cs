@@ -1,14 +1,11 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
 namespace Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
-/// <summary>
-/// Production Phase 7 boundary.  The planning/draft-authority publications are useful
-/// diagnostics, but they are not prose and are deliberately not consulted here.
-/// </summary>
 public interface IDocumentaryNarrativeLifecycleIntegrationService
 {
     Task<DocumentaryNarrativeLifecycleResult> ExecuteAsync(DocumentaryNarrativeLifecycleRequest request,
@@ -24,58 +21,62 @@ public sealed record DocumentaryNarrativeCompositionRequest(
     string ProfileId, IReadOnlyList<DocumentaryNarrativeSceneInput> OrderedScenes,
     DocumentaryNarrativeDurationGuidance OverallDurationGuidance,
     IReadOnlyList<string> SafetyRules, IReadOnlyList<string> Vocabulary,
-    IReadOnlyList<string> KnowledgeReferences);
+    IReadOnlyList<string> KnowledgeReferences)
+{
+    public IReadOnlyList<string> RepairGuidance { get; init; } = [];
+}
 
 public sealed record DocumentaryNarrativeDurationGuidance(int MinimumSeconds, int PreferredSeconds, int MaximumSeconds);
-
 public sealed record DocumentaryNarrativeRequiredFact(string ClaimId, string Fact,
     IReadOnlyList<string> KnowledgeReferenceIds, IReadOnlyList<string> SourceIds, decimal Confidence,
     IReadOnlyList<string> QualificationRequirements);
-
 public sealed record DocumentaryNarrativeSceneInput(int SceneNumber, string SceneId, string SectionKey,
     string Heading, string ViewerQuestion, string LearningObjective, string NarrationBrief,
     IReadOnlyList<DocumentaryNarrativeRequiredFact> RequiredFacts, IReadOnlyList<string> OptionalFacts,
     IReadOnlyList<string> CulturalContext, IReadOnlyList<string> SafetyRules, IReadOnlyList<string> Vocabulary,
     string VisualIntent, int TargetDurationSeconds, string PreviousSceneContext, string TransitionSeed);
-
+public sealed record DocumentaryNarrativeDraftScene(string SceneId, string NarrationText,
+    IReadOnlyList<string> GroundingReferences);
 public sealed record DocumentaryNarrativeDraftCandidate(string Variant, string Path, string Text,
-    IReadOnlyList<string> SceneIds, IReadOnlyList<string> GroundingReferences);
-
+    IReadOnlyList<string> SceneIds, IReadOnlyList<string> GroundingReferences)
+{
+    public IReadOnlyList<DocumentaryNarrativeDraftScene> Scenes { get; init; } = [];
+    public int WordCount { get; init; }
+}
 public sealed record DocumentaryNarrativeQualityResult(bool Passed, IReadOnlyList<string> Errors,
     IReadOnlyList<string> Warnings, int SceneCount, int EstimatedDurationSeconds);
-
 public sealed record DocumentaryNarrativeLifecycleAcceptanceResult(bool Accepted, string Reason,
     string? ReleaseCandidateId = null);
-
 public sealed record DocumentaryNarrativeProviderCallEvidence(string Generator, string EntryMethod,
-    int LongCalls, int ShortCalls, IReadOnlyList<string> DiagnosticFiles);
-
+    int GeneratorInvocationCount, bool LongVariantProduced, bool ShortVariantProduced,
+    IReadOnlyList<string> DiagnosticFiles)
+{
+    // Compatibility aliases for callers of the short-lived original evidence contract.
+    public int LongCalls => LongVariantProduced ? GeneratorInvocationCount : 0;
+    public int ShortCalls => ShortVariantProduced ? GeneratorInvocationCount : 0;
+}
 public sealed record DocumentaryNarrativeLifecycleResult(
-    DocumentaryNarrativeCompositionRequest LongRequest,
-    DocumentaryNarrativeCompositionRequest ShortRequest,
-    DocumentaryNarrativeDraftCandidate? LongDraft,
-    DocumentaryNarrativeDraftCandidate? ShortDraft,
-    DocumentaryNarrativeQualityResult LongQuality,
-    DocumentaryNarrativeQualityResult ShortQuality,
-    IReadOnlyList<string> RevisionHistory,
-    DocumentaryNarrativeLifecycleAcceptanceResult LongAcceptance,
-    DocumentaryNarrativeLifecycleAcceptanceResult ShortAcceptance,
-    IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings,
-    DocumentaryNarrativeProviderCallEvidence ProviderCallEvidence,
+    DocumentaryNarrativeCompositionRequest LongRequest, DocumentaryNarrativeCompositionRequest ShortRequest,
+    DocumentaryNarrativeDraftCandidate? LongDraft, DocumentaryNarrativeDraftCandidate? ShortDraft,
+    DocumentaryNarrativeQualityResult LongQuality, DocumentaryNarrativeQualityResult ShortQuality,
+    IReadOnlyList<string> RevisionHistory, DocumentaryNarrativeLifecycleAcceptanceResult LongAcceptance,
+    DocumentaryNarrativeLifecycleAcceptanceResult ShortAcceptance, IReadOnlyList<string> Errors,
+    IReadOnlyList<string> Warnings, DocumentaryNarrativeProviderCallEvidence ProviderCallEvidence,
     IReadOnlyList<string> GeneratedFiles)
 {
     public bool Succeeded => LongAcceptance.Accepted && ShortAcceptance.Accepted && Errors.Count == 0;
 }
 
-/// <summary>
-/// Thin Draft -&gt; Validate -&gt; Revise -&gt; Accept orchestration around the existing V5 generator.
-/// Wording is flexible; certified claim identities remain grounding evidence.
-/// </summary>
+/// <summary>Thin production orchestration around the existing V5 narration generator.</summary>
 public sealed class DocumentaryNarrativeLifecycleIntegrationService(
     NarrationGeneratorV5 generator,
     DocumentaryNarrativeAcceptanceCoordinator acceptanceCoordinator) : IDocumentaryNarrativeLifecycleIntegrationService
 {
-    public const int MaximumRevisionAttempts = 2;
+    public const int MaximumGenerationAttempts = 2;
+    public const int MaximumRevisionAttempts = MaximumGenerationAttempts;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly string[] LeakageTerms =
+        ["system prompt", "developer prompt", "producer notes", "internal instruction", "claimId", "knowledgeReferenceId", "```json"];
 
     public async Task<DocumentaryNarrativeLifecycleResult> ExecuteAsync(DocumentaryNarrativeLifecycleRequest request,
         CancellationToken cancellationToken = default)
@@ -83,120 +84,278 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         ArgumentNullException.ThrowIfNull(request);
         var errors = new List<string>();
         var warnings = new List<string>();
-        var longRequest = BuildCompositionRequest(request, "Long", new(480, 600, 900));
-        var shortRequest = BuildCompositionRequest(request, "Short", new(60, 90, 120));
-        if (longRequest.OrderedScenes.Count == 0) errors.Add("Long narration has no governed Phase 6 scenes.");
-        if (shortRequest.OrderedScenes.Count == 0) errors.Add("Short narration has no governed Phase 6 scenes.");
+        var revisions = new List<string>();
+        var generatedFiles = new List<string>();
+        var storyFramesPath = Path.Combine(request.ExecutionRoot, "06-story-frames", "story-frames.json");
+        var diagnosticsPath = Path.Combine(request.ExecutionRoot, "narration-v5", "narration-validation-diagnostics.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath)!);
 
-        var generated = NarrationGeneratorV5Result.Empty;
-        if (errors.Count == 0)
-        {
-            var batchRequest = new BatchGenerateFromPlansRequest(request.Year, request.RegionId, request.Language,
-                DryRun: false, UseProductionPipeline: true, StartPhaseNo: 7, EndPhaseNo: 7, PlanId: request.PlanId);
-            var batchResponse = new BatchGenerateFromPlansResponse(true, false, 1, 1, 1, [], [], [], [],
-                UseProductionPipeline: true, PlanId: request.PlanId, OutputRoot: request.ExecutionRoot,
-                ProductionPipelineRequest: request.ProductionPipelineRequest);
-            try { generated = await generator.BuildAndWriteDiagnosticsAsync(batchRequest, batchResponse, cancellationToken); }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (Exception ex) { errors.Add($"NarrationGeneratorV5 failed: {ex.Message}"); }
-        }
-
-        var longDraft = ReadDraft(request.ExecutionRoot, "long", longRequest);
-        var shortDraft = ReadDraft(request.ExecutionRoot, "short", shortRequest);
-        var longQuality = Validate(longDraft, longRequest);
-        var shortQuality = Validate(shortDraft, shortRequest);
-        errors.AddRange(longQuality.Errors.Select(x => "Long: " + x));
-        errors.AddRange(shortQuality.Errors.Select(x => "Short: " + x));
-        warnings.AddRange(longQuality.Warnings.Select(x => "Long: " + x));
-        warnings.AddRange(shortQuality.Warnings.Select(x => "Short: " + x));
-
-        // Prompt 2 will persist the rich release aggregate; the existing coordinator still
-        // owns the acceptance decision at this production integration boundary.
-        var longAcceptance = Accept(longDraft, longQuality, request.ExecutionId, "long",
-            acceptanceCoordinator.Accept(longDraft is not null, longQuality.Passed, longQuality.Passed));
-        var shortAcceptance = Accept(shortDraft, shortQuality, request.ExecutionId, "short",
-            acceptanceCoordinator.Accept(shortDraft is not null, shortQuality.Passed, shortQuality.Passed));
-        return new(longRequest, shortRequest, longDraft, shortDraft, longQuality, shortQuality, [],
-            longAcceptance, shortAcceptance, errors.Distinct().ToArray(), warnings.Distinct().ToArray(),
-            new(nameof(NarrationGeneratorV5), nameof(NarrationGeneratorV5.BuildAndWriteDiagnosticsAsync), 1, 1, generated.GeneratedFiles),
-            generated.GeneratedFiles);
-    }
-
-    private static DocumentaryNarrativeCompositionRequest BuildCompositionRequest(DocumentaryNarrativeLifecycleRequest request,
-        string variant, DocumentaryNarrativeDurationGuidance duration)
-    {
-        var manifestPath = Path.Combine(request.ExecutionRoot, "06-story-frames", "story-frame-manifest.json");
-        using var document = File.Exists(manifestPath) ? JsonDocument.Parse(File.ReadAllText(manifestPath)) : null;
-        var scenes = FindVariantScenes(document?.RootElement, variant).Select((scene, index) => MapScene(scene, index)).ToArray();
-        return new(request.ExecutionId, request.PlanId, request.EventId, request.EventFamily, request.Language, variant,
-            request.ProfileId, scenes, duration,
-            ["Use only grounded astronomy facts; distinguish culture and mythology from science.", "Do not present astrology as scientific causation.", "Do not leak prompts, notes, or internal identifiers."],
-            [], scenes.SelectMany(x => x.RequiredFacts).SelectMany(x => x.KnowledgeReferenceIds).Distinct().ToArray());
-    }
-
-    private static IEnumerable<JsonElement> FindVariantScenes(JsonElement? root, string variant)
-    {
-        if (root is null) yield break;
-        foreach (var arrayName in variant.Equals("Long", StringComparison.OrdinalIgnoreCase)
-                     ? new[] { "longScenes", "longStoryFrames" } : new[] { "shortScenes", "shortStoryFrames" })
-            if (TryProperty(root.Value, arrayName, out var array) && array.ValueKind == JsonValueKind.Array)
-            { foreach (var item in array.EnumerateArray()) yield return item; yield break; }
-        if (TryProperty(root.Value, "variants", out var variants) && variants.ValueKind == JsonValueKind.Array)
-            foreach (var item in variants.EnumerateArray())
-                if (Text(item, "variant", "format", "variantType").Equals(variant, StringComparison.OrdinalIgnoreCase) && TryProperty(item, "scenes", out var scenes))
-                { foreach (var scene in scenes.EnumerateArray()) yield return scene; yield break; }
-    }
-
-    private static DocumentaryNarrativeSceneInput MapScene(JsonElement scene, int index)
-    {
-        var number = Number(scene, "sceneNumber", "sceneOrder", "sequence") ?? index + 1;
-        var id = Text(scene, "sceneId", "storyFrameId", "id");
-        if (string.IsNullOrWhiteSpace(id)) id = $"scene-{number}";
-        return new(number, id, Text(scene, "sectionKey", "section"), Text(scene, "heading", "title", "purpose"),
-            Text(scene, "viewerQuestion", "question"), Text(scene, "learningObjective", "objective"),
-            Text(scene, "narrationBrief", "narrativePurpose", "purpose"), [], [], [], [], [],
-            Text(scene, "visualIntent", "visualPurpose"), Number(scene, "targetDurationSeconds", "estimatedDurationSeconds") ?? 0,
-            index == 0 ? "" : "Continue naturally from the preceding governed scene.", Text(scene, "transitionSeed", "transition"));
-    }
-
-    private static DocumentaryNarrativeDraftCandidate? ReadDraft(string root, string variant, DocumentaryNarrativeCompositionRequest composition)
-    {
-        var path = Path.Combine(root, "narration-v5", variant, "narration.json");
-        if (!File.Exists(path)) return null;
-        using var doc = JsonDocument.Parse(File.ReadAllText(path));
-        var text = Text(doc.RootElement, "fullNarrationText", "fullText", "text");
-        var ids = new List<string>();
-        if (TryProperty(doc.RootElement, "scenes", out var scenes) && scenes.ValueKind == JsonValueKind.Array)
-            ids.AddRange(scenes.EnumerateArray().Select(x => Text(x, "sceneId", "id")).Where(x => x.Length > 0));
-        return new(variant, path, text, ids, composition.KnowledgeReferences);
-    }
-
-    private static DocumentaryNarrativeQualityResult Validate(DocumentaryNarrativeDraftCandidate? draft, DocumentaryNarrativeCompositionRequest request)
-    {
-        var errors = new List<string>(); var warnings = new List<string>();
-        if (draft is null) errors.Add("Generator did not return the requested variant.");
+        StoryFramesAuthority? authority = null;
+        if (!File.Exists(storyFramesPath))
+            errors.Add("Canonical Phase 6 Story Frame authority was not found at 06-story-frames/story-frames.json.");
         else
         {
-            var missing = request.OrderedScenes.Select(x => x.SceneId).Where(id => !draft.SceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+            await using var stream = File.OpenRead(storyFramesPath);
+            authority = await JsonSerializer.DeserializeAsync<StoryFramesAuthority>(stream, JsonOptions, cancellationToken);
+            ValidateAuthority(authority, request, errors);
+        }
+
+        var longRequest = BuildCompositionRequest(request, authority, "Long", new(480, 600, 900));
+        var shortRequest = BuildCompositionRequest(request, authority, "Short", new(60, 90, 120));
+        if (longRequest.OrderedScenes.Count == 0) errors.Add("Long narration has no governed Phase 6 scenes.");
+        if (shortRequest.OrderedScenes.Count == 0) errors.Add("Short narration has no governed Phase 6 scenes.");
+        if (longRequest.OrderedScenes.All(scene => scene.RequiredFacts.Count == 0) &&
+            shortRequest.OrderedScenes.All(scene => scene.RequiredFacts.Count == 0))
+            warnings.Add("Composition-side required facts were not independently projected; NarrationGeneratorV5 will use its existing semantic fact resolution pipeline.");
+
+        var longRequestPath = Path.Combine(request.ExecutionRoot, "narration-v5", "long", "narrative-composition-request.json");
+        var shortRequestPath = Path.Combine(request.ExecutionRoot, "narration-v5", "short", "narrative-composition-request.json");
+        await WriteCompositionRequestsAsync(longRequest, shortRequest, longRequestPath, shortRequestPath, cancellationToken);
+        generatedFiles.AddRange([longRequestPath, shortRequestPath]);
+
+        NarrationGeneratorV5Result generated = NarrationGeneratorV5Result.Empty;
+        DocumentaryNarrativeDraftCandidate? longDraft = null;
+        DocumentaryNarrativeDraftCandidate? shortDraft = null;
+        var longQuality = EmptyQuality("Generation was not attempted.");
+        var shortQuality = EmptyQuality("Generation was not attempted.");
+        var crossErrors = new List<string>();
+        var invocationCount = 0;
+
+        if (errors.Count == 0)
+        {
+            for (var attempt = 1; attempt <= MaximumGenerationAttempts; attempt++)
+            {
+                invocationCount++;
+                generated = await InvokeGeneratorAsync(request, cancellationToken);
+                generatedFiles.AddRange(generated.GeneratedFiles);
+                revisions.Add(attempt == 1 ? "Attempt 1: Generated." : "Attempt 2: Regenerated with correction guidance.");
+
+                var longRead = await ReadDraftAsync(request.ExecutionRoot, "long", longRequest, cancellationToken);
+                var shortRead = await ReadDraftAsync(request.ExecutionRoot, "short", shortRequest, cancellationToken);
+                longDraft = longRead.Draft;
+                shortDraft = shortRead.Draft;
+                longQuality = Validate(longDraft, longRequest, longRead.Errors, ReadGeneratorBlockingErrors(request.ExecutionRoot));
+                shortQuality = Validate(shortDraft, shortRequest, shortRead.Errors, ReadGeneratorBlockingErrors(request.ExecutionRoot));
+                crossErrors = ValidateCrossVariant(longDraft, shortDraft).ToList();
+                var attemptErrors = longQuality.Errors.Select(x => "Long: " + x)
+                    .Concat(shortQuality.Errors.Select(x => "Short: " + x)).Concat(crossErrors).ToArray();
+                revisions.Add(attemptErrors.Length == 0
+                    ? $"Attempt {attempt} validation: Passed."
+                    : $"Attempt {attempt} validation: Failed — {string.Join("; ", attemptErrors)}");
+                if (attemptErrors.Length == 0 || attempt == MaximumGenerationAttempts) break;
+
+                longRequest = longRequest with { RepairGuidance = attemptErrors };
+                shortRequest = shortRequest with { RepairGuidance = attemptErrors };
+                await PreserveAttemptDiagnosticsAsync(request.ExecutionRoot, attempt, cancellationToken);
+                await WriteCompositionRequestsAsync(longRequest, shortRequest, longRequestPath, shortRequestPath, cancellationToken);
+            }
+        }
+
+        errors.AddRange(longQuality.Errors.Select(x => "Long: " + x));
+        errors.AddRange(shortQuality.Errors.Select(x => "Short: " + x));
+        errors.AddRange(crossErrors);
+        warnings.AddRange(longQuality.Warnings.Select(x => "Long: " + x));
+        warnings.AddRange(shortQuality.Warnings.Select(x => "Short: " + x));
+        var noPendingRepairableIssues = longQuality.Passed && shortQuality.Passed && crossErrors.Count == 0;
+        var convergenceSucceeded = noPendingRepairableIssues && invocationCount <= MaximumGenerationAttempts;
+        var longAcceptance = Accept(longDraft, longQuality, request.ExecutionId, "long",
+            acceptanceCoordinator.Accept(longDraft is not null, longQuality.Passed, convergenceSucceeded));
+        var shortAcceptance = Accept(shortDraft, shortQuality, request.ExecutionId, "short",
+            acceptanceCoordinator.Accept(shortDraft is not null, shortQuality.Passed, convergenceSucceeded));
+
+        var succeeded = longAcceptance.Accepted && shortAcceptance.Accepted && errors.Count == 0;
+        var diagnostics = new
+        {
+            schemaVersion = "1.0", request.ExecutionId, planId = request.PlanId, request.EventId, request.EventFamily,
+            request.Language, request.ProfileId, canonicalStoryFramesPath = storyFramesPath,
+            longCompositionRequestPath = longRequestPath, shortCompositionRequestPath = shortRequestPath,
+            expectedLongSceneCount = longRequest.OrderedScenes.Count, actualLongSceneCount = longDraft?.Scenes.Count ?? 0,
+            expectedShortSceneCount = shortRequest.OrderedScenes.Count, actualShortSceneCount = shortDraft?.Scenes.Count ?? 0,
+            generator = nameof(NarrationGeneratorV5), entryMethod = nameof(NarrationGeneratorV5.BuildAndWriteDiagnosticsAsync),
+            generatorInvocationCount = invocationCount,
+            longArtifactPath = Path.Combine(request.ExecutionRoot, "narration-v5", "long", "narration.json"),
+            shortArtifactPath = Path.Combine(request.ExecutionRoot, "narration-v5", "short", "narration.json"),
+            longQuality, shortQuality, crossVariantValidationResult = new { passed = crossErrors.Count == 0, errors = crossErrors },
+            durationEstimates = new { longSeconds = longQuality.EstimatedDurationSeconds, shortSeconds = shortQuality.EstimatedDurationSeconds },
+            revisionHistory = revisions, longAcceptance, shortAcceptance, succeeded,
+            errors = errors.Distinct(StringComparer.Ordinal).ToArray(), warnings = warnings.Distinct(StringComparer.Ordinal).ToArray(),
+            generatedUtc = DateTimeOffset.UtcNow
+        };
+        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
+        generatedFiles.Add(diagnosticsPath);
+        return new(longRequest, shortRequest, longDraft, shortDraft, longQuality, shortQuality, revisions,
+            longAcceptance, shortAcceptance, errors.Distinct(StringComparer.Ordinal).ToArray(),
+            warnings.Distinct(StringComparer.Ordinal).ToArray(),
+            new(nameof(NarrationGeneratorV5), nameof(NarrationGeneratorV5.BuildAndWriteDiagnosticsAsync), invocationCount,
+                longDraft is not null, shortDraft is not null, generated.GeneratedFiles),
+            generatedFiles.Distinct(StringComparer.Ordinal).ToArray());
+    }
+
+    private async Task<NarrationGeneratorV5Result> InvokeGeneratorAsync(DocumentaryNarrativeLifecycleRequest request,
+        CancellationToken cancellationToken)
+    {
+        var batchRequest = new BatchGenerateFromPlansRequest(request.Year, request.RegionId, request.Language,
+            DryRun: false, UseProductionPipeline: true, StartPhaseNo: 7, EndPhaseNo: 7, PlanId: request.PlanId);
+        var batchResponse = new BatchGenerateFromPlansResponse(true, false, 1, 1, 1, [], [], [], [],
+            UseProductionPipeline: true, PlanId: request.PlanId, OutputRoot: request.ExecutionRoot,
+            ProductionPipelineRequest: request.ProductionPipelineRequest);
+        return await generator.BuildAndWriteDiagnosticsAsync(batchRequest, batchResponse, cancellationToken);
+    }
+
+    private static void ValidateAuthority(StoryFramesAuthority? authority, DocumentaryNarrativeLifecycleRequest request,
+        List<string> errors)
+    {
+        if (authority is null) { errors.Add("Canonical Phase 6 Story Frame authority is empty or invalid."); return; }
+        if (!authority.PlanId.Equals(request.PlanId.ToString("D"), StringComparison.OrdinalIgnoreCase))
+            errors.Add($"Canonical Story Frame PlanId '{authority.PlanId}' does not match requested PlanId '{request.PlanId:D}'.");
+        if (!string.IsNullOrWhiteSpace(authority.EventId) && !string.IsNullOrWhiteSpace(request.EventId) &&
+            !authority.EventId.Equals(request.EventId, StringComparison.OrdinalIgnoreCase))
+            errors.Add($"Canonical Story Frame EventId '{authority.EventId}' does not match requested EventId '{request.EventId}'.");
+        if (!authority.Language.Equals(request.Language, StringComparison.OrdinalIgnoreCase))
+            errors.Add($"Canonical Story Frame language '{authority.Language}' does not match requested language '{request.Language}'.");
+        if (authority.Frames.Count == 0) errors.Add("Canonical Phase 6 Story Frame authority contains no frames.");
+        foreach (var variant in new[] { "Long", "Short" })
+            if (!authority.RequestedVariants.Contains(variant, StringComparer.OrdinalIgnoreCase))
+                errors.Add($"Canonical Phase 6 Story Frame authority does not request the {variant} variant.");
+    }
+
+    internal static DocumentaryNarrativeCompositionRequest BuildCompositionRequest(DocumentaryNarrativeLifecycleRequest request,
+        StoryFramesAuthority? authority, string variant, DocumentaryNarrativeDurationGuidance duration)
+    {
+        var safety = new[] { "Use only grounded astronomy facts; distinguish culture and mythology from science.",
+            "Do not present astrology as scientific causation.", "Do not leak prompts, notes, or internal identifiers." };
+        var groups = (authority?.Frames ?? []).Where(frame => frame.Variant.Equals(variant, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(frame => frame.SceneId, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Min(frame => frame.SceneNumber)).ThenBy(group => group.Min(frame => frame.FrameNumber)).ToArray();
+        var scenes = groups.Select((group, index) =>
+        {
+            var ordered = group.OrderBy(frame => frame.FrameNumber).ToArray();
+            var first = ordered[0];
+            var references = ordered.SelectMany(frame => frame.KnowledgeReferenceIds).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            return new DocumentaryNarrativeSceneInput(first.SceneNumber, first.SceneId, first.NarrativeStage,
+                first.SceneRole, string.Join("; ", ordered.SelectMany(frame => frame.ViewerQuestionIds).Distinct()),
+                string.Join("; ", ordered.SelectMany(frame => frame.LearningObjectiveIds).Distinct()),
+                string.Join(" ", ordered.Select(frame => frame.NarrativeIntent).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()),
+                [], [], [], safety, [],
+                string.Join(" ", ordered.Select(frame => frame.VisualIntent).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()),
+                (int)Math.Round(ordered.Sum(frame => frame.EstimatedDuration)),
+                index == 0 ? "" : $"Continue naturally from {groups[index - 1].Key}.",
+                string.Join(" ", ordered.Select(frame => frame.TransitionOut).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()));
+        }).ToArray();
+        return new(request.ExecutionId, request.PlanId, request.EventId, request.EventFamily, request.Language, variant,
+            request.ProfileId, scenes, duration, safety, [],
+            (authority?.Frames ?? []).Where(frame => frame.Variant.Equals(variant, StringComparison.OrdinalIgnoreCase))
+                .SelectMany(frame => frame.KnowledgeReferenceIds).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static async Task WriteCompositionRequestsAsync(DocumentaryNarrativeCompositionRequest longRequest,
+        DocumentaryNarrativeCompositionRequest shortRequest, string longPath, string shortPath, CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(longPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(shortPath)!);
+        await File.WriteAllTextAsync(longPath, JsonSerializer.Serialize(longRequest, JsonOptions), cancellationToken);
+        await File.WriteAllTextAsync(shortPath, JsonSerializer.Serialize(shortRequest, JsonOptions), cancellationToken);
+    }
+
+    private static async Task<(DocumentaryNarrativeDraftCandidate? Draft, IReadOnlyList<string> Errors)> ReadDraftAsync(
+        string root, string variant, DocumentaryNarrativeCompositionRequest composition, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(root, "narration-v5", variant, "narration.json");
+        if (!File.Exists(path)) return (null, [$"Draft artifact was not found at narration-v5/{variant}/narration.json."]);
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            var narration = await JsonSerializer.DeserializeAsync<NarrationV5>(stream, JsonOptions, cancellationToken);
+            if (narration is null) return (null, ["Draft JSON did not contain a narration document."]);
+            var scenes = narration.Scenes.Select(scene => new DocumentaryNarrativeDraftScene(scene.SceneId,
+                scene.NarrationText ?? "", scene.RequiredFactsCovered ?? [])).ToArray();
+            var text = string.IsNullOrWhiteSpace(narration.FullNarrationText)
+                ? string.Join("\n\n", scenes.Select(scene => scene.NarrationText).Where(text => !string.IsNullOrWhiteSpace(text)))
+                : narration.FullNarrationText;
+            if (scenes.Length == 0 || scenes.All(scene => string.IsNullOrWhiteSpace(scene.NarrationText)) || string.IsNullOrWhiteSpace(text))
+                return (null, ["Draft contains no non-empty scene narration."]);
+            var references = scenes.SelectMany(scene => scene.GroundingReferences)
+                .Concat(composition.KnowledgeReferences).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            return (new(variant, path, text, scenes.Select(scene => scene.SceneId).ToArray(), references)
+            { Scenes = scenes, WordCount = WordCount(text) }, []);
+        }
+        catch (JsonException ex) { return (null, [$"Draft JSON is invalid: {ex.Message}"]); }
+    }
+
+    internal static DocumentaryNarrativeQualityResult Validate(DocumentaryNarrativeDraftCandidate? draft,
+        DocumentaryNarrativeCompositionRequest request, IReadOnlyList<string> readErrors,
+        IReadOnlyList<string> generatorBlockingErrors)
+    {
+        var errors = readErrors.ToList();
+        var warnings = new List<string>();
+        if (draft is not null)
+        {
+            var expected = request.OrderedScenes.Select(scene => scene.SceneId).ToArray();
+            var groups = draft.SceneIds.GroupBy(id => id, StringComparer.OrdinalIgnoreCase).ToArray();
+            var duplicates = groups.Where(group => group.Count() > 1).Select(group => group.Key).ToArray();
+            if (duplicates.Length > 0) errors.Add($"Duplicate scene IDs: {string.Join(", ", duplicates)}.");
+            var missing = expected.Where(id => groups.All(group => !group.Key.Equals(id, StringComparison.OrdinalIgnoreCase))).ToArray();
             if (missing.Length > 0) errors.Add($"Missing governed scenes: {string.Join(", ", missing)}.");
-            if (string.IsNullOrWhiteSpace(draft.Text)) errors.Add("Narration text is empty.");
-            if (new[] { "system prompt", "producer notes", "claimId", "knowledgeReferenceId" }.Any(x => draft.Text.Contains(x, StringComparison.OrdinalIgnoreCase))) errors.Add("Metadata or prompt leakage detected.");
+            var unexpected = groups.Select(group => group.Key).Where(id => !expected.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
+            if (unexpected.Length > 0) errors.Add($"Unexpected scene IDs: {string.Join(", ", unexpected)}.");
+            var duplicateBlocks = draft.Scenes.Where(scene => !string.IsNullOrWhiteSpace(scene.NarrationText))
+                .GroupBy(scene => Normalize(scene.NarrationText), StringComparer.Ordinal).Where(group => group.Count() > 1).ToArray();
+            if (duplicateBlocks.Length > 0) errors.Add("Duplicate complete scene narration blocks were detected.");
+            if (LeakageTerms.Any(term => draft.Text.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                Regex.IsMatch(draft.Text, "\\bsceneId\\s*[:=]\\s*[\\\"']", RegexOptions.IgnoreCase))
+                errors.Add("Metadata or prompt leakage detected.");
             var seconds = EstimateSeconds(draft.Text, request.Language);
             if (seconds < request.OverallDurationGuidance.MinimumSeconds || seconds > request.OverallDurationGuidance.MaximumSeconds)
                 warnings.Add($"Estimated overall duration {seconds}s is outside guidance; measured authority belongs to Phases 15-16.");
         }
-        return new(errors.Count == 0, errors, warnings, draft?.SceneIds.Count ?? 0, EstimateSeconds(draft?.Text ?? "", request.Language));
+        errors.AddRange(generatorBlockingErrors);
+        return new(errors.Count == 0, errors.Distinct(StringComparer.Ordinal).ToArray(), warnings,
+            draft?.Scenes.Count ?? 0, EstimateSeconds(draft?.Text ?? "", request.Language));
     }
 
+    internal static IReadOnlyList<string> ValidateCrossVariant(DocumentaryNarrativeDraftCandidate? longDraft,
+        DocumentaryNarrativeDraftCandidate? shortDraft)
+    {
+        if (longDraft is null || shortDraft is null) return [];
+        var longText = Normalize(longDraft.Text); var shortText = Normalize(shortDraft.Text);
+        if (longText.Equals(shortText, StringComparison.Ordinal)) return ["Long and Short narration are identical."];
+        if (shortText.Length >= 200 && longText.Contains(shortText, StringComparison.Ordinal))
+            return ["Short narration is a verbatim contiguous copy of Long narration."];
+        return [];
+    }
+
+    private static IReadOnlyList<string> ReadGeneratorBlockingErrors(string root)
+    {
+        var path = Path.Combine(root, "narration-v5", "narration-validation-diagnostics.json");
+        if (!File.Exists(path)) return [];
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            if (!TryProperty(document.RootElement, "errors", out var errors) || errors.ValueKind != JsonValueKind.Array) return [];
+            return errors.EnumerateArray().Where(value => value.ValueKind == JsonValueKind.String)
+                .Select(value => "Generator blocking failure: " + value.GetString()).ToArray();
+        }
+        catch (JsonException) { return ["Generator diagnostics JSON is invalid."]; }
+    }
+
+    private static async Task PreserveAttemptDiagnosticsAsync(string root, int attempt, CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(root, "narration-v5", "narration-validation-diagnostics.json");
+        if (File.Exists(path))
+            await File.WriteAllBytesAsync(Path.Combine(root, "narration-v5", $"narration-validation-diagnostics.attempt-{attempt}.json"),
+                await File.ReadAllBytesAsync(path, cancellationToken), cancellationToken);
+    }
+
+    private static DocumentaryNarrativeQualityResult EmptyQuality(string error) => new(false, [error], [], 0, 0);
     private static DocumentaryNarrativeLifecycleAcceptanceResult Accept(DocumentaryNarrativeDraftCandidate? draft,
         DocumentaryNarrativeQualityResult quality, string executionId, string variant, bool coordinatorAccepted) =>
         coordinatorAccepted && quality.Passed && draft is not null
             ? new(true, "Converged natural narration passed practical quality validation.", $"{executionId}.{variant}.release-candidate")
             : new(false, "Narration did not converge to an acceptable release candidate.");
-
+    private static int WordCount(string text) => Regex.Matches(text ?? "", @"\S+").Count;
     private static int EstimateSeconds(string text, string language) => string.IsNullOrWhiteSpace(text) ? 0 :
-        (int)Math.Round(text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length / (language.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? 120d : 135d) * 60d);
-    private static bool TryProperty(JsonElement element, string name, out JsonElement value) { foreach (var p in element.EnumerateObject()) if (p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { value=p.Value; return true; } value=default; return false; }
-    private static string Text(JsonElement element, params string[] names) { foreach (var name in names) if (TryProperty(element, name, out var value)) return value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : value.ToString(); return ""; }
-    private static int? Number(JsonElement element, params string[] names) { foreach (var name in names) if (TryProperty(element, name, out var value) && value.TryGetInt32(out var number)) return number; return null; }
+        (int)Math.Round(WordCount(text) / (language.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? 120d : 135d) * 60d);
+    private static string Normalize(string value) => Regex.Replace(value.Trim().ToLowerInvariant(), @"\s+", " ");
+    private static bool TryProperty(JsonElement element, string name, out JsonElement value)
+    { foreach (var property in element.EnumerateObject()) if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { value = property.Value; return true; } value = default; return false; }
 }

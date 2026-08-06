@@ -868,22 +868,41 @@ public sealed partial class ProductionPipelineExecutionService(
                 "Phase 7 natural narration lifecycle is unavailable.", true, cancellationToken, started,
                 reasonCodeOverride: "P7_NARRATIVE_LIFECYCLE_UNAVAILABLE");
 
-        var profile = (familyNarrationProfileResolver ?? new FamilyNarrationProfileResolver())
-            .Resolve(FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType), context.Request.Language);
-        var lifecycleRequest = new DocumentaryNarrativeLifecycleRequest(context.OutputRoot,
-            context.Request.PlanId.ToString("D"), context.Request.PlanId, context.EventId,
-            FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType), context.Request.Language,
-            profile.Profile?.ProfileId ?? "default", (context.Request.ScheduledUtc ?? DateTimeOffset.UtcNow).Year,
-            context.Request.RegionId, context.Request);
-        var result = await _documentaryNarrativeLifecycleIntegrationService.ExecuteAsync(lifecycleRequest, cancellationToken);
-        var finished = DateTimeOffset.UtcNow;
-        return new ProductionPhaseResult(7, "Narration Studio V5",
-            result.Succeeded ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, finished,
-            (long)(finished-started).TotalMilliseconds, [], result.GeneratedFiles,
-            Path.Combine(context.OutputRoot, "narration-v5", "narration-validation-diagnostics.json"),
-            result.Warnings, result.Errors, !result.Succeeded,
-            result.Succeeded ? "Long and Short natural narration converged and were accepted." : "Natural narration lifecycle did not converge.")
-        { ReasonCode = result.Succeeded ? "P7_NARRATIVE_LIFECYCLE_ACCEPTED" : "P7_NARRATIVE_LIFECYCLE_REJECTED" };
+        try
+        {
+            var profile = (familyNarrationProfileResolver ?? new FamilyNarrationProfileResolver())
+                .Resolve(FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType), context.Request.Language);
+            var lifecycleRequest = new DocumentaryNarrativeLifecycleRequest(context.OutputRoot,
+                context.Request.PlanId.ToString("D"), context.Request.PlanId, context.EventId,
+                FamilyNarrationProfileResolver.NormalizeEventFamily(context.Request.EventType), context.Request.Language,
+                profile.Profile?.ProfileId ?? "default", (context.Request.ScheduledUtc ?? DateTimeOffset.UtcNow).Year,
+                context.Request.RegionId, context.Request);
+            var result = await _documentaryNarrativeLifecycleIntegrationService.ExecuteAsync(lifecycleRequest, cancellationToken);
+            var finished = DateTimeOffset.UtcNow;
+            return new ProductionPhaseResult(7, "Narration Studio V5",
+                result.Succeeded ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, finished,
+                (long)(finished-started).TotalMilliseconds, [], result.GeneratedFiles,
+                Path.Combine(context.OutputRoot, "narration-v5", "narration-validation-diagnostics.json"),
+                result.Warnings, result.Errors, !result.Succeeded,
+                result.Succeeded ? "Long and Short natural narration converged and were accepted." : "Natural narration lifecycle did not converge.")
+            { ReasonCode = result.Succeeded ? "P7_NARRATIVE_LIFECYCLE_ACCEPTED" : "P7_NARRATIVE_LIFECYCLE_REJECTED" };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or JsonException
+                                   or UnauthorizedAccessException or NotSupportedException)
+        {
+            var finished = DateTimeOffset.UtcNow;
+            var diagnosticsPath = Path.Combine(context.OutputRoot, "narration-v5", "narration-validation-diagnostics.json");
+            var outputs = File.Exists(diagnosticsPath) ? new[] { diagnosticsPath } : [];
+            return new ProductionPhaseResult(7, "Narration Studio V5", ProductionPhaseStatus.Failed, started, finished,
+                (long)(finished-started).TotalMilliseconds, [], outputs,
+                File.Exists(diagnosticsPath) ? diagnosticsPath : null, [], [ex.Message], true,
+                "Phase 7 natural narration lifecycle failed at the production exception boundary.")
+            { ReasonCode = "P7_NARRATIVE_LIFECYCLE_FAILED" };
+        }
     }
 
     // Compatibility-only authority chain. It may still produce knowledge/planning diagnostics,
