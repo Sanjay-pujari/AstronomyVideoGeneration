@@ -118,6 +118,26 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationTests
             .Should().ContainSingle(message => message.Contains("identical"));
     }
 
+    [Fact]
+    public void BlueprintMismatch_reordered_scene_blocks_publication_validation()
+    {
+        var composition = DocumentaryNarrativeLifecycleIntegrationService.BuildCompositionRequest(
+            Request(), Authority([Frame("Long", 1), Frame("Long", 2)]), "Long", new(1, 2, 999));
+        var scenes = new[]
+        {
+            new DocumentaryNarrativeDraftScene("long-scene-02", "Orion's second governed purpose explains the winter sky.", []),
+            new DocumentaryNarrativeDraftScene("long-scene-01", "Orion's first governed purpose introduces the winter sky.", [])
+        };
+        var draft = new DocumentaryNarrativeDraftCandidate("Long", "narration.json",
+            string.Join(' ', scenes.Select(scene => scene.NarrationText)), scenes.Select(scene => scene.SceneId).ToArray(), [])
+            { Scenes = scenes };
+
+        var result = DocumentaryNarrativeLifecycleIntegrationService.Validate(draft, composition, [], []);
+
+        result.Passed.Should().BeFalse();
+        result.Errors.Should().Contain(error => error.Contains("scene order") && error.Contains("DocumentaryBlueprint"));
+    }
+
     [Theory]
     [InlineData("ViewerQuestionId VQ-ORION-01 should be repeated to the audience.")]
     [InlineData("LearningObjectiveId LO-ORION-02 explains this passage.")]
