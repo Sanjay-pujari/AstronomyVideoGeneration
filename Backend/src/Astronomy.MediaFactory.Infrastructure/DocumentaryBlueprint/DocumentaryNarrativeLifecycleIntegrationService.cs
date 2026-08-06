@@ -183,6 +183,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         var shortRequest = BuildCompositionRequest(request, authority, blueprintAuthority?.Short, blueprintAuthority?.Aggregate, runtimeAuthority, "Short", new(60, 90, 120));
         if (longRequest.OrderedScenes.Count == 0) errors.Add("Long narration has no governed Phase 6 scenes.");
         if (shortRequest.OrderedScenes.Count == 0) errors.Add("Short narration has no governed Phase 6 scenes.");
+        ValidateCompositionHandoff(request, longRequest, shortRequest, errors);
 
         var longRequestPath = Path.Combine(request.ExecutionRoot, "narration-v5", "long", "narrative-composition-request.json");
         var shortRequestPath = Path.Combine(request.ExecutionRoot, "narration-v5", "short", "narrative-composition-request.json");
@@ -220,7 +221,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
                 }
                 generationAttempts++;
                 providerInvocationStarted = true;
-                generated = await InvokeGeneratorAsync(request, cancellationToken);
+                generated = await InvokeGeneratorAsync(request, longRequest, shortRequest, cancellationToken);
                 var counts = ReadProviderInvocationCounts(request.ExecutionRoot);
                 longProviderInvocationCount += counts.Long;
                 shortProviderInvocationCount += counts.Short;
@@ -318,6 +319,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
     }
 
     private async Task<NarrationGeneratorV5Result> InvokeGeneratorAsync(DocumentaryNarrativeLifecycleRequest request,
+        DocumentaryNarrativeCompositionRequest longRequest, DocumentaryNarrativeCompositionRequest shortRequest,
         CancellationToken cancellationToken)
     {
         var batchRequest = new BatchGenerateFromPlansRequest(request.Year, request.RegionId, request.Language,
@@ -325,7 +327,20 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         var batchResponse = new BatchGenerateFromPlansResponse(true, false, 1, 1, 1, [], [], [], [],
             UseProductionPipeline: true, PlanId: request.PlanId, OutputRoot: request.ExecutionRoot,
             ProductionPipelineRequest: request.ProductionPipelineRequest);
-        return await generator.BuildAndWriteDiagnosticsAsync(batchRequest, batchResponse, cancellationToken);
+        return await generator.BuildAndWriteDiagnosticsAsync(batchRequest, batchResponse,
+            new NarrationGeneratorV5AuthorityInput(longRequest, shortRequest), cancellationToken);
+    }
+
+    private static void ValidateCompositionHandoff(DocumentaryNarrativeLifecycleRequest lifecycle,
+        DocumentaryNarrativeCompositionRequest longRequest, DocumentaryNarrativeCompositionRequest shortRequest, List<string> errors)
+    {
+        var identityValid = new[] { longRequest, shortRequest }.All(composition =>
+            composition.ExecutionId == lifecycle.ExecutionId && composition.PlanId == lifecycle.PlanId &&
+            composition.EventId == lifecycle.EventId && composition.Language == lifecycle.Language && composition.ProfileId == lifecycle.ProfileId);
+        var ownershipOverlap = longRequest.OrderedScenes.Select(scene => scene.SceneId)
+            .Intersect(shortRequest.OrderedScenes.Select(scene => scene.SceneId), StringComparer.OrdinalIgnoreCase).Any();
+        if (!identityValid || ownershipOverlap)
+            errors.Add("P7_COMPOSITION_AUTHORITY_HANDOFF_INVALID: composition identity mismatch or cross-variant scene ownership overlap.");
     }
 
     private static (int Long, int Short) ReadProviderInvocationCounts(string root)
