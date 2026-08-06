@@ -14,12 +14,20 @@ public sealed class NarrationProviderOutputTests
         Assert.Equal("Betelgeuse marks a warm-colored shoulder while blue-white Rigel anchors a foot.", parsed[2]);
     }
 
+    [Fact]
+    public void StructurallyEmptyProviderResponse_IsRejectedDuringParsing()
+        => Assert.Throws<TargetInvocationException>(() => Parse("{\"variant\":\"Long\",\"scenes\":[]}", "long", 1));
+
     [Theory]
-    [InlineData("{\"variant\":\"Long\",\"scenes\":[]}")]
-    [InlineData("{\"variant\":\"Long\",\"scenes\":[{\"sceneNumber\":1,\"narrationText\":\"Advance01 introduces the next idea.\"}]}")]
-    [InlineData("{\"variant\":\"Long\",\"scenes\":[{\"sceneNumber\":1,\"narrationText\":\"final narration remains owned by Phase 7\"}]}")]
-    public void PlaceholderRegression_IsRejected(string response)
-        => Assert.Throws<TargetInvocationException>(() => Parse(response, "long", 1));
+    [InlineData("Advance01 introduces the next idea.")]
+    [InlineData("final narration remains owned by Phase 7")]
+    public void ProviderNarrationLeakage_IsParsedThenRejectedByPostProviderValidation(string narrationText)
+    {
+        var response = $$"""{"variant":"Long","scenes":[{"sceneNumber":1,"narrationText":"{{narrationText}}"}]}""";
+        Assert.Equal(narrationText, Parse(response, "long", 1)[1]);
+        Assert.Contains(GeneratedNarrationValidator.Validate(narrationText), failure =>
+            failure.DetectedIssue == "ProviderInternalIdentifierOrPlaceholder");
+    }
 
     [Fact]
     public void RepairAttempt_ChangesPromptChecksumMaterial()

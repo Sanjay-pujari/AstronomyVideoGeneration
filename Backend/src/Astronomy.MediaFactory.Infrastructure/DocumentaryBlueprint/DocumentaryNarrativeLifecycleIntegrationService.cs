@@ -82,6 +82,10 @@ public sealed record DocumentaryNarrativeProviderCallEvidence(string Generator, 
     public int LongCalls => LongVariantProduced ? GeneratorInvocationCount : 0;
     public int ShortCalls => ShortVariantProduced ? GeneratorInvocationCount : 0;
 }
+public sealed record DocumentaryNarrativeStageEvidence(string CurrentAttemptId, bool PreProviderValidationPassed,
+    bool ProviderInvocationStarted, int LongProviderInvocationCount, int ShortProviderInvocationCount,
+    bool ProviderInvocationCompleted, bool ProviderResponseParsed, bool PostProviderValidationStarted,
+    bool PostProviderValidationPassed);
 public sealed record DocumentaryNarrativeLifecycleResult(
     DocumentaryNarrativeCompositionRequest LongRequest, DocumentaryNarrativeCompositionRequest ShortRequest,
     DocumentaryNarrativeDraftCandidate? LongDraft, DocumentaryNarrativeDraftCandidate? ShortDraft,
@@ -92,6 +96,7 @@ public sealed record DocumentaryNarrativeLifecycleResult(
     IReadOnlyList<string> GeneratedFiles)
 {
     public Phase7NarrationPublicationResult? Publication { get; init; }
+    public DocumentaryNarrativeStageEvidence? StageEvidence { get; init; }
     public bool Succeeded => LongAcceptance.Accepted && ShortAcceptance.Accepted && Errors.Count == 0
         && Publication is { PublicationCommitted: true, PhysicalReadbackPassed: true, ChecksumsPassed: true };
 }
@@ -121,6 +126,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         var diagnosticsPath = Path.Combine(request.ExecutionRoot, "narration-v5", "narrative-lifecycle-validation.json");
         var generatorDiagnosticsPath = Path.Combine(request.ExecutionRoot, "narration-v5", "generator-validation-diagnostics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath)!);
+        CleanupWorkingNarration(request.ExecutionRoot);
 
         StoryFramesAuthority? authority = null;
         Phase7BlueprintAuthority? blueprintAuthority = null;
@@ -161,6 +167,10 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         var providerInvocationCompleted = false;
         var preProviderValidationPassed = errors.Count == 0;
         var postProviderValidationPassed = false;
+        var postProviderValidationStarted = false;
+        var providerResponseParsed = false;
+        var longProviderInvocationCount = 0;
+        var shortProviderInvocationCount = 0;
         Phase7NarrationPublicationResult? publicationResult = null;
         var generatorAssessment = new NarrationGeneratorBlockingAssessment(false, false, false, [], []);
 
@@ -176,16 +186,22 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
                 generationAttempts++;
                 providerInvocationStarted = true;
                 generated = await InvokeGeneratorAsync(request, cancellationToken);
-                invocationCount += ReadProviderInvocationCount(request.ExecutionRoot);
+                var counts = ReadProviderInvocationCounts(request.ExecutionRoot);
+                longProviderInvocationCount += counts.Long;
+                shortProviderInvocationCount += counts.Short;
+                invocationCount += counts.Long + counts.Short;
                 providerInvocationCompleted = true;
+                await WriteAttemptMarkersAsync(request, cancellationToken);
                 generatedFiles.AddRange(generated.GeneratedFiles);
                 revisions.Add(attempt == 1 ? "Attempt 1: Generated." : "Attempt 2: Regenerated with correction guidance.");
 
-                var longRead = await ReadDraftAsync(request.ExecutionRoot, "long", longRequest, cancellationToken);
-                var shortRead = await ReadDraftAsync(request.ExecutionRoot, "short", shortRequest, cancellationToken);
+                var longRead = await ReadDraftAsync(request.ExecutionRoot, "long", longRequest, request.AttemptId, cancellationToken);
+                var shortRead = await ReadDraftAsync(request.ExecutionRoot, "short", shortRequest, request.AttemptId, cancellationToken);
                 longDraft = longRead.Draft;
                 shortDraft = shortRead.Draft;
+                providerResponseParsed = longDraft is not null && shortDraft is not null;
                 generatorAssessment = AssessGeneratorResult(request.ExecutionRoot, true, true);
+                postProviderValidationStarted = true;
                 longQuality = Validate(longDraft, longRequest, longRead.Errors, generatorAssessment.BlockingErrors);
                 shortQuality = Validate(shortDraft, shortRequest, shortRead.Errors, generatorAssessment.BlockingErrors);
                 crossErrors = ValidateCrossVariant(longDraft, shortDraft).ToList();
@@ -238,7 +254,8 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             expectedLongSceneCount = longRequest.OrderedScenes.Count, actualLongSceneCount = longDraft?.Scenes.Count ?? 0,
             expectedShortSceneCount = shortRequest.OrderedScenes.Count, actualShortSceneCount = shortDraft?.Scenes.Count ?? 0,
             generator = nameof(NarrationGeneratorV5), entryMethod = nameof(NarrationGeneratorV5.BuildAndWriteDiagnosticsAsync),
-            currentAttemptId = request.AttemptId, providerInvocationStarted, providerInvocationCompleted,
+            currentAttemptId = request.AttemptId, providerInvocationStarted, longProviderInvocationCount,
+            shortProviderInvocationCount, providerInvocationCompleted, providerResponseParsed, postProviderValidationStarted,
             narrationArtifactGeneratedThisAttempt = generated.GeneratedFiles.Any(File.Exists), narrationArtifactAttemptId = request.AttemptId,
             staleArtifactIgnored, preProviderValidationPassed, postProviderValidationPassed,
             generatorInvocationCount = invocationCount,
@@ -260,7 +277,9 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             new(nameof(NarrationGeneratorV5), nameof(NarrationGeneratorV5.BuildAndWriteDiagnosticsAsync), invocationCount,
                 longDraft is not null, shortDraft is not null, generated.GeneratedFiles),
             generatedFiles.Where(File.Exists).Distinct(StringComparer.Ordinal).ToArray())
-        { Publication = publicationResult };
+        { Publication = publicationResult, StageEvidence = new(request.AttemptId, preProviderValidationPassed,
+            providerInvocationStarted, longProviderInvocationCount, shortProviderInvocationCount,
+            providerInvocationCompleted, providerResponseParsed, postProviderValidationStarted, postProviderValidationPassed) };
     }
 
     private async Task<NarrationGeneratorV5Result> InvokeGeneratorAsync(DocumentaryNarrativeLifecycleRequest request,
@@ -274,17 +293,31 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         return await generator.BuildAndWriteDiagnosticsAsync(batchRequest, batchResponse, cancellationToken);
     }
 
-    private static int ReadProviderInvocationCount(string root)
+    private static (int Long, int Short) ReadProviderInvocationCounts(string root)
     {
         var path = Path.Combine(root, "narration-v5", "documentary-script", "performance-diagnostics.json");
-        if (!File.Exists(path)) return 0;
+        if (!File.Exists(path)) return (0, 0);
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(path));
-            return TryProperty(document.RootElement, "providerInvocationCount", out var count) && count.TryGetInt32(out var value)
-                ? value : 0;
+            return (TryProperty(document.RootElement, "longProviderInvocationCount", out var longCount) && longCount.TryGetInt32(out var longValue) ? longValue : 0,
+                TryProperty(document.RootElement, "shortProviderInvocationCount", out var shortCount) && shortCount.TryGetInt32(out var shortValue) ? shortValue : 0);
         }
-        catch (JsonException) { return 0; }
+        catch (JsonException) { return (0, 0); }
+    }
+
+    private static void CleanupWorkingNarration(string root)
+    {
+        // narration-v5 is Phase 7's uncommitted working root.  Never touch 07-narration here:
+        // that directory remains the last certified authority until atomic publication succeeds.
+        var workingRoot = Path.Combine(root, "narration-v5");
+        foreach (var relative in new[] { "narration.json", "long/narration.json", "short/narration.json",
+                     "raw-narrative", "documentary-script" })
+        {
+            var path = Path.Combine(workingRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+            if (Directory.Exists(path)) Directory.Delete(path, true);
+            else if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     private static void ValidateAuthority(StoryFramesAuthority? authority, DocumentaryNarrativeLifecycleRequest request,
@@ -420,12 +453,17 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
     }
 
     private static async Task<(DocumentaryNarrativeDraftCandidate? Draft, IReadOnlyList<string> Errors)> ReadDraftAsync(
-        string root, string variant, DocumentaryNarrativeCompositionRequest composition, CancellationToken cancellationToken)
+        string root, string variant, DocumentaryNarrativeCompositionRequest composition, string currentAttemptId, CancellationToken cancellationToken)
     {
         var path = Path.Combine(root, "narration-v5", variant, "narration.json");
         if (!File.Exists(path)) return (null, [$"Draft artifact was not found at narration-v5/{variant}/narration.json."]);
+        var markerPath = Path.Combine(root, "narration-v5", variant, "attempt-metadata.json");
+        if (!File.Exists(markerPath)) return (null, [$"Draft artifact has no current-attempt metadata at narration-v5/{variant}/attempt-metadata.json."]);
         try
         {
+            using (var marker = JsonDocument.Parse(await File.ReadAllTextAsync(markerPath, cancellationToken)))
+                if (!TryProperty(marker.RootElement, "attemptId", out var id) || id.GetString() != currentAttemptId)
+                    return (null, [$"Draft artifact attemptId does not match current attempt {currentAttemptId}."]);
             await using var stream = File.OpenRead(path);
             var narration = await JsonSerializer.DeserializeAsync<NarrationV5>(stream, JsonOptions, cancellationToken);
             if (narration is null) return (null, ["Draft JSON did not contain a narration document."]);
@@ -442,6 +480,18 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             { Scenes = scenes, WordCount = WordCount(text) }, []);
         }
         catch (JsonException ex) { return (null, [$"Draft JSON is invalid: {ex.Message}"]); }
+    }
+
+    private static async Task WriteAttemptMarkersAsync(DocumentaryNarrativeLifecycleRequest request, CancellationToken cancellationToken)
+    {
+        foreach (var variant in new[] { "long", "short" })
+        {
+            var narrationPath = Path.Combine(request.ExecutionRoot, "narration-v5", variant, "narration.json");
+            if (!File.Exists(narrationPath)) continue;
+            var markerPath = Path.Combine(Path.GetDirectoryName(narrationPath)!, "attempt-metadata.json");
+            await File.WriteAllTextAsync(markerPath, JsonSerializer.Serialize(new { attemptId = request.AttemptId,
+                generatedUtc = DateTimeOffset.UtcNow, request.ExecutionId, request.PlanId }, JsonOptions), cancellationToken);
+        }
     }
 
     internal static DocumentaryNarrativeQualityResult Validate(DocumentaryNarrativeDraftCandidate? draft,

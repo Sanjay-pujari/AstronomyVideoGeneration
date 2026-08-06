@@ -975,6 +975,15 @@ public sealed partial class ProductionPipelineExecutionService(
                 .Profile?.ProfileId ?? "default",
             requestedVariants = new[] { "Long", "Short" },
             generatorInvocationCount = lifecycleResult?.ProviderCallEvidence.GeneratorInvocationCount ?? 0,
+            currentAttemptId = lifecycleResult?.StageEvidence?.CurrentAttemptId,
+            preProviderValidationPassed = lifecycleResult?.StageEvidence?.PreProviderValidationPassed ?? false,
+            providerInvocationStarted = lifecycleResult?.StageEvidence?.ProviderInvocationStarted ?? false,
+            longProviderInvocationCount = lifecycleResult?.StageEvidence?.LongProviderInvocationCount ?? 0,
+            shortProviderInvocationCount = lifecycleResult?.StageEvidence?.ShortProviderInvocationCount ?? 0,
+            providerInvocationCompleted = lifecycleResult?.StageEvidence?.ProviderInvocationCompleted ?? false,
+            providerResponseParsed = lifecycleResult?.StageEvidence?.ProviderResponseParsed ?? false,
+            postProviderValidationStarted = lifecycleResult?.StageEvidence?.PostProviderValidationStarted ?? false,
+            postProviderValidationPassed = lifecycleResult?.StageEvidence?.PostProviderValidationPassed ?? false,
             longGenerated = lifecycleResult?.LongDraft is not null, shortGenerated = lifecycleResult?.ShortDraft is not null,
             longValidated = lifecycleResult?.LongQuality.Passed ?? false, shortValidated = lifecycleResult?.ShortQuality.Passed ?? false,
             longNarrationPath = File.Exists(longPath) ? NormalizePath(longPath) : null,
@@ -985,10 +994,13 @@ public sealed partial class ProductionPipelineExecutionService(
             publicationCommitted = lifecycleResult?.Publication?.PublicationCommitted ?? false,
             certificationPassed = accepted && lifecycleResult?.Publication?.ChecksumsPassed == true,
             physicalReadbackPassed = lifecycleResult?.Publication?.PhysicalReadbackPassed ?? false,
-            longAcceptedCandidatePath = File.Exists(longCandidatePath) ? NormalizePath(longCandidatePath) : null,
-            shortAcceptedCandidatePath = File.Exists(shortCandidatePath) ? NormalizePath(shortCandidatePath) : null,
-            narrationManifestPath = File.Exists(narrationManifestPath) ? NormalizePath(narrationManifestPath) : null,
-            narrationCertificationPath = File.Exists(narrationCertificationPath) ? NormalizePath(narrationCertificationPath) : null,
+            longAcceptedCandidatePath = accepted ? NormalizePath(longCandidatePath) : null,
+            shortAcceptedCandidatePath = accepted ? NormalizePath(shortCandidatePath) : null,
+            narrationManifestPath = accepted ? NormalizePath(narrationManifestPath) : null,
+            narrationCertificationPath = accepted ? NormalizePath(narrationCertificationPath) : null,
+            priorCommittedPublicationPreserved = !accepted && Directory.Exists(releaseRoot),
+            currentRunReusedPriorPublication = false,
+            currentRunReplacedPriorPublication = accepted,
             generatorValidationPath = NormalizePath(generatorPath), lifecycleValidationPath = NormalizePath(lifecyclePath),
             generationStatus = lifecycleResult?.LongDraft is not null && lifecycleResult.ShortDraft is not null ? "Generated" : "Failed",
             acceptanceStatus = lifecycleResult?.LongAcceptance.Accepted == true && lifecycleResult.ShortAcceptance.Accepted ? "Accepted" : "Rejected",
@@ -16639,7 +16651,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var requestedEndPhase = context.PipelineRequest.RequestedEndPhaseNo ?? context.EndPhaseNo;
         var dependencyExpansionApplied = requestedStartPhase != context.StartPhaseNo || requestedEndPhase != context.EndPhaseNo;
         var filesGeneratedThisRun = phaseResults.SelectMany(phase => phase.OutputFiles).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).Select(NormalizePath).ToArray();
-        var phasesActuallyExecuted = phaseResults.Where(phase => phase.Status == ProductionPhaseStatus.Succeeded).Select(phase => phase.PhaseNo).ToArray();
+        var phasesActuallyExecuted = phaseResults.Where(phase => phase.Status != ProductionPhaseStatus.Skipped).Select(phase => phase.PhaseNo).ToArray();
         var phase1AuthorityPath=Path.Combine(context.OutputRoot,"01-plan","execution-context.json");
         Phase1ExecutionContext? phase1Authority=null;
         if(File.Exists(phase1AuthorityPath))phase1Authority=JsonSerializer.Deserialize<Phase1ExecutionContext>(await File.ReadAllTextAsync(phase1AuthorityPath,cancellationToken),JsonOptions);
@@ -16706,7 +16718,14 @@ public sealed partial class ProductionPipelineExecutionService(
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "narration-v5", "short", "narration.json")), role = "ShortNarration" },
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "narration-v5", "long", "narrative-composition-request.json")), role = "LongCompositionRequest" },
             new { path = NormalizePath(Path.Combine(context.OutputRoot, "narration-v5", "short", "narrative-composition-request.json")), role = "ShortCompositionRequest" }
-        }.Where(x => File.Exists(x.path)).Select(x => new { x.path, x.role, checksum = PhysicalChecksum(x.path) }).ToArray();
+            ,new { path = NormalizePath(Path.Combine(context.OutputRoot, "07-narration", "long", "accepted-release-candidate.json")), role = "AuthoritativeLongNarration" }
+            ,new { path = NormalizePath(Path.Combine(context.OutputRoot, "07-narration", "short", "accepted-release-candidate.json")), role = "AuthoritativeShortNarration" }
+            ,new { path = NormalizePath(Path.Combine(context.OutputRoot, "07-narration", "narration-manifest.json")), role = "AuthoritativeNarrationManifest" }
+            ,new { path = NormalizePath(Path.Combine(context.OutputRoot, "07-narration", "narration-certification.json")), role = "AuthoritativeNarrationCertification" }
+        }.Where(x => File.Exists(x.path) && (!x.role.StartsWith("Authoritative", StringComparison.Ordinal)
+            || phaseResults.Any(result => result.PhaseNo == 7 && result.Status == ProductionPhaseStatus.Succeeded
+                && result.PublicationCommitted && result.CommittedStateValidationPassed)))
+            .Select(x => new { x.path, x.role, checksum = PhysicalChecksum(x.path) }).ToArray();
         var generatedManifestJson = JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, phase1Artifacts, phase2Artifacts, currentRunArtifacts=filesGeneratedThisRun, existingDependencies=context.DryRun?Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).Where(File.Exists).Select(NormalizePath).ToArray():Array.Empty<string>(), phasesGenerated=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Succeeded).Select(x=>x.PhaseNo).ToArray(), phasesReused=phaseResults.Where(x=>!context.DryRun&&x.Status==ProductionPhaseStatus.Skipped&&x.OutputFiles.Count>0).Select(x=>x.PhaseNo).ToArray(), phasesFailed=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Failed).Select(x=>x.PhaseNo).ToArray(), phasesDryRunSkipped=context.DryRun?phaseResults.Select(x=>x.PhaseNo).ToArray():Array.Empty<int>(), phasesNotRequested=PhaseDefinitionsStatic().Where(x=>x<context.StartPhaseNo||x>context.EndPhaseNo).ToArray(), executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, phase7Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
             cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
@@ -16715,10 +16734,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var mergedManifest = File.Exists(path)
             ? JsonNode.Parse(await File.ReadAllTextAsync(path, cancellationToken))?.AsObject() ?? new JsonObject()
             : new JsonObject();
-        // `phases` is the stable, governing publication history.  Execution results from this
-        // invocation remain in ProductionPipelineExecutionResult (the API telemetry) and must
-        // never replace committed entries merely because a phase was reused or failed.  Merge
-        // successful publications by phase number and retain untouched/downstream entries.
+        generatedManifest["phaseExecutionHistory"] = MergePhaseExecutionHistory(mergedManifest["phaseExecutionHistory"], mergedManifest["phases"], phaseResults);
         generatedManifest["phases"] = MergeCommittedPhaseHistory(mergedManifest["phases"], phaseResults);
         foreach (var property in generatedManifest)
             mergedManifest[property.Key] = property.Value?.DeepClone();
@@ -16736,7 +16752,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 if (entry is JsonObject item && item["phaseNo"]?.GetValue<int>() is int phaseNo)
                     byPhase[phaseNo] = item.DeepClone();
 
-        foreach (var result in currentResults.Where(IsCommittedPublication))
+        // Phase 7 is execution authority as well as publication authority: its active entry must
+        // always describe the latest attempt. Other phases retain their established committed-only semantics.
+        foreach (var result in currentResults.Where(result => IsCommittedPublication(result) || result.PhaseNo == 7))
         {
             var entry = JsonSerializer.SerializeToNode(result, JsonOptions)!.AsObject();
             if (result.PhaseNo == 6 && result.ReasonCode == "P6AUTH_COMMITTED")
@@ -16754,6 +16772,17 @@ public sealed partial class ProductionPipelineExecutionService(
         var merged = new JsonArray();
         foreach (var entry in byPhase.OrderBy(x => x.Key)) merged.Add(entry.Value);
         return merged;
+    }
+
+    private static JsonArray MergePhaseExecutionHistory(JsonNode? existingHistory, JsonNode? previousActive,
+        IReadOnlyList<ProductionPhaseResult> currentResults)
+    {
+        var history = existingHistory is JsonArray prior ? (JsonArray)prior.DeepClone() : new JsonArray();
+        if (previousActive is JsonArray active)
+            foreach (var phaseNo in currentResults.Select(result => result.PhaseNo).Distinct())
+                foreach (var entry in active.OfType<JsonObject>().Where(item => item["phaseNo"]?.GetValue<int>() == phaseNo))
+                    history.Add(entry.DeepClone());
+        return history;
     }
 
     private static bool IsCommittedPublication(ProductionPhaseResult result)
