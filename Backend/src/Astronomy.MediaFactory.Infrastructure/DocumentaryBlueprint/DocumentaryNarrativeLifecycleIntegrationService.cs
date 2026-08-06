@@ -26,7 +26,13 @@ public sealed record DocumentaryNarrativeCompositionRequest(
     IReadOnlyList<string> KnowledgeReferences)
 {
     public IReadOnlyList<string> RepairGuidance { get; init; } = [];
+    public DocumentaryNarrativeBlueprintLineage? BlueprintLineage { get; init; }
 }
+
+public sealed record DocumentaryNarrativeBlueprintLineage(string SourceBlueprintAggregateId,
+    string SourceBlueprintAggregateChecksum, string SourceVariantBlueprintId,
+    string SourceVariantBlueprintChecksum, string SourceStoryFramesAuthorityId,
+    string SourceStoryFramesAuthorityChecksum, string Variant, IReadOnlyList<string> BlueprintSceneIds);
 
 public sealed record DocumentaryNarrativeDurationGuidance(int MinimumSeconds, int PreferredSeconds, int MaximumSeconds);
 public sealed record DocumentaryNarrativeRequiredFact(string ClaimId, string Fact,
@@ -36,7 +42,17 @@ public sealed record DocumentaryNarrativeSceneInput(int SceneNumber, string Scen
     string Heading, string ViewerQuestion, string LearningObjective, string NarrationBrief,
     IReadOnlyList<DocumentaryNarrativeRequiredFact> RequiredFacts, IReadOnlyList<string> OptionalFacts,
     IReadOnlyList<string> CulturalContext, IReadOnlyList<string> SafetyRules, IReadOnlyList<string> Vocabulary,
-    string VisualIntent, int TargetDurationSeconds, string PreviousSceneContext, string TransitionSeed);
+    string VisualIntent, int TargetDurationSeconds, string PreviousSceneContext, string TransitionSeed)
+{
+    public string BlueprintSceneId { get; init; } = SceneId;
+    public string StoryFrameId { get; init; } = "";
+    public string SceneRole { get; init; } = Heading;
+    public string NarrativeStage { get; init; } = SectionKey;
+    public string EditorialOutcome { get; init; } = "";
+    public string EditorialPriority { get; init; } = "";
+    public IReadOnlyList<string> BlueprintKnowledgeReferenceIds { get; init; } = [];
+    public IReadOnlyList<string> VisualOpportunities { get; init; } = [];
+}
 public sealed record DocumentaryNarrativeDraftScene(string SceneId, string NarrationText,
     IReadOnlyList<string> GroundingReferences);
 public sealed record DocumentaryNarrativeDraftCandidate(string Variant, string Path, string Text,
@@ -52,6 +68,9 @@ public sealed record DocumentaryNarrativeLifecycleAcceptanceResult(bool Accepted
 internal sealed record NarrationGeneratorBlockingAssessment(bool GenerationCompleted, bool LongProduced,
     bool ShortProduced, IReadOnlyList<string> BlockingErrors, IReadOnlyList<string> AdvisoryWarnings,
     bool CanRetry = false);
+internal sealed record Phase7BlueprintAuthority(DocumentaryBlueprintAggregate Aggregate,
+    DocumentaryBlueprintVariantArtifact Long, DocumentaryBlueprintVariantArtifact Short,
+    StoryFramesAuthority StoryFrames);
 public sealed record DocumentaryNarrativeProviderCallEvidence(string Generator, string EntryMethod,
     int GeneratorInvocationCount, bool LongVariantProduced, bool ShortVariantProduced,
     IReadOnlyList<string> DiagnosticFiles)
@@ -99,6 +118,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         Directory.CreateDirectory(Path.GetDirectoryName(diagnosticsPath)!);
 
         StoryFramesAuthority? authority = null;
+        Phase7BlueprintAuthority? blueprintAuthority = null;
         if (!File.Exists(storyFramesPath))
             errors.Add("Canonical Phase 6 Story Frame authority was not found at 06-story-frames/story-frames.json.");
         else
@@ -108,8 +128,10 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             ValidateAuthority(authority, request, errors);
         }
 
-        var longRequest = BuildCompositionRequest(request, authority, "Long", new(480, 600, 900));
-        var shortRequest = BuildCompositionRequest(request, authority, "Short", new(60, 90, 120));
+        blueprintAuthority = await ReadBlueprintAuthorityAsync(request.ExecutionRoot, authority, errors, cancellationToken);
+
+        var longRequest = BuildCompositionRequest(request, authority, blueprintAuthority?.Long, blueprintAuthority?.Aggregate, "Long", new(480, 600, 900));
+        var shortRequest = BuildCompositionRequest(request, authority, blueprintAuthority?.Short, blueprintAuthority?.Aggregate, "Short", new(60, 90, 120));
         if (longRequest.OrderedScenes.Count == 0) errors.Add("Long narration has no governed Phase 6 scenes.");
         if (shortRequest.OrderedScenes.Count == 0) errors.Add("Short narration has no governed Phase 6 scenes.");
         if (longRequest.OrderedScenes.All(scene => scene.RequiredFacts.Count == 0) &&
@@ -182,7 +204,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         var succeeded = longAcceptance.Accepted && shortAcceptance.Accepted && errors.Count == 0;
         if (succeeded)
         {
-            var publication = await PublishReleaseCandidatesAsync(request, longRequest, shortRequest, longDraft!, shortDraft!,
+            var publication = await PublishReleaseCandidatesAsync(request, blueprintAuthority!, longRequest, shortRequest, longDraft!, shortDraft!,
                 longQuality, shortQuality, longAcceptance, shortAcceptance, generatorDiagnosticsPath, diagnosticsPath, cancellationToken);
             generatedFiles.AddRange(publication);
         }
@@ -243,8 +265,67 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
                 errors.Add($"Canonical Phase 6 Story Frame authority does not request the {variant} variant.");
     }
 
+    private static async Task<Phase7BlueprintAuthority?> ReadBlueprintAuthorityAsync(string root,
+        StoryFramesAuthority? storyFrames, List<string> errors, CancellationToken token)
+    {
+        var required = new[] { "04-blueprint/documentary-blueprint.json", "04-blueprint/documentary-blueprint.long.json",
+            "04-blueprint/documentary-blueprint.short.json", "04-blueprint/long-scene-index.json",
+            "04-blueprint/short-scene-index.json", "04-blueprint/knowledge-selection.json",
+            "validation/phase-04-validation.json", "05-editorial/blueprint-certification.json",
+            "validation/phase-05-validation.json", "validation/phase-06-validation.json" };
+        foreach (var relative in required.Where(relative => !File.Exists(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)))))
+            errors.Add($"Required governed authority artifact is missing: {relative}.");
+        if (errors.Count > 0 || storyFrames is null) return null;
+        try
+        {
+            async Task<T?> Read<T>(string relative)
+            {
+                await using var stream = File.OpenRead(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+                return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, token);
+            }
+            var aggregate = await Read<DocumentaryBlueprintAggregate>(required[0]);
+            var longVariant = await Read<DocumentaryBlueprintVariantArtifact>(required[1]);
+            var shortVariant = await Read<DocumentaryBlueprintVariantArtifact>(required[2]);
+            if (aggregate is null || longVariant is null || shortVariant is null)
+            { errors.Add("Canonical Phase 4 DocumentaryBlueprint artifacts are empty or invalid."); return null; }
+            ValidateVariant("Long", aggregate.LongVariant, longVariant, storyFrames, errors);
+            ValidateVariant("Short", aggregate.ShortVariant, shortVariant, storyFrames, errors);
+            if (!storyFrames.SourcePhase4Checksum.Equals(aggregate.DeterministicChecksum, StringComparison.Ordinal))
+                errors.Add("StoryFramesAuthority SourcePhase4Checksum does not match the published DocumentaryBlueprint aggregate checksum.");
+            foreach (var validation in new[] { required[6], required[8], required[9] })
+            {
+                using var document = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, validation.Replace('/', Path.DirectorySeparatorChar)), token));
+                var json = document.RootElement.GetRawText();
+                if (Regex.IsMatch(json, "\\\"(?:validationStatus|status)\\\"\\s*:\\s*\\\"(?:Invalid|Failed)\\\"", RegexOptions.IgnoreCase))
+                    errors.Add($"Committed authority validation is not valid: {validation}.");
+            }
+            return errors.Count == 0 ? new(aggregate, longVariant, shortVariant, storyFrames) : null;
+        }
+        catch (JsonException ex) { errors.Add($"Governed DocumentaryBlueprint chain contains invalid JSON: {ex.Message}"); return null; }
+    }
+
+    private static void ValidateVariant(string variant, DocumentaryBlueprintVariantArtifact embedded,
+        DocumentaryBlueprintVariantArtifact physical, StoryFramesAuthority frames, List<string> errors)
+    {
+        if (!physical.Variant.Equals(variant, StringComparison.OrdinalIgnoreCase))
+            errors.Add($"{variant} blueprint artifact has wrong variant ownership '{physical.Variant}'.");
+        if (embedded.DeterministicChecksum != physical.DeterministicChecksum || embedded.Blueprint.BlueprintId != physical.Blueprint.BlueprintId)
+            errors.Add($"{variant} blueprint physical artifact does not match the published aggregate.");
+        var blueprintIds = physical.Blueprint.Scenes.OrderBy(scene => scene.SceneNumber).Select(scene => scene.SceneId).ToArray();
+        var frameIds = frames.Frames.Where(frame => frame.Variant.Equals(variant, StringComparison.OrdinalIgnoreCase))
+            .GroupBy(frame => frame.SceneId, StringComparer.OrdinalIgnoreCase).OrderBy(group => group.Min(frame => frame.SceneNumber))
+            .Select(group => group.Key).ToArray();
+        if (!blueprintIds.SequenceEqual(frameIds, StringComparer.OrdinalIgnoreCase))
+            errors.Add($"{variant} Story Frame scene sequence does not exactly match its governed DocumentaryBlueprint scene sequence.");
+    }
+
     internal static DocumentaryNarrativeCompositionRequest BuildCompositionRequest(DocumentaryNarrativeLifecycleRequest request,
         StoryFramesAuthority? authority, string variant, DocumentaryNarrativeDurationGuidance duration)
+        => BuildCompositionRequest(request, authority, null, null, variant, duration);
+
+    internal static DocumentaryNarrativeCompositionRequest BuildCompositionRequest(DocumentaryNarrativeLifecycleRequest request,
+        StoryFramesAuthority? authority, DocumentaryBlueprintVariantArtifact? variantArtifact,
+        DocumentaryBlueprintAggregate? aggregate, string variant, DocumentaryNarrativeDurationGuidance duration)
     {
         var safety = new[] { "Use only grounded astronomy facts; distinguish culture and mythology from science.",
             "Do not present astrology as scientific causation.", "Do not leak prompts, notes, or internal identifiers." };
@@ -255,21 +336,39 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         {
             var ordered = group.OrderBy(frame => frame.FrameNumber).ToArray();
             var first = ordered[0];
-            var references = ordered.SelectMany(frame => frame.KnowledgeReferenceIds).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            return new DocumentaryNarrativeSceneInput(first.SceneNumber, first.SceneId, first.NarrativeStage,
-                first.SceneRole, string.Join("; ", ordered.SelectMany(frame => frame.ViewerQuestionIds).Distinct()),
-                string.Join("; ", ordered.SelectMany(frame => frame.LearningObjectiveIds).Distinct()),
-                string.Join(" ", ordered.Select(frame => frame.NarrativeIntent).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()),
+            var blueprint = variantArtifact?.Blueprint.Scenes.SingleOrDefault(scene => scene.SceneId.Equals(first.SceneId, StringComparison.OrdinalIgnoreCase));
+            var purpose = blueprint is null ? string.Join(" ", ordered.Select(frame => frame.NarrativeIntent).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct())
+                : $"Purpose: {blueprint.SceneObjective.Summary} Viewer goal: {blueprint.SceneObjective.LearningGoal} " +
+                  $"Takeaway: {blueprint.EditorialOutcome.ViewerTakeaway} Transition intent: {blueprint.Transition.TransitionIntent}";
+            return new DocumentaryNarrativeSceneInput(first.SceneNumber, first.SceneId, blueprint?.NarrativeStage.ToString() ?? first.NarrativeStage,
+                blueprint?.Title ?? first.SceneRole, blueprint?.ViewerQuestion.Text ?? string.Join("; ", ordered.SelectMany(frame => frame.ViewerQuestionIds).Distinct()),
+                blueprint?.SceneObjective.LearningGoal ?? string.Join("; ", ordered.SelectMany(frame => frame.LearningObjectiveIds).Distinct()), purpose,
                 [], [], [], safety, [],
                 string.Join(" ", ordered.Select(frame => frame.VisualIntent).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()),
-                (int)Math.Round(ordered.Sum(frame => frame.EstimatedDuration)),
+                blueprint?.EstimatedDurationSeconds ?? (int)Math.Round(ordered.Sum(frame => frame.EstimatedDuration)),
                 index == 0 ? "" : $"Continue naturally from {groups[index - 1].Key}.",
-                string.Join(" ", ordered.Select(frame => frame.TransitionOut).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()));
+                blueprint?.Transition.TransitionIntent ?? string.Join(" ", ordered.Select(frame => frame.TransitionOut).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()))
+            {
+                BlueprintSceneId = blueprint?.SceneId ?? first.SceneId, StoryFrameId = first.FrameId,
+                SceneRole = blueprint?.SceneRole.ToString() ?? first.SceneRole,
+                NarrativeStage = blueprint?.NarrativeStage.ToString() ?? first.NarrativeStage,
+                EditorialOutcome = blueprint is null ? "" : $"{blueprint.EditorialOutcome.ViewerTakeaway} {blueprint.EditorialOutcome.NarrativeContribution}",
+                EditorialPriority = blueprint?.EditorialPriority.ToString() ?? "",
+                BlueprintKnowledgeReferenceIds = blueprint?.KnowledgeReferences.Select(reference => reference.KnowledgeEntryId).ToArray() ?? [],
+                VisualOpportunities = blueprint?.VisualOpportunities.Select(opportunity => opportunity.Description).ToArray() ?? []
+            };
         }).ToArray();
-        return new(request.ExecutionId, request.PlanId, request.EventId, request.EventFamily, request.Language, variant,
+        return new DocumentaryNarrativeCompositionRequest(request.ExecutionId, request.PlanId, request.EventId, request.EventFamily, request.Language, variant,
             request.ProfileId, scenes, duration, safety, [],
-            (authority?.Frames ?? []).Where(frame => frame.Variant.Equals(variant, StringComparison.OrdinalIgnoreCase))
-                .SelectMany(frame => frame.KnowledgeReferenceIds).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+            scenes.SelectMany(scene => scene.BlueprintKnowledgeReferenceIds)
+                .Concat((authority?.Frames ?? []).Where(frame => frame.Variant.Equals(variant, StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(frame => frame.KnowledgeReferenceIds)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray())
+        {
+            BlueprintLineage = variantArtifact is null || aggregate is null || authority is null ? null : new(
+                aggregate.AggregateId, aggregate.DeterministicChecksum, variantArtifact.Blueprint.BlueprintId,
+                variantArtifact.DeterministicChecksum, authority.AuthorityId, authority.SemanticChecksum, variant,
+                variantArtifact.Blueprint.Scenes.OrderBy(scene => scene.SceneNumber).Select(scene => scene.SceneId).ToArray())
+        };
     }
 
     private static async Task WriteCompositionRequestsAsync(DocumentaryNarrativeCompositionRequest longRequest,
@@ -322,6 +421,9 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             if (missing.Length > 0) errors.Add($"Missing governed scenes: {string.Join(", ", missing)}.");
             var unexpected = groups.Select(group => group.Key).Where(id => !expected.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
             if (unexpected.Length > 0) errors.Add($"Unexpected scene IDs: {string.Join(", ", unexpected)}.");
+            if (duplicates.Length == 0 && missing.Length == 0 && unexpected.Length == 0 &&
+                !expected.SequenceEqual(draft.SceneIds, StringComparer.OrdinalIgnoreCase))
+                errors.Add("Narration scene order does not match the governed DocumentaryBlueprint and Story Frames sequence.");
             var duplicateBlocks = draft.Scenes.Where(scene => !string.IsNullOrWhiteSpace(scene.NarrationText))
                 .GroupBy(scene => Normalize(scene.NarrationText), StringComparer.Ordinal).Where(group => group.Count() > 1).ToArray();
             if (duplicateBlocks.Length > 0) errors.Add("Duplicate complete scene narration blocks were detected.");
@@ -435,6 +537,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
     }
 
     private static async Task<IReadOnlyList<string>> PublishReleaseCandidatesAsync(DocumentaryNarrativeLifecycleRequest request,
+        Phase7BlueprintAuthority blueprintAuthority,
         DocumentaryNarrativeCompositionRequest longRequest, DocumentaryNarrativeCompositionRequest shortRequest,
         DocumentaryNarrativeDraftCandidate longDraft, DocumentaryNarrativeDraftCandidate shortDraft,
         DocumentaryNarrativeQualityResult longQuality, DocumentaryNarrativeQualityResult shortQuality,
@@ -449,14 +552,15 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         Directory.CreateDirectory(Path.GetDirectoryName(longPath)!); Directory.CreateDirectory(Path.GetDirectoryName(shortPath)!);
         async Task WriteCandidate(string path, string variant, DocumentaryNarrativeCompositionRequest composition, DocumentaryNarrativeDraftCandidate draft, DocumentaryNarrativeQualityResult quality, DocumentaryNarrativeLifecycleAcceptanceResult acceptance)
         {
-            var scenes = composition.OrderedScenes.Select(input => { var actual = draft.Scenes.Single(s => s.SceneId.Equals(input.SceneId, StringComparison.OrdinalIgnoreCase)); return new { sceneId=input.SceneId, input.SceneNumber, input.SectionKey, heading=input.Heading, narrationText=actual.NarrationText, sourceClaimIds=input.RequiredFacts.Select(f=>f.ClaimId), knowledgeReferenceIds=input.RequiredFacts.SelectMany(f=>f.KnowledgeReferenceIds).Distinct(), estimatedDurationSeconds=EstimateSeconds(actual.NarrationText, request.Language), visualIntent=input.VisualIntent, transitionSeed=input.TransitionSeed }; }).ToArray();
-            var payload = new { schemaVersion="1.0", releaseCandidateId=acceptance.ReleaseCandidateId, request.ExecutionId, request.PlanId, request.EventId, request.EventFamily, request.Language, variant, title=composition.OrderedScenes.FirstOrDefault()?.Heading ?? request.EventId, sceneCount=scenes.Length, totalWordCount=draft.WordCount, estimatedDurationSeconds=quality.EstimatedDurationSeconds, scenes, qualityResult=quality, acceptanceResult=acceptance, sourceNarrationArtifactPath=draft.Path.Replace('\\','/'), deterministicChecksum=Checksum(JsonSerializer.Serialize(scenes, JsonOptions)) };
+            var lineage = composition.BlueprintLineage!;
+            var scenes = composition.OrderedScenes.Select(input => { var actual = draft.Scenes.Single(s => s.SceneId.Equals(input.SceneId, StringComparison.OrdinalIgnoreCase)); return new { sceneId=input.SceneId, input.SceneNumber, blueprintSceneId=input.BlueprintSceneId, storyFrameId=input.StoryFrameId, blueprintVariant=variant, storyFramesAuthorityId=lineage.SourceStoryFramesAuthorityId, knowledgeAuthorityId=ReadKnowledgeAuthorityId(request.ExecutionRoot), selectedKnowledgeReferenceIds=input.BlueprintKnowledgeReferenceIds, selectedClaimIds=input.RequiredFacts.Select(f=>f.ClaimId), language=request.Language, sourceNarrationArtifact=draft.Path.Replace('\\','/'), narrationText=actual.NarrationText, estimatedDurationSeconds=EstimateSeconds(actual.NarrationText, request.Language) }; }).ToArray();
+            var payload = new { schemaVersion="1.1", releaseCandidateId=acceptance.ReleaseCandidateId, request.ExecutionId, request.PlanId, request.EventId, request.EventFamily, request.Language, variant, sourceBlueprintAggregateId=lineage.SourceBlueprintAggregateId, sourceBlueprintAggregateChecksum=lineage.SourceBlueprintAggregateChecksum, sourceVariantBlueprintId=lineage.SourceVariantBlueprintId, sourceVariantBlueprintChecksum=lineage.SourceVariantBlueprintChecksum, sourceStoryFramesAuthorityId=lineage.SourceStoryFramesAuthorityId, sourceStoryFramesAuthorityChecksum=lineage.SourceStoryFramesAuthorityChecksum, blueprintSceneCount=lineage.BlueprintSceneIds.Count, acceptedSceneCount=scenes.Length, blueprintSceneIds=lineage.BlueprintSceneIds, title=composition.OrderedScenes.FirstOrDefault()?.Heading ?? request.EventId, sceneCount=scenes.Length, totalWordCount=draft.WordCount, estimatedDurationSeconds=quality.EstimatedDurationSeconds, scenes, qualityResult=quality, acceptanceResult=acceptance, sourceNarrationArtifactPath=draft.Path.Replace('\\','/'), deterministicChecksum=Checksum(JsonSerializer.Serialize(scenes, JsonOptions)) };
             await File.WriteAllTextAsync(path, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
         }
         await WriteCandidate(longPath, "Long", longRequest, longDraft, longQuality, longAcceptance);
         await WriteCandidate(shortPath, "Short", shortRequest, shortDraft, shortQuality, shortAcceptance);
         var candidatesExist = File.Exists(longPath) && File.Exists(shortPath);
-        var certification = new { schemaVersion="1.0", reasonCode="P7_NARRATION_RELEASE_CANDIDATE_CERTIFIED", longCandidateExists=File.Exists(longPath), shortCandidateExists=File.Exists(shortPath), sceneCountsMatch=true, allSceneNarrationNonEmpty=true, internalMetadataLeakage=false, producerNoteLeakage=false, severeRepetition=false, longShortIndependencePassed=true, canonicalSceneMappingPassed=true, requiredFactualSubstancePassed=true, languagePassed=true, acceptancePassed=true, physicalReadbackPassed=candidatesExist, checksumsPassed=candidatesExist, downstreamReady=candidatesExist };
+        var certification = new { schemaVersion="1.1", reasonCode="P7_NARRATION_RELEASE_CANDIDATE_CERTIFIED", sourceBlueprintAggregateId=blueprintAuthority.Aggregate.AggregateId, sourceBlueprintAggregateChecksum=blueprintAuthority.Aggregate.DeterministicChecksum, sourceStoryFramesAuthorityId=blueprintAuthority.StoryFrames.AuthorityId, sourceStoryFramesAuthorityChecksum=blueprintAuthority.StoryFrames.SemanticChecksum, longCandidateExists=File.Exists(longPath), shortCandidateExists=File.Exists(shortPath), sceneCountsMatch=true, allSceneNarrationNonEmpty=true, internalMetadataLeakage=false, producerNoteLeakage=false, severeRepetition=false, longShortIndependencePassed=true, canonicalSceneMappingPassed=true, requiredFactualSubstancePassed=true, languagePassed=true, acceptancePassed=true, physicalReadbackPassed=candidatesExist, checksumsPassed=candidatesExist, downstreamReady=candidatesExist };
         await File.WriteAllTextAsync(certificationPath, JsonSerializer.Serialize(certification, JsonOptions), cancellationToken);
         var manifest = new Dictionary<string, object?> { ["executionId"]=request.ExecutionId, ["planId"]=request.PlanId, ["eventId"]=request.EventId, ["eventFamily"]=request.EventFamily, ["language"]=request.Language, ["profileId"]=request.ProfileId, ["requestedVariants"]=new[]{"Long","Short"}, ["longAcceptedCandidatePath"]=longPath.Replace('\\','/'), ["shortAcceptedCandidatePath"]=shortPath.Replace('\\','/'), ["longSceneCount"]=longDraft.Scenes.Count, ["shortSceneCount"]=shortDraft.Scenes.Count, ["longWordCount"]=longDraft.WordCount, ["shortWordCount"]=shortDraft.WordCount, ["longEstimatedDurationSeconds"]=longQuality.EstimatedDurationSeconds, ["shortEstimatedDurationSeconds"]=shortQuality.EstimatedDurationSeconds, ["generatorDiagnosticsPath"]=generatorDiagnosticsPath.Replace('\\','/'), ["lifecycleDiagnosticsPath"]=lifecycleDiagnosticsPath.Replace('\\','/'), ["certificationPath"]=certificationPath.Replace('\\','/'), ["downstreamReady"]=candidatesExist, ["generatedUtc"]=DateTimeOffset.UtcNow };
         manifest["deterministicChecksum"] = Checksum(JsonSerializer.Serialize(manifest, JsonOptions));
@@ -464,6 +568,13 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         using var _ = JsonDocument.Parse(await File.ReadAllTextAsync(longPath, cancellationToken));
         using var __ = JsonDocument.Parse(await File.ReadAllTextAsync(shortPath, cancellationToken));
         return [longPath, shortPath, manifestPath, certificationPath];
+    }
+    private static string ReadKnowledgeAuthorityId(string root)
+    {
+        var path = Path.Combine(root, "07-narration", "knowledge", "knowledge-authority.json");
+        if (!File.Exists(path)) return "";
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        return TryProperty(document.RootElement, "authorityId", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
     }
     private static string Checksum(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private static bool TryProperty(JsonElement element, string name, out JsonElement value)
