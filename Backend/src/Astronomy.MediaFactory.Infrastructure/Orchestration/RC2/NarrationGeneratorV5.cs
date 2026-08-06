@@ -348,14 +348,25 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         longSceneFactCards = SceneFactCardGenerator.Build("long", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, longProjectionFrames, semanticResolution);
         shortSceneFactCards = SceneFactCardGenerator.Build("short", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, shortProjectionFrames, semanticResolution);
         var committedIds = authorityValidation.CommittedClaimIds;
-        var projectedIds = longSceneFactCards.Cards.Concat(shortSceneFactCards.Cards).SelectMany(card => card.SelectedClaimIds ?? []).ToHashSet(StringComparer.Ordinal);
-        var lostCommittedIds = committedIds.Where(id => !projectedIds.Contains(id)).ToArray();
+        var projectedIds = longSceneFactCards.Cards.Concat(shortSceneFactCards.Cards)
+            .SelectMany(card => (card.KnowledgeFacts ?? []).SelectMany(fact => fact.SourceClaimIds ?? [fact.ClaimId]))
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var lostCommittedIds = authorityInput is null
+            ? committedIds.Where(id => !projectedIds.Contains(id, StringComparer.Ordinal)).ToArray()
+            : CommittedCompositionFactCardProjector.FindLostCommittedClaimIds(authorityInput, longSceneFactCards, shortSceneFactCards);
+        var equivalentGroups = longSceneFactCards.Cards.Concat(shortSceneFactCards.Cards)
+            .SelectMany(card => (card.KnowledgeFacts ?? []).Where(fact => (fact.SourceClaimIds?.Count ?? 0) > 1).Select(fact =>
+                new EquivalentCommittedClaimGroup(card.Format, card.SceneId, SceneFactCardGenerator.NormalizeFactStatement(fact.Statement),
+                    fact.ClaimId, fact.SourceClaimIds!, fact.SourceIds, fact.KnowledgeReferenceIds)))
+            .OrderBy(group => group.Variant, StringComparer.Ordinal).ThenBy(group => group.SceneId, StringComparer.Ordinal)
+            .ThenBy(group => group.NormalizedStatement, StringComparer.Ordinal).ToArray();
         await WriteAllTextUtf8Async(compositionBridgeDiagnosticsPath, JsonSerializer.Serialize(authorityValidation.Diagnostics with
         {
             LongInitialSceneCardFactCount = longInitialFactCount, ShortInitialSceneCardFactCount = shortInitialFactCount,
             LongFinalSceneCardFactCount = longSceneFactCards.Cards.Sum(card => card.Facts.Count), ShortFinalSceneCardFactCount = shortSceneFactCards.Cards.Sum(card => card.Facts.Count),
             CommittedClaimIdsProjectedToCards = projectedIds.Order().ToArray(), CommittedClaimIdsLost = lostCommittedIds,
-            BridgePassed = authorityValidation.Valid && lostCommittedIds.Length == 0
+            BridgePassed = authorityValidation.Valid && lostCommittedIds.Length == 0,
+            EquivalentCommittedClaimGroups = equivalentGroups
         }, JsonOptions), cancellationToken);
         if (lostCommittedIds.Length > 0)
             throw new InvalidOperationException($"P7_COMMITTED_FACT_PROJECTION_LOSS: committed claims disappeared: {string.Join(", ", lostCommittedIds)}.");
@@ -2484,7 +2495,8 @@ public sealed record StoryFrameNarrationSource(string SceneId, int SceneOrder, s
     string EditorialPriority = "", int TargetDurationSeconds = 0, IReadOnlyList<SceneKnowledgeFact>? PacketKnowledgeFacts = null,
     IReadOnlyList<string>? StoryFrameKnowledgeReferenceIds = null);
 public sealed record SceneKnowledgeFact(string ClaimId, string Statement, IReadOnlyList<string> KnowledgeReferenceIds,
-    IReadOnlyList<string> SourceIds, decimal Confidence, IReadOnlyList<string> QualificationRequirements, bool Required = true);
+    IReadOnlyList<string> SourceIds, decimal Confidence, IReadOnlyList<string> QualificationRequirements, bool Required = true,
+    IReadOnlyList<string>? SourceClaimIds = null);
 public sealed record RawNarrative(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<RawNarrativeScene> Scenes);
 public sealed record RawNarrativeScene(string SceneId, int SceneOrder, string SceneRole, IReadOnlyList<string> MustSayFacts, IReadOnlyList<string> MustExplain, IReadOnlyList<string> MustGuide, IReadOnlyList<string> MustNotSay, string TransitionToNext, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
 public sealed record SceneFactCardSet(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<SceneFactCard> Cards);
@@ -3111,7 +3123,14 @@ public sealed record CompositionFactBridgeDiagnostics(
     IReadOnlyList<string> MissingCompositionSceneIds, IReadOnlyList<string> SceneIdMappingFailures,
     IReadOnlyList<string> CommittedClaimIdsReceivedByGenerator,
     IReadOnlyList<string> CommittedClaimIdsProjectedToCards, IReadOnlyList<string> CommittedClaimIdsLost,
-    string BridgeSource, bool BridgePassed);
+    string BridgeSource, bool BridgePassed)
+{
+    public IReadOnlyList<EquivalentCommittedClaimGroup> EquivalentCommittedClaimGroups { get; init; } = [];
+}
+
+public sealed record EquivalentCommittedClaimGroup(string Variant, string SceneId, string NormalizedStatement,
+    string CanonicalClaimId, IReadOnlyList<string> EquivalentClaimIds, IReadOnlyList<string> AllSourceIds,
+    IReadOnlyList<string> AllKnowledgeReferenceIds);
 
 public sealed record CompositionProjectionResult(bool Valid, string ReasonCode, IReadOnlyList<string> Errors,
     IReadOnlyList<StoryFrameNarrationSource>? LongFrames, IReadOnlyList<StoryFrameNarrationSource>? ShortFrames,
@@ -3120,6 +3139,30 @@ public sealed record CompositionProjectionResult(bool Valid, string ReasonCode, 
 /// <summary>Projects the already-validated composition authority directly onto its governed story frames.</summary>
 public static class CommittedCompositionFactCardProjector
 {
+    public static string[] FindLostCommittedClaimIds(NarrationGeneratorV5AuthorityInput input,
+        SceneFactCardSet longCards, SceneFactCardSet shortCards)
+    {
+        return input.LongRequest.OrderedScenes.SelectMany(scene => LostInScene(scene, longCards))
+            .Concat(input.ShortRequest.OrderedScenes.SelectMany(scene => LostInScene(scene, shortCards)))
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+        static IEnumerable<string> LostInScene(DocumentaryNarrativeSceneInput scene, SceneFactCardSet cards)
+        {
+            var card = cards.Cards.SingleOrDefault(candidate => candidate.SceneId.Equals(scene.SceneId, StringComparison.OrdinalIgnoreCase));
+            foreach (var claim in scene.RequiredFacts)
+            {
+                var represented = card?.KnowledgeFacts?.Any(fact =>
+                    fact.Required &&
+                    SceneFactCardGenerator.NormalizeFactStatement(fact.Statement).Equals(
+                        SceneFactCardGenerator.NormalizeFactStatement(claim.Fact), StringComparison.Ordinal) &&
+                    (fact.SourceClaimIds ?? [fact.ClaimId]).Contains(claim.ClaimId, StringComparer.Ordinal) &&
+                    claim.SourceIds.All(id => fact.SourceIds.Contains(id, StringComparer.Ordinal)) &&
+                    claim.KnowledgeReferenceIds.All(id => fact.KnowledgeReferenceIds.Contains(id, StringComparer.Ordinal))) == true;
+                if (!represented) yield return claim.ClaimId;
+            }
+        }
+    }
+
     public static CompositionProjectionResult ValidateAndProject(NarrationGeneratorV5AuthorityInput? input,
         IReadOnlyList<StoryFrameNarrationSource> longFrames, IReadOnlyList<StoryFrameNarrationSource> shortFrames,
         string language, string orchestrationVersion)
@@ -3232,7 +3275,8 @@ public static class SceneFactCardGenerator
             if (placeholder is not null)
                 throw new InvalidOperationException($"P7_SCENE_FACT_PLACEHOLDER_DETECTED: scene '{frame.SceneId}' contains '{placeholder.Statement}'.");
             var governedFacts = candidates.Where(IsCertifiedKnowledgeFact)
-                .GroupBy(f => CleanFactValue(f.Statement), StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToArray();
+                .GroupBy(f => NormalizeFactStatement(f.Statement), StringComparer.Ordinal)
+                .Select(MergeEquivalentFacts).ToArray();
             var facts = governedFacts.Select(f => CleanFactValue(f.Statement)).ToArray();
             var observations = Array.Empty<string>();
             return new SceneFactCard(
@@ -3254,8 +3298,8 @@ public static class SceneFactCardGenerator
                 frame.ScenePurpose,
                 governedFacts,
                 string.IsNullOrWhiteSpace(frame.BlueprintSceneId) ? frame.SceneId : frame.BlueprintSceneId,
-                governedFacts.SelectMany(f => f.KnowledgeReferenceIds).Concat(frame.BlueprintKnowledgeReferenceIds ?? []).Distinct(StringComparer.Ordinal).ToArray(),
-                governedFacts.Select(f => f.ClaimId).Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).ToArray(),
+                governedFacts.SelectMany(f => f.KnowledgeReferenceIds).Concat(frame.BlueprintKnowledgeReferenceIds ?? []).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                governedFacts.SelectMany(f => f.SourceClaimIds ?? [f.ClaimId]).Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
                 frame.ViewerQuestion,
                 frame.LearningObjective,
                 frame.EditorialOutcome,
@@ -3264,8 +3308,8 @@ public static class SceneFactCardGenerator
                 frame.NarrativeStage,
                 frame.ScenePurpose,
                 frame.EditorialPriority,
-                governedFacts.SelectMany(f => f.SourceIds).Distinct(StringComparer.Ordinal).ToArray(),
-                governedFacts.SelectMany(f => f.QualificationRequirements).Distinct(StringComparer.Ordinal).ToArray());
+                governedFacts.SelectMany(f => f.SourceIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                governedFacts.SelectMany(f => f.QualificationRequirements).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
         }).ToArray();
         return new SceneFactCardSet("AstroPulse-SceneFactCards-v2", orchestrationVersion, normalizedFormat, notes.Language, cards);
     }
@@ -3277,6 +3321,25 @@ public static class SceneFactCardGenerator
     private static bool IsCertifiedKnowledgeFact(SceneKnowledgeFact fact) =>
         !string.IsNullOrWhiteSpace(fact.Statement) && !IsPlaceholderFact(fact.Statement) &&
         !string.IsNullOrWhiteSpace(fact.ClaimId) && fact.KnowledgeReferenceIds.Count > 0 && fact.SourceIds.Count > 0;
+
+    private static SceneKnowledgeFact MergeEquivalentFacts(IGrouping<string, SceneKnowledgeFact> group)
+    {
+        var ordered = group.OrderBy(fact => fact.ClaimId, StringComparer.Ordinal).ToArray();
+        var canonical = ordered[0];
+        return canonical with
+        {
+            Statement = CleanFactValue(canonical.Statement),
+            KnowledgeReferenceIds = ordered.SelectMany(fact => fact.KnowledgeReferenceIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+            SourceIds = ordered.SelectMany(fact => fact.SourceIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+            Confidence = ordered.Max(fact => fact.Confidence),
+            QualificationRequirements = ordered.SelectMany(fact => fact.QualificationRequirements).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+            Required = ordered.Any(fact => fact.Required),
+            SourceClaimIds = ordered.SelectMany(fact => fact.SourceClaimIds ?? [fact.ClaimId]).Where(id => !string.IsNullOrWhiteSpace(id))
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()
+        };
+    }
+
+    public static string NormalizeFactStatement(string? value) => CleanFactValue(value).ToUpperInvariant();
 
     private static IReadOnlyList<string> Categorize(ProducerNotesScene scene, IReadOnlyList<string> observations, params string[] keywords)
     {
