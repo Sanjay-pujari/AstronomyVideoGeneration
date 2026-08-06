@@ -2687,6 +2687,8 @@ public static class NarrationSafeFactFormatter
 
 public sealed record NarrationPurityFailure(string Format, string SceneId, string DocumentaryBeatId, string Field, string RuleId, string MatchedPhrase, string SurroundingText, string SourceArtifact, string SourceField, string Severity)
 {
+    public string DetectedIssue => RuleId;
+
     public override string ToString()
         => $"Narration context purity failure: format={Format}; sceneId={SceneId}; documentaryBeatId={DocumentaryBeatId}; field={Field}; ruleId={RuleId}; matchedPhrase={MatchedPhrase}; surroundingText={SurroundingText}; sourceArtifact={SourceArtifact}; sourceField={SourceField}; severity={Severity}";
 }
