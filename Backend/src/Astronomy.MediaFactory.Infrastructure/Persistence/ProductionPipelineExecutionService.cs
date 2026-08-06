@@ -915,16 +915,16 @@ public sealed partial class ProductionPipelineExecutionService(
             if (!authorityPreparation.Success || committedStages.Length != 2 ||
                 committedStages.Any(stage => !stage.PublicationCommitted || !stage.CommittedStateValidationPassed))
             {
-                var finished = DateTimeOffset.UtcNow;
-                var reasonCode = authorityPreparation.ReasonCode;
+                var authorityFinished = DateTimeOffset.UtcNow;
+                var authorityReasonCode = authorityPreparation.ReasonCode;
                 var authorityErrors = authorityPreparation.Errors.Concat(authorityPreparation.BlockingIssues).Distinct().ToArray();
-                var validationPath = await WriteCanonicalPhase7ValidationAsync(context, started, finished,
-                    ProductionPhaseStatus.Failed, reasonCode, "Phase 7 committed authority preparation failed.", null,
+                var authorityValidationPath = await WriteCanonicalPhase7ValidationAsync(context, started, authorityFinished,
+                    ProductionPhaseStatus.Failed, authorityReasonCode, "Phase 7 committed authority preparation failed.", null,
                     authorityPreparation.Warnings, authorityErrors, cancellationToken);
-                return new ProductionPhaseResult(7, "Narration Studio V5", ProductionPhaseStatus.Failed, started, finished,
-                    (long)(finished-started).TotalMilliseconds, [], authorityPreparation.GeneratedFiles.Concat([validationPath]).ToArray(),
-                    validationPath, authorityPreparation.Warnings, authorityErrors, true, "Committed authority prerequisite failed.")
-                    { ReasonCode = reasonCode, InternalStageResults = authorityPreparation.StageResults };
+                return new ProductionPhaseResult(7, "Narration Studio V5", ProductionPhaseStatus.Failed, started, authorityFinished,
+                    (long)(authorityFinished-started).TotalMilliseconds, [], authorityPreparation.GeneratedFiles.Concat([authorityValidationPath]).ToArray(),
+                    authorityValidationPath, authorityPreparation.Warnings, authorityErrors, true, "Committed authority prerequisite failed.")
+                    { ReasonCode = authorityReasonCode, InternalStageResults = authorityPreparation.StageResults };
             }
             var lifecycleRequest = new DocumentaryNarrativeLifecycleRequest(context.OutputRoot,
                 context.Request.PlanId.ToString("D"), context.Request.PlanId, context.EventId,
