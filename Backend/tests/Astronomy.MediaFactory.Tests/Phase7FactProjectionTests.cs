@@ -1,9 +1,92 @@
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Phase7FactProjectionTests
 {
+    [Fact]
+    public void DuplicateRequiredClaimsSameScenePreserveAllIds()
+    {
+        var card = BuildCard("long", "scene-1",
+            Certified("claim-b", "Orion has official constellation boundaries.", "ref-b", "source-b"),
+            Certified("claim-a", "Orion has official constellation boundaries.", "ref-a", "source-a"));
+
+        Assert.Single(card.Facts);
+        Assert.Equal("claim-a", Assert.Single(card.KnowledgeFacts!).ClaimId);
+        Assert.Equal(["claim-a", "claim-b"], card.SelectedClaimIds);
+        Assert.Equal(["claim-a", "claim-b"], card.KnowledgeFacts![0].SourceClaimIds);
+    }
+
+    [Fact]
+    public void NormalizedEquivalentStatementsPreserveAllIds()
+    {
+        var card = BuildCard("long", "scene-1",
+            Certified("claim-1", "Fact: Alnitak, Alnilam, and Mintaka form Orion's Belt", "ref-1", "source-1"),
+            Certified("claim-2", "Alnitak, Alnilam, and Mintaka form Orion's Belt.", "ref-2", "source-2"));
+
+        Assert.Single(card.Facts);
+        Assert.Equal(["claim-1", "claim-2"], card.SelectedClaimIds);
+    }
+
+    [Fact]
+    public void DuplicateClaimsMergeProvenanceAndRequiredDisposition()
+    {
+        var optional = new SceneKnowledgeFact("claim-b", "A shared certified fact.", ["ref-b"], ["source-b"], .8m, ["qual-b"], false);
+        var required = new SceneKnowledgeFact("claim-a", "A shared certified fact.", ["ref-a"], ["source-a"], .99m, ["qual-a"], true);
+
+        var merged = Assert.Single(BuildCard("long", "scene-1", optional, required).KnowledgeFacts!);
+
+        Assert.True(merged.Required);
+        Assert.Equal(.99m, merged.Confidence);
+        Assert.Equal(["source-a", "source-b"], merged.SourceIds);
+        Assert.Equal(["ref-a", "ref-b"], merged.KnowledgeReferenceIds);
+        Assert.Equal(["qual-a", "qual-b"], merged.QualificationRequirements);
+    }
+
+    [Fact]
+    public void CrossSceneDuplicatesRemainSceneScoped()
+    {
+        var frames = new[]
+        {
+            FrameWithFact("scene-4", 4, Certified("claim-4", "The Belt is nearly straight.", "ref-4", "source-4")),
+            FrameWithFact("scene-9", 9, Certified("claim-9", "The Belt is nearly straight.", "ref-9", "source-9"))
+        };
+
+        var cards = SceneFactCardGenerator.Build("long", EmptyNotes(), "test", frames).Cards;
+
+        Assert.Equal(["claim-4"], cards[0].SelectedClaimIds);
+        Assert.Equal(["claim-9"], cards[1].SelectedClaimIds);
+    }
+
+    [Fact]
+    public void CrossVariantDuplicatesRemainIndependent()
+    {
+        var statement = "Orion is visible from much of Earth.";
+        var longCard = BuildCard("long", "long-scene", Certified("long-claim", statement, "long-ref", "long-source"));
+        var shortCard = BuildCard("short", "short-scene", Certified("short-claim", statement, "short-ref", "short-source"));
+
+        Assert.Equal(["long-claim"], longCard.SelectedClaimIds);
+        Assert.Equal(["short-claim"], shortCard.SelectedClaimIds);
+    }
+
+    [Fact]
+    public void GenuineClaimLossStillFails()
+    {
+        var longClaim = RequiredClaim("long-claim", "A governed long fact.", "long-ref", "long-source");
+        var shortClaim = RequiredClaim("short-claim", "A governed short fact.", "short-ref", "short-source");
+        var authority = new NarrationGeneratorV5AuthorityInput(
+            Request("Long", SceneInput("long-scene", longClaim)),
+            Request("Short", SceneInput("short-scene", shortClaim)));
+        var longCards = SceneFactCardGenerator.Build("long", EmptyNotes(), "test",
+            [FrameWithFact("long-scene", 1, Certified("different-claim", "A different fact.", "different-ref", "different-source"))]);
+        var shortCards = SceneFactCardGenerator.Build("short", EmptyNotes(), "test",
+            [FrameWithFact("short-scene", 1, Certified("short-claim", shortClaim.Fact, "short-ref", "short-source"))]);
+
+        var lost = CommittedCompositionFactCardProjector.FindLostCommittedClaimIds(authority, longCards, shortCards);
+
+        Assert.Equal(["long-claim"], lost);
+    }
     [Fact]
     public void ResolverZeroFactsPreservesCommittedPacketFactsAndLineage()
     {
@@ -126,6 +209,22 @@ public sealed class Phase7FactProjectionTests
     private static StoryFrameNarrationSource Frame(string id, int order, string role, string purpose, string question, string outcome)
         => new(id, order, $"frame-{id}", "", [Certified($"claim-{id}", $"Certified astronomy fact for {id}.", $"kr-{id}", $"source-{id}")],
             $"blueprint-{id}", question, outcome, outcome, "Continue", purpose, [$"kr-{id}"], role, role, "Required", 20);
+
+    private static SceneFactCard BuildCard(string format, string sceneId, params SceneKnowledgeFact[] facts)
+        => Assert.Single(SceneFactCardGenerator.Build(format, EmptyNotes(), "test", [FrameWithFact(sceneId, 1, facts)]).Cards);
+
+    private static StoryFrameNarrationSource FrameWithFact(string id, int order, params SceneKnowledgeFact[] facts)
+        => new(id, order, $"frame-{id}", "", facts, $"blueprint-{id}", BlueprintKnowledgeReferenceIds: facts.SelectMany(f => f.KnowledgeReferenceIds).ToArray());
+
+    private static DocumentaryNarrativeRequiredFact RequiredClaim(string id, string fact, string reference, string source)
+        => new(id, fact, [reference], [source], .99m, []);
+
+    private static DocumentaryNarrativeSceneInput SceneInput(string id, params DocumentaryNarrativeRequiredFact[] facts)
+        => new(1, id, "section", "Science", "question", "objective", "brief", facts, [], [], [], [], "visual", 20, "", "");
+
+    private static DocumentaryNarrativeCompositionRequest Request(string variant, params DocumentaryNarrativeSceneInput[] scenes)
+        => new("execution", Guid.Empty, "event", "family", "en", variant, "profile", scenes,
+            new DocumentaryNarrativeDurationGuidance(1, 2, 3), [], [], []);
 
     private static NarrationContextBeat Beat(string id, string goal, string outcome, string intent)
         => new(goal, outcome, intent, [new("claim", "A certified astronomy fact.", "CertifiedKnowledgeClaim")], [], null,
