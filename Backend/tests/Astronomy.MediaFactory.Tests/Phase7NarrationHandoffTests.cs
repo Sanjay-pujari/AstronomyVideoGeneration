@@ -5,6 +5,25 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Phase7NarrationHandoffTests
 {
+    [Theory]
+    [InlineData("sceneFact1", "ObjectName", "Betelgeuse")]
+    [InlineData("sceneFact7", "ScienceMeaning", "Orion has scientific meaning")]
+    public void NarrationRealizer_PreservesSemanticFactType(string factKey, string factType, string value)
+    {
+        var profile = AstronomyFamilyProfileCatalog.ResolveFamilyProfile(
+            CanonicalEventIdentityResolver.Resolve(new("Constellation", null, null, [], null))).Profile;
+        var fact = new SpeakableFact(factKey, value, null, factType, value, value, "en", "en-US", true, "test", factKey);
+        var context = new NarrationSafeContext("long", "scene-3", "long-hook", "Hook", "Introduce Orion", "Create curiosity about Orion", "", null, null,
+            "continue", "calm", "measured", 100, [fact], [], []);
+
+        var realized = new NarrationRealizer().Realize(context, profile, LanguageProfileResolver.Resolve("en")).SpeakableFacts.Single();
+
+        Assert.Equal(factType, realized.FactType);
+        Assert.Equal(value, realized.Value);
+        Assert.Equal(factKey, realized.SourceFactKey);
+        Assert.NotEqual(factKey, realized.FactType);
+    }
+
     [Fact]
     public void NarrationSafeContext_ContainsMeteorProjectedFacts()
     {

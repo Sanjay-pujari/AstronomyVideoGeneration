@@ -463,7 +463,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                 return new
                 {
                     variant = format, sceneNumber = index + 1, sceneId = realization.SceneId,
-                    sourceSceneRole = realization.BeatRole, projectedPurpose = projection.Purpose,
+                    sourceSceneRole = realization.BeatRole, normalizedProviderRole = ProviderSemanticProjection.ResolveRole(realization), projectedPurpose = projection.Purpose,
                     factualStatementCount = projection.FactualStatements.Count, factualStatements = projection.FactualStatements,
                     objectVocabularyCount = projection.ObjectVocabulary.Count, objectVocabulary = projection.ObjectVocabulary,
                     pronunciationCount = projection.Pronunciations.Count,
@@ -471,7 +471,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                     unsupportedFragmentCount = projection.UnsupportedFragments.Count, unsupportedFragments = projection.UnsupportedFragments,
                     roleSupportsVocabularyOnlyContext = assessment.RoleSupportsVocabularyOnlyContext,
                     meaningfulContextPassed = assessment.Passed, meaningfulContextReasonCode = assessment.ReasonCode,
-                    promptSemanticCharacterCount = assessment.SemanticCharacterCount
+                    promptSemanticCharacterCount = assessment.SemanticCharacterCount,
+                    projectedInputs = projection.ProjectedInputs
                 };
             })).ToArray();
         await WriteAllTextUtf8Async(providerSceneContextDiagnosticsPath,
@@ -4457,7 +4458,7 @@ public sealed record AstronomyFamilyProfileResolutionResult(AstronomyFamilyProfi
 public sealed record FamilyProfileResolutionStage(string Stage, string? InputValue, string? ResolvedEventFamily, string? ResolvedProfileId, string ResolutionSource, bool FallbackUsed);
 public sealed record CanonicalEventIdentity(string EventType, string? EventFamily, string? StrategyId, string? SourceEventType, string NormalizedEventType, string ResolutionSource, bool AliasApplied, IReadOnlyDictionary<string, string?> InspectedSources, IReadOnlyList<string> StoryFrameEventTypes, IReadOnlyList<string> Conflicts, IReadOnlyList<string> BlockingErrors);
 public sealed record CanonicalEventIdentityResolutionInput(string? RequestEventType, string? ProductionIntelligenceEventType, string? DocumentaryContractEventType, IReadOnlyList<string> StoryFrameEventTypes, string? NarrationContextEventType);
-public sealed record RealizedSemanticFact(string IntentType, string FactType, string Label, string Value, string? Unit = null);
+public sealed record RealizedSemanticFact(string IntentType, string FactType, string Label, string Value, string? Unit = null, string? SourceFactKey = null);
 public sealed record TransitionIntent(string FromConcept, string ToConcept, string Relationship);
 public sealed record NarrationRealizationResult(string Format, string SceneId, string BeatRole, string FamilyProfileId, string ContentNature, string NarrativeRole, string NarrativePurpose, IReadOnlyList<RealizedSemanticFact> SpeakableFacts, IReadOnlyList<string> ScientificBoundaries, IReadOnlyList<RealizedSemanticFact> ObservationDetails, TransitionIntent? TransitionIntent, string Tone, string Rhythm, int WordBudget, string? PriorBeatSummary, string? NextBeatPurpose, IReadOnlyList<string> ForbiddenNarrationPatterns, string OpeningGuidance, bool CanRealize = true, IReadOnlyList<string>? MissingRequiredFacts = null);
 public sealed record NarrationRealizationIssue(string FamilyProfile, string Format, string SceneId, string BeatRole, string Field, string DetectedIssue, string SourceArtifact, string SourceField, string NormalizationStep, string RealizationStep);
@@ -4636,7 +4637,7 @@ public sealed class NarrationRealizer : INarrationRealizer
 {
     public NarrationRealizationResult Realize(NarrationSafeContext context, AstronomyFamilyProfile familyProfile, LanguageProfile languageProfile)
     {
-        var facts = context.SpeakableFacts.Select(f => new RealizedSemanticFact(IntentForFact(f.FactType), f.FactKey, HumanizeFact(f.FactKey), f.SpeakableValue, f.CanonicalUnit)).Where(f => !string.IsNullOrWhiteSpace(f.Value) && !Regex.IsMatch(f.Value, @"System\.Collections|ImmutableArray|Astronomy\.MediaFactory\.Infrastructure|<>f__AnonymousType|\{\s*\w+\s*=|`\d+", RegexOptions.CultureInvariant)).ToArray();
+        var facts = context.SpeakableFacts.Select(f => new RealizedSemanticFact(IntentForFact(f.FactType), f.FactType, HumanizeFact(f.FactKey), f.SpeakableValue, f.CanonicalUnit, f.FactKey)).Where(f => !string.IsNullOrWhiteSpace(f.Value) && !Regex.IsMatch(f.Value, @"System\.Collections|ImmutableArray|Astronomy\.MediaFactory\.Infrastructure|<>f__AnonymousType|\{\s*\w+\s*=|`\d+", RegexOptions.CultureInvariant)).ToArray();
         var observation = facts.Where(f => Regex.IsMatch(f.FactType + f.Label, "Direction|Window|Time|Date|Region|Visibility|Telescope|Binocular|Radiant|SkyLocation|Pattern", RegexOptions.IgnoreCase)).ToArray();
         var role = ResolveBeatRole(context, familyProfile);
         return new NarrationRealizationResult(context.Format, string.IsNullOrWhiteSpace(context.SceneId) ? $"{context.Format}-{role}" : context.SceneId, role, familyProfile.FamilyId, familyProfile.ContentNature, role, Purpose(role, familyProfile), facts, BuildBoundaries(context, familyProfile), observation, BuildTransition(role, familyProfile), context.Tone, context.Rhythm, context.WordBudget, null, null, ["private-note prose", "imperative guidance language", "raw time strings", "production staging language", "data labels", "internal IDs"], OpeningGuidance(role, familyProfile));
