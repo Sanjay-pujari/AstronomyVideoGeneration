@@ -5,6 +5,13 @@ public static class Phase7NarrationAuthorityOrchestrationReasonCodes
     public const string Completed = "P7_NARRATION_AUTHORITY_COMPLETED";
     public const string ReuseValid = "P7_NARRATION_AUTHORITY_REUSE_VALID";
     public const string UnhandledFailure = "P7_NARRATION_AUTHORITY_UNHANDLED_FAILURE";
+    public const string RuntimeAuthorityReady = "P7_NARRATION_RUNTIME_AUTHORITY_READY";
+}
+
+public enum Phase7NarrationAuthorityExecutionTarget
+{
+    ThroughCommittedPlanning = 0,
+    ThroughDeterministicDraftAuthority = 1
 }
 
 public sealed record Phase7NarrationAuthorityOrchestrationRequest(
@@ -25,6 +32,8 @@ public sealed record Phase7NarrationAuthorityOrchestrationRequest(
     public string EventType { get; init; } = "";
     public string ContentCategory { get; init; } = "";
     public Phase7CanonicalProfileIdentity? CanonicalProfileIdentity { get; init; }
+    public Phase7NarrationAuthorityExecutionTarget ExecutionTarget { get; init; }
+        = Phase7NarrationAuthorityExecutionTarget.ThroughDeterministicDraftAuthority;
 }
 
 public sealed record Phase7AuthorityStageResult(
@@ -91,9 +100,14 @@ public sealed record Phase7NarrationAuthorityOrchestrationResult(
     public bool DraftValidationPassed => DraftGateStatuses.Count > 0 && DraftGateStatuses.All(g => g.Passed);
     public int DraftPassedGateCount => DraftGateStatuses.Count(g => g.Passed);
     public int DraftFailedGateCount => DraftGateStatuses.Count(g => !g.Passed);
+    public Phase7NarrationAuthorityExecutionTarget RequestedTarget { get; init; }
+        = Phase7NarrationAuthorityExecutionTarget.ThroughDeterministicDraftAuthority;
+    public Phase7NarrationAuthorityExecutionTarget? CompletedTarget { get; init; }
+    public bool RuntimeAuthorityReady { get; init; }
+    public string DraftValidationStatus { get; init; } = "NotRun";
     public string ReasonCode { get; init; } = ResolveReasonCode(Success, StageResults);
 
-    private static string ResolveReasonCode(bool success, IReadOnlyList<Phase7AuthorityStageResult> stageResults)
+    public static string ResolveReasonCodeForResult(bool success, IReadOnlyList<Phase7AuthorityStageResult> stageResults)
     {
         if (!success)
         {
@@ -107,6 +121,9 @@ public sealed record Phase7NarrationAuthorityOrchestrationResult(
             ? Phase7NarrationAuthorityOrchestrationReasonCodes.ReuseValid
             : Phase7NarrationAuthorityOrchestrationReasonCodes.Completed;
     }
+
+    private static string ResolveReasonCode(bool success, IReadOnlyList<Phase7AuthorityStageResult> stageResults) =>
+        ResolveReasonCodeForResult(success, stageResults);
 }
 
 public interface IPhase7NarrationAuthorityOrchestrator

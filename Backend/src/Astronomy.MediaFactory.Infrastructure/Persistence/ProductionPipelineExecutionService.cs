@@ -907,13 +907,11 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 EventType = context.Request.EventType,
                 ContentCategory = context.ExecutionContext.Category,
-                CanonicalProfileIdentity = canonicalProfile
+                CanonicalProfileIdentity = canonicalProfile,
+                ExecutionTarget = Phase7NarrationAuthorityExecutionTarget.ThroughCommittedPlanning
             };
             var authorityPreparation = await _phase7NarrationAuthorityOrchestrator.ExecuteAsync(authorityRequest, cancellationToken);
-            var committedStages = authorityPreparation.StageResults
-                .Where(stage => stage.StageCode is "KnowledgeAuthority" or "NarrationPlanningPublication").ToArray();
-            if (!authorityPreparation.Success || committedStages.Length != 2 ||
-                committedStages.Any(stage => !stage.PublicationCommitted || !stage.CommittedStateValidationPassed))
+            if (!IsRuntimeAuthorityPreparationValid(authorityPreparation))
             {
                 var authorityFinished = DateTimeOffset.UtcNow;
                 var authorityReasonCode = authorityPreparation.ReasonCode;
@@ -968,6 +966,26 @@ public sealed partial class ProductionPipelineExecutionService(
                 validationPath, [], [ex.Message], true, reason)
             { ReasonCode = "P7_NARRATIVE_LIFECYCLE_FAILED" };
         }
+    }
+
+    private static bool IsRuntimeAuthorityPreparationValid(Phase7NarrationAuthorityOrchestrationResult result)
+    {
+        if (!result.Success || !result.RuntimeAuthorityReady ||
+            result.CompletedTarget != Phase7NarrationAuthorityExecutionTarget.ThroughCommittedPlanning)
+            return false;
+
+        var stages = result.StageResults.ToDictionary(stage => stage.StageCode, StringComparer.Ordinal);
+        return PublicationValid("KnowledgeAuthority") &&
+               StageValid("KnowledgeCommittedState", requireCommittedState: true) &&
+               StageValid("SceneKnowledgePackets") &&
+               StageValid("NarrationPlanningAuthority") &&
+               PublicationValid("NarrationPlanningPublication") &&
+               StageValid("NarrationPlanningCommittedState", requireCommittedState: true);
+
+        bool PublicationValid(string code) => stages.TryGetValue(code, out var stage) && stage.Success &&
+            stage.PublicationCommitted && stage.CommittedStateValidationPassed;
+        bool StageValid(string code, bool requireCommittedState = false) => stages.TryGetValue(code, out var stage) &&
+            stage.Success && (!requireCommittedState || stage.CommittedStateValidationPassed);
     }
 
     private async Task<string> WriteCanonicalPhase7ValidationAsync(ProductionPhaseContext context,

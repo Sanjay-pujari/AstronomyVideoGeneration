@@ -5,6 +5,23 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Phase7NarrationAuthorityOrchestrationStaticTests
 {
     [Fact]
+    public void ProductionRequestsCommittedPlanningAndOrchestratorStopsBeforeDraft()
+    {
+        var orchestrator = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
+            "DocumentaryBlueprint", "Phase7NarrationAuthorityOrchestrator.cs"));
+        var production = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
+            "Persistence", "ProductionPipelineExecutionService.cs"));
+
+        var stop = orchestrator.IndexOf("ThroughCommittedPlanning)", StringComparison.Ordinal);
+        var draft = orchestrator.IndexOf("draftAuthorityService.ExecuteAsync", StringComparison.Ordinal);
+        Assert.True(stop >= 0 && stop < draft);
+        Assert.Contains("return Finish(true);", orchestrator[stop..draft]);
+        Assert.Contains("ExecutionTarget = Phase7NarrationAuthorityExecutionTarget.ThroughCommittedPlanning", production);
+        Assert.Contains("IsRuntimeAuthorityPreparationValid(authorityPreparation)", production);
+        Assert.Contains("StageValid(\"NarrationPlanningCommittedState\", requireCommittedState: true)", production);
+    }
+
+    [Fact]
     public void Phase7Orchestrator_invokes_provider_free_authority_stages_in_governed_order()
     {
         var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource(
