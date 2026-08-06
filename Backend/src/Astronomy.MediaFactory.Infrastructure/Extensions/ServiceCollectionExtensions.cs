@@ -699,6 +699,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISemanticCapabilityResolver, SemanticCapabilityResolver>();
         services.AddSingleton<IAstronomyDomainKnowledgeProvider, AstronomyDomainKnowledgeProvider>();
         services.AddScoped<NarrationGeneratorV5>();
+        services.AddSingleton<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryNarrativeAcceptanceCoordinator>();
+        services.AddScoped<Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.IDocumentaryNarrativeLifecycleIntegrationService,
+            Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint.DocumentaryNarrativeLifecycleIntegrationService>();
         services.AddScoped<Rc2ContentPlanningBatchOrchestrator>();
         services.AddScoped<IRc2ContentPlanningBatchOrchestrator>(provider => provider.GetRequiredService<Rc2ContentPlanningBatchOrchestrator>());
         services.AddScoped<IManualCategoryPreparationOrchestrator, ManualCategoryPreparationOrchestrator>();
