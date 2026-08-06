@@ -15,7 +15,7 @@ using ContractsContentType = Astronomy.MediaFactory.Contracts.ContentType;
 
 namespace Astronomy.MediaFactory.ContentGen;
 
-public sealed class AzureOpenAiContentGenerationService : IScriptGenerationService, IShortsScriptGenerationService, IMetadataOptimizationModelClient
+public sealed class AzureOpenAiContentGenerationService : IScriptGenerationService, IShortsScriptGenerationService, IMetadataOptimizationModelClient, INarrationPerformer
 {
     private const string ApiVersion = "2024-10-21";
     private const int MaxGenerationAttempts = 3;
@@ -47,6 +47,12 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             })
             : credential;
     }
+
+    public string ProviderName => "Azure OpenAI";
+    public string ModelOrDeployment => _options.ChatDeployment;
+
+    public Task<string> PerformAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
+        => RequestCompletionAsync(userPrompt, cancellationToken, systemPrompt);
 
     public async Task<ScriptResult> GenerateAsync(ContractsContentType contentType, AstronomyContext context, CancellationToken cancellationToken)
     {
@@ -159,7 +165,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         return BuildShortFallback(contentType, context);
     }
 
-    private async Task<string> RequestCompletionAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<string> RequestCompletionAsync(string prompt, CancellationToken cancellationToken, string? systemPrompt = null)
     {
         if (string.IsNullOrWhiteSpace(_options.Endpoint) || string.IsNullOrWhiteSpace(_options.ChatDeployment))
         {
@@ -186,7 +192,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             {
                 messages = new object[]
                 {
-                    new { role = "system", content = "You are a precise assistant that always returns valid JSON. Do not include markdown code fences." },
+                    new { role = "system", content = systemPrompt ?? "You are a precise assistant that always returns valid JSON. Do not include markdown code fences." },
                     new { role = "user", content = prompt }
                 },
                 temperature = 0.2,
