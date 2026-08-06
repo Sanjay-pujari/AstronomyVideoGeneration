@@ -50,7 +50,18 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
             files.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.Ordinal).ToArray(),
             errors.Distinct(StringComparer.Ordinal).ToArray(), blockers.Distinct(StringComparer.Ordinal).ToArray(),
             providerIsolationAudit.Complete(providerStart), planningId, planningChecksum, draftId, draftChecksum, longDraft, shortDraft,
-            draftValidationReason, draftGates);
+            draftValidationReason, draftGates)
+        {
+            RequestedTarget = request.ExecutionTarget,
+            CompletedTarget = success ? request.ExecutionTarget : null,
+            RuntimeAuthorityReady = stages.Any(s => s.StageCode == "NarrationPlanningCommittedState" && s.Success && s.CommittedStateValidationPassed),
+            DraftValidationStatus = request.ExecutionTarget == Phase7NarrationAuthorityExecutionTarget.ThroughCommittedPlanning
+                ? "NotRequested"
+                : draftGates.Count == 0 ? "NotRun" : draftGates.All(g => g.Passed) ? "Passed" : "Failed",
+            ReasonCode = success && request.ExecutionTarget == Phase7NarrationAuthorityExecutionTarget.ThroughCommittedPlanning
+                ? Phase7NarrationAuthorityOrchestrationReasonCodes.RuntimeAuthorityReady
+                : Phase7NarrationAuthorityOrchestrationResult.ResolveReasonCodeForResult(success, stages)
+        };
 
         var knowledgeRequest = new Phase7InputAuthorityRequest(request.ExecutionRoot, request.ExecutionId, request.PlanId,
             request.EventId, request.Language, request.ProfileId, request.RequestedVariants)
@@ -117,6 +128,9 @@ public sealed class Phase7NarrationAuthorityOrchestrator(
             planningCommitted.IsValid && planningCommitted.Authority is not null ? "Valid" : "Failed", planningCommitted.ReasonCode,
             false, false, planningCommitted.IsValid && planningCommitted.Authority is not null, [], planningCommitted.Warnings, planningCommitted.Errors, planningCommitted.Errors));
         if (!planningCommitted.IsValid || planningCommitted.Authority is null) return Finish(false);
+
+        if (request.ExecutionTarget == Phase7NarrationAuthorityExecutionTarget.ThroughCommittedPlanning)
+            return Finish(true);
 
         var draft = await draftAuthorityService.ExecuteAsync(new(planningRequest,
             new(request.ExecutionRoot, request.ExecutionId, request.PlanId, request.EventId, request.Language)), token);

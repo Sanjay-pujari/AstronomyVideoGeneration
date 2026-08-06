@@ -5,6 +5,27 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Phase7FactProjectionTests
 {
     [Fact]
+    public void ResolverZeroFactsPreservesCommittedPacketFactsAndLineage()
+    {
+        var committed = Certified("packet-claim-orion", "Orion contains a recognizable belt of three stars.",
+            "packet-reference-orion", "committed-packet");
+        var frame = new StoryFrameNarrationSource("long-001", 1, "frame-001", "Recognize Orion", [committed],
+            "blueprint-001", "Where is Orion?", "Recognize Orion", "Retain the pattern", "Continue", "Recognition",
+            ["packet-reference-orion"]);
+        var before = Assert.Single(SceneFactCardGenerator.Build("long", EmptyNotes(), "test", [frame]).Cards);
+
+        var resolution = new RequiredSemanticFactResolutionResult([], new { resolvedBeatCount = 0 });
+        var after = Assert.Single(SceneFactCardGenerator.Build("long", EmptyNotes(), "test", [frame], resolution).Cards);
+
+        Assert.NotEmpty(before.Facts);
+        Assert.True(after.Facts.Count >= before.Facts.Count);
+        Assert.Equal(before.Facts, after.Facts);
+        Assert.Equal(before.SelectedClaimIds, after.SelectedClaimIds);
+        Assert.Equal(before.SelectedKnowledgeReferenceIds, after.SelectedKnowledgeReferenceIds);
+        Assert.Contains("packet-claim-orion", after.SelectedClaimIds);
+    }
+
+    [Fact]
     public void CertifiedCompositionFactsReachSceneFactCardsWithLineage()
     {
         var fact = Certified("claim-belt", "Three named stars form the familiar belt pattern.", "kr-belt", "source-catalog");
