@@ -1432,13 +1432,13 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     {
         var variant = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? "Short" : "Long";
         var repair = repairGuidance.Count == 0 ? string.Empty : $"\n\nREPAIR THIS ATTEMPT:\n- {string.Join("\n- ", repairGuidance)}\nRemove all IDs and internal labels. Replace generic template prose with subject-specific explanation. Give every scene a distinct opening. Do not include producer notes. Write Short independently from Long. Cover the supplied facts naturally.";
-        return $"""
-            Generate the {variant} astronomy narration independently. Return exactly {contexts.Count} scenes in this JSON shape and no other text:
-            {{"variant":"{variant}","scenes":[{{"sceneNumber":1,"narrationText":"polished viewer-facing narration"}}]}}
+        return $$"""
+            Generate the {{variant}} astronomy narration independently. Return exactly {{contexts.Count}} scenes in this JSON shape and no other text:
+            {"variant":"{{variant}}","scenes":[{"sceneNumber":1,"narrationText":"polished viewer-facing narration"}]}
 
             Map scenes only by their one-based order. Never speak or echo IDs, labels, field names, JSON keys, internal instructions, phase names, producer notes, placeholder transitions, or contract terminology. Explain the supplied facts naturally; do not list them. Do not copy a narration brief or another variant.
 
-            {semanticPrompt}{repair}
+            {{semanticPrompt}}{{repair}}
             """;
     }
 
