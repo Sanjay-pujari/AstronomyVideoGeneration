@@ -6,6 +6,28 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class NarrationProviderOutputTests
 {
     [Fact]
+    public void RealizedPrompt_ProjectsFactsWithoutMachineIdentity()
+    {
+        var beat = new NarrationContextBeat("Advance01", "Help viewers recognize Orion by its Belt.", "producer: use an overlay", [], [], null, "internal-transition-01", "calm", "measured", [], "final narration remains owned by Phase 7", "SCENE-SECRET-01", 1, "long", 45, null);
+        var context = new NarrationContextDocument("v", "test", [new NarrationFormatContext("long", [beat])]);
+        var realization = new NarrationRealizationResult("long", "SCENE-SECRET-01", "Advance01", "authority-secret", "constellation", "Advance01",
+            "Help viewers recognize Orion quickly in the night sky.",
+            [new("ClaimId=CLAIM-SECRET", "named-stars", "Orion's Belt stars", "Alnitak, Alnilam, and Mintaka form a conspicuous visual line.")],
+            ["The three stars form an apparent pattern and are not physically close."], [],
+            new("basic recognition", "Orion's major stars", "internal-transition-01"), "calm", "measured", 100, null, null, [], "Open with wonder");
+
+        var prompt = new NarrationPromptComposer().Compose(new NarrationPromptComposerInput(context, [], "/tmp/prompt.md", "/tmp/prompt.json", Realizations: [realization])).PromptPreviewMarkdown;
+
+        Assert.Contains("Alnitak, Alnilam, and Mintaka", prompt);
+        Assert.Contains("Help viewers recognize Orion quickly", prompt);
+        Assert.DoesNotContain("SCENE-SECRET-01", prompt);
+        Assert.DoesNotContain("CLAIM-SECRET", prompt);
+        Assert.DoesNotContain("authority-secret", prompt);
+        Assert.DoesNotContain("internal-transition-01", prompt);
+        Assert.DoesNotContain("producer: use an overlay", prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ProviderResponse_MapsCompleteSceneNumbersAndPreservesText()
     {
         var parsed = Parse("""{"variant":"Long","scenes":[{"sceneNumber":1,"narrationText":"Orion rises with three Belt stars forming its unmistakable center."},{"sceneNumber":2,"narrationText":"Betelgeuse marks a warm-colored shoulder while blue-white Rigel anchors a foot."}]}""", "long", 2);
@@ -17,6 +39,19 @@ public sealed class NarrationProviderOutputTests
     [Fact]
     public void StructurallyEmptyProviderResponse_IsRejectedDuringParsing()
         => Assert.Throws<TargetInvocationException>(() => Parse("{\"variant\":\"Long\",\"scenes\":[]}", "long", 1));
+
+    [Fact]
+    public void ProviderResponse_RejectsExplanatoryFields()
+        => Assert.Throws<TargetInvocationException>(() => Parse("""{"variant":"Long","scenes":[{"sceneNumber":1,"narrationText":"Natural prose.","producerAdvice":"Use a dramatic pause."}]}""", "long", 1));
+
+    [Fact]
+    public void ProviderResponse_CleansOnlyHarmlessWrappers()
+    {
+        var parsed = Parse("""```json
+            {"variant":"Long","scenes":[{"sceneNumber":1,"narrationText":"Narration: \"Orion's Belt points across the winter sky.\""}]}
+            ```""", "long", 1);
+        Assert.Equal("Orion's Belt points across the winter sky.", parsed[1]);
+    }
 
     [Theory]
     [InlineData("Advance01 introduces the next idea.")]
