@@ -109,9 +109,10 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     {
         var sb = new StringBuilder();
         AddSection(sb, 1, "OUTPUT LANGUAGE", languageProfile is null ? "Use the requested language profile." : BuildLanguageHeader(languageProfile));
+        AddSection(sb, 2, "PERFORMANCE CONTRACT", "Write polished viewer-facing documentary narration. The following metadata is private semantic context, not wording to repeat. Explain factual meaning in connected natural prose, make every passage distinct, preserve scientific grounding, attribute cultural traditions, and keep astronomy separate from astrology. Write Short independently from Long.");
         foreach (var item in realizations)
         {
-            AddSection(sb, 2, "NARRATIVE ROLE", item.NarrativeRole);
+            AddSection(sb, 3, "PRIVATE SEMANTIC CONTEXT", item.NarrativeRole);
             AddSection(sb, 3, "DOCUMENTARY PURPOSE", item.NarrativePurpose);
             AddSection(sb, 4, "SPEAKABLE FACTS", FormatSemanticFacts(item.SpeakableFacts));
             AddSection(sb, 5, "SCIENTIFIC BOUNDARIES", FormatList(item.ScientificBoundaries));
@@ -121,6 +122,8 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
             AddSection(sb, 9, "WORD BUDGET", item.WordBudget.ToString(CultureInfo.InvariantCulture));
             AddSection(sb, 10, "PROHIBITED CONTENT", FormatList(item.ForbiddenNarrationPatterns));
         }
+        AddSection(sb, 11, "NEGATIVE OUTPUT RULES", "Never output field names, IDs, labels, stage names, placeholder transition names, producer notes, internal instructions, phase or contract names, JSON fragments, or Markdown headings inside narration text. Scene metadata is context only.");
+        AddSection(sb, 12, "OUTPUT CONTRACT", new OutputContractSectionBuilder().Build());
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }
 

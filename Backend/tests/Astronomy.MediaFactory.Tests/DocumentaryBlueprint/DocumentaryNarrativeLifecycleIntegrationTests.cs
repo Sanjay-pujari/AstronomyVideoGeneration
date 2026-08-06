@@ -118,6 +118,33 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationTests
             .Should().ContainSingle(message => message.Contains("identical"));
     }
 
+    [Theory]
+    [InlineData("ViewerQuestionId VQ-ORION-01 should be repeated to the audience.")]
+    [InlineData("LearningObjectiveId LO-ORION-02 explains this passage.")]
+    [InlineData("ClaimId: CLM-42 supplies the answer.")]
+    [InlineData("Final narration remains owned by Phase 7.")]
+    [InlineData("Advance01 introduces the next idea.")]
+    public void Practical_validation_blocks_internal_metadata_patterns(string text)
+    {
+        var composition = DocumentaryNarrativeLifecycleIntegrationService.BuildCompositionRequest(
+            Request(), Authority([Frame("Long", 1)]), "Long", new(1, 2, 999));
+        var scene = new DocumentaryNarrativeDraftScene("long-scene-01", text, []);
+        var draft = new DocumentaryNarrativeDraftCandidate("long", "narration.json", text, [scene.SceneId], []) { Scenes = [scene] };
+        DocumentaryNarrativeLifecycleIntegrationService.Validate(draft, composition, [], []).Passed.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Factual_substance_accepts_natural_paraphrase_and_rejects_generic_hook()
+    {
+        var governed = new DocumentaryNarrativeSceneInput(1, "orion-belt", "recognition", "Recognizing Orion",
+            "How can Orion be found?", "Recognize the belt", "Explain Orion's Belt as three aligned stars",
+            [new("belt-claim", "Orion's Belt is formed by three aligned stars", [], [], 1m, [])], [], [], [], [], "", 20, "", "");
+        DocumentaryNarrativeLifecycleIntegrationService.HasFactualSubstance(
+            "Three bright stars in a straight line form Orion's Belt, an easy signpost in the winter sky.", governed).Should().BeTrue();
+        DocumentaryNarrativeLifecycleIntegrationService.HasFactualSubstance(
+            "Look up and let wonder guide you as the story continues into another remarkable moment.", governed).Should().BeFalse();
+    }
+
     [Fact]
     public void Retry_is_bounded_to_two_total_generator_attempts() =>
         DocumentaryNarrativeLifecycleIntegrationService.MaximumGenerationAttempts.Should().Be(2);
