@@ -1445,12 +1445,15 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     private static IReadOnlyDictionary<int, string> ParseProviderNarration(string response, string format, int expectedCount)
     {
         if (string.IsNullOrWhiteSpace(response)) throw new InvalidOperationException($"{format} provider returned an empty response.");
+        response = RemoveJsonCodeFence(response);
         JsonDocument document;
         try { document = JsonDocument.Parse(response.Trim()); }
         catch (JsonException ex) { throw new InvalidOperationException($"{format} provider response was not valid structured JSON.", ex); }
         using (document)
         {
             var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Any(p => p.Name is not ("variant" or "scenes")))
+                throw new InvalidOperationException($"{format} provider response contains fields outside the narration contract.");
             var returnedVariant = root.TryGetProperty("variant", out var variant) ? variant.GetString() : null;
             if (!string.Equals(returnedVariant, format, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Provider returned variant '{returnedVariant}' for the {format} request.");
@@ -1459,9 +1462,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             var result = new Dictionary<int, string>();
             foreach (var scene in scenes.EnumerateArray())
             {
+                if (scene.ValueKind != JsonValueKind.Object || scene.EnumerateObject().Any(p => p.Name is not ("sceneNumber" or "narrationText")))
+                    throw new InvalidOperationException($"{format} provider scene contains explanatory fields outside the narration contract.");
                 if (!scene.TryGetProperty("sceneNumber", out var numberElement) || !numberElement.TryGetInt32(out var number) || number < 1 || number > expectedCount || result.ContainsKey(number))
                     throw new InvalidOperationException($"{format} provider response contains an invalid, duplicate, or unexpected scene number.");
-                var narrationText = scene.TryGetProperty("narrationText", out var textElement) ? textElement.GetString()?.Trim() : null;
+                var narrationText = scene.TryGetProperty("narrationText", out var textElement) && textElement.ValueKind == JsonValueKind.String
+                    ? CleanNarrationWrapper(textElement.GetString()) : null;
                 if (string.IsNullOrWhiteSpace(narrationText)) throw new InvalidOperationException($"{format} scene {number} has empty narrationText.");
                 result[number] = narrationText;
             }
@@ -1469,6 +1475,22 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                 throw new InvalidOperationException($"{format} provider response scene numbering is incomplete.");
             return result;
         }
+    }
+
+    private static string RemoveJsonCodeFence(string value)
+    {
+        var trimmed = value.Trim();
+        var match = Regex.Match(trimmed, @"\A```(?:json)?\s*(?<json>\{[\s\S]*\})\s*```\z", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success ? match.Groups["json"].Value : trimmed;
+    }
+
+    private static string? CleanNarrationWrapper(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return value;
+        var cleaned = Regex.Replace(value.Trim(), @"^Narration:\s*", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Trim();
+        if (cleaned.Length >= 2 && ((cleaned[0] == '“' && cleaned[^1] == '”') || (cleaned[0] == '\"' && cleaned[^1] == '\"')))
+            cleaned = cleaned[1..^1].Trim();
+        return cleaned;
     }
 
     private static IEnumerable<NarrationV5Scene> RunChronicleEditorialEngine(NarrationLlmRequestV1 request, DocumentaryScript documentaryScript, string format)

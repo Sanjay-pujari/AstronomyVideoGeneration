@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.PromptComposer;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Style.Contracts;
 
@@ -109,26 +110,30 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     {
         var sb = new StringBuilder();
         AddSection(sb, 1, "OUTPUT LANGUAGE", languageProfile is null ? "Use the requested language profile." : BuildLanguageHeader(languageProfile));
-        AddSection(sb, 2, "PERFORMANCE CONTRACT", "Write polished viewer-facing documentary narration. The following metadata is private semantic context, not wording to repeat. Explain factual meaning in connected natural prose, make every passage distinct, preserve scientific grounding, attribute cultural traditions, and keep astronomy separate from astrology. Write Short independently from Long.");
-        foreach (var item in realizations)
+        AddSection(sb, 2, "PERFORMANCE CONTRACT", "You are writing polished spoken narration for a professional astronomy documentary. Use the supplied facts and scene purpose to write natural viewer-facing prose. Explain astronomy facts naturally rather than listing them, give every scene a distinct opening, and write Short independently from Long.");
+        foreach (var pair in realizations.Select((item, index) => (item, index)))
         {
-            AddSection(sb, 3, "PRIVATE SEMANTIC CONTEXT", item.NarrativeRole);
-            AddSection(sb, 3, "DOCUMENTARY PURPOSE", item.NarrativePurpose);
-            AddSection(sb, 4, "SPEAKABLE FACTS", FormatSemanticFacts(item.SpeakableFacts));
-            AddSection(sb, 5, "SCIENTIFIC BOUNDARIES", FormatList(item.ScientificBoundaries));
-            AddSection(sb, 6, "OBSERVATION DETAILS", FormatSemanticFacts(item.ObservationDetails));
-            AddSection(sb, 7, "TRANSITION INTENT", item.TransitionIntent is null ? "none" : $"from {item.TransitionIntent.FromConcept} to {item.TransitionIntent.ToConcept}; relationship {item.TransitionIntent.Relationship}");
-            AddSection(sb, 8, "VOICE AND RHYTHM", $"tone: {item.Tone}; rhythm: {item.Rhythm}; opening guidance: {item.OpeningGuidance}");
-            AddSection(sb, 9, "WORD BUDGET", item.WordBudget.ToString(CultureInfo.InvariantCulture));
-            AddSection(sb, 10, "PROHIBITED CONTENT", FormatList(item.ForbiddenNarrationPatterns));
+            var item = pair.item;
+            AddSection(sb, 3, $"SCENE {pair.index + 1}", $"Purpose:\n{CleanSemanticText(item.NarrativePurpose)}\n\nGrounded facts:\n{FormatSemanticFacts(item.SpeakableFacts)}\n\nScientific boundaries:\n{FormatList(item.ScientificBoundaries.Select(CleanSemanticText).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray())}\n\nObservation guidance:\n{FormatSemanticFacts(item.ObservationDetails)}\n\nTransition meaning:\n{FormatTransition(item.TransitionIntent)}\n\nTone and pacing:\n{CleanSemanticText(item.Tone)}; {CleanSemanticText(item.Rhythm)}\n\nDuration guidance:\nApproximately {item.WordBudget.ToString(CultureInfo.InvariantCulture)} spoken words.");
         }
-        AddSection(sb, 11, "NEGATIVE OUTPUT RULES", "Never output field names, IDs, labels, stage names, placeholder transition names, producer notes, internal instructions, phase or contract names, JSON fragments, or Markdown headings inside narration text. Scene metadata is context only.");
+        AddSection(sb, 11, "NEGATIVE OUTPUT RULES", "Do not mention or repeat IDs, field names, labels, contracts, phases, validation, producer notes, internal instructions, JSON, scene role names, transition codes, or placeholder names. Never output Advance01, Advance02, final narration remains owned by Phase 7, Advance the certified intent, ViewerQuestionId, LearningObjectiveId, ClaimId, KnowledgeReferenceId, SceneId, or producer instructions.");
         AddSection(sb, 12, "OUTPUT CONTRACT", new OutputContractSectionBuilder().Build());
         return sb.ToString().TrimEnd() + Environment.NewLine;
     }
 
     private static string FormatSemanticFacts(IReadOnlyList<RealizedSemanticFact> facts)
-        => facts.Count == 0 ? "none" : string.Join("\n", facts.Select(f => $"- {f.IntentType}: {f.Label} = {f.Value}" + (string.IsNullOrWhiteSpace(f.Unit) ? string.Empty : $" {f.Unit}")));
+        => facts.Count == 0 ? "none supplied" : string.Join("\n", facts.Select(f => $"- {CleanSemanticText(f.Label)}: {CleanSemanticText(f.Value)}" + (string.IsNullOrWhiteSpace(f.Unit) ? string.Empty : $" {CleanSemanticText(f.Unit)}")));
+
+    private static string FormatTransition(TransitionIntent? transition)
+        => transition is null ? "Continue naturally to the next idea." : $"Move naturally from {CleanSemanticText(transition.FromConcept)} toward {CleanSemanticText(transition.ToConcept)}.";
+
+    private static string CleanSemanticText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var clean = Regex.Replace(value.Trim(), @"\b(?:Scene|ViewerQuestion|LearningObjective|Claim|KnowledgeReference|StoryFrame|BlueprintScene|Authority)Id\s*[:=]?\s*[A-Za-z0-9_.:-]*", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        clean = Regex.Replace(clean, @"\bAdvance\d{1,3}\b", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return Regex.Replace(clean, @"\s{2,}", " ").Trim(' ', '-', ':');
+    }
 
     private static string BuildLanguageHeader(LanguageProfile profile)
         => $"Requested output language: {profile.DisplayName}\nLanguage code: {profile.Culture}\nScript: {profile.Script}\n\n{profile.OutputInstruction}\n\nThe brief below is semantic guidance. Realize its meaning as natural {profile.DisplayName} narration, without copying labels or guidance text.\n\nTerminology policy: {string.Join("; ", profile.Terminology.Select(kv => $"{kv.Key} → {kv.Value}"))}";
