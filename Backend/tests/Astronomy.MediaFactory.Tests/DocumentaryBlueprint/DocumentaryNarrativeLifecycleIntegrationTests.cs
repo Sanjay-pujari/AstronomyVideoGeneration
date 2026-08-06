@@ -100,12 +100,48 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationTests
             result.ProviderCallEvidence.GeneratorInvocationCount.Should().Be(0);
             result.Errors.Should().Contain(message => message.Contains(
                 "Canonical Phase 6 Story Frame authority was not found at 06-story-frames/story-frames.json"));
-            File.Exists(Path.Combine(root, "narration-v5", "narration-validation-diagnostics.json")).Should().BeTrue();
+            File.Exists(Path.Combine(root, "narration-v5", "narrative-lifecycle-validation.json")).Should().BeTrue();
         }
         finally
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void Generator_classifier_keeps_advisories_nonblocking()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "phase7-classifier-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "narration-v5"));
+            File.WriteAllText(Path.Combine(root, "narration-v5", "generator-validation-diagnostics.json"),
+                """{"longNarrationArtifactValid":true,"shortNarrationArtifactValid":true,"languageValidationPassed":true,"sceneMappingValid":true,"auroraCertified":false,"overallNarrationScore":82,"promptRecommendation":"Improve cadence","warnings":["Optional fact omitted","Duration outside guidance"]}""");
+
+            var assessment = DocumentaryNarrativeLifecycleIntegrationService.AssessGeneratorResult(root, true, true);
+
+            assessment.BlockingErrors.Should().BeEmpty();
+            assessment.AdvisoryWarnings.Should().Contain(message => message.Contains("Aurora"));
+            assessment.AdvisoryWarnings.Should().Contain(message => message.Contains("Optional fact"));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData("{\"longNarrationArtifactValid\":false,\"shortNarrationArtifactValid\":true,\"languageValidationPassed\":true,\"sceneMappingValid\":true}")]
+    [InlineData("{\"longNarrationArtifactValid\":true,\"shortNarrationArtifactValid\":true,\"languageValidationPassed\":false,\"sceneMappingValid\":true}")]
+    [InlineData("{\"longNarrationArtifactValid\":true,\"shortNarrationArtifactValid\":true,\"languageValidationPassed\":true,\"sceneMappingValid\":false}")]
+    public void Generator_classifier_blocks_material_generation_failures(string diagnostics)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "phase7-classifier-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "narration-v5"));
+            File.WriteAllText(Path.Combine(root, "narration-v5", "generator-validation-diagnostics.json"), diagnostics);
+            DocumentaryNarrativeLifecycleIntegrationService.AssessGeneratorResult(root, true, true)
+                .BlockingErrors.Should().NotBeEmpty();
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     private static DocumentaryNarrativeLifecycleRequest Request() =>

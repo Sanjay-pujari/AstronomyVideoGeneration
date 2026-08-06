@@ -532,6 +532,13 @@ public sealed partial class ProductionPipelineExecutionService(
             if (!doc.RootElement.TryGetProperty("status", out var status)) return false;
             if (string.Equals(status.GetString(), ProductionPhaseStatus.Succeeded.ToString(), StringComparison.OrdinalIgnoreCase))
             {
+                if (phaseNo == 7)
+                    return doc.RootElement.TryGetProperty("reasonCode", out var p7Reason) && p7Reason.GetString() == "P7_NARRATIVE_LIFECYCLE_ACCEPTED"
+                        && doc.RootElement.TryGetProperty("validationStatus", out var p7Validation) && p7Validation.GetString() == "Valid"
+                        && doc.RootElement.TryGetProperty("longAccepted", out var longAccepted) && longAccepted.ValueKind == JsonValueKind.True
+                        && doc.RootElement.TryGetProperty("shortAccepted", out var shortAccepted) && shortAccepted.ValueKind == JsonValueKind.True
+                        && File.Exists(Path.Combine(context.OutputRoot, "narration-v5", "long", "narration.json"))
+                        && File.Exists(Path.Combine(context.OutputRoot, "narration-v5", "short", "narration.json"));
                 if(phaseNo!=1)return true;
                 return doc.RootElement.TryGetProperty("publicationCommitted",out var committed)&&committed.ValueKind==JsonValueKind.True
                     &&doc.RootElement.TryGetProperty("validationStatus",out var validationStatus)&&string.Equals(validationStatus.GetString(),"Valid",StringComparison.Ordinal)
@@ -879,13 +886,35 @@ public sealed partial class ProductionPipelineExecutionService(
                 context.Request.RegionId, context.Request);
             var result = await _documentaryNarrativeLifecycleIntegrationService.ExecuteAsync(lifecycleRequest, cancellationToken);
             var finished = DateTimeOffset.UtcNow;
-            return new ProductionPhaseResult(7, "Narration Studio V5",
-                result.Succeeded ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, started, finished,
-                (long)(finished-started).TotalMilliseconds, [], result.GeneratedFiles,
-                Path.Combine(context.OutputRoot, "narration-v5", "narration-validation-diagnostics.json"),
+            var status = result.Succeeded ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed;
+            var reasonCode = result.Succeeded ? "P7_NARRATIVE_LIFECYCLE_ACCEPTED" : "P7_NARRATIVE_LIFECYCLE_REJECTED";
+            var validationPath = Path.Combine(context.OutputRoot, "validation", "phase-07-validation.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(validationPath)!);
+            var lifecyclePath = Path.Combine(context.OutputRoot, "narration-v5", "narrative-lifecycle-validation.json");
+            var generatorPath = Path.Combine(context.OutputRoot, "narration-v5", "generator-validation-diagnostics.json");
+            var longPath = Path.Combine(context.OutputRoot, "narration-v5", "long", "narration.json");
+            var shortPath = Path.Combine(context.OutputRoot, "narration-v5", "short", "narration.json");
+            await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
+            {
+                phaseNo = 7, phaseName = "Narration Studio V5", status = status.ToString(), reasonCode,
+                reason = result.Succeeded ? "Long and Short natural narration converged and were accepted." : "Natural narration lifecycle did not converge.",
+                executionId = lifecycleRequest.ExecutionId, planId = context.Request.PlanId, eventId = context.EventId,
+                language = context.Request.Language, profileId = lifecycleRequest.ProfileId, requestedVariants = new[] { "Long", "Short" },
+                generatorInvocationCount = result.ProviderCallEvidence.GeneratorInvocationCount,
+                longNarrationPath = NormalizePath(longPath), shortNarrationPath = NormalizePath(shortPath),
+                longAccepted = result.LongAcceptance.Accepted, shortAccepted = result.ShortAcceptance.Accepted,
+                generatorValidationPath = NormalizePath(generatorPath), lifecycleValidationPath = NormalizePath(lifecyclePath),
+                downstreamReady = result.Succeeded, publicationCommitted = result.Succeeded,
+                validationStatus = result.Succeeded ? "Valid" : "Invalid",
+                outputFiles = result.GeneratedFiles.Where(File.Exists).Select(NormalizePath),
+                warnings = result.Warnings, errors = result.Errors, startedUtc = started, finishedUtc = finished
+            }, JsonOptions), cancellationToken);
+            var outputs = result.GeneratedFiles.Concat([validationPath]).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            return new ProductionPhaseResult(7, "Narration Studio V5", status, started, finished,
+                (long)(finished-started).TotalMilliseconds, [], outputs, validationPath,
                 result.Warnings, result.Errors, !result.Succeeded,
                 result.Succeeded ? "Long and Short natural narration converged and were accepted." : "Natural narration lifecycle did not converge.")
-            { ReasonCode = result.Succeeded ? "P7_NARRATIVE_LIFECYCLE_ACCEPTED" : "P7_NARRATIVE_LIFECYCLE_REJECTED" };
+            { ReasonCode = reasonCode };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -895,7 +924,7 @@ public sealed partial class ProductionPipelineExecutionService(
                                    or UnauthorizedAccessException or NotSupportedException)
         {
             var finished = DateTimeOffset.UtcNow;
-            var diagnosticsPath = Path.Combine(context.OutputRoot, "narration-v5", "narration-validation-diagnostics.json");
+            var diagnosticsPath = Path.Combine(context.OutputRoot, "narration-v5", "narrative-lifecycle-validation.json");
             var outputs = File.Exists(diagnosticsPath) ? new[] { diagnosticsPath } : [];
             return new ProductionPhaseResult(7, "Narration Studio V5", ProductionPhaseStatus.Failed, started, finished,
                 (long)(finished-started).TotalMilliseconds, [], outputs,
@@ -16601,7 +16630,15 @@ public sealed partial class ProductionPipelineExecutionService(
             BuildPhase6ManifestArtifact(context.OutputRoot, "06-story-frames/story-frame-index.json", "DownstreamContract", "checksum", "indexContractVersion", phase6ValidationEvidence),
             BuildPhase6ManifestArtifact(context.OutputRoot, "06-story-frames/story-frame-diagnostics.json", "SupportingDiagnostics", null, "diagnosticsContractVersion", phase6ValidationEvidence)
         }.Where(x => x is not null).ToArray();
-        var generatedManifestJson = JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, phase1Artifacts, phase2Artifacts, currentRunArtifacts=filesGeneratedThisRun, existingDependencies=context.DryRun?Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).Where(File.Exists).Select(NormalizePath).ToArray():Array.Empty<string>(), phasesGenerated=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Succeeded).Select(x=>x.PhaseNo).ToArray(), phasesReused=phaseResults.Where(x=>!context.DryRun&&x.Status==ProductionPhaseStatus.Skipped&&x.OutputFiles.Count>0).Select(x=>x.PhaseNo).ToArray(), phasesFailed=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Failed).Select(x=>x.PhaseNo).ToArray(), phasesDryRunSkipped=context.DryRun?phaseResults.Select(x=>x.PhaseNo).ToArray():Array.Empty<int>(), phasesNotRequested=PhaseDefinitionsStatic().Where(x=>x<context.StartPhaseNo||x>context.EndPhaseNo).ToArray(), executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
+        var phase7Artifacts = new[]
+        {
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "validation", "phase-07-validation.json")), role = "CanonicalValidation" },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "narration-v5", "generator-validation-diagnostics.json")), role = "GeneratorDiagnostics" },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "narration-v5", "narrative-lifecycle-validation.json")), role = "LifecycleDiagnostics" },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "narration-v5", "long", "narration.json")), role = "LongNarration" },
+            new { path = NormalizePath(Path.Combine(context.OutputRoot, "narration-v5", "short", "narration.json")), role = "ShortNarration" }
+        }.Where(x => File.Exists(x.path)).Select(x => new { x.path, x.role, checksum = PhysicalChecksum(x.path) }).ToArray();
+        var generatedManifestJson = JsonSerializer.Serialize(new { context.Request.PlanId, context.Request.RegionId, context.Request.Title, phase1Artifacts, phase2Artifacts, currentRunArtifacts=filesGeneratedThisRun, existingDependencies=context.DryRun?Phase1CanonicalFiles(context.OutputRoot).Concat(Phase1CompatibilityFiles(context.OutputRoot)).Where(File.Exists).Select(NormalizePath).ToArray():Array.Empty<string>(), phasesGenerated=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Succeeded).Select(x=>x.PhaseNo).ToArray(), phasesReused=phaseResults.Where(x=>!context.DryRun&&x.Status==ProductionPhaseStatus.Skipped&&x.OutputFiles.Count>0).Select(x=>x.PhaseNo).ToArray(), phasesFailed=phaseResults.Where(x=>x.Status==ProductionPhaseStatus.Failed).Select(x=>x.PhaseNo).ToArray(), phasesDryRunSkipped=context.DryRun?phaseResults.Select(x=>x.PhaseNo).ToArray():Array.Empty<int>(), phasesNotRequested=PhaseDefinitionsStatic().Where(x=>x<context.StartPhaseNo||x>context.EndPhaseNo).ToArray(), executionMode = context.ExecutionMode.ToString(), dependencyExpansionMode = context.PipelineRequest.DependencyExpansionMode.ToString(), requestedStartPhaseNo = requestedStartPhase, requestedEndPhaseNo = requestedEndPhase, requestedStartPhase, requestedEndPhase, expandedStartPhase = context.StartPhaseNo, expandedEndPhase = context.EndPhaseNo, dependencyExpansionApplied, dependencyExpansionReason = dependencyExpansionApplied ? "dependencyExpansionMode=Rebuild expanded prerequisite phases for rebuild." : context.PipelineRequest.DependencyExpansionMode == DependencyExpansionMode.ReadOnly ? "dependencyExpansionMode=ReadOnly; earlier phase outputs are read-only dependencies." : "dependencyExpansionMode=None; requested phase range is authoritative.", phasesActuallyExecuted, phase3Artifacts, phase4Artifacts, phase5Artifacts, phase6Artifacts, phase7Artifacts, outputRootsDeleted = BuildOutputRootsDeletedDiagnostics(context),
             cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
             cleanupSkippedDirectories = context.SkippedDirectoriesDueToOverwrite ?? Array.Empty<string>(), readOnlyDependencyRoots = BuildReadOnlyDependencyRootsDiagnostics(context), startPhaseNo = context.StartPhaseNo, endPhaseNo = context.EndPhaseNo, overwriteExisting = context.OverwriteExisting, retryFailedOnly = context.RetryFailedOnly, cleanupScope = BuildCleanupScopeDiagnostics(context), deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context), sceneApprovalStagingRoot = NormalizePath(context.ExecutionContext.SceneRoot!), sceneApprovalNormalizedRoot = NormalizePath(GetSceneApprovalNormalizedRoot(context.OutputRoot)), filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(), filesGeneratedThisRun, executedPhaseNumbers = phasesActuallyExecuted, skippedPhaseNumbers = PhaseDefinitionsStatic().Where(phaseNo => phaseNo < context.StartPhaseNo || phaseNo > context.EndPhaseNo || phaseResults.Any(result => result.PhaseNo == phaseNo && result.Status == ProductionPhaseStatus.Skipped)).ToArray(), phases = phaseResults }, JsonOptions);
