@@ -115,6 +115,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var documentaryScriptDiagnosticsPath = Path.Combine(documentaryScriptRoot, "documentary-script-diagnostics.json");
         var performanceDiagnosticsPath = Path.Combine(documentaryScriptRoot, "performance-diagnostics.json");
         var providerFailureDiagnosticsPath = Path.Combine(narrationRoot, "provider-failure-diagnostics.json");
+        var providerOutputValidationDiagnosticsPath = Path.Combine(narrationRoot, "provider-output-validation-diagnostics.json");
         var sceneIdentityDiagnosticsPath = Path.Combine(narrationRoot, "scene-identity-diagnostics.json");
         var narrationContextPath = Path.Combine(narrationRoot, "narration-context.json");
         var narrationRealizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-realization-diagnostics.json");
@@ -442,12 +443,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var generationErrors = new List<string>();
         var llmRequestCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var providerDiagnostics = new List<object>();
+        var providerValidationAttempts = new List<ProviderOutputValidationAttempt>();
         NarrationProviderException? providerFailure = null;
         string? failedVariant = null;
         string? failedProviderCallId = null;
         int failedRequestCharacterCount = 0;
         int failedEstimatedInputTokens = 0;
         int failedMaxOutputTokens = 0;
+        bool anyProviderResponseParsed = false;
+        bool providerOutputValidationStarted = false;
+        bool providerOutputValidationPassed = false;
         // A failed provider attempt must not leave a previous run's narration looking current.
         foreach (var artifact in new[] { narrationPath, longNarrationPath, shortNarrationPath })
             if (File.Exists(artifact)) File.Delete(artifact);
@@ -465,6 +470,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                     throw new InvalidOperationException($"Provider invocation blocked: {format} scenes lack both factual inputs and a meaningful narration brief.");
 
                 var formatRealizations = realizationResults.Where(r => r.Format.Equals(format, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var projections = formatRealizations.Select(ProviderSemanticProjection.Project).ToArray();
+                var insufficient = projections.Select((projection, index) => (projection, index)).Where(x => !ProviderSemanticProjection.HasMeaningfulContext(x.projection)).ToArray();
+                if (insufficient.Length > 0)
+                    throw new NarrationProviderException("P7_PROVIDER_SCENE_CONTEXT_INSUFFICIENT", "PreProviderValidation", $"{format} scene context is insufficient for scene(s) {string.Join(", ", insufficient.Select(x => x.index + 1))}.", false);
                 var formatContext = narrationContext with { Formats = narrationContext.Formats.Where(f => f.Format.Equals(format, StringComparison.OrdinalIgnoreCase)).ToArray() };
                 var formatPrompt = composer.Compose(new NarrationPromptComposerInput(formatContext, [narrationContextPath], promptPreviewPath, promptDiagnosticsPath,
                     LanguageProfile: languageProfile, Realizations: formatRealizations)).PromptPreviewMarkdown;
@@ -476,6 +485,14 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                 Exception? lastAttemptFailure = null;
                 for (var attempt = 1; attempt <= 2 && parsed is null; attempt++)
                 {
+                    var jsonParseSucceeded = false;
+                    var schemaValidationPassed = false;
+                    var sceneMappingPassed = false;
+                    var narrationQualityValidationPassed = false;
+                    var parsedSceneCount = 0;
+                    int[] returnedSceneNumbers = [];
+                    NarrationPurityFailure[] contentFailures = [];
+                    IReadOnlyDictionary<int, string>? parsedForMetadata = null;
                     completedCall = null;
                     lastAttemptFailure = null;
                     actualUserPrompt = BuildStructuredVariantPrompt(format, contexts, formatPrompt, repairGuidance);
@@ -510,9 +527,18 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                         var providerTask = narrationPerformer.InvokeAsync(call, cancellationToken);
                         completedCall = await providerTask;
                         parsed = ParseProviderNarration(completedCall.Response, format, contexts.Count);
-                        var contentFailures = parsed.Values.SelectMany(narration => GeneratedNarrationValidator.Validate(narration)).ToArray();
+                        parsedForMetadata = parsed;
+                        jsonParseSucceeded = schemaValidationPassed = sceneMappingPassed = true;
+                        anyProviderResponseParsed = true;
+                        parsedSceneCount = parsed.Count;
+                        returnedSceneNumbers = parsed.Keys.Order().ToArray();
+                        contentFailures = parsed.SelectMany(pair => GeneratedNarrationValidator.Validate(pair.Value, format)
+                            .Select(failure => failure with { SceneId = contexts[pair.Key - 1].SceneId, DocumentaryBeatId = $"scene-{pair.Key}" })).ToArray();
+                        providerOutputValidationStarted = true;
                         if (contentFailures.Length > 0)
                             throw new InvalidOperationException($"{format} provider prose failed validation: {string.Join(" | ", contentFailures.Select(f => f.DetectedIssue))}");
+                        narrationQualityValidationPassed = true;
+                        providerOutputValidationPassed = true;
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
@@ -523,7 +549,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                         parsed = null;
                         if (attempt == 1)
                         {
-                            repairGuidance.Add($"The previous response was rejected: {ex.Message}. Return contract-only, factual viewer narration.");
+                            repairGuidance.AddRange(contentFailures.Select(f => $"Scene {ParseSceneNumber(f.DocumentaryBeatId)} was rejected for internal {DescribeRejectedCategory(f.MatchedPhrase)} wording. Rewrite that scene as plain spoken narration without labels, IDs, or prompt structure."));
+                            if (contentFailures.Length == 0) repairGuidance.Add("The previous response did not meet the response contract. Return only the required scene narration structure.");
                             continue;
                         }
                     }
@@ -539,12 +566,19 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                             modelOrDeployment = completedCall?.ModelOrDeployment ?? narrationPerformer.ModelOrDeployment,
                             requestStartedUtc = completedCall?.RequestStartedUtc, requestCompletedUtc = completedCall?.RequestCompletedUtc,
                             responseReceived = completedCall is not null, responseLength = providerResponse.Length,
-                            responseChecksum = completedCall?.ResponseChecksum, structuredParseResult = parsed is not null ? "Succeeded" : "Rejected",
-                            parseSucceeded = parsed is not null, returnedSceneCount = parsed?.Count ?? 0,
-                            returnedSceneNumbers = parsed?.Keys.Order().ToArray() ?? [], rejectedExtraFields = lastAttemptFailure?.Message.Contains("outside the narration contract", StringComparison.OrdinalIgnoreCase) == true,
-                            finalMappingCount = parsed?.Count ?? 0, sanitizedFirstScenePreview = SanitizePreview(parsed?.OrderBy(x => x.Key).FirstOrDefault().Value),
+                            responseChecksum = completedCall?.ResponseChecksum, jsonParseSucceeded, schemaValidationPassed,
+                            returnedSceneCount = parsedSceneCount, returnedSceneNumbers, sceneMappingPassed, narrationQualityValidationPassed,
+                            rejectedSceneCount = contentFailures.Select(f => f.SceneId).Distinct().Count(), rejectionReasons = contentFailures.Select(f => f.DetectedIssue).Distinct().ToArray(), rejectedExtraFields = lastAttemptFailure?.Message.Contains("outside the narration contract", StringComparison.OrdinalIgnoreCase) == true,
+                            finalMappingCount = parsedSceneCount, sanitizedFirstScenePreview = SanitizePreview(parsedForMetadata?.OrderBy(x => x.Key).FirstOrDefault().Value),
                             actualProviderPromptChecksum = requestChecksum, diagnosticPromptChecksum = requestChecksum
                         }, JsonOptions), cancellationToken);
+                        providerValidationAttempts.Add(new ProviderOutputValidationAttempt(call.AttemptId, format, completedCall is not null,
+                            jsonParseSucceeded, schemaValidationPassed, parsedSceneCount, returnedSceneNumbers, sceneMappingPassed,
+                            narrationQualityValidationPassed, contentFailures.Select(f => new ProviderOutputRejection(
+                                ParseSceneNumber(f.DocumentaryBeatId), f.SceneId, f.DetectedIssue, f.MatchedPhrase,
+                                SanitizePreview(parsedSceneCount > 0 && ParseSceneNumber(f.DocumentaryBeatId) > 0 ? parsedForMetadata![ParseSceneNumber(f.DocumentaryBeatId)] : null),
+                                DeterminePhraseOrigin(f.MatchedPhrase, performerPrompt, actualUserPrompt, narrationContextJson), nameof(GeneratedNarrationValidator), nameof(GeneratedNarrationValidator.Validate))).ToArray()));
+                        await WriteAllTextUtf8Async(providerOutputValidationDiagnosticsPath, JsonSerializer.Serialize(new { attempts = providerValidationAttempts }, JsonOptions), cancellationToken);
                     }
                 }
                 if (parsed is null) throw new InvalidOperationException($"{format} narration provider failed; no fallback was used.", lastAttemptFailure);
@@ -617,6 +651,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             shortProviderInvocationCount = llmRequestCounts.GetValueOrDefault("short"), invocations = providerDiagnostics,
             providerInvocationStarted = llmRequestCounts.Values.Sum() > 0 && providerFailure?.InvocationStarted != false,
             providerInvocationCompleted = providerFailure is null && llmRequestCounts.Values.Sum() > 0,
+            providerResponseParsed = anyProviderResponseParsed, providerOutputValidationStarted, providerOutputValidationPassed,
             providerFailureCategory = providerFailure?.Category, providerFailureReasonCode = providerFailure?.ReasonCode,
             providerFailureDiagnosticsPath = File.Exists(providerFailureDiagnosticsPath) ? NormalizePath(providerFailureDiagnosticsPath) : null,
             failedVariant, retryable = providerFailure?.Retryable,
@@ -1748,6 +1783,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     }
 
     private static string Sha256(string value) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static int ParseSceneNumber(string value) => int.TryParse(value.Replace("scene-", string.Empty, StringComparison.OrdinalIgnoreCase), out var number) ? number : 0;
+    private static string DescribeRejectedCategory(string phrase) => Regex.IsMatch(phrase, @"(?:Advance|Outcome)\d+", RegexOptions.IgnoreCase) ? "placeholder-transition" : "contract-identifier";
+    private static string DeterminePhraseOrigin(string phrase, string systemPrompt, string userPrompt, string safeContext)
+    {
+        if (systemPrompt.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return "system prompt";
+        if (userPrompt.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return "user prompt";
+        if (safeContext.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return "NarrationSafeContext";
+        return "provider-added wording";
+    }
 
     private static string? SanitizePreview(string? value)
     {
@@ -3017,6 +3062,12 @@ public sealed record NarrationPurityFailure(string Format, string SceneId, strin
         => $"Narration context purity failure: format={Format}; sceneId={SceneId}; documentaryBeatId={DocumentaryBeatId}; field={Field}; ruleId={RuleId}; matchedPhrase={MatchedPhrase}; surroundingText={SurroundingText}; sourceArtifact={SourceArtifact}; sourceField={SourceField}; severity={Severity}";
 }
 
+public sealed record ProviderOutputValidationAttempt(string AttemptId, string Variant, bool ProviderResponseReceived,
+    bool JsonParseSucceeded, bool SchemaValidationPassed, int SceneCount, IReadOnlyList<int> ReturnedSceneNumbers,
+    bool SceneMappingPassed, bool NarrationQualityValidationPassed, IReadOnlyList<ProviderOutputRejection> Rejections);
+public sealed record ProviderOutputRejection(int SceneNumber, string SceneId, string Rule, string MatchedPhrase,
+    string? SanitizedExcerpt, string PhraseOrigin, string ValidationClass, string ValidationMethod);
+
 public static class ContextSchemaValidator
 {
     private static readonly HashSet<string> KnownSuccessCriteria = new(StringComparer.OrdinalIgnoreCase)
@@ -3080,7 +3131,7 @@ public static class SpeakableContextPurityValidator
 
 public static class GeneratedNarrationValidator
 {
-    private static readonly Regex ProviderInternalIdentifierOrPlaceholder = new(@"\b(?:VQ|LO|CLM|CLAIM|KR|KNOWLEDGE)[-_]?[A-Z0-9]{2,}\b|\bAdvance\d{2,}\b|final narration remains owned|advance the certified", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex ProviderInternalIdentifierOrPlaceholder = new(@"\b(?:VQ|LO|CLM|CLAIM|KR|KNOWLEDGE)[-_]?[A-Z0-9]{2,}\b|\b(?:Advance|Outcome)\d{2,}\b|\bOrion Gold scene\b|\bscene\s+Fact\d+\b|\b(?:ViewerQuestionId|LearningObjectiveId|SceneId|ClaimId|FactKey|ScientificExplanation)\b|producer note|final narration remains owned|advance the certified", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex InternalRegionCode = new(@"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex PascalCaseSemanticKey = new(@"\b(?:PlanetPairingApparentLineOfSightGeometry|ApparentAlignmentExplanation|ObservationTiming|BinocularGuidance|NarrativeRole|TransitionIntent|FactType|CapabilityId|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+){2,})\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex IncompleteTransition = new(@"\bthrough the\s*[.!?]|\{[A-Za-z0-9_]+\}|<[^>]+>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
