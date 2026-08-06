@@ -164,15 +164,15 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         await WriteAllTextUtf8Async(producerNotesContractPath, JsonSerializer.Serialize(producerNotesContract, JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(producerNotesDiagnosticsPath, JsonSerializer.Serialize(producerNotesDiagnostics, JsonOptions), cancellationToken);
 
-        var longRawNarrative = RawNarrativeGenerator.Build("long", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion);
-        var shortRawNarrative = RawNarrativeGenerator.Build("short", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion);
+        var longStoryFrames = LoadStoryFrames(outputRoot, "long");
+        var shortStoryFrames = LoadStoryFrames(outputRoot, "short");
+        var longRawNarrative = RawNarrativeGenerator.Build("long", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, longStoryFrames.Frames);
+        var shortRawNarrative = RawNarrativeGenerator.Build("short", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, shortStoryFrames.Frames);
         await WriteAllTextUtf8Async(longRawNarrativePath, JsonSerializer.Serialize(longRawNarrative, JsonOptions), cancellationToken);
         await WriteAllTextUtf8Async(shortRawNarrativePath, JsonSerializer.Serialize(shortRawNarrative, JsonOptions), cancellationToken);
         var rawNarrativeDiagnostics = new { component = "RawNarrativeGenerator-v1", longGenerated = longRawNarrative.Scenes.Count > 0, shortGenerated = shortRawNarrative.Scenes.Count > 0, longSceneCount = longRawNarrative.Scenes.Count, shortSceneCount = shortRawNarrative.Scenes.Count, deterministic = true, excludedFromLlmBoundary = true, producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true };
         await WriteAllTextUtf8Async(rawNarrativeDiagnosticsPath, JsonSerializer.Serialize(rawNarrativeDiagnostics, JsonOptions), cancellationToken);
 
-        var longStoryFrames = LoadStoryFrames(outputRoot, "long");
-        var shortStoryFrames = LoadStoryFrames(outputRoot, "short");
         var longSceneFactCards = SceneFactCardGenerator.Build("long", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, longStoryFrames.Frames);
         var shortSceneFactCards = SceneFactCardGenerator.Build("short", producerNotesContract, Rc2PipelinePhaseRegistry.OrchestrationVersion, shortStoryFrames.Frames);
         await WriteAllTextUtf8Async(longSceneFactCardsPath, JsonSerializer.Serialize(longSceneFactCards, JsonOptions), cancellationToken);
@@ -313,12 +313,16 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             styleContract?.VoiceProfile ?? "Premium astronomy documentary: confident, elegant, natural, human, curious, educational, and calm.",
             Rc2PipelinePhaseRegistry.OrchestrationVersion,
             languageProfile);
+        var projectionDiagnostics = NarrationContextProjectionValidator.Validate(
+            requestedFormats, longSceneFactCards, shortSceneFactCards, longRawNarrative, shortRawNarrative,
+            narrationInputNormalization.Context);
+        await WriteAllTextUtf8Async(narrationInputNormalizationDiagnosticsPath,
+            JsonSerializer.Serialize(new { normalization = narrationInputNormalization.Diagnostics, contextProjection = projectionDiagnostics }, JsonOptions), cancellationToken);
         var realizationResults = narrationInputNormalization.SafeContexts.Select(c => narrationRealizer.Realize(c, familyProfile, languageProfile)).ToArray();
         var realizationValidation = NarrationRealizationValidator.Validate(realizationResults, familyProfile).Concat(RequiredSemanticFactPhase7Validator.Validate(semanticResolution)).ToArray();
         var narrationContext = NarrationRealizedContextMapper.ToContext(narrationInputNormalization.Context, realizationResults);
         var narrationContextJson = JsonSerializer.Serialize(narrationContext, JsonOptions);
         await WriteAllTextUtf8Async(narrationContextPath, narrationContextJson, cancellationToken);
-        await WriteAllTextUtf8Async(narrationInputNormalizationDiagnosticsPath, JsonSerializer.Serialize(narrationInputNormalization.Diagnostics, JsonOptions), cancellationToken);
         var realizationDiagnostics = NarrationRealizationDiagnosticsBuilder.Build(familyProfile, realizationResults, realizationValidation, languageProfile);
         await WriteAllTextUtf8Async(narrationRealizationDiagnosticsPath, JsonSerializer.Serialize(realizationDiagnostics, JsonOptions), cancellationToken);
         logger.LogInformation("Phase 7 NarrationContext before prompt generation: {NarrationContext}", narrationContextJson);
@@ -364,7 +368,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                     var textForFormat = string.Join("\n\n", scenesForFormat.Select(scene => scene.NarrationText));
                     generatedByFormat[format] = new NarrationV5($"AstroPulse-Narration-v5-{format}", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, scenesForFormat, textForFormat, channelEnding);
                 }
-                var documentaryScriptDiagnostics = new { component = "LLMDocumentaryPerformer-v2", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "narration-context", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, visualInstructionLeakageDetected = false, longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"), shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"), wholeDocumentGenerationUsed = true };
+                var documentaryScriptDiagnostics = new { component = "LLMDocumentaryPerformer-v2", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "narration-context", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, visualInstructionLeakageDetected = false, longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"), shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"), longLlmScenePassageCount = narrationContext.Formats.FirstOrDefault(f => f.Format.Equals("long", StringComparison.OrdinalIgnoreCase))?.Beats.Count ?? 0, shortLlmScenePassageCount = narrationContext.Formats.FirstOrDefault(f => f.Format.Equals("short", StringComparison.OrdinalIgnoreCase))?.Beats.Count ?? 0, wholeDocumentGenerationUsed = true };
                 await WriteAllTextUtf8Async(documentaryScriptDiagnosticsPath, JsonSerializer.Serialize(documentaryScriptDiagnostics, JsonOptions), cancellationToken);
                 if (generatedByFormat.Count == 0) throw new InvalidOperationException("Phase 7 cannot generate narration because requested narration formats resolved to an empty collection.");
                 narration = generatedByFormat.TryGetValue("long", out var longNarration) ? longNarration : generatedByFormat.Values.First();
@@ -2152,7 +2156,7 @@ public sealed record StoryFrameNarrationSource(string SceneId, int SceneOrder, s
 public sealed record RawNarrative(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<RawNarrativeScene> Scenes);
 public sealed record RawNarrativeScene(string SceneId, int SceneOrder, string SceneRole, IReadOnlyList<string> MustSayFacts, IReadOnlyList<string> MustExplain, IReadOnlyList<string> MustGuide, IReadOnlyList<string> MustNotSay, string TransitionToNext, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
 public sealed record SceneFactCardSet(string ContractVersion, string OrchestrationVersion, string Format, string Language, IReadOnlyList<SceneFactCard> Cards);
-public sealed record SceneFactCard(string SceneId, int SceneOrder, string Format, IReadOnlyList<string> Facts, IReadOnlyList<string> Observations, IReadOnlyList<string> Visibility, IReadOnlyList<string> Timing, IReadOnlyList<string> Location, IReadOnlyList<string> Objects, IReadOnlyList<string> Science, IReadOnlyList<string> RequiredMentions, IReadOnlyList<string> ForbiddenClaims, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId);
+public sealed record SceneFactCard(string SceneId, int SceneOrder, string Format, IReadOnlyList<string> Facts, IReadOnlyList<string> Observations, IReadOnlyList<string> Visibility, IReadOnlyList<string> Timing, IReadOnlyList<string> Location, IReadOnlyList<string> Objects, IReadOnlyList<string> Science, IReadOnlyList<string> RequiredMentions, IReadOnlyList<string> ForbiddenClaims, int EstimatedDurationSeconds, string SourceSceneIntentId, string SourceStoryFrameId, string NarrationPurpose = "");
 public sealed record SceneIdentityDiagnostics(string ContractVersion, int DiagnosticCount, IReadOnlyList<SceneIdentityDiagnostic> Diagnostics);
 public sealed record SceneIdentityDiagnostic(string Phase6SceneId, string Phase7SceneId, string DocumentaryBeatId, string Format, int SceneOrder, string MappingStatus, string MismatchReason);
 public sealed record DocumentaryTranscriptionistInput(string DocumentaryOutline, DocumentaryPerformerSceneFactCards SceneFactCards, string AstroPulseVoiceProfile);
@@ -2160,7 +2164,7 @@ public sealed record DocumentaryPerformerSceneFactCards(SceneFactCardSet Long, S
 public sealed record NarrationContextDocument(string ContractVersion, string OrchestrationVersion, IReadOnlyList<NarrationFormatContext> Formats);
 public sealed record NarrationFormatContext(string Format, IReadOnlyList<NarrationContextBeat> Beats);
 public sealed record NarrationVerifiedFact(string FactKey, string Value, string? SemanticPurpose, string? Unit = null);
-public sealed record NarrationContextBeat(string KnowledgeGoal, string AudienceOutcome, string EditorialIntent, IReadOnlyList<NarrationVerifiedFact> VerifiedFacts, IReadOnlyList<string> ScientificConstraints, string? ObservationObjective, string TransitionGoal, string Tone, string NarrativeRhythm, IReadOnlyList<string> SuccessCriteria, string? OptionalProducerNotes);
+public sealed record NarrationContextBeat(string KnowledgeGoal, string AudienceOutcome, string EditorialIntent, IReadOnlyList<NarrationVerifiedFact> VerifiedFacts, IReadOnlyList<string> ScientificConstraints, string? ObservationObjective, string TransitionGoal, string Tone, string NarrativeRhythm, IReadOnlyList<string> SuccessCriteria, string? OptionalProducerNotes, string SceneId = "", int SceneOrder = 0, string Format = "", int TargetDurationSeconds = 0, string? PreviousSceneContext = null);
 public sealed record DocumentaryScript(string ContractVersion, string Format, string Title, string Language, IReadOnlyList<DocumentaryScriptScene> Scenes, [property: JsonPropertyName("fullScript")] string FullScriptText);
 public sealed record DocumentaryScriptScene(string SceneId, int SceneOrder, [property: JsonPropertyName("narration")] string NarrationText, string TransitionToNext, [property: JsonPropertyName("requiredFactsUsed")] IReadOnlyList<string> RequiredFactsPreserved, IReadOnlyList<string> MustNotSay, string ObservationGuidance)
 {
@@ -2208,10 +2212,10 @@ public static class NarrationInputNormalizer
                 counters.SafeFactCount += facts.Length;
                 var notes = ProducerNoteSanitizer.Sanitize(beat.OptionalProducerNotes, languageProfile, counters, warnings).ToArray();
                 var constraints = beat.ScientificConstraints.Select(v => SanitizeSemantic(v, languageProfile, counters, warnings, optional:true)).Where(v => !string.IsNullOrWhiteSpace(v)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-                var safe = new NarrationSafeContext(format.Format, string.Empty, string.Empty, ResolveRole(facts, languageProfile), SemanticTemplate("knowledgeGoal", languageProfile), SemanticTemplate("audienceOutcome", languageProfile), SemanticTemplate("editorialIntent", languageProfile), SemanticTemplate("observationObjective", languageProfile), SemanticTemplate("scientificObjective", languageProfile), SemanticTemplate("transitionGoal", languageProfile), ResolveTone(languageProfile), ResolveRhythm(format.Format, languageProfile), format.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 35 : 95, facts, notes, constraints);
+                var safe = new NarrationSafeContext(format.Format, beat.SceneId, beat.SceneId, ResolveRole(facts, languageProfile), beat.KnowledgeGoal, beat.AudienceOutcome, beat.EditorialIntent, beat.ObservationObjective, beat.ObservationObjective, beat.TransitionGoal, beat.Tone, beat.NarrativeRhythm, beat.TargetDurationSeconds > 0 ? Math.Max(12, beat.TargetDurationSeconds * 2) : format.Format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 35 : 95, facts, notes, constraints);
                 safeContexts.Add(safe);
-                handoffDiagnostics.Add(new NarrationSafeContextHandoffDiagnostic(format.Format, string.Empty, string.Empty, beat.VerifiedFacts.Count, facts.Select(f => f.FactKey).ToArray(), ignoredFacts, JsonSerializer.Serialize(new { scene = string.Empty, beat = string.Empty, facts = safe.SpeakableFacts.Select(f => new { factType = f.FactKey, value = f.SpeakableValue }) })));
-                beats.Add(new NarrationContextBeat(safe.KnowledgeGoal, safe.AudienceOutcome, safe.EditorialIntent, facts.Select(f => new NarrationVerifiedFact(f.FactKey, f.SpeakableValue, f.FactType, f.CanonicalUnit)).ToArray(), safe.Constraints, safe.ObservationObjective, safe.TransitionGoal, safe.Tone, safe.Rhythm, beat.SuccessCriteria.Select(_ => SemanticTemplate("successCriteria", languageProfile)).Distinct().ToArray(), notes.Length == 0 ? null : string.Join(" ", notes.Select(n => n.SemanticInstruction))));
+                handoffDiagnostics.Add(new NarrationSafeContextHandoffDiagnostic(format.Format, beat.SceneId, beat.SceneId, beat.VerifiedFacts.Count, facts.Select(f => f.FactKey).ToArray(), ignoredFacts, JsonSerializer.Serialize(new { scene = beat.SceneId, beat = beat.SceneId, facts = safe.SpeakableFacts.Select(f => new { factType = f.FactKey, value = f.SpeakableValue }) })));
+                beats.Add(new NarrationContextBeat(safe.KnowledgeGoal, safe.AudienceOutcome, safe.EditorialIntent, facts.Select(f => new NarrationVerifiedFact(f.FactKey, f.SpeakableValue, f.FactType, f.CanonicalUnit)).ToArray(), safe.Constraints, safe.ObservationObjective, safe.TransitionGoal, safe.Tone, safe.Rhythm, beat.SuccessCriteria.Select(_ => SemanticTemplate("successCriteria", languageProfile)).Distinct().ToArray(), notes.Length == 0 ? null : string.Join(" ", notes.Select(n => n.SemanticInstruction)), beat.SceneId, beat.SceneOrder, format.Format, beat.TargetDurationSeconds, beat.PreviousSceneContext));
             }
             formats.Add(new NarrationFormatContext(format.Format, beats));
         }
@@ -2423,6 +2427,25 @@ public static class NarrationContextBuilder
     private static IReadOnlyList<NarrationContextBeat> BuildBeats(string format, JsonElement? contract, JsonElement? styleContract, SceneFactCardSet cards, RequiredSemanticFactResolutionResult? resolvedFacts, string voiceProfile)
     {
         var contractBeats = ReadArray(contract, "beats").OrderBy(e => GetInt(e, "beatOrder") ?? 0).ToArray();
+        if (contractBeats.Length == 0)
+        {
+            return cards.Cards.OrderBy(card => card.SceneOrder).Select((card, index) =>
+            {
+                var facts = card.Facts.Concat(card.Observations).Concat(card.Science).Concat(card.RequiredMentions)
+                    .Where(value => !string.IsNullOrWhiteSpace(value) && !ContainsForbiddenVisualLanguage(value))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Select((value, factIndex) => new NarrationVerifiedFact($"sceneFact{factIndex + 1}", Clean(value), "CanonicalSceneFact"))
+                    .ToArray();
+                var purpose = FirstNonEmpty(card.NarrationPurpose, card.Observations.FirstOrDefault(), card.Science.FirstOrDefault(), card.Facts.FirstOrDefault())
+                    ?? "Carry this canonical scene forward as a factual documentary beat.";
+                return new NarrationContextBeat(Clean(purpose), "Give the audience one clear, grounded idea.",
+                    "Narrate the scene naturally without exposing planning labels.", facts, card.ForbiddenClaims,
+                    card.Observations.FirstOrDefault(), "Continue the meaning established by the preceding scene.",
+                    Clean(voiceProfile), format.Equals("short", StringComparison.OrdinalIgnoreCase) ? "compressed documentary beat" : "measured documentary beat",
+                    [], null, card.SceneId, card.SceneOrder, NormalizeVariant(format), card.EstimatedDurationSeconds,
+                    index == 0 ? null : cards.Cards.OrderBy(c => c.SceneOrder).ElementAt(index - 1).SceneId);
+            }).ToArray();
+        }
         return contractBeats.Select(beat =>
         {
             var warnings = new List<string>();
@@ -2448,9 +2471,18 @@ public static class NarrationContextBuilder
                 tone,
                 rhythm,
                 ReadStringArray(beat, "successCriteria").Where(v => !ContainsForbiddenVisualLanguage(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                warnings.Count == 0 ? null : string.Join(" ", warnings));
+                warnings.Count == 0 ? null : string.Join(" ", warnings),
+                FirstNonEmpty(GetString(beat, "sceneId"), beatId) ?? string.Empty,
+                GetInt(beat, "beatOrder") ?? 0, NormalizeVariant(format), GetInt(beat, "targetDurationSeconds") ?? 0,
+                GetString(beat, "previousSceneContext"));
         }).ToArray();
     }
+
+    private static string NormalizeVariant(string format) => format.Trim().ToLowerInvariant() switch
+    {
+        "long" => "long", "short" => "short",
+        _ => throw new InvalidOperationException($"NarrationContextProjectionUnknownVariant: variant='{format}'.")
+    };
 
     private static IReadOnlyList<NarrationVerifiedFact> ReadResolvedFacts(string format, string? beatId, RequiredSemanticFactResolutionResult? resolvedFacts)
     {
@@ -2680,7 +2712,8 @@ public static class SceneFactCardGenerator
                 scene is null || scene.KeyFacts.Count == 0 ? ["Do not invent unconfirmed event details."] : ["Do not invent unconfirmed altitude, constellation, brightness, weather, optical aid, or physical-distance claims."],
                 normalizedFormat.Equals("short", StringComparison.OrdinalIgnoreCase) ? 12 : 28,
                 scene?.SceneId ?? frame.SceneId,
-                frame.FrameId);
+                frame.FrameId,
+                frame.NarrationMapping);
         }).ToArray();
         return new SceneFactCardSet("AstroPulse-SceneFactCards-v2", orchestrationVersion, normalizedFormat, notes.Language, cards);
     }
@@ -2739,9 +2772,29 @@ public static class SceneFactCardGenerator
 
 public static class RawNarrativeGenerator
 {
-    public static RawNarrative Build(string format, ProducerNotesContract notes, string orchestrationVersion)
+    public static RawNarrative Build(string format, ProducerNotesContract notes, string orchestrationVersion, IReadOnlyList<StoryFrameNarrationSource>? canonicalFrames = null)
     {
-        var selected = notes.Briefs.Where(b => b.FormatRequirement.Equals(format, StringComparison.OrdinalIgnoreCase)).OrderBy(b => b.SceneOrder).ToArray();
+        var normalizedFormat = format.Trim().ToLowerInvariant() switch
+        {
+            "long" => "long", "short" => "short",
+            _ => throw new InvalidOperationException($"RawNarrativeUnknownVariant: variant='{format}'.")
+        };
+        if (canonicalFrames is { Count: > 0 })
+        {
+            var noteLookup = notes.Briefs.Where(b => b.FormatRequirement.Equals(normalizedFormat, StringComparison.OrdinalIgnoreCase))
+                .GroupBy(b => b.SceneId, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            var canonicalScenes = canonicalFrames.OrderBy(f => f.SceneOrder).Select((frame, index) =>
+            {
+                noteLookup.TryGetValue(frame.SceneId, out var note);
+                return new RawNarrativeScene(frame.SceneId, frame.SceneOrder, ResolveRole(note?.NarrativeGoal ?? frame.NarrationMapping, index),
+                    note?.KeyFacts.Select(f => $"{f.Name}: {f.Value}").ToArray() ?? [],
+                    SplitSentences(note?.SceneStory ?? frame.NarrationMapping), SplitSentences(note?.ObservationGuidance ?? string.Empty),
+                    ["Do not invent unconfirmed event details."], note?.TransitionContext ?? frame.NarrationMapping,
+                    normalizedFormat == "short" ? 12 : 28, frame.SceneId, frame.FrameId);
+            }).ToArray();
+            return new RawNarrative("AstroPulse-RawNarrative-v1", orchestrationVersion, normalizedFormat, notes.Language, canonicalScenes);
+        }
+        var selected = notes.Briefs.Where(b => b.FormatRequirement.Equals(normalizedFormat, StringComparison.OrdinalIgnoreCase)).OrderBy(b => b.SceneOrder).ToArray();
         var scenes = selected.Select((scene, index) => new RawNarrativeScene(
             scene.SceneId,
             scene.SceneOrder,
@@ -2754,7 +2807,7 @@ public static class RawNarrativeGenerator
             format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 12 : 28,
             scene.SceneId,
             scene.SceneId)).ToArray();
-        return new RawNarrative("AstroPulse-RawNarrative-v1", orchestrationVersion, format.ToLowerInvariant(), notes.Language, scenes);
+        return new RawNarrative("AstroPulse-RawNarrative-v1", orchestrationVersion, normalizedFormat, notes.Language, scenes);
     }
 
     private static string ResolveRole(string value, int index)
@@ -2770,6 +2823,66 @@ public static class RawNarrativeGenerator
         .Select(v => v.Trim(' ', '.', ';', ':'))
         .Where(v => !string.IsNullOrWhiteSpace(v))
         .ToArray();
+}
+
+public sealed record NarrationContextProjectionDiagnostics(
+    int LongCompositionSceneCount, int ShortCompositionSceneCount,
+    int LongRawNarrativeSceneCount, int ShortRawNarrativeSceneCount,
+    int LongSceneFactCardCount, int ShortSceneFactCardCount,
+    int LongSafeContextBeatCount, int ShortSafeContextBeatCount,
+    bool LongSceneIdsMatch, bool ShortSceneIdsMatch, bool VariantLeakageDetected,
+    bool LlmInvocationPreventedDueToEmptyContext, string ContextProjectionSource,
+    string? FirstLongMismatch, string? FirstShortMismatch);
+
+public static class NarrationContextProjectionValidator
+{
+    public static NarrationContextProjectionDiagnostics Validate(IReadOnlyList<string> requestedFormats,
+        SceneFactCardSet longCards, SceneFactCardSet shortCards, RawNarrative longRaw, RawNarrative shortRaw,
+        NarrationContextDocument context)
+    {
+        var requested = requestedFormats.Select(Normalize).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var longExpected = longCards.Cards.OrderBy(c => c.SceneOrder).Select(c => c.SceneId).ToArray();
+        var shortExpected = shortCards.Cards.OrderBy(c => c.SceneOrder).Select(c => c.SceneId).ToArray();
+        var longActual = Beats("long").Select(b => b.SceneId).ToArray();
+        var shortActual = Beats("short").Select(b => b.SceneId).ToArray();
+        var firstLong = FirstMismatch(longExpected, longActual);
+        var firstShort = FirstMismatch(shortExpected, shortActual);
+        var longIdSet = longExpected.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var shortIdSet = shortExpected.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var leakage = longActual.Any(shortIdSet.Contains) || shortActual.Any(longIdSet.Contains)
+            || longCards.Cards.Any(c => Normalize(c.Format) != "long") || shortCards.Cards.Any(c => Normalize(c.Format) != "short");
+        var empty = (requested.Contains("long") && longExpected.Length == 0) || (requested.Contains("short") && shortExpected.Length == 0)
+            || (requested.Contains("long") && longActual.Length == 0) || (requested.Contains("short") && shortActual.Length == 0);
+        var invalidIdentity = longActual.Any(string.IsNullOrWhiteSpace) || shortActual.Any(string.IsNullOrWhiteSpace)
+            || longActual.Distinct(StringComparer.OrdinalIgnoreCase).Count() != longActual.Length
+            || shortActual.Distinct(StringComparer.OrdinalIgnoreCase).Count() != shortActual.Length;
+        var meaningless = context.Formats.SelectMany(f => f.Beats).Any(b => string.IsNullOrWhiteSpace(b.KnowledgeGoal)
+            && b.VerifiedFacts.Count == 0 && string.IsNullOrWhiteSpace(b.ObservationObjective) && string.IsNullOrWhiteSpace(b.OptionalProducerNotes));
+        var diagnostics = new NarrationContextProjectionDiagnostics(longExpected.Length, shortExpected.Length,
+            longRaw.Scenes.Count, shortRaw.Scenes.Count, longCards.Cards.Count, shortCards.Cards.Count,
+            longActual.Length, shortActual.Length, firstLong is null, firstShort is null, leakage, empty,
+            "CanonicalNarrativeCompositionRequest/SceneFactCards", firstLong, firstShort);
+        if (empty || invalidIdentity || meaningless || leakage || firstLong is not null || firstShort is not null
+            || longRaw.Scenes.Count != longExpected.Length || shortRaw.Scenes.Count != shortExpected.Length)
+            throw new InvalidOperationException($"NarrationContextProjectionInvariantFailed: expectedLong={longExpected.Length}; actualLong={longActual.Length}; expectedShort={shortExpected.Length}; actualShort={shortActual.Length}; firstLongMismatch={firstLong ?? "none"}; firstShortMismatch={firstShort ?? "none"}; variantLeakage={leakage}; emptyRequestedContext={empty}; invalidIdentity={invalidIdentity}; meaninglessBeat={meaningless}. LLM invocation prevented.");
+        return diagnostics;
+
+        IReadOnlyList<NarrationContextBeat> Beats(string variant) => context.Formats.FirstOrDefault(f => Normalize(f.Format) == variant)?.Beats ?? [];
+    }
+
+    private static string Normalize(string? variant) => variant?.Trim().ToLowerInvariant() switch
+    {
+        "long" => "long", "short" => "short",
+        _ => throw new InvalidOperationException($"NarrationContextProjectionUnknownVariant: variant='{variant ?? "<missing>"}'.")
+    };
+
+    private static string? FirstMismatch(IReadOnlyList<string> expected, IReadOnlyList<string> actual)
+    {
+        for (var i = 0; i < Math.Max(expected.Count, actual.Count); i++)
+            if (i >= expected.Count || i >= actual.Count || !expected[i].Equals(actual[i], StringComparison.OrdinalIgnoreCase))
+                return $"index={i}; expected={(i < expected.Count ? expected[i] : "<none>")}; actual={(i < actual.Count ? actual[i] : "<none>")}";
+        return null;
+    }
 }
 
 public interface INarrationRealizer
@@ -3842,9 +3955,9 @@ public static class NarrationRealizedContextMapper
     public static NarrationContextDocument ToContext(NarrationContextDocument source, IReadOnlyList<NarrationRealizationResult> results)
     {
         var byFormat = results.GroupBy(r => r.Format, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.OrdinalIgnoreCase);
-        return source with { Formats = source.Formats.Select(f => new NarrationFormatContext(f.Format, byFormat.TryGetValue(f.Format, out var rs) ? rs.Select(ToBeat).ToArray() : f.Beats)).ToArray() };
+        return source with { Formats = source.Formats.Select(f => new NarrationFormatContext(f.Format, byFormat.TryGetValue(f.Format, out var rs) ? rs.Select((r, i) => ToBeat(r, i < f.Beats.Count ? f.Beats[i] : null)).ToArray() : f.Beats)).ToArray() };
     }
-    private static NarrationContextBeat ToBeat(NarrationRealizationResult r) => new(r.NarrativeRole, r.NarrativePurpose, r.OpeningGuidance, r.SpeakableFacts.Concat(r.ObservationDetails).Select(f => new NarrationVerifiedFact(f.FactType, f.Value, f.Unit)).ToArray(), r.ScientificBoundaries, string.Join("; ", r.ObservationDetails.Select(f => f.Value)), r.TransitionIntent is null ? string.Empty : $"{r.TransitionIntent.FromConcept} -> {r.TransitionIntent.ToConcept} ({r.TransitionIntent.Relationship})", r.Tone, r.Rhythm, r.ForbiddenNarrationPatterns, null);
+    private static NarrationContextBeat ToBeat(NarrationRealizationResult r, NarrationContextBeat? source) => new(r.NarrativeRole, r.NarrativePurpose, r.OpeningGuidance, r.SpeakableFacts.Concat(r.ObservationDetails).Select(f => new NarrationVerifiedFact(f.FactType, f.Value, f.Unit)).ToArray(), r.ScientificBoundaries, string.Join("; ", r.ObservationDetails.Select(f => f.Value)), r.TransitionIntent is null ? string.Empty : $"{r.TransitionIntent.FromConcept} -> {r.TransitionIntent.ToConcept} ({r.TransitionIntent.Relationship})", r.Tone, r.Rhythm, r.ForbiddenNarrationPatterns, null, r.SceneId, source?.SceneOrder ?? 0, r.Format, source?.TargetDurationSeconds ?? 0, source?.PreviousSceneContext);
 }
 
 public static class NarrationRealizationValidator
