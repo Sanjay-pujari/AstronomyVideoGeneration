@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using System.Text.Unicode;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Core.ExecutionContracts;
 using Astronomy.MediaFactory.Core.ExecutionValidation;
 using Astronomy.MediaFactory.ContentGen;
