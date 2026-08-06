@@ -27,6 +27,12 @@ internal static class AzureConfigurationValidation
 
         if (!options.UseManagedIdentity && !HasValue(options.ApiKey))
             yield return "AzureOpenAI:ApiKey is required unless AzureOpenAI:UseManagedIdentity=true.";
+
+        if (options.TimeoutSeconds <= 0)
+            yield return "AzureOpenAI:TimeoutSeconds must be greater than zero.";
+
+        if (options.LongMaxOutputTokens <= 0 || options.ShortMaxOutputTokens <= 0)
+            yield return "AzureOpenAI LongMaxOutputTokens and ShortMaxOutputTokens must be greater than zero.";
     }
 
     public static IEnumerable<string> ValidateSpeech(AzureSpeechOptions options, bool requireConfiguration)

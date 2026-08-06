@@ -19,7 +19,6 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
 {
     private const string ApiVersion = "2024-10-21";
     private const int MaxGenerationAttempts = 3;
-    private const int AzureOpenAiTimeoutSeconds = 90;
 
     private readonly HttpClient _httpClient;
     private readonly AzureOpenAiOptions _options;
@@ -61,7 +60,20 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         var started = DateTime.UtcNow;
         _logger.LogInformation("Narration provider call {ProviderCallId} attempt {AttemptId} variant {Variant} started for {Deployment}",
             request.ProviderCallId, request.AttemptId, request.Variant, _options.ChatDeployment);
-        var response = await RequestCompletionAsync(request.UserPrompt, cancellationToken, request.SystemPrompt);
+        string response;
+        try
+        {
+            response = await RequestCompletionAsync(request.UserPrompt, cancellationToken, request.SystemPrompt,
+                request.MaxOutputTokens > 0 ? request.MaxOutputTokens : null);
+        }
+        catch (Exception ex)
+        {
+            var classified = ClassifyNarrationFailure(ex, cancellationToken);
+            _logger.LogError(ex,
+                "Narration provider call {ProviderCallId} failed. category={Category}; reasonCode={ReasonCode}; httpStatus={HttpStatus}; sdkErrorCode={SdkErrorCode}; retryable={Retryable}",
+                request.ProviderCallId, classified.Category, classified.ReasonCode, classified.HttpStatus, classified.SdkErrorCode, classified.Retryable);
+            throw classified;
+        }
         var result = NarrationProviderCallResult.Completed(request, ProviderName, ModelOrDeployment, started, DateTime.UtcNow, response);
         _logger.LogInformation("Narration provider call {ProviderCallId} completed with {CharacterCount} characters and checksum {Checksum}",
             result.ProviderCallId, result.ResponseCharacterCount, result.ResponseChecksum);
@@ -179,7 +191,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         return BuildShortFallback(contentType, context);
     }
 
-    private async Task<string> RequestCompletionAsync(string prompt, CancellationToken cancellationToken, string? systemPrompt = null)
+    private async Task<string> RequestCompletionAsync(string prompt, CancellationToken cancellationToken, string? systemPrompt = null, int? maxOutputTokens = null)
     {
         if (string.IsNullOrWhiteSpace(_options.Endpoint) || string.IsNullOrWhiteSpace(_options.ChatDeployment))
         {
@@ -210,6 +222,7 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
                     new { role = "user", content = prompt }
                 },
                 temperature = 0.2,
+                max_tokens = maxOutputTokens ?? 4096,
                 response_format = new { type = "json_object" }
             })
         };
@@ -230,13 +243,14 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
         var startedUtc = DateTimeOffset.UtcNow;
         var stopwatch = Stopwatch.StartNew();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(AzureOpenAiTimeoutSeconds));
+        var timeoutSeconds = _options.TimeoutSeconds > 0 ? _options.TimeoutSeconds : 90;
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         _logger.LogInformation(
             "Azure OpenAI call starting. modelOrDeployment={Deployment}; promptPurpose={PromptPurpose}; startedUtc={StartedUtc:o}; timeoutSeconds={TimeoutSeconds}",
             _options.ChatDeployment,
             "chat-completion-json",
             startedUtc,
-            AzureOpenAiTimeoutSeconds);
+            timeoutSeconds);
         HttpResponseMessage response;
         try
         {
@@ -250,11 +264,12 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
                 _options.ChatDeployment,
                 "chat-completion-json",
                 startedUtc,
-                AzureOpenAiTimeoutSeconds,
+                timeoutSeconds,
                 ex.Message,
                 stopwatch.ElapsedMilliseconds);
             throw;
         }
+
         using (response)
         {
         if (!response.IsSuccessStatusCode)
@@ -278,6 +293,26 @@ public sealed class AzureOpenAiContentGenerationService : IScriptGenerationServi
             payload.Length);
         return ExtractAssistantContent(payload);
         }
+    }
+
+    private static NarrationProviderException ClassifyNarrationFailure(Exception exception, CancellationToken callerToken)
+    {
+        if (exception is NarrationProviderException known) return known;
+        if (exception is OperationCanceledException)
+            return callerToken.IsCancellationRequested
+                ? new("P7_PROVIDER_UNKNOWN_FAILURE", "Cancellation", "Narration provider call was cancelled by the caller.", true, false, innerException: exception)
+                : new("P7_PROVIDER_TIMEOUT", "Timeout", "Narration provider call exceeded its configured timeout.", true, true, innerException: exception);
+        if (exception is HttpRequestException http)
+        {
+            var status = http.StatusCode is null ? null : (int?)http.StatusCode.Value;
+            if (status is 401 or 403) return new("P7_PROVIDER_AUTHENTICATION_FAILED", "Authentication", "Azure OpenAI rejected the configured credential.", true, false, status, innerException: exception);
+            if (status == 429) return new("P7_PROVIDER_RATE_LIMITED", "RateLimited", "Azure OpenAI rate limit was reached.", true, true, status, innerException: exception);
+            if (status is >= 400 and < 500) return new("P7_PROVIDER_REQUEST_REJECTED", "RequestRejected", $"Azure OpenAI rejected the narration request with HTTP {status}.", true, false, status, innerException: exception);
+            return new("P7_PROVIDER_UNKNOWN_FAILURE", "Transport", "Azure OpenAI transport request failed.", true, status is null or >= 500, status, innerException: exception);
+        }
+        if (exception is InvalidOperationException)
+            return new("P7_PROVIDER_CONFIGURATION_MISSING", "Configuration", exception.Message, false, innerException: exception);
+        return new("P7_PROVIDER_UNKNOWN_FAILURE", "Unknown", exception.Message, true, false, innerException: exception);
     }
 
     private static string ExtractAssistantContent(string payload)

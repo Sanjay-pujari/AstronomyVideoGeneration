@@ -105,6 +105,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var shortDocumentaryScriptPath = Path.Combine(documentaryScriptShortRoot, "documentary-script.json");
         var documentaryScriptDiagnosticsPath = Path.Combine(documentaryScriptRoot, "documentary-script-diagnostics.json");
         var performanceDiagnosticsPath = Path.Combine(documentaryScriptRoot, "performance-diagnostics.json");
+        var providerFailureDiagnosticsPath = Path.Combine(narrationRoot, "provider-failure-diagnostics.json");
         var sceneIdentityDiagnosticsPath = Path.Combine(narrationRoot, "scene-identity-diagnostics.json");
         var narrationContextPath = Path.Combine(narrationRoot, "narration-context.json");
         var narrationRealizationDiagnosticsPath = Path.Combine(narrationRoot, "narration-realization-diagnostics.json");
@@ -353,13 +354,19 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var generationErrors = new List<string>();
         var llmRequestCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var providerDiagnostics = new List<object>();
+        NarrationProviderException? providerFailure = null;
+        string? failedVariant = null;
+        string? failedProviderCallId = null;
+        int failedRequestCharacterCount = 0;
+        int failedEstimatedInputTokens = 0;
+        int failedMaxOutputTokens = 0;
         // A failed provider attempt must not leave a previous run's narration looking current.
         foreach (var artifact in new[] { narrationPath, longNarrationPath, shortNarrationPath })
             if (File.Exists(artifact)) File.Delete(artifact);
         try
         {
             if (narrationPerformer is null)
-                throw new InvalidOperationException("No DI-registered INarrationPerformer is available; placeholder narration is forbidden.");
+                throw new NarrationProviderException("P7_PROVIDER_NOT_REGISTERED", "Registration", "No DI-registered INarrationPerformer is available; placeholder narration is forbidden.", false);
             var generatedByFormat = new Dictionary<string, NarrationV5>(StringComparer.OrdinalIgnoreCase);
             foreach (var format in requestedFormats)
             {
@@ -385,8 +392,13 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                     lastAttemptFailure = null;
                     actualUserPrompt = BuildStructuredVariantPrompt(format, contexts, formatPrompt, repairGuidance);
                     requestChecksum = Sha256(actualUserPrompt);
+                    var estimatedInputTokens = (performerPrompt.Length + actualUserPrompt.Length + 3) / 4;
+                    var maxOutputTokens = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 2048 : 4096;
                     var call = new NarrationProviderCall(Guid.NewGuid().ToString("N"), $"{format}-{attempt}", format,
-                        performerPrompt, actualUserPrompt, requestChecksum);
+                        performerPrompt, actualUserPrompt, requestChecksum, contexts.Count, estimatedInputTokens, maxOutputTokens);
+                    failedRequestCharacterCount = performerPrompt.Length + actualUserPrompt.Length;
+                    failedEstimatedInputTokens = estimatedInputTokens;
+                    failedMaxOutputTokens = maxOutputTokens;
                     var formatRequestPath = Path.Combine(narrationRoot, $"llm-request.{format.ToLowerInvariant()}.attempt-{attempt}.json");
                     await WriteAllTextUtf8Async(formatRequestPath, JsonSerializer.Serialize(new
                     {
@@ -404,8 +416,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                     try
                     {
                         // InvokeAsync is the concrete provider boundary. This counter is never derived from files.
-                        var providerTask = narrationPerformer.InvokeAsync(call, cancellationToken);
+                        failedVariant = format;
+                        failedProviderCallId = call.ProviderCallId;
                         llmRequestCounts[format] = llmRequestCounts.GetValueOrDefault(format) + 1;
+                        var providerTask = narrationPerformer.InvokeAsync(call, cancellationToken);
                         completedCall = await providerTask;
                         parsed = ParseProviderNarration(completedCall.Response, format, contexts.Count);
                         var contentFailures = parsed.Values.SelectMany(narration => GeneratedNarrationValidator.Validate(narration)).ToArray();
@@ -415,6 +429,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
+                        providerFailure = ex as NarrationProviderException ?? new NarrationProviderException(
+                            "P7_PROVIDER_UNKNOWN_FAILURE", "Unknown", ex.Message, true, innerException: ex);
                         lastAttemptFailure = ex;
                         parsed = null;
                         if (attempt == 1)
@@ -478,7 +494,32 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         }
         catch (Exception ex)
         {
-            generationErrors.Add($"Narration generation failed: {ex.Message}");
+            providerFailure ??= ex as NarrationProviderException;
+            var detail = providerFailure is null ? ex.Message : $"{providerFailure.ReasonCode}: {providerFailure.Message}";
+            generationErrors.Add($"Narration generation failed: {detail}");
+        }
+        if (providerFailure is not null)
+        {
+            await WriteAllTextUtf8Async(providerFailureDiagnosticsPath, JsonSerializer.Serialize(new {
+                executionId = Path.GetFileName(Path.TrimEndingDirectorySeparator(outputRoot)),
+                attemptId = failedVariant is null ? null : $"{failedVariant}-{llmRequestCounts.GetValueOrDefault(failedVariant)}",
+                variant = failedVariant, providerCallId = failedProviderCallId,
+                providerImplementationType = narrationPerformer?.GetType().FullName,
+                providerName = narrationPerformer?.ProviderName, deploymentOrModel = narrationPerformer?.ModelOrDeployment,
+                providerServiceResolved = narrationPerformer is not null,
+                providerConfigurationResolved = providerFailure.Category != "Configuration",
+                endpointConfigured = providerFailure.Category != "Configuration", credentialConfigured = providerFailure.Category != "Configuration",
+                invocationStarted = providerFailure.InvocationStarted, invocationCompleted = false,
+                requestCharacterCount = failedRequestCharacterCount, estimatedInputTokens = failedEstimatedInputTokens,
+                maxOutputTokens = failedMaxOutputTokens,
+                responseFormat = "json_object", temperature = 0.2, timeoutSeconds = 90,
+                failureCategory = providerFailure.Category, failureReasonCode = providerFailure.ReasonCode,
+                safeFailureMessage = providerFailure.Message, innerExceptionType = providerFailure.InnerException?.GetType().FullName,
+                innerExceptionMessage = providerFailure.InnerException?.Message,
+                sdkErrorCode = providerFailure.SdkErrorCode, httpStatus = providerFailure.HttpStatus,
+                retryable = providerFailure.Retryable, cancellationCausedFailure = providerFailure.Category == "Cancellation",
+                generatedUtc = DateTimeOffset.UtcNow
+            }, JsonOptions), cancellationToken);
         }
         if (requestedFormats.Count > 0 && llmRequestCounts.Values.Sum() == 0)
             generationErrors.Add("P7_NARRATION_PROVIDER_NOT_INVOKED: no concrete narration provider call occurred for the requested variants.");
@@ -486,6 +527,11 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             generatorInvocationCount = llmRequestCounts.Values.Sum(),
             providerInvocationCount = llmRequestCounts.Values.Sum(), longProviderInvocationCount = llmRequestCounts.GetValueOrDefault("long"),
             shortProviderInvocationCount = llmRequestCounts.GetValueOrDefault("short"), invocations = providerDiagnostics,
+            providerInvocationStarted = llmRequestCounts.Values.Sum() > 0 && providerFailure?.InvocationStarted != false,
+            providerInvocationCompleted = providerFailure is null && llmRequestCounts.Values.Sum() > 0,
+            providerFailureCategory = providerFailure?.Category, providerFailureReasonCode = providerFailure?.ReasonCode,
+            providerFailureDiagnosticsPath = File.Exists(providerFailureDiagnosticsPath) ? NormalizePath(providerFailureDiagnosticsPath) : null,
+            failedVariant, retryable = providerFailure?.Retryable,
             fallbackUsed = false, fallbackReason = generationErrors.Count == 0 ? null : "Provider generation did not produce an accepted artifact; no fallback was attempted.",
             errors = generationErrors
         }, JsonOptions), cancellationToken);
@@ -1036,7 +1082,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         await WriteAllTextUtf8Async(narrationValidationDiagnosticsPath, JsonSerializer.Serialize(validation, JsonOptions), cancellationToken);
         if (generationErrors.Count > 0) throw new InvalidOperationException(string.Join(" ", generationErrors));
         logger.LogInformation("Narration Studio V5 wrote {SceneCount} scenes to {NarrationPath}.", narrationScenes.Length, narrationPath);
-        return new NarrationGeneratorV5Result([sceneIdentityDiagnosticsPath, narrationContextPath, narrationRealizationDiagnosticsPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, narrationValidationDiagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath, eventIdentityDiagnosticsPath]);
+        var generatedFiles = new[] { sceneIdentityDiagnosticsPath, narrationContextPath, narrationRealizationDiagnosticsPath, planPath, briefsPath, styleContractPath, styleDiagnosticsPath, knowledgeContractPath, knowledgeDiagnosticsPath, editorialBriefContractPath, editorialBriefDiagnosticsPath, producerNotesContractPath, producerNotesDiagnosticsPath, longRawNarrativePath, shortRawNarrativePath, rawNarrativeDiagnosticsPath, longSceneFactCardsPath, shortSceneFactCardsPath, sceneFactCardsDiagnosticsPath, longDocumentaryScriptPath, shortDocumentaryScriptPath, documentaryScriptDiagnosticsPath, performanceDiagnosticsPath, llmRequestPath, narrationPath, longNarrationPath, longDiagnosticsPath, shortNarrationPath, shortDiagnosticsPath, diagnosticsPath, narrationValidationDiagnosticsPath, promptPreviewPath, promptDiagnosticsPath, promptQualityPath, narrationInputNormalizationDiagnosticsPath, eventIdentityDiagnosticsPath, providerFailureDiagnosticsPath };
+        return new NarrationGeneratorV5Result(generatedFiles.Where(File.Exists).ToArray());
     }
 
     private static Task WriteAllTextUtf8Async(string path, string contents, CancellationToken cancellationToken = default)

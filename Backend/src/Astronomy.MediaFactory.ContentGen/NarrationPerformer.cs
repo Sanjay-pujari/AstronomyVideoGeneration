@@ -26,7 +26,33 @@ public sealed record NarrationProviderCall(
     string Variant,
     string SystemPrompt,
     string UserPrompt,
-    string PromptChecksum);
+    string PromptChecksum,
+    int SceneCount = 0,
+    int EstimatedInputTokens = 0,
+    int MaxOutputTokens = 0,
+    string ResponseFormat = "json_object");
+
+public sealed class NarrationProviderException : Exception
+{
+    public NarrationProviderException(string reasonCode, string category, string safeMessage, bool invocationStarted,
+        bool retryable = false, int? httpStatus = null, string? sdkErrorCode = null, Exception? innerException = null)
+        : base(safeMessage, innerException)
+    {
+        ReasonCode = reasonCode;
+        Category = category;
+        InvocationStarted = invocationStarted;
+        Retryable = retryable;
+        HttpStatus = httpStatus;
+        SdkErrorCode = sdkErrorCode;
+    }
+
+    public string ReasonCode { get; }
+    public string Category { get; }
+    public bool InvocationStarted { get; }
+    public bool Retryable { get; }
+    public int? HttpStatus { get; }
+    public string? SdkErrorCode { get; }
+}
 
 public sealed record NarrationProviderCallResult(
     string ProviderCallId,

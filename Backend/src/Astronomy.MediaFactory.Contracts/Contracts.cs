@@ -663,6 +663,9 @@ public sealed class AzureOpenAiOptions
     public string ImageDeployment { get; set; } = "";
     public bool UseManagedIdentity { get; set; }
     public string? ManagedIdentityClientId { get; set; }
+    public int TimeoutSeconds { get; set; } = 90;
+    public int LongMaxOutputTokens { get; set; } = 4096;
+    public int ShortMaxOutputTokens { get; set; } = 2048;
 }
 
 public sealed class AzureOpenAIForImageOptions
