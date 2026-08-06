@@ -357,7 +357,9 @@ public sealed partial class ProductionPipelineExecutionService(
             || PreviousPhaseSucceeded(context, 9);
         var requestedOutputCompletion = BuildRequestedOutputCompletion(context, phaseResults);
         var success = CalculatePipelineSuccess(context, phaseResults, errors);
-        return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, HeroContractExists(outputRoot), ThumbnailsExist(outputRoot), File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-tts-audio.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-tts-audio.mp3")), File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, requestedOutputCompletion);
+        var shortNarrationAccepted = File.Exists(Path.Combine(outputRoot, "07-narration", "short", "accepted-release-candidate.json"));
+        var longNarrationAccepted = File.Exists(Path.Combine(outputRoot, "07-narration", "long", "accepted-release-candidate.json"));
+        return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, HeroContractExists(outputRoot), ThumbnailsExist(outputRoot), shortNarrationAccepted || File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), longNarrationAccepted || File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-tts-audio.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-tts-audio.mp3")), File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, requestedOutputCompletion);
     }
 
     internal static bool ShouldRunGenericOverwriteCleanup(bool overwriteExisting, int startPhaseNo)
@@ -539,8 +541,10 @@ public sealed partial class ProductionPipelineExecutionService(
                         && doc.RootElement.TryGetProperty("validationStatus", out var p7Validation) && p7Validation.GetString() == "Valid"
                         && doc.RootElement.TryGetProperty("longAccepted", out var longAccepted) && longAccepted.ValueKind == JsonValueKind.True
                         && doc.RootElement.TryGetProperty("shortAccepted", out var shortAccepted) && shortAccepted.ValueKind == JsonValueKind.True
-                        && File.Exists(Path.Combine(context.OutputRoot, "narration-v5", "long", "narration.json"))
-                        && File.Exists(Path.Combine(context.OutputRoot, "narration-v5", "short", "narration.json"));
+                        && doc.RootElement.TryGetProperty("downstreamReady", out var ready) && ready.ValueKind == JsonValueKind.True
+                        && File.Exists(Path.Combine(context.OutputRoot, "07-narration", "long", "accepted-release-candidate.json"))
+                        && File.Exists(Path.Combine(context.OutputRoot, "07-narration", "short", "accepted-release-candidate.json"))
+                        && File.Exists(Path.Combine(context.OutputRoot, "07-narration", "narration-certification.json"));
                 if(phaseNo!=1)return true;
                 return doc.RootElement.TryGetProperty("publicationCommitted",out var committed)&&committed.ValueKind==JsonValueKind.True
                     &&doc.RootElement.TryGetProperty("validationStatus",out var validationStatus)&&string.Equals(validationStatus.GetString(),"Valid",StringComparison.Ordinal)
@@ -904,7 +908,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 (long)(finished-started).TotalMilliseconds, [], outputs, validationPath,
                 result.Warnings, result.Errors, !result.Succeeded,
                 reason)
-            { ReasonCode = reasonCode };
+            { ReasonCode = reasonCode, PublicationCommitted = result.Succeeded,
+                CommittedStateValidationPassed = result.Succeeded,
+                AlreadyPublished = false };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -938,7 +944,14 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortPath = Path.Combine(narrationRoot, "short", "narration.json");
         var generatorPath = Path.Combine(narrationRoot, "generator-validation-diagnostics.json");
         var lifecyclePath = Path.Combine(narrationRoot, "narrative-lifecycle-validation.json");
-        var accepted = status == ProductionPhaseStatus.Succeeded && reasonCode == "P7_NARRATIVE_LIFECYCLE_ACCEPTED";
+        var releaseRoot = Path.Combine(context.OutputRoot, "07-narration");
+        var longCandidatePath = Path.Combine(releaseRoot, "long", "accepted-release-candidate.json");
+        var shortCandidatePath = Path.Combine(releaseRoot, "short", "accepted-release-candidate.json");
+        var narrationManifestPath = Path.Combine(releaseRoot, "narration-manifest.json");
+        var narrationCertificationPath = Path.Combine(releaseRoot, "narration-certification.json");
+        var accepted = status == ProductionPhaseStatus.Succeeded && reasonCode == "P7_NARRATIVE_LIFECYCLE_ACCEPTED"
+            && File.Exists(longCandidatePath) && File.Exists(shortCandidatePath) && File.Exists(narrationManifestPath)
+            && File.Exists(narrationCertificationPath);
         var outputs = (lifecycleResult?.GeneratedFiles ?? Array.Empty<string>()).Concat(new[]
         {
             generatorPath, lifecyclePath, longPath, shortPath,
@@ -958,6 +971,8 @@ public sealed partial class ProductionPipelineExecutionService(
             longNarrationPath = NormalizePath(longPath), shortNarrationPath = NormalizePath(shortPath),
             longAccepted = lifecycleResult?.LongAcceptance.Accepted ?? false,
             shortAccepted = lifecycleResult?.ShortAcceptance.Accepted ?? false,
+            longAcceptedCandidatePath = NormalizePath(longCandidatePath), shortAcceptedCandidatePath = NormalizePath(shortCandidatePath),
+            narrationManifestPath = NormalizePath(narrationManifestPath), narrationCertificationPath = NormalizePath(narrationCertificationPath),
             generatorValidationPath = NormalizePath(generatorPath), lifecycleValidationPath = NormalizePath(lifecyclePath),
             downstreamReady = accepted, publicationCommitted = accepted,
             validationStatus = accepted ? "Valid" : "Invalid", outputFiles = outputs,
