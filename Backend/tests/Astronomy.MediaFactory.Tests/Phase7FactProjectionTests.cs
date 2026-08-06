@@ -68,6 +68,52 @@ public sealed class Phase7FactProjectionTests
         Assert.False(Assert.Single(shortCard.Cards).Facts.Single().Contains("long", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void BlueprintSceneRolesRemainDistinct()
+    {
+        var frames = new[]
+        {
+            Frame("opening", 1, "Hook", "Invite curiosity", "Why look up?", "Become curious"),
+            Frame("science", 2, "Science", "Explain the geometry", "Why is it shaped this way?", "Understand the geometry"),
+            Frame("close", 3, "Closing", "Reflect on scale", "What should remain?", "Remember the scale")
+        };
+
+        var cards = SceneFactCardGenerator.Build("long", EmptyNotes(), "test", frames).Cards;
+        Assert.Equal(3, cards.Select(card => card.ScenePurpose).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Single(cards.Where(card => card.SceneRole == "Hook"));
+    }
+
+    [Fact]
+    public void NarrationContextPreservesSemanticDiversityAfterRealization()
+    {
+        var source = new NarrationContextDocument("v", "v", [new NarrationFormatContext("long", [
+            Beat("opening", "Hook: invite curiosity", "Become curious", "Open with wonder"),
+            Beat("science", "Science: explain geometry", "Understand geometry", "Explain with restraint")
+        ])]);
+        var realized = new[]
+        {
+            Realized("opening"), Realized("science")
+        };
+
+        var projected = NarrationRealizedContextMapper.ToContext(source, realized);
+        var beats = Assert.Single(projected.Formats).Beats;
+        Assert.Equal(2, beats.Select(beat => beat.KnowledgeGoal).Distinct().Count());
+        Assert.Equal("Science: explain geometry", beats[1].KnowledgeGoal);
+        Assert.Equal("Understand geometry", beats[1].AudienceOutcome);
+    }
+
+    private static StoryFrameNarrationSource Frame(string id, int order, string role, string purpose, string question, string outcome)
+        => new(id, order, $"frame-{id}", "", [Certified($"claim-{id}", $"Certified astronomy fact for {id}.", $"kr-{id}", $"source-{id}")],
+            $"blueprint-{id}", question, outcome, outcome, "Continue", purpose, [$"kr-{id}"], role, role, "Required", 20);
+
+    private static NarrationContextBeat Beat(string id, string goal, string outcome, string intent)
+        => new(goal, outcome, intent, [new("claim", "A certified astronomy fact.", "CertifiedKnowledgeClaim")], [], null,
+            "Continue", "calm", "measured", [], null, id, id == "opening" ? 1 : 2, "long", 20);
+
+    private static NarrationRealizationResult Realized(string id)
+        => new("long", id, "Hook", "Constellation", "EducationalObjectProfile", "Hook", "Create curiosity about the subject.",
+            [], [], [], null, "calm", "measured", 40, null, null, [], "curiosity, surprise, or wonder");
+
     private static SceneKnowledgeFact Certified(string claim, string statement, string reference, string source) =>
         new(claim, statement, [reference], [source], 0.99m, [], true);
 
