@@ -373,38 +373,97 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                 var formatContext = narrationContext with { Formats = narrationContext.Formats.Where(f => f.Format.Equals(format, StringComparison.OrdinalIgnoreCase)).ToArray() };
                 var formatPrompt = composer.Compose(new NarrationPromptComposerInput(formatContext, [narrationContextPath], promptPreviewPath, promptDiagnosticsPath,
                     LanguageProfile: languageProfile, Realizations: formatRealizations)).PromptPreviewMarkdown;
-                var repairGuidance = ReadRepairGuidance(outputRoot, format);
-                var actualUserPrompt = BuildStructuredVariantPrompt(format, contexts, formatPrompt, repairGuidance);
-                var requestChecksum = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(actualUserPrompt))).ToLowerInvariant();
-                var formatRequestPath = Path.Combine(narrationRoot, $"llm-request.{format.ToLowerInvariant()}.json");
-                await WriteAllTextUtf8Async(formatRequestPath, JsonSerializer.Serialize(new
+                var repairGuidance = ReadRepairGuidance(outputRoot, format).ToList();
+                IReadOnlyDictionary<int, string>? parsed = null;
+                NarrationProviderCallResult? completedCall = null;
+                string requestChecksum = string.Empty;
+                string actualUserPrompt = string.Empty;
+                Exception? lastAttemptFailure = null;
+                for (var attempt = 1; attempt <= 2 && parsed is null; attempt++)
                 {
-                    component = "LLMDocumentaryPerformer", provider = narrationPerformer.ProviderName,
-                    modelOrDeployment = narrationPerformer.ModelOrDeployment, variant = format,
-                    expectedSceneCount = contexts.Count, systemPrompt = performerPrompt, userPrompt = actualUserPrompt,
-                    requestChecksum, repairGuidance
-                }, JsonOptions), cancellationToken);
+                    completedCall = null;
+                    lastAttemptFailure = null;
+                    actualUserPrompt = BuildStructuredVariantPrompt(format, contexts, formatPrompt, repairGuidance);
+                    requestChecksum = Sha256(actualUserPrompt);
+                    var call = new NarrationProviderCall(Guid.NewGuid().ToString("N"), $"{format}-{attempt}", format,
+                        performerPrompt, actualUserPrompt, requestChecksum);
+                    var formatRequestPath = Path.Combine(narrationRoot, $"llm-request.{format.ToLowerInvariant()}.attempt-{attempt}.json");
+                    await WriteAllTextUtf8Async(formatRequestPath, JsonSerializer.Serialize(new
+                    {
+                        component = "LLMDocumentaryPerformer", provider = narrationPerformer.ProviderName,
+                        modelOrDeployment = narrationPerformer.ModelOrDeployment, variant = format, attempt,
+                        expectedSceneCount = contexts.Count, systemPrompt = performerPrompt, userPrompt = actualUserPrompt,
+                        actualProviderPromptChecksum = requestChecksum, diagnosticPromptChecksum = requestChecksum, repairGuidance,
+                        sceneInputs = contexts.Select((c, i) => new { sceneNumber = i + 1,
+                            requiredFactCount = c.VerifiedFacts.Count, optionalFactCount = 0,
+                            resolvedFactCount = c.VerifiedFacts.Count,
+                            meaningfulSubjectCount = HasMeaningfulSubject(c.AudienceOutcome) ? 1 : 0,
+                            performerPromptFactCount = c.VerifiedFacts.Count })
+                    }, JsonOptions), cancellationToken);
 
-                llmRequestCounts[format] = 1;
-                string providerResponse;
-                try { providerResponse = await narrationPerformer.PerformAsync(performerPrompt, actualUserPrompt, cancellationToken); }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex) { throw new InvalidOperationException($"{format} narration provider failed; no fallback was used.", ex); }
+                    try
+                    {
+                        // InvokeAsync is the concrete provider boundary. This counter is never derived from files.
+                        var providerTask = narrationPerformer.InvokeAsync(call, cancellationToken);
+                        llmRequestCounts[format] = llmRequestCounts.GetValueOrDefault(format) + 1;
+                        completedCall = await providerTask;
+                        parsed = ParseProviderNarration(completedCall.Response, format, contexts.Count);
+                        var contentFailures = parsed.Values.SelectMany(GeneratedNarrationValidator.Validate).ToArray();
+                        if (contentFailures.Length > 0)
+                            throw new InvalidOperationException($"{format} provider prose failed validation: {string.Join(" | ", contentFailures.Select(f => f.DetectedIssue))}");
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        lastAttemptFailure = ex;
+                        parsed = null;
+                        if (attempt == 1)
+                        {
+                            repairGuidance.Add($"The previous response was rejected: {ex.Message}. Return contract-only, factual viewer narration.");
+                            continue;
+                        }
+                    }
+                    finally
+                    {
+                        var response = completedCall?.Response ?? string.Empty;
+                        var metadataPath = Path.Combine(format.Equals("short", StringComparison.OrdinalIgnoreCase) ? shortRoot : longRoot,
+                            $"provider-response-metadata.attempt-{attempt}.json");
+                        await WriteAllTextUtf8Async(metadataPath, JsonSerializer.Serialize(new
+                        {
+                            providerCallId = call.ProviderCallId, attemptId = call.AttemptId, variant = format,
+                            providerName = completedCall?.ProviderName ?? narrationPerformer.ProviderName,
+                            modelOrDeployment = completedCall?.ModelOrDeployment ?? narrationPerformer.ModelOrDeployment,
+                            requestStartedUtc = completedCall?.RequestStartedUtc, requestCompletedUtc = completedCall?.RequestCompletedUtc,
+                            responseReceived = completedCall is not null, responseLength = response.Length,
+                            responseChecksum = completedCall?.ResponseChecksum, structuredParseResult = parsed is not null ? "Succeeded" : "Rejected",
+                            parseSucceeded = parsed is not null, returnedSceneCount = parsed?.Count ?? 0,
+                            returnedSceneNumbers = parsed?.Keys.Order().ToArray() ?? [], rejectedExtraFields = lastAttemptFailure?.Message.Contains("outside the narration contract", StringComparison.OrdinalIgnoreCase) == true,
+                            finalMappingCount = parsed?.Count ?? 0, sanitizedFirstScenePreview = SanitizePreview(parsed?.OrderBy(x => x.Key).FirstOrDefault().Value),
+                            actualProviderPromptChecksum = requestChecksum, diagnosticPromptChecksum = requestChecksum
+                        }, JsonOptions), cancellationToken);
+                    }
+                }
+                if (parsed is null) throw new InvalidOperationException($"{format} narration provider failed; no fallback was used.", lastAttemptFailure);
 
-                var parsed = ParseProviderNarration(providerResponse, format, contexts.Count);
                 var scenesForFormat = contexts.OrderBy(c => c.SceneOrder).Select((context, index) => new NarrationV5Scene(
-                    context.SceneId, context.KnowledgeGoal, parsed[index + 1], context.VerifiedFacts.Select(f => f.FactKey).ToArray(), [])).ToArray();
+                    context.SceneId, context.KnowledgeGoal, parsed[index + 1], context.VerifiedFacts.Select(f => f.FactKey).ToArray(), [], "ProviderResponse")).ToArray();
                 var textForFormat = string.Join("\n\n", scenesForFormat.Select(scene => scene.NarrationText));
                 generatedByFormat[format] = new NarrationV5($"AstroPulse-Narration-v5-{format}", Rc2PipelinePhaseRegistry.OrchestrationVersion, language, scenesForFormat, textForFormat, channelEnding);
                 var scriptPath = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? shortDocumentaryScriptPath : longDocumentaryScriptPath;
-                await WriteAllTextUtf8Async(scriptPath, JsonSerializer.Serialize(new { variant = format, scenes = scenesForFormat.Select((s, i) => new { sceneNumber = i + 1, narrationText = s.NarrationText }) }, JsonOptions), cancellationToken);
-                providerDiagnostics.Add(new { variant = format, providerInvocationCount = 1, providerName = narrationPerformer.ProviderName,
-                    modelOrDeployment = narrationPerformer.ModelOrDeployment, providerResponseReceived = true,
-                    providerResponseLength = providerResponse.Length, responseParseSucceeded = true, fallbackUsed = false,
-                    fallbackReason = (string?)null, requestChecksum, factualInputs = contexts.Select((c, i) => new {
-                        sceneNumber = i + 1, factualInputCount = c.VerifiedFacts.Count,
-                        factualInputPreview = c.VerifiedFacts.Take(3).Select(f => f.Value).ToArray(), performerPromptHasFacts = c.VerifiedFacts.Count > 0,
-                        promptSemanticCharacterCount = c.VerifiedFacts.Sum(f => f.Value.Length) + c.AudienceOutcome.Length }).ToArray() });
+                await WriteAllTextUtf8Async(scriptPath, JsonSerializer.Serialize(new { variant = format, diagnosticOnly = true, finalNarrationAuthority = false, scenes = scenesForFormat.Select((s, i) => new { sceneNumber = i + 1, narrationText = s.NarrationText, finalNarrationTextSource = s.FinalNarrationTextSource }) }, JsonOptions), cancellationToken);
+                var canonicalMetadataPath = Path.Combine(format.Equals("short", StringComparison.OrdinalIgnoreCase) ? shortRoot : longRoot, "provider-response-metadata.json");
+                File.Copy(Path.Combine(Path.GetDirectoryName(canonicalMetadataPath)!, $"provider-response-metadata.attempt-{llmRequestCounts.GetValueOrDefault(format)}.json"), canonicalMetadataPath, true);
+                providerDiagnostics.Add(new { variant = format, providerInvocationCount = llmRequestCounts.GetValueOrDefault(format), providerCallId = completedCall!.ProviderCallId,
+                    attemptId = completedCall.AttemptId, providerName = completedCall.ProviderName,
+                    modelOrDeployment = completedCall.ModelOrDeployment, completedCall.RequestStartedUtc, completedCall.RequestCompletedUtc,
+                    providerResponseReceived = true, providerResponseLength = completedCall.ResponseCharacterCount, responseChecksum = completedCall.ResponseChecksum,
+                    responseParseSucceeded = true, fallbackUsed = false, fallbackReason = (string?)null, actualProviderPromptChecksum = requestChecksum,
+                    diagnosticPromptChecksum = requestChecksum, finalNarrationTextSource = "ProviderResponse",
+                    factualInputs = contexts.Select((c, i) => new {
+                        sceneNumber = i + 1, requiredFactCount = c.VerifiedFacts.Count, optionalFactCount = 0,
+                        resolvedFactCount = c.VerifiedFacts.Count,
+                        meaningfulSubjectCount = HasMeaningfulSubject(c.AudienceOutcome) ? 1 : 0,
+                        performerPromptFactCount = c.VerifiedFacts.Count }).ToArray() });
             }
                 var documentaryScriptDiagnostics = new { component = "LLMDocumentaryPerformer-v2", longGenerated = File.Exists(longDocumentaryScriptPath), shortGenerated = File.Exists(shortDocumentaryScriptPath), llmInputSource = "narration-context", producerNotesExcludedFromLlm = true, narrativeBriefExcludedFromLlm = true, visualInstructionLeakageDetected = false, longLlmRequestCount = llmRequestCounts.GetValueOrDefault("long"), shortLlmRequestCount = llmRequestCounts.GetValueOrDefault("short"), longLlmScenePassageCount = narrationContext.Formats.FirstOrDefault(f => f.Format.Equals("long", StringComparison.OrdinalIgnoreCase))?.Beats.Count ?? 0, shortLlmScenePassageCount = narrationContext.Formats.FirstOrDefault(f => f.Format.Equals("short", StringComparison.OrdinalIgnoreCase))?.Beats.Count ?? 0, wholeDocumentGenerationUsed = true };
                 await WriteAllTextUtf8Async(documentaryScriptDiagnosticsPath, JsonSerializer.Serialize(documentaryScriptDiagnostics, JsonOptions), cancellationToken);
@@ -421,7 +480,10 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         {
             generationErrors.Add($"Narration generation failed: {ex.Message}");
         }
+        if (requestedFormats.Count > 0 && llmRequestCounts.Values.Sum() == 0)
+            generationErrors.Add("P7_NARRATION_PROVIDER_NOT_INVOKED: no concrete narration provider call occurred for the requested variants.");
         await WriteAllTextUtf8Async(performanceDiagnosticsPath, JsonSerializer.Serialize(new {
+            generatorInvocationCount = llmRequestCounts.Values.Sum(),
             providerInvocationCount = llmRequestCounts.Values.Sum(), longProviderInvocationCount = llmRequestCounts.GetValueOrDefault("long"),
             shortProviderInvocationCount = llmRequestCounts.GetValueOrDefault("short"), invocations = providerDiagnostics,
             fallbackUsed = false, fallbackReason = generationErrors.Count == 0 ? null : "Provider generation did not produce an accepted artifact; no fallback was attempted.",
@@ -468,7 +530,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var sceneIdentityDiagnostics = BuildSceneIdentityDiagnostics(longSceneFactCards.Cards, shortSceneFactCards.Cards, longActualSceneIds, shortActualSceneIds, requestedFormats);
         await WriteAllTextUtf8Async(sceneIdentityDiagnosticsPath, JsonSerializer.Serialize(sceneIdentityDiagnostics, JsonOptions), cancellationToken);
         var sceneMappingValid = sceneIdentityDiagnostics.Diagnostics.All(d => d.MappingStatus.Equals("Mapped", StringComparison.OrdinalIgnoreCase));
-        var wholeDocumentGenerationUsed = llmRequestCounts.Values.Sum() == requestedFormats.Count && llmRequestCounts.Values.All(c => c == 1);
+        var wholeDocumentGenerationUsed = requestedFormats.All(format => llmRequestCounts.GetValueOrDefault(format) > 0);
         var expectedCounts = requestedFormats.ToDictionary(f => f, f => ResolveExpectedFrameCount(outputRoot, f), StringComparer.OrdinalIgnoreCase);
         var longExpectedSceneCount = expectedCounts.GetValueOrDefault("long");
         var shortExpectedSceneCount = expectedCounts.GetValueOrDefault("short");
@@ -1477,6 +1539,15 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         }
     }
 
+    private static string Sha256(string value) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static string? SanitizePreview(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var sanitized = Regex.Replace(value, @"[\r\n\t]+", " ").Trim();
+        return sanitized[..Math.Min(160, sanitized.Length)];
+    }
+
     private static string RemoveJsonCodeFence(string value)
     {
         var trimmed = value.Trim();
@@ -1493,72 +1564,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         return cleaned;
     }
 
-    private static IEnumerable<NarrationV5Scene> RunChronicleEditorialEngine(NarrationLlmRequestV1 request, DocumentaryScript documentaryScript, string format)
-    {
-        if (string.IsNullOrWhiteSpace(request.UserPrompt)) throw new InvalidOperationException("Documentary transcriptionist input was empty.");
-        foreach (var scriptScene in documentaryScript.Scenes.OrderBy(s => s.SceneOrder))
-        {
-            var draft = new NarrationV5Scene(scriptScene.SceneId, "Documentary script", scriptScene.NarrationText, scriptScene.RequiredFactsPreserved, []);
-            var documentaryEdited = DocumentaryEditor(draft);
-            var observationEdited = ObservationEditor(documentaryEdited, scriptScene.ToNarrationBrief(format));
-            yield return observationEdited;
-        }
-    }
-
-    private static NarrationV5Scene DocumentaryWriter(NarrationBriefV5 brief, string language, string format)
-    {
-        var facts = brief.FactsToMention.ToDictionary(f => f.Name, f => f.Value, StringComparer.OrdinalIgnoreCase);
-        var detailPhrase = BuildNaturalDetailPhrase(brief.FactsToMention);
-        var purpose = brief.ScenePurpose;
-        var purposeKind = ClassifySceneRole(purpose);
-        var text = purposeKind switch
-        {
-            "hook" => $"As twilight deepens, the sky sets up a quiet meeting worth noticing. {detailPhrase} This is an easy moment to miss, but a rewarding one to catch.",
-            "science" => $"The closeness is a line-of-sight effect. the objects remain physically separate, yet from Earth their separate paths can briefly seem to gather in one small patch of sky. {detailPhrase}",
-            "observation" => $"Make it practical now. {BuildObservationGuidance(facts)} {detailPhrase}",
-            "takeaway" or "closing" => $"After the viewing window passes, the memory is simple: two bright worlds sharing one quiet corner of the sky. {BuildClosingMeaning(facts)}",
-            _ => $"Curiosity turns into recognition. {detailPhrase} Each detail makes the sky easier to read."
-        };
-        text = ApplyFormatNarrationStyle(text, purposeKind, format);
-
-        if (language.Equals("hi", StringComparison.OrdinalIgnoreCase)) text = text.Trim();
-        text = CleanNarration(text);
-        if (brief.MustIncludeEnding) text = EnsureSingleEnding(text);
-        else text = text.Replace(DefaultEnglishChannelEnding, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
-        return new NarrationV5Scene(brief.SceneId, brief.ScenePurpose, text, brief.FactsToMention.Select(f => f.Name).ToArray(), brief.FactsToAvoid);
-    }
-
-    private static string ApplyFormatNarrationStyle(string text, string purposeKind, string format)
-    {
-        if (format.Equals("short", StringComparison.OrdinalIgnoreCase))
-        {
-            var action = purposeKind is "hook" ? "Look up soon." : purposeKind is "observation" ? "Step outside, find the open horizon, and start with your eyes." : "Stay with the visible sky.";
-            return $"{action} {text}";
-        }
-
-        var context = purposeKind is "science"
-            ? "In a slower view, the important point is that astronomy often turns huge distances into simple patterns we can recognize from the ground."
-            : "Let the moment breathe, because a careful look at the sky is often more rewarding than a quick glance.";
-        return $"{text} {context}";
-    }
-
-    private static NarrationV5Scene DocumentaryEditor(NarrationV5Scene scene)
-    {
-        var text = RemoveLeakage(scene.NarrationText);
-        text = NaturalizeIsoDates(text);
-        text = FixDuplicatedPhrases(text);
-        text = RemoveDocumentaryRepetition(text);
-        text = ImproveSpokenRhythm(text);
-        return scene with { NarrationText = text };
-    }
-
-    private static NarrationV5Scene ObservationEditor(NarrationV5Scene scene, NarrationBriefV5 brief)
-    {
-        // Phase 7 stabilization: do not pad scenes with global English fallback templates.
-        // Observation guidance must already be authored by the performer from localized speakable facts.
-        var text = ImproveSpokenRhythm(RemoveDocumentaryRepetition(FixDuplicatedPhrases(NaturalizeIsoDates(RemoveLeakage(scene.NarrationText)))));
-        return scene with { NarrationText = text };
-    }
+    // Final NarrationV5Scene construction intentionally has no documentary-script or deterministic
+    // writer/editor path. Those artifacts are diagnostics/context only; provider narrationText is
+    // mapped once above and is never rewritten after parsing.
 
     private static string BuildClosingMeaning(IReadOnlyDictionary<string, string> facts)
     {
@@ -4509,7 +4517,7 @@ public sealed record NarrationFactV5(string Name, string Value);
 public sealed record NarrationPlanV5(string NarrationPlanVersion, string OrchestrationVersion, string Language, string VoiceProfile, string StoryArc, IReadOnlyList<NarrationFactV5> RequiredNarrationFacts, IReadOnlyList<string> ProhibitedPhrases, IReadOnlyList<string> PreferredPhrases, string ChannelEnding, IReadOnlyList<NarrationPlanV5Scene> Scenes);
 public sealed record NarrationPlanV5Scene(string SceneId, string ScenePurpose, int SceneOrder, string KeyMessage, string ViewerFocus, string EmotionalRole, string NarrationIntent, IReadOnlyList<NarrationFactV5> RequiredFacts, IReadOnlyList<NarrationFactV5> MustMentionFacts, IReadOnlyList<string> MustAvoidFacts, string EditorialConnectorToNext, string TargetTone, string TargetLength);
 public sealed record NarrationV5(string NarrationVersion, string OrchestrationVersion, string Language, IReadOnlyList<NarrationV5Scene> Scenes, string FullNarrationText, string ChannelEnding);
-public sealed record NarrationV5Scene(string SceneId, string ScenePurpose, string NarrationText, IReadOnlyList<string> RequiredFactsCovered, IReadOnlyList<string> Warnings);
+public sealed record NarrationV5Scene(string SceneId, string ScenePurpose, string NarrationText, IReadOnlyList<string> RequiredFactsCovered, IReadOnlyList<string> Warnings, string FinalNarrationTextSource = "NonProviderDiagnostic");
 public sealed record RequiredFactCoverage(string Value, bool Covered);
 public sealed record ProfessionalNarrationScores(int DocumentaryVoiceScore, int ScientificAccuracyScore, int ObservationGuidanceScore, int EditorialFlowScore, int SpokenLanguageScore, int ViewerRetentionScore, int AstroPulseIdentityScore, int OverallNarrationScore);
 public sealed record RedundancyDiagnostics(int Score, int DuplicateCount, bool ExceedsThreshold, IReadOnlyList<string> Warnings);

@@ -1,10 +1,31 @@
 using System.Reflection;
+using System.Text.Json;
+using Astronomy.MediaFactory.ContentGen;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
 namespace Astronomy.MediaFactory.Tests;
 
 public sealed class NarrationProviderOutputTests
 {
+    [Fact]
+    public async Task ProviderCounterIncrementsOnlyAtConcreteAdapter()
+    {
+        var concrete = new CountingPerformer();
+        INarrationPerformer performer = concrete;
+        var request = new NarrationProviderCall("call-1", "long-1", "long", "system", "facts", "checksum");
+
+        // Creating request/output-shaped data is deliberately inert.
+        _ = JsonSerializer.Serialize(request);
+        _ = "{\"scenes\":[]}";
+        Assert.Equal(0, concrete.InvocationCount);
+
+        var result = await performer.InvokeAsync(request, default);
+
+        Assert.Equal(1, concrete.InvocationCount);
+        Assert.Equal("call-1", result.ProviderCallId);
+        Assert.NotEmpty(result.ResponseChecksum);
+    }
+
     [Fact]
     public void RealizedPrompt_ProjectsFactsWithoutMachineIdentity()
     {
@@ -90,5 +111,17 @@ public sealed class NarrationProviderOutputTests
         var beat = new NarrationContextBeat("recognition", "Recognize Orion by the three Belt stars", "", [new("Belt stars", "Three aligned stars", null)], [], null, "continue", "calm", "varied", [], null, "internal-scene", 1, "short", 20, null);
         return (string)typeof(NarrationGeneratorV5).GetMethod("BuildStructuredVariantPrompt", BindingFlags.NonPublic | BindingFlags.Static)!
             .Invoke(null, ["short", new[] { beat }, "Orion's Belt contains three conspicuous aligned stars.", guidance])!;
+    }
+
+    private sealed class CountingPerformer : INarrationPerformer
+    {
+        public int InvocationCount { get; private set; }
+        public string ProviderName => "test-provider";
+        public string ModelOrDeployment => "test-model";
+        public Task<string> PerformAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
+        {
+            InvocationCount++;
+            return Task.FromResult("{\"variant\":\"long\",\"scenes\":[{\"sceneNumber\":1,\"narrationText\":\"Orion's three Belt stars form a conspicuous line.\"}]}");
+        }
     }
 }
