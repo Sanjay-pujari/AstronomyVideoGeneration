@@ -184,9 +184,13 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var styleWarnings = new List<string>();
         var styleErrors = new List<string>();
         var typedEditorialContract = ReadTypedJson<EditorialContract>(editorialPath);
-        var typedStoryboard = ReadTypedJson<CreativeStoryboard>(storyboardPath);
+        // The canonical Phase 6 composition projection is deliberately not a CreativeStoryboard.
+        // Style is optional, so only run the legacy director when its actual typed input exists.
+        var typedStoryboard = canonicalInputs.LegacyCreativeFallbackUsed
+            ? ReadTypedJson<CreativeStoryboard>(storyboardPath)
+            : null;
         if (typedEditorialContract is null) styleErrors.Add("Documentary Style Director could not read editorial/editorial-contract.json.");
-        if (typedStoryboard is null) styleErrors.Add("Documentary Style Director could not read creative/creative-storyboard.json.");
+        if (typedStoryboard is null) styleWarnings.Add("Documentary Style Director was skipped because no compatible typed storyboard projection was available; the default documentary voice profile was used.");
         var director = styleDirector ?? new DocumentaryStyleDirector(new DocumentaryVocabulary(), new DocumentaryTransitionLibrary(), new DocumentaryFactTransformer(), NullLogger<DocumentaryStyleDirector>.Instance);
         var styleContract = typedEditorialContract is not null && typedStoryboard is not null
             ? await director.BuildAsync(typedEditorialContract, typedStoryboard, narrationBriefs, cancellationToken)
@@ -201,7 +205,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var longDocumentaryContract = canonicalInputs.LongBlueprint;
         var shortDocumentaryContract = canonicalInputs.ShortBlueprint;
         var productionEventIntelligence = canonicalInputs.ProductionEventIntelligence;
-        var observationMetadata = ReadFirstJson(Path.Combine(outputRoot, "editorial", "observation-metadata.json"));
+        var productionPipelineRequest = ExtractProductionPipelineRequest(response.ProductionPipelineRequest);
+        var observationMetadata = ResolveObservationContext(productionPipelineRequest, productionEventIntelligence, contract, outputRoot);
         var storyGraph = ReadFirstJson(Path.Combine(outputRoot, "editorial", "story-graph.json"));
         var canonicalEventIdentity = CanonicalEventIdentityResolver.Resolve(new CanonicalEventIdentityResolutionInput(
             ResolvePipelineRequestEventType(response.ProductionPipelineRequest),
@@ -234,7 +239,6 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         await WriteAllTextUtf8Async(semanticRegistryValidationReportPath, JsonSerializer.Serialize(new { generatedAtUtc = DateTimeOffset.UtcNow, coverage = semanticRegistryCoverage, invalidCapabilities = invalidSemanticRegistrations }, JsonOptions), cancellationToken);
         if (invalidSemanticRegistrations.Length > 0)
             throw new InvalidOperationException("Semantic registry validation failed: " + string.Join("; ", invalidSemanticRegistrations.Select(i => $"FamilyProfile={i.familyProfile}, Format={i.format}, BeatRole={i.beatRole}, Capability={i.capabilityId}, Required={i.required}, FailureReason={i.failureReason}")));
-        var productionPipelineRequest = ExtractProductionPipelineRequest(response.ProductionPipelineRequest);
         var resolverInput = new RequiredSemanticFactResolutionInput(
             familyProfile,
             longDocumentaryContract,
@@ -570,11 +574,23 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             phaseRegistryName = nameof(Rc2PipelinePhaseRegistry),
             chronicleCorePhaseMapUsed = true,
             legacyPhaseMapUsed = false,
-            documentaryContractLongFound = File.Exists(Path.Combine(outputRoot, "creative", "documentary-contract.long.json")),
-            documentaryContractShortFound = File.Exists(Path.Combine(outputRoot, "creative", "documentary-contract.short.json")),
+            longBlueprintSourcePath = NormalizePath(canonicalInputs.LongBlueprintPath),
+            shortBlueprintSourcePath = NormalizePath(canonicalInputs.ShortBlueprintPath),
+            editorialContractSourcePath = NormalizePath(canonicalInputs.EditorialContractPath),
+            productionIntelligenceSourcePath = NormalizePath(canonicalInputs.ProductionIntelligencePath),
+            storyStructureSourcePath = NormalizePath(canonicalInputs.StoryStructurePath),
+            canonicalPhase2AuthorityUnwrapped = canonicalInputs.CanonicalPhase2AuthorityUnwrapped,
+            canonicalCompositionRequestsUsed = canonicalInputs.CanonicalCompositionRequestsUsed,
+            legacyCreativeFallbackUsed = canonicalInputs.LegacyCreativeFallbackUsed,
+            longBlueprintFound = canonicalInputs.LongBlueprint.HasValue,
+            shortBlueprintFound = canonicalInputs.ShortBlueprint.HasValue,
+            longBlueprintBeatCount = CountDocumentaryBeats(canonicalInputs.LongBlueprint),
+            shortBlueprintBeatCount = CountDocumentaryBeats(canonicalInputs.ShortBlueprint),
+            documentaryContractLongFound = canonicalInputs.LongBlueprint.HasValue,
+            documentaryContractShortFound = canonicalInputs.ShortBlueprint.HasValue,
             editorialContractFound = File.Exists(editorialPath),
-            documentaryBeatCountLong = CountDocumentaryBeats(Path.Combine(outputRoot, "creative", "documentary-contract.long.json")),
-            documentaryBeatCountShort = CountDocumentaryBeats(Path.Combine(outputRoot, "creative", "documentary-contract.short.json")),
+            documentaryBeatCountLong = CountDocumentaryBeats(canonicalInputs.LongBlueprint),
+            documentaryBeatCountShort = CountDocumentaryBeats(canonicalInputs.ShortBlueprint),
             narrationContextGenerated = File.Exists(narrationContextPath),
             llmInvoked = llmGenerationExecuted,
             longNarrationGenerated = File.Exists(longNarrationPath),
@@ -996,9 +1012,12 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
     }
 
     private sealed record NarrationV5CanonicalInputs(
-        string EditorialContractPath, string StoryStructurePath, JsonElement? EditorialContract,
+        string EditorialContractPath, string StoryStructurePath, string LongBlueprintPath,
+        string ShortBlueprintPath, string ProductionIntelligencePath, JsonElement? EditorialContract,
         JsonElement? StoryStructure, JsonElement? LongBlueprint, JsonElement? ShortBlueprint,
-        JsonElement? ProductionEventIntelligence, JsonElement? QuestionAnswerSet);
+        JsonElement? ProductionEventIntelligence, JsonElement? QuestionAnswerSet,
+        bool CanonicalPhase2AuthorityUnwrapped, bool CanonicalCompositionRequestsUsed,
+        bool LegacyCreativeFallbackUsed);
 
     private static NarrationV5CanonicalInputs ResolveCanonicalInputs(string outputRoot, BatchGenerateFromPlansResponse response)
     {
@@ -1026,9 +1045,51 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             language = response.ProductionPipelineRequest is ContentPlanProductionPipelineRequest request ? request.Language : null,
             storyArc = "Hook → Discovery → Science → Observation → Takeaway", scenes
         }, JsonOptions);
-        return new(editorialPath, scenes.Length == 0 ? Path.Combine(outputRoot, "creative", "creative-storyboard.json") : "06-story-frames/story-frames.json + narration-v5/{format}/narrative-composition-request.json",
+        var intelligence = ReadCanonicalProductionEventIntelligence(intelligencePath, out var authorityUnwrapped);
+        var legacyStoryboardPath = Path.Combine(outputRoot, "creative", "creative-storyboard.json");
+        var legacyCreativeFallbackUsed = scenes.Length == 0 && File.Exists(legacyStoryboardPath);
+        return new(editorialPath, scenes.Length == 0 ? legacyStoryboardPath : Path.Combine(outputRoot, "06-story-frames", "story-frames.json"),
+            longBlueprintPath, shortBlueprintPath, intelligencePath,
             ReadFirstJson(editorialPath), story, ReadFirstJson(longBlueprintPath), ReadFirstJson(shortBlueprintPath),
-            ReadFirstJson(intelligencePath), ReadFirstJson(questionsPath));
+            intelligence, ReadFirstJson(questionsPath), authorityUnwrapped, scenes.Length > 0, legacyCreativeFallbackUsed);
+    }
+
+    private static JsonElement? ReadCanonicalProductionEventIntelligence(string path, out bool authorityUnwrapped)
+    {
+        authorityUnwrapped = false;
+        var root = ReadFirstJson(path);
+        if (root is { ValueKind: JsonValueKind.Object } value &&
+            value.TryGetProperty("intelligence", out var intelligence) && intelligence.ValueKind == JsonValueKind.Object)
+        {
+            authorityUnwrapped = true;
+            return intelligence.Clone();
+        }
+        return root;
+    }
+
+    private static JsonElement? ResolveObservationContext(ContentPlanProductionPipelineRequest? request,
+        JsonElement? productionEventIntelligence, JsonElement? editorialContract, string outputRoot)
+    {
+        var supported = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "regionId", "visibilityRegion", "timeZone", "timezone", "scheduledUtc", "startUtc", "peakUtc", "endUtc",
+            "localPeakTime", "bestViewingWindowLocal", "skyDirectionHint", "moonInterference", "viewingQuality",
+            "location", "observerContext", "primaryObjects", "secondaryObjects"
+        };
+        var values = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        void Enrich(JsonElement? source, bool overwrite)
+        {
+            if (source is not { ValueKind: JsonValueKind.Object } element) return;
+            foreach (var property in element.EnumerateObject().Where(p => supported.Contains(p.Name)))
+                if (overwrite || !values.ContainsKey(property.Name)) values[property.Name] = property.Value.Clone();
+        }
+
+        if (request is not null) Enrich(JsonSerializer.SerializeToElement(request, JsonOptions), true);
+        Enrich(productionEventIntelligence, false);
+        Enrich(editorialContract, false);
+        Enrich(ReadFirstJson(Path.Combine(outputRoot, "05-editorial", "scene-intents.json")), false);
+        Enrich(ReadFirstJson(Path.Combine(outputRoot, "editorial", "observation-metadata.json")), false);
+        return values.Count == 0 ? null : JsonSerializer.SerializeToElement(values, JsonOptions);
     }
 
     private static string PreferExisting(string root, string canonical, string compatibility)
@@ -1744,8 +1805,6 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
             throw new InvalidOperationException("Phase 7 semantic resolution requires both typed documentary contracts.");
         if (!input.ProductionEventIntelligence.HasValue)
             throw new InvalidOperationException("Phase 7 semantic resolution requires production event intelligence from Phase 2.");
-        if (!input.ObservationMetadata.HasValue)
-            throw new InvalidOperationException("Phase 7 semantic resolution requires observation metadata from Phase 5.");
     }
 
     private static int Score(bool basePass, int covered, int total) => !basePass ? 50 : total == 0 ? 90 : Math.Clamp(70 + (covered * 30 / Math.Max(1, total)), 0, 100);

@@ -3,12 +3,52 @@ using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Reflection;
+using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 
 public sealed class DocumentaryNarrativeLifecycleIntegrationTests
 {
     private static readonly Guid PlanId = Guid.Parse("11111111-2222-3333-4444-555555555555");
+
+    [Theory]
+    [InlineData("{\"intelligence\":{\"eventType\":\"Constellation\",\"skyDirectionHint\":\"south\"}}", true)]
+    [InlineData("{\"eventType\":\"Constellation\",\"skyDirectionHint\":\"north\"}", false)]
+    public void Canonical_phase2_reader_unwraps_authority_and_preserves_raw_compatibility(string json, bool expectedUnwrapped)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "phase7-intelligence-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "production-event-intelligence.json");
+        File.WriteAllText(path, json);
+        try
+        {
+            var method = typeof(NarrationGeneratorV5).GetMethod("ReadCanonicalProductionEventIntelligence",
+                BindingFlags.NonPublic | BindingFlags.Static)!;
+            object?[] arguments = [path, false];
+
+            var intelligence = (JsonElement?)method.Invoke(null, arguments);
+
+            ((bool)arguments[1]!).Should().Be(expectedUnwrapped);
+            intelligence.Should().NotBeNull();
+            intelligence!.Value.GetProperty("eventType").GetString().Should().Be("Constellation");
+            intelligence.Value.TryGetProperty("intelligence", out _).Should().BeFalse();
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Phase7_source_prefers_canonical_inputs_and_keeps_legacy_observation_optional()
+    {
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Orchestration", "RC2", "NarrationGeneratorV5.cs"));
+
+        source.Should().Contain("PreferExisting(outputRoot, \"02-intelligence/production-event-intelligence.json\", \"plan-input/production-event-intelligence.json\")");
+        source.Should().Contain("ResolveObservationContext(productionPipelineRequest, productionEventIntelligence, contract, outputRoot)");
+        source.Should().NotContain("requires observation metadata from Phase 5");
+        source.Should().Contain("04-blueprint/documentary-blueprint.long.json");
+        source.Should().Contain("04-blueprint/documentary-blueprint.short.json");
+        source.Should().Contain("05-editorial/editorial-contract.json");
+    }
 
     [Fact]
     public void Canonical_authority_maps_independent_ordered_long_and_short_compositions()
