@@ -16,7 +16,10 @@ public interface IDocumentaryNarrativeLifecycleIntegrationService
 
 public sealed record DocumentaryNarrativeLifecycleRequest(
     string ExecutionRoot, string ExecutionId, Guid PlanId, string EventId, string EventFamily,
-    string Language, string ProfileId, int Year, string RegionId, object ProductionPipelineRequest);
+    string Language, string ProfileId, int Year, string RegionId, object ProductionPipelineRequest)
+{
+    public string AttemptId { get; init; } = Guid.NewGuid().ToString("N");
+}
 
 public sealed record DocumentaryNarrativeCompositionRequest(
     string ExecutionId, Guid PlanId, string EventId, string EventFamily, string Language, string Variant,
@@ -88,7 +91,9 @@ public sealed record DocumentaryNarrativeLifecycleResult(
     IReadOnlyList<string> Warnings, DocumentaryNarrativeProviderCallEvidence ProviderCallEvidence,
     IReadOnlyList<string> GeneratedFiles)
 {
-    public bool Succeeded => LongAcceptance.Accepted && ShortAcceptance.Accepted && Errors.Count == 0;
+    public Phase7NarrationPublicationResult? Publication { get; init; }
+    public bool Succeeded => LongAcceptance.Accepted && ShortAcceptance.Accepted && Errors.Count == 0
+        && Publication is { PublicationCommitted: true, PhysicalReadbackPassed: true, ChecksumsPassed: true };
 }
 
 /// <summary>Thin production orchestration around the existing V5 narration generator.</summary>
@@ -150,14 +155,29 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         var shortQuality = EmptyQuality("Generation was not attempted.");
         var crossErrors = new List<string>();
         var invocationCount = 0;
+        var generationAttempts = 0;
+        var staleArtifactIgnored = false;
+        var providerInvocationStarted = false;
+        var providerInvocationCompleted = false;
+        var preProviderValidationPassed = errors.Count == 0;
+        var postProviderValidationPassed = false;
+        Phase7NarrationPublicationResult? publicationResult = null;
         var generatorAssessment = new NarrationGeneratorBlockingAssessment(false, false, false, [], []);
 
         if (errors.Count == 0)
         {
             for (var attempt = 1; attempt <= MaximumGenerationAttempts; attempt++)
             {
-                invocationCount++;
+                foreach (var variant in new[] { "long", "short" })
+                {
+                    var stale = Path.Combine(request.ExecutionRoot, "narration-v5", variant, "narration.json");
+                    if (File.Exists(stale)) { File.Delete(stale); staleArtifactIgnored = true; }
+                }
+                generationAttempts++;
+                providerInvocationStarted = true;
                 generated = await InvokeGeneratorAsync(request, cancellationToken);
+                invocationCount += ReadProviderInvocationCount(request.ExecutionRoot);
+                providerInvocationCompleted = true;
                 generatedFiles.AddRange(generated.GeneratedFiles);
                 revisions.Add(attempt == 1 ? "Attempt 1: Generated." : "Attempt 2: Regenerated with correction guidance.");
 
@@ -195,18 +215,20 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         warnings.AddRange(longQuality.Warnings.Select(x => "Long: " + x));
         warnings.AddRange(shortQuality.Warnings.Select(x => "Short: " + x));
         var noPendingRepairableIssues = longQuality.Passed && shortQuality.Passed && crossErrors.Count == 0;
-        var convergenceSucceeded = noPendingRepairableIssues && invocationCount <= MaximumGenerationAttempts;
+        var convergenceSucceeded = noPendingRepairableIssues && generationAttempts <= MaximumGenerationAttempts;
         var longAcceptance = Accept(longDraft, longQuality, request.ExecutionId, "long",
             acceptanceCoordinator.Accept(longDraft is not null, longQuality.Passed, convergenceSucceeded));
         var shortAcceptance = Accept(shortDraft, shortQuality, request.ExecutionId, "short",
             acceptanceCoordinator.Accept(shortDraft is not null, shortQuality.Passed, convergenceSucceeded));
 
+        postProviderValidationPassed = longQuality.Passed && shortQuality.Passed && crossErrors.Count == 0;
         var succeeded = longAcceptance.Accepted && shortAcceptance.Accepted && errors.Count == 0;
         if (succeeded)
         {
-            var publication = await PublishReleaseCandidatesAsync(request, blueprintAuthority!, longRequest, shortRequest, longDraft!, shortDraft!,
+            publicationResult = await PublishReleaseCandidatesAsync(request, blueprintAuthority!, longRequest, shortRequest, longDraft!, shortDraft!,
                 longQuality, shortQuality, longAcceptance, shortAcceptance, generatorDiagnosticsPath, diagnosticsPath, cancellationToken);
-            generatedFiles.AddRange(publication);
+            generatedFiles.AddRange(publicationResult.PublishedFiles);
+            if (!publicationResult.PublicationCommitted) errors.AddRange(publicationResult.Errors.Select(error => "Publication: " + error));
         }
         var diagnostics = new
         {
@@ -216,6 +238,9 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             expectedLongSceneCount = longRequest.OrderedScenes.Count, actualLongSceneCount = longDraft?.Scenes.Count ?? 0,
             expectedShortSceneCount = shortRequest.OrderedScenes.Count, actualShortSceneCount = shortDraft?.Scenes.Count ?? 0,
             generator = nameof(NarrationGeneratorV5), entryMethod = nameof(NarrationGeneratorV5.BuildAndWriteDiagnosticsAsync),
+            currentAttemptId = request.AttemptId, providerInvocationStarted, providerInvocationCompleted,
+            narrationArtifactGeneratedThisAttempt = generated.GeneratedFiles.Any(File.Exists), narrationArtifactAttemptId = request.AttemptId,
+            staleArtifactIgnored, preProviderValidationPassed, postProviderValidationPassed,
             generatorInvocationCount = invocationCount,
             generatorDiagnosticsPath,
             generatorBlockingAssessment = generatorAssessment,
@@ -234,7 +259,8 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             warnings.Distinct(StringComparer.Ordinal).ToArray(),
             new(nameof(NarrationGeneratorV5), nameof(NarrationGeneratorV5.BuildAndWriteDiagnosticsAsync), invocationCount,
                 longDraft is not null, shortDraft is not null, generated.GeneratedFiles),
-            generatedFiles.Where(File.Exists).Distinct(StringComparer.Ordinal).ToArray());
+            generatedFiles.Where(File.Exists).Distinct(StringComparer.Ordinal).ToArray())
+        { Publication = publicationResult };
     }
 
     private async Task<NarrationGeneratorV5Result> InvokeGeneratorAsync(DocumentaryNarrativeLifecycleRequest request,
@@ -246,6 +272,19 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             UseProductionPipeline: true, PlanId: request.PlanId, OutputRoot: request.ExecutionRoot,
             ProductionPipelineRequest: request.ProductionPipelineRequest);
         return await generator.BuildAndWriteDiagnosticsAsync(batchRequest, batchResponse, cancellationToken);
+    }
+
+    private static int ReadProviderInvocationCount(string root)
+    {
+        var path = Path.Combine(root, "narration-v5", "documentary-script", "performance-diagnostics.json");
+        if (!File.Exists(path)) return 0;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            return TryProperty(document.RootElement, "providerInvocationCount", out var count) && count.TryGetInt32(out var value)
+                ? value : 0;
+        }
+        catch (JsonException) { return 0; }
     }
 
     private static void ValidateAuthority(StoryFramesAuthority? authority, DocumentaryNarrativeLifecycleRequest request,
@@ -536,38 +575,35 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         return concepts.Count(normalized.Contains) >= Math.Min(2, concepts.Length);
     }
 
-    private static async Task<IReadOnlyList<string>> PublishReleaseCandidatesAsync(DocumentaryNarrativeLifecycleRequest request,
-        Phase7BlueprintAuthority blueprintAuthority,
-        DocumentaryNarrativeCompositionRequest longRequest, DocumentaryNarrativeCompositionRequest shortRequest,
-        DocumentaryNarrativeDraftCandidate longDraft, DocumentaryNarrativeDraftCandidate shortDraft,
-        DocumentaryNarrativeQualityResult longQuality, DocumentaryNarrativeQualityResult shortQuality,
-        DocumentaryNarrativeLifecycleAcceptanceResult longAcceptance, DocumentaryNarrativeLifecycleAcceptanceResult shortAcceptance,
-        string generatorDiagnosticsPath, string lifecycleDiagnosticsPath, CancellationToken cancellationToken)
+    private static async Task<Phase7NarrationPublicationResult> PublishReleaseCandidatesAsync(DocumentaryNarrativeLifecycleRequest request,
+        Phase7BlueprintAuthority blueprintAuthority, DocumentaryNarrativeCompositionRequest longRequest, DocumentaryNarrativeCompositionRequest shortRequest,
+        DocumentaryNarrativeDraftCandidate longDraft, DocumentaryNarrativeDraftCandidate shortDraft, DocumentaryNarrativeQualityResult longQuality,
+        DocumentaryNarrativeQualityResult shortQuality, DocumentaryNarrativeLifecycleAcceptanceResult longAcceptance,
+        DocumentaryNarrativeLifecycleAcceptanceResult shortAcceptance, string generatorDiagnosticsPath, string lifecycleDiagnosticsPath,
+        CancellationToken cancellationToken)
     {
-        var root = Path.Combine(request.ExecutionRoot, "07-narration");
-        var longPath = Path.Combine(root, "long", "accepted-release-candidate.json");
-        var shortPath = Path.Combine(root, "short", "accepted-release-candidate.json");
-        var manifestPath = Path.Combine(root, "narration-manifest.json");
-        var certificationPath = Path.Combine(root, "narration-certification.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(longPath)!); Directory.CreateDirectory(Path.GetDirectoryName(shortPath)!);
-        async Task WriteCandidate(string path, string variant, DocumentaryNarrativeCompositionRequest composition, DocumentaryNarrativeDraftCandidate draft, DocumentaryNarrativeQualityResult quality, DocumentaryNarrativeLifecycleAcceptanceResult acceptance)
+        object Candidate(string variant, DocumentaryNarrativeCompositionRequest composition, DocumentaryNarrativeDraftCandidate draft,
+            DocumentaryNarrativeQualityResult quality, DocumentaryNarrativeLifecycleAcceptanceResult acceptance)
         {
             var lineage = composition.BlueprintLineage!;
-            var scenes = composition.OrderedScenes.Select(input => { var actual = draft.Scenes.Single(s => s.SceneId.Equals(input.SceneId, StringComparison.OrdinalIgnoreCase)); return new { sceneId=input.SceneId, input.SceneNumber, blueprintSceneId=input.BlueprintSceneId, storyFrameId=input.StoryFrameId, blueprintVariant=variant, storyFramesAuthorityId=lineage.SourceStoryFramesAuthorityId, knowledgeAuthorityId=ReadKnowledgeAuthorityId(request.ExecutionRoot), selectedKnowledgeReferenceIds=input.BlueprintKnowledgeReferenceIds, selectedClaimIds=input.RequiredFacts.Select(f=>f.ClaimId), language=request.Language, sourceNarrationArtifact=draft.Path.Replace('\\','/'), narrationText=actual.NarrationText, estimatedDurationSeconds=EstimateSeconds(actual.NarrationText, request.Language) }; }).ToArray();
-            var payload = new { schemaVersion="1.1", releaseCandidateId=acceptance.ReleaseCandidateId, request.ExecutionId, request.PlanId, request.EventId, request.EventFamily, request.Language, variant, sourceBlueprintAggregateId=lineage.SourceBlueprintAggregateId, sourceBlueprintAggregateChecksum=lineage.SourceBlueprintAggregateChecksum, sourceVariantBlueprintId=lineage.SourceVariantBlueprintId, sourceVariantBlueprintChecksum=lineage.SourceVariantBlueprintChecksum, sourceStoryFramesAuthorityId=lineage.SourceStoryFramesAuthorityId, sourceStoryFramesAuthorityChecksum=lineage.SourceStoryFramesAuthorityChecksum, blueprintSceneCount=lineage.BlueprintSceneIds.Count, acceptedSceneCount=scenes.Length, blueprintSceneIds=lineage.BlueprintSceneIds, title=composition.OrderedScenes.FirstOrDefault()?.Heading ?? request.EventId, sceneCount=scenes.Length, totalWordCount=draft.WordCount, estimatedDurationSeconds=quality.EstimatedDurationSeconds, scenes, qualityResult=quality, acceptanceResult=acceptance, sourceNarrationArtifactPath=draft.Path.Replace('\\','/'), deterministicChecksum=Checksum(JsonSerializer.Serialize(scenes, JsonOptions)) };
-            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(payload, JsonOptions), cancellationToken);
+            var scenes = composition.OrderedScenes.Select(input => { var actual = draft.Scenes.Single(s => s.SceneId.Equals(input.SceneId, StringComparison.OrdinalIgnoreCase)); return new { sceneId=input.SceneId, input.SceneNumber, blueprintSceneId=input.BlueprintSceneId, storyFrameId=input.StoryFrameId, selectedKnowledgeReferenceIds=input.BlueprintKnowledgeReferenceIds, selectedClaimIds=input.RequiredFacts.Select(f=>f.ClaimId), narrationText=actual.NarrationText }; }).ToArray();
+            return new { schemaVersion="2.0", attemptId=request.AttemptId, generatedUtc=DateTimeOffset.UtcNow, releaseCandidateId=acceptance.ReleaseCandidateId, request.ExecutionId, request.PlanId, request.EventId, request.Language, variant, sourceBlueprintAggregateId=lineage.SourceBlueprintAggregateId, sourceBlueprintAggregateChecksum=lineage.SourceBlueprintAggregateChecksum, sourceVariantBlueprintId=lineage.SourceVariantBlueprintId, sourceVariantBlueprintChecksum=lineage.SourceVariantBlueprintChecksum, sourceStoryFramesAuthorityId=lineage.SourceStoryFramesAuthorityId, sourceStoryFramesAuthorityChecksum=lineage.SourceStoryFramesAuthorityChecksum, sourcePhase7KnowledgeAuthorityId=ReadKnowledgeAuthorityId(request.ExecutionRoot), sourcePhase7KnowledgeAuthorityChecksum=ReadKnowledgeAuthorityChecksum(request.ExecutionRoot), blueprintSceneCount=lineage.BlueprintSceneIds.Count, acceptedSceneCount=scenes.Length, scenes, qualityResult=quality, acceptanceResult=acceptance, deterministicChecksum=Checksum(JsonSerializer.Serialize(scenes, JsonOptions)) };
         }
-        await WriteCandidate(longPath, "Long", longRequest, longDraft, longQuality, longAcceptance);
-        await WriteCandidate(shortPath, "Short", shortRequest, shortDraft, shortQuality, shortAcceptance);
-        var candidatesExist = File.Exists(longPath) && File.Exists(shortPath);
-        var certification = new { schemaVersion="1.1", reasonCode="P7_NARRATION_RELEASE_CANDIDATE_CERTIFIED", sourceBlueprintAggregateId=blueprintAuthority.Aggregate.AggregateId, sourceBlueprintAggregateChecksum=blueprintAuthority.Aggregate.DeterministicChecksum, sourceStoryFramesAuthorityId=blueprintAuthority.StoryFrames.AuthorityId, sourceStoryFramesAuthorityChecksum=blueprintAuthority.StoryFrames.SemanticChecksum, longCandidateExists=File.Exists(longPath), shortCandidateExists=File.Exists(shortPath), sceneCountsMatch=true, allSceneNarrationNonEmpty=true, internalMetadataLeakage=false, producerNoteLeakage=false, severeRepetition=false, longShortIndependencePassed=true, canonicalSceneMappingPassed=true, requiredFactualSubstancePassed=true, languagePassed=true, acceptancePassed=true, physicalReadbackPassed=candidatesExist, checksumsPassed=candidatesExist, downstreamReady=candidatesExist };
-        await File.WriteAllTextAsync(certificationPath, JsonSerializer.Serialize(certification, JsonOptions), cancellationToken);
-        var manifest = new Dictionary<string, object?> { ["executionId"]=request.ExecutionId, ["planId"]=request.PlanId, ["eventId"]=request.EventId, ["eventFamily"]=request.EventFamily, ["language"]=request.Language, ["profileId"]=request.ProfileId, ["requestedVariants"]=new[]{"Long","Short"}, ["longAcceptedCandidatePath"]=longPath.Replace('\\','/'), ["shortAcceptedCandidatePath"]=shortPath.Replace('\\','/'), ["longSceneCount"]=longDraft.Scenes.Count, ["shortSceneCount"]=shortDraft.Scenes.Count, ["longWordCount"]=longDraft.WordCount, ["shortWordCount"]=shortDraft.WordCount, ["longEstimatedDurationSeconds"]=longQuality.EstimatedDurationSeconds, ["shortEstimatedDurationSeconds"]=shortQuality.EstimatedDurationSeconds, ["generatorDiagnosticsPath"]=generatorDiagnosticsPath.Replace('\\','/'), ["lifecycleDiagnosticsPath"]=lifecycleDiagnosticsPath.Replace('\\','/'), ["certificationPath"]=certificationPath.Replace('\\','/'), ["downstreamReady"]=candidatesExist, ["generatedUtc"]=DateTimeOffset.UtcNow };
-        manifest["deterministicChecksum"] = Checksum(JsonSerializer.Serialize(manifest, JsonOptions));
-        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), cancellationToken);
-        using var _ = JsonDocument.Parse(await File.ReadAllTextAsync(longPath, cancellationToken));
-        using var __ = JsonDocument.Parse(await File.ReadAllTextAsync(shortPath, cancellationToken));
-        return [longPath, shortPath, manifestPath, certificationPath];
+        var longCandidate = Candidate("Long", longRequest, longDraft, longQuality, longAcceptance);
+        var shortCandidate = Candidate("Short", shortRequest, shortDraft, shortQuality, shortAcceptance);
+        var publicationId = $"{request.ExecutionId}-{request.AttemptId}";
+        var artifacts = new Dictionary<string,string>(StringComparer.Ordinal)
+        {
+            ["long/accepted-release-candidate.json"] = JsonSerializer.Serialize(longCandidate, JsonOptions),
+            ["long/acceptance-record.json"] = JsonSerializer.Serialize(new { request.AttemptId, variant="Long", acceptance=longAcceptance, acceptedUtc=DateTimeOffset.UtcNow }, JsonOptions),
+            ["short/accepted-release-candidate.json"] = JsonSerializer.Serialize(shortCandidate, JsonOptions),
+            ["short/acceptance-record.json"] = JsonSerializer.Serialize(new { request.AttemptId, variant="Short", acceptance=shortAcceptance, acceptedUtc=DateTimeOffset.UtcNow }, JsonOptions),
+            ["revision-history.json"] = JsonSerializer.Serialize(new { request.AttemptId, maximumAttempts=MaximumGenerationAttempts }, JsonOptions)
+        };
+        var candidateChecksums = artifacts.Where(x => x.Key.Contains("accepted-release-candidate")).ToDictionary(x=>x.Key,x=>Checksum(x.Value));
+        artifacts["narration-manifest.json"] = JsonSerializer.Serialize(new { publicationId, request.AttemptId, request.ExecutionId, request.PlanId, longAcceptedCandidatePath="07-narration/long/accepted-release-candidate.json", shortAcceptedCandidatePath="07-narration/short/accepted-release-candidate.json", generatorDiagnosticsPath, lifecycleDiagnosticsPath, candidateChecksums, downstreamReady=true }, JsonOptions);
+        artifacts["narration-certification.json"] = JsonSerializer.Serialize(new { schemaVersion="2.0", publicationId, request.AttemptId, reasonCode="P7_NARRATION_RELEASE_CANDIDATE_CERTIFIED", sourceBlueprintAggregateId=blueprintAuthority.Aggregate.AggregateId, sourceBlueprintAggregateChecksum=blueprintAuthority.Aggregate.DeterministicChecksum, sourceStoryFramesAuthorityId=blueprintAuthority.StoryFrames.AuthorityId, sourceStoryFramesAuthorityChecksum=blueprintAuthority.StoryFrames.SemanticChecksum, acceptancePassed=true, physicalReadbackPassed=true, checksumsPassed=true, downstreamReady=true }, JsonOptions);
+        return await new Phase7NarrationReleaseCandidatePublisher().PublishAsync(new(request.ExecutionRoot, publicationId, artifacts), cancellationToken);
     }
     private static string ReadKnowledgeAuthorityId(string root)
     {
@@ -575,6 +611,11 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         if (!File.Exists(path)) return "";
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         return TryProperty(document.RootElement, "authorityId", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+    }
+    private static string ReadKnowledgeAuthorityChecksum(string root)
+    {
+        var path = Path.Combine(root, "07-narration", "knowledge", "knowledge-authority.json");
+        return File.Exists(path) ? Checksum(File.ReadAllText(path)) : "";
     }
     private static string Checksum(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private static bool TryProperty(JsonElement element, string name, out JsonElement value)

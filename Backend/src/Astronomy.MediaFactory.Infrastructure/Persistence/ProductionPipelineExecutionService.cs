@@ -336,7 +336,7 @@ public sealed partial class ProductionPipelineExecutionService(
             // Phase 5 manifest and validation publication are exclusively owned by its coordinator.
             // A certified Phase 6 reuse is a read-only operation.  The manifest is part of the
             // committed complete set, so even serializing equivalent JSON would violate reuse.
-            if (phase.No is not (1 or 4 or 5 or 7) && result.Status != ProductionPhaseStatus.Skipped)
+            if (phase.No is not (1 or 4 or 5) && result.Status != ProductionPhaseStatus.Skipped)
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
             if (result.Status == ProductionPhaseStatus.Failed)
             {
@@ -541,9 +541,13 @@ public sealed partial class ProductionPipelineExecutionService(
                         && doc.RootElement.TryGetProperty("validationStatus", out var p7Validation) && p7Validation.GetString() == "Valid"
                         && doc.RootElement.TryGetProperty("longAccepted", out var longAccepted) && longAccepted.ValueKind == JsonValueKind.True
                         && doc.RootElement.TryGetProperty("shortAccepted", out var shortAccepted) && shortAccepted.ValueKind == JsonValueKind.True
+                        && doc.RootElement.TryGetProperty("publicationCommitted", out var publicationCommitted) && publicationCommitted.ValueKind == JsonValueKind.True
+                        && doc.RootElement.TryGetProperty("certificationPassed", out var certificationPassed) && certificationPassed.ValueKind == JsonValueKind.True
+                        && doc.RootElement.TryGetProperty("physicalReadbackPassed", out var readbackPassed) && readbackPassed.ValueKind == JsonValueKind.True
                         && doc.RootElement.TryGetProperty("downstreamReady", out var ready) && ready.ValueKind == JsonValueKind.True
                         && File.Exists(Path.Combine(context.OutputRoot, "07-narration", "long", "accepted-release-candidate.json"))
                         && File.Exists(Path.Combine(context.OutputRoot, "07-narration", "short", "accepted-release-candidate.json"))
+                        && File.Exists(Path.Combine(context.OutputRoot, "07-narration", "narration-manifest.json"))
                         && File.Exists(Path.Combine(context.OutputRoot, "07-narration", "narration-certification.json"));
                 if(phaseNo!=1)return true;
                 return doc.RootElement.TryGetProperty("publicationCommitted",out var committed)&&committed.ValueKind==JsonValueKind.True
@@ -899,7 +903,10 @@ public sealed partial class ProductionPipelineExecutionService(
             var result = await _documentaryNarrativeLifecycleIntegrationService.ExecuteAsync(lifecycleRequest, cancellationToken);
             var finished = DateTimeOffset.UtcNow;
             var status = result.Succeeded ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed;
-            var reasonCode = result.Succeeded ? "P7_NARRATIVE_LIFECYCLE_ACCEPTED" : "P7_NARRATIVE_LIFECYCLE_REJECTED";
+            var publicationFailed = result.LongAcceptance.Accepted && result.ShortAcceptance.Accepted
+                && result.Publication is not { PublicationCommitted: true };
+            var reasonCode = result.Succeeded ? "P7_NARRATIVE_LIFECYCLE_ACCEPTED"
+                : publicationFailed ? "P7_NARRATION_PUBLICATION_FAILED" : "P7_NARRATIVE_LIFECYCLE_REJECTED";
             var reason = result.Succeeded ? "Long and Short natural narration converged and were accepted." : "Natural narration lifecycle did not converge.";
             var validationPath = await WriteCanonicalPhase7ValidationAsync(context, started, finished, status,
                 reasonCode, reason, result, result.Warnings, result.Errors, cancellationToken);
@@ -908,8 +915,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 (long)(finished-started).TotalMilliseconds, [], outputs, validationPath,
                 result.Warnings, result.Errors, !result.Succeeded,
                 reason)
-            { ReasonCode = reasonCode, PublicationCommitted = result.Succeeded,
-                CommittedStateValidationPassed = result.Succeeded,
+            { ReasonCode = reasonCode, PublicationCommitted = result.Publication?.PublicationCommitted ?? false,
+                CommittedStateValidationPassed = result.Publication?.PhysicalReadbackPassed ?? false,
                 AlreadyPublished = false };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -968,13 +975,26 @@ public sealed partial class ProductionPipelineExecutionService(
                 .Profile?.ProfileId ?? "default",
             requestedVariants = new[] { "Long", "Short" },
             generatorInvocationCount = lifecycleResult?.ProviderCallEvidence.GeneratorInvocationCount ?? 0,
-            longNarrationPath = NormalizePath(longPath), shortNarrationPath = NormalizePath(shortPath),
+            longGenerated = lifecycleResult?.LongDraft is not null, shortGenerated = lifecycleResult?.ShortDraft is not null,
+            longValidated = lifecycleResult?.LongQuality.Passed ?? false, shortValidated = lifecycleResult?.ShortQuality.Passed ?? false,
+            longNarrationPath = File.Exists(longPath) ? NormalizePath(longPath) : null,
+            shortNarrationPath = File.Exists(shortPath) ? NormalizePath(shortPath) : null,
             longAccepted = lifecycleResult?.LongAcceptance.Accepted ?? false,
             shortAccepted = lifecycleResult?.ShortAcceptance.Accepted ?? false,
-            longAcceptedCandidatePath = NormalizePath(longCandidatePath), shortAcceptedCandidatePath = NormalizePath(shortCandidatePath),
-            narrationManifestPath = NormalizePath(narrationManifestPath), narrationCertificationPath = NormalizePath(narrationCertificationPath),
+            publicationAttempted = lifecycleResult?.Publication is not null,
+            publicationCommitted = lifecycleResult?.Publication?.PublicationCommitted ?? false,
+            certificationPassed = accepted && lifecycleResult?.Publication?.ChecksumsPassed == true,
+            physicalReadbackPassed = lifecycleResult?.Publication?.PhysicalReadbackPassed ?? false,
+            longAcceptedCandidatePath = File.Exists(longCandidatePath) ? NormalizePath(longCandidatePath) : null,
+            shortAcceptedCandidatePath = File.Exists(shortCandidatePath) ? NormalizePath(shortCandidatePath) : null,
+            narrationManifestPath = File.Exists(narrationManifestPath) ? NormalizePath(narrationManifestPath) : null,
+            narrationCertificationPath = File.Exists(narrationCertificationPath) ? NormalizePath(narrationCertificationPath) : null,
             generatorValidationPath = NormalizePath(generatorPath), lifecycleValidationPath = NormalizePath(lifecyclePath),
-            downstreamReady = accepted, publicationCommitted = accepted,
+            generationStatus = lifecycleResult?.LongDraft is not null && lifecycleResult.ShortDraft is not null ? "Generated" : "Failed",
+            acceptanceStatus = lifecycleResult?.LongAcceptance.Accepted == true && lifecycleResult.ShortAcceptance.Accepted ? "Accepted" : "Rejected",
+            publicationStatus = lifecycleResult?.Publication?.PublicationCommitted == true ? "Committed" : "NotCommitted",
+            certificationStatus = accepted ? "Certified" : "NotCertified",
+            downstreamReady = accepted,
             validationStatus = accepted ? "Valid" : "Invalid", outputFiles = outputs,
             warnings, errors, startedUtc = started, finishedUtc = finished
         }, JsonOptions), cancellationToken);
