@@ -408,7 +408,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                         llmRequestCounts[format] = llmRequestCounts.GetValueOrDefault(format) + 1;
                         completedCall = await providerTask;
                         parsed = ParseProviderNarration(completedCall.Response, format, contexts.Count);
-                        var contentFailures = parsed.Values.SelectMany(GeneratedNarrationValidator.Validate).ToArray();
+                        var contentFailures = parsed.Values.SelectMany(narration => GeneratedNarrationValidator.Validate(narration)).ToArray();
                         if (contentFailures.Length > 0)
                             throw new InvalidOperationException($"{format} provider prose failed validation: {string.Join(" | ", contentFailures.Select(f => f.DetectedIssue))}");
                     }
@@ -425,7 +425,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                     }
                     finally
                     {
-                        var response = completedCall?.Response ?? string.Empty;
+                        var providerResponse = completedCall?.Response ?? string.Empty;
                         var metadataPath = Path.Combine(format.Equals("short", StringComparison.OrdinalIgnoreCase) ? shortRoot : longRoot,
                             $"provider-response-metadata.attempt-{attempt}.json");
                         await WriteAllTextUtf8Async(metadataPath, JsonSerializer.Serialize(new
@@ -434,7 +434,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                             providerName = completedCall?.ProviderName ?? narrationPerformer.ProviderName,
                             modelOrDeployment = completedCall?.ModelOrDeployment ?? narrationPerformer.ModelOrDeployment,
                             requestStartedUtc = completedCall?.RequestStartedUtc, requestCompletedUtc = completedCall?.RequestCompletedUtc,
-                            responseReceived = completedCall is not null, responseLength = response.Length,
+                            responseReceived = completedCall is not null, responseLength = providerResponse.Length,
                             responseChecksum = completedCall?.ResponseChecksum, structuredParseResult = parsed is not null ? "Succeeded" : "Rejected",
                             parseSucceeded = parsed is not null, returnedSceneCount = parsed?.Count ?? 0,
                             returnedSceneNumbers = parsed?.Keys.Order().ToArray() ?? [], rejectedExtraFields = lastAttemptFailure?.Message.Contains("outside the narration contract", StringComparison.OrdinalIgnoreCase) == true,
