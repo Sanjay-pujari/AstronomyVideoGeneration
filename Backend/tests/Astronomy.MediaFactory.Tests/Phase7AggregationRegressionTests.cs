@@ -74,6 +74,24 @@ public sealed class Phase7AggregationRegressionTests
     }
 
     [Fact]
+    public void ShortOnlyPhase9NotApplicableAggregatesAsSuccessfulWithoutExecution()
+    {
+        var skipped = Phase(9, ProductionPhaseStatus.Skipped, reason: "Output type not requested") with
+        {
+            ReasonCode = "P9_LONG_NOT_REQUESTED"
+        };
+
+        var diagnostics = ContentPlanProductionExecutionService.BuildSuccessAggregationDiagnostics(Request(9, 9), [skipped], []);
+
+        Assert.True(diagnostics.Success);
+        Assert.True(diagnostics.PartialPhaseSuccess);
+        Assert.True(diagnostics.AllExecutedPhasesSucceeded);
+        Assert.Equal(0, diagnostics.FailedPlans);
+        Assert.Empty(diagnostics.ExecutedPhaseNumbers);
+        Assert.Empty(diagnostics.FailedExecutedPhases);
+    }
+
+    [Fact]
     public void Rc2OverlaySourceDoesNotContainHardCodedPhase7MissingOutputFailure()
     {
         var repoRoot = RepositoryTestPaths.Root();

@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Persistence;
 using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -178,11 +179,11 @@ public sealed class Phase8AuthorityArchitectureTests
     [Fact]
     public void AuthorityCleanupOwns08SceneAssets()
     {
-        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
-        var method = Slice(source, "private void ClearPhaseRangeOutputsForOverwrite", "private static void DeleteFileIfExists");
-        Assert.Contains("IsSceneAssetsV3Enabled(context)", method);
-        Assert.Contains("\"08-scene-assets\"", method);
-        Assert.Contains("\"scene-assets-v3\"", method);
+        var registry = ReadInfrastructure("Phase1Authority.cs");
+        var cleanup = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        Assert.Contains("Add(8,Path.Combine(root,\"08-scene-assets\"))", registry);
+        Assert.Contains("Add(8,Path.Combine(root,\"scene-assets-v3\"),compatibility:true)", registry);
+        Assert.Contains("PhaseOwnedCleanupExecutor.TryDelete", cleanup);
     }
 
     [Fact]
