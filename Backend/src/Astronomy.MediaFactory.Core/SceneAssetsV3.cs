@@ -79,6 +79,43 @@ public sealed record Phase8SceneRequirement(
     string RenderingPreference, string? LocationContext = null, string? TimeContext = null,
     string? NarrationReleaseCandidateChecksum = null);
 
+public enum AstronomicalAccuracyRequirement
+{
+    None,
+    Contextual,
+    ObjectAccurate,
+    GeometryAccurate,
+    ObservationAccurate
+}
+
+/// <summary>Provider routing derived from certified scene meaning, independently of documentary role.</summary>
+public sealed record Phase8VisualAccuracyPlan(AstronomicalAccuracyRequirement Requirement,
+    bool RequiresScientificGeometry, string RenderingStrategy, string PreferredProvider,
+    string FallbackProvider, IReadOnlyList<string> ExpectedObjects);
+
+public static class Phase8VisualAccuracyPolicy
+{
+    private static readonly string[] GeometryIntent = ["where to look", "locate", "find ", "recogniz", "pattern", "belt", "relative placement", "configuration", "conjunction", "grouping"];
+    private static readonly string[] ObservationIntent = ["horizon", "direction", "azimuth", "altitude", "rises", "sets", "best viewing time"];
+
+    public static Phase8VisualAccuracyPlan Derive(Phase8SceneRequirement scene)
+    {
+        var semantics = string.Join(' ', scene.ScenePurpose, scene.VisualDirection, scene.ObservationDirection,
+            scene.AcceptedNarrationText, string.Join(' ', scene.RequiredAstronomyObjects)).ToLowerInvariant();
+        var observation = ObservationIntent.Any(semantics.Contains);
+        var geometry = GeometryIntent.Any(semantics.Contains);
+        var requires = observation || geometry;
+        var requirement = observation ? AstronomicalAccuracyRequirement.ObservationAccurate
+            : geometry ? AstronomicalAccuracyRequirement.GeometryAccurate
+            : scene.RequiredAstronomyObjects.Count > 0 ? AstronomicalAccuracyRequirement.ObjectAccurate
+            : AstronomicalAccuracyRequirement.Contextual;
+        return new(requirement, requires,
+            requires ? "ScientificallyAccurateSkyCaptureWithAspectSafeComposition" : "CinematicDocumentary",
+            requires ? "ExistingAccurateSkyGuideRenderer" : "AzureOpenAICinematicImageGenerator",
+            requires ? "None" : "DeterministicSceneRenderer", scene.RequiredAstronomyObjects);
+    }
+}
+
 /// <summary>The frozen Phase 7 downstream artifact; deliberately contains no working-draft contract.</summary>
 public sealed record Phase7AcceptedNarrationScene(string SceneId, int SceneNumber, string BlueprintSceneId,
     string StoryFrameId, IReadOnlyList<string> SelectedKnowledgeReferenceIds,
@@ -118,6 +155,7 @@ public static class Phase8AuthorityReasonCodes
     public const string SceneLineageMismatch = "P8_SCENE_LINEAGE_MISMATCH";
     public const string NarrationSceneMappingFailed = "P8_NARRATION_SCENE_MAPPING_FAILED";
     public const string VariantAuthorityMissing = "P8_VARIANT_AUTHORITY_MISSING";
+    public const string ScientificVisualRequirementUnsatisfied = "P8_SCIENTIFIC_VISUAL_REQUIREMENT_UNSATISFIED";
 }
 
 public sealed class Phase8AuthorityException(string reasonCode, IReadOnlyList<string> errors)
@@ -164,7 +202,11 @@ public sealed record SceneAssetManifestItem(string AssetId, string Variant, stri
     string PhysicalPath, int Width, int Height, string AspectRatio, string Checksum,
     string SemanticIdentity, bool SharedAsset, string? SharedAssetOwner,
     IReadOnlyList<string> SharedAssetConsumers, bool Reused, bool ProviderCalledThisExecution,
-    string ValidationStatus, IReadOnlyList<string> Warnings);
+    string ValidationStatus, IReadOnlyList<string> Warnings,
+    AstronomicalAccuracyRequirement AstronomicalAccuracyRequirement = AstronomicalAccuracyRequirement.Contextual,
+    string AstronomicalAccuracySource = "CinematicGenerative", bool ScientificGeometryCertified = false,
+    IReadOnlyList<string>? AstronomyObjectsExpected = null, IReadOnlyList<string>? AstronomyObjectsVerified = null,
+    string SkyGeometryValidationStatus = "NotRequired", string? AccuracyEvidencePath = null);
 public sealed record Phase8ManifestValidationResult(bool IsValid, IReadOnlyList<string> ReasonCodes,
     IReadOnlyList<string> Errors);
 public interface IPhase8SceneAssetManifestValidator

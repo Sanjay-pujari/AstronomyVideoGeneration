@@ -2593,7 +2593,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var extraSceneIds = actualSceneIds.Where(id => !expectedSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
         if (manifest.SceneCount != expectedCount || manifest.Scenes.Count != expectedCount) throw new InvalidOperationException($"Scene Assets V3 {format} expected {expectedCount} scenes but found {manifest.Scenes.Count}. expectedSceneIds={string.Join(",", expectedSceneIds)} actualSceneIds={string.Join(",", actualSceneIds)} sceneContractSource={SceneAssetsV3SceneContract.ContractSource}");
         if (missingSceneIds.Length > 0 || extraSceneIds.Length > 0) throw new InvalidOperationException($"Scene Assets V3 {format} scene contract mismatch. expectedSceneIds={string.Join(",", expectedSceneIds)} actualSceneIds={string.Join(",", actualSceneIds)} missingSceneIds={string.Join(",", missingSceneIds)} extraSceneIds={string.Join(",", extraSceneIds)} sceneContractSource={SceneAssetsV3SceneContract.ContractSource}");
-        if (!manifest.Scenes.Any(s => s.RenderMode == "AccurateSkyGuideScene")) throw new InvalidOperationException($"Scene Assets V3 {format} is missing AccurateSkyGuideScene.");
+        // Authority publications validate scientific requirements per scene in
+        // Phase8SceneAssetManifestValidator. The literal legacy render-mode gate remains only for
+        // the SceneAssetsV3SceneContract compatibility path.
+        if (authority is null && !manifest.Scenes.Any(s => s.RenderMode == "AccurateSkyGuideScene"))
+            throw new InvalidOperationException($"Scene Assets V3 {format} is missing AccurateSkyGuideScene.");
         if (manifest.Scenes.Any(s => string.IsNullOrWhiteSpace(s.NarrationBeat))) throw new InvalidOperationException($"Scene Assets V3 {format} has a scene without narrationBeat.");
         var metadata = JsonSerializer.Deserialize<SceneTimelineMetadataDocument>(File.ReadAllText(Path.Combine(root, "scene-timeline-metadata.json")), JsonOptions)
             ?? throw new InvalidOperationException($"Scene Assets V3 {format} timeline metadata could not be parsed.");

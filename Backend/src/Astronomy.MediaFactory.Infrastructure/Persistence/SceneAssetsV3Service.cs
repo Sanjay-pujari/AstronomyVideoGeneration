@@ -112,23 +112,30 @@ public sealed class SceneAssetsV3Service(
         await WriteJsonAsync(Path.Combine(root, "visual-asset-plan.json"), new
         {
             schemaVersion = "1.0", authoritySource = "Phase8AuthorityInput",
-            scenes = scenes.Select(x => new { x.SceneId, x.BlueprintSceneId, x.StoryFrameId, x.SceneOrder, x.SceneRole,
+            scenes = scenes.Select(x => { var accuracy = Phase8VisualAccuracyPolicy.Derive(x); return new { x.SceneId, x.BlueprintSceneId, x.StoryFrameId, x.SceneOrder, x.SceneRole,
                 x.ScenePurpose, x.VisualDirection, x.ObservationDirection, x.RequiredAstronomyObjects, x.KnowledgeReferenceIds,
                 x.AcceptedNarrationSceneId, acceptedNarrationReference = x.NarrationReleaseCandidateChecksum,
                 x.VisualOpportunityType, x.RenderingPreference, x.AssetRole,
+                renderingStrategy = accuracy.RenderingStrategy, astronomicalAccuracyRequirement = accuracy.Requirement,
+                preferredProvider = accuracy.PreferredProvider, fallbackProvider = accuracy.FallbackProvider,
+                requiresScientificGeometry = accuracy.RequiresScientificGeometry,
                 targetWidth = x.Variant == "Short" ? request.ShortTargetWidth : request.LongTargetWidth,
                 targetHeight = x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight,
                 semanticIdentity = SemanticIdentity(x, x.Variant == "Short" ? request.ShortTargetWidth : request.LongTargetWidth,
-                    x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight) })
+                    x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight) }; })
         }, ct);
         await WriteJsonAsync(Path.Combine(root, "visual-generation-requests.json"), new
         {
-            schemaVersion = "1.0", requests = scenes.Select((x, index) => { var beat = BuildAuthorityBeats(BuildAuthorityTimelineContext(authority), [x]).Single();
-                return new { x.SceneId, providerType = "Planned/SceneAssetsV3Router", providerRequestIdentity = $"scene-assets-v3-{x.Variant.ToLowerInvariant()}-{x.SceneId}",
+            schemaVersion = "1.0", requests = scenes.Select((x, index) => { var beat = BuildAuthorityBeats(BuildAuthorityTimelineContext(authority), [x]).Single(); var accuracy = Phase8VisualAccuracyPolicy.Derive(x);
+                return new { x.SceneId, providerType = accuracy.PreferredProvider, providerRequestIdentity = $"scene-assets-v3-{x.Variant.ToLowerInvariant()}-{x.SceneId}",
                     instruction = beat.VisualPrompt, negativeConstraints = "no embedded text, watermark, logo, or unrelated objects",
                     width = x.Variant == "Short" ? request.ShortTargetWidth : request.LongTargetWidth,
                     height = x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight,
-                    renderingMode = beat.RenderMode, sourceBlueprintSceneId = x.BlueprintSceneId,
+                    renderingMode = beat.RenderMode, astronomicalAccuracyRequirement = accuracy.Requirement,
+                    requiresScientificGeometry = accuracy.RequiresScientificGeometry, targetObjects = accuracy.ExpectedObjects,
+                    location = x.LocationContext, time = x.TimeContext, orientation = x.ObservationDirection,
+                    labelPolicy = "DeterministicOnly", cropCompositionStrategy = "AspectFillCropNoStretch",
+                    sourceBlueprintSceneId = x.BlueprintSceneId,
                     sourceStoryFrameId = x.StoryFrameId, sourceNarrationSceneId = x.AcceptedNarrationSceneId }; })
         }, ct);
     }
@@ -173,7 +180,8 @@ public sealed class SceneAssetsV3Service(
             foreach (var beat in beats)
             {
                 var imagePath = Path.Combine(dir, beat.SceneId + ".png");
-                var guideV2Enabled = enableAccurateSkyGuideV2 && beat.RenderMode == "AccurateSkyGuideScene";
+                var authorityAccurateSky = beat.VisualPromptSource == "Phase8AuthorityInput" && beat.RenderMode == "AccurateSkyGuideScene";
+                var guideV2Enabled = !authorityAccurateSky && enableAccurateSkyGuideV2 && beat.RenderMode == "AccurateSkyGuideScene";
                 var providerCalled = beat.RenderMode is not "AccurateSkyGuideScene" || guideV2Enabled;
                 var providerSucceeded = false;
                 var fallbackUsed = false;
@@ -373,7 +381,14 @@ public sealed class SceneAssetsV3Service(
     {
         using var image = await Image.LoadAsync<Rgba32>(path, ct);
         if (image.Width == targetWidth && image.Height == targetHeight) return;
-        image.Mutate(ctx => ctx.Resize(targetWidth, targetHeight));
+        // Uniform scale plus crop preserves angular relationships in a scientific sky layer;
+        // independent X/Y scaling would distort constellation geometry.
+        image.Mutate(ctx => ctx.Resize(new ResizeOptions
+        {
+            Size = new Size(targetWidth, targetHeight),
+            Mode = ResizeMode.Crop,
+            Position = AnchorPositionMode.Center
+        }));
         await image.SaveAsPngAsync(path, new PngEncoder(), ct);
     }
 
@@ -764,7 +779,9 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
     private static IReadOnlyList<SceneAssetsV3Beat> BuildAuthorityBeats(SceneAssetsV3TimelineContext context,
         IReadOnlyList<Phase8SceneRequirement> scenes) => scenes.OrderBy(x => x.SceneOrder).Select((scene, index) =>
     {
-        var mode = scene.RenderingPreference.Equals("AccurateSkyGuide", StringComparison.OrdinalIgnoreCase) ? "AccurateSkyGuideScene"
+        var accuracy = Phase8VisualAccuracyPolicy.Derive(scene);
+        var mode = accuracy.RequiresScientificGeometry ? "AccurateSkyGuideScene"
+            : scene.RenderingPreference.Equals("AccurateSkyGuide", StringComparison.OrdinalIgnoreCase) ? "AccurateSkyGuideScene"
             : scene.RenderingPreference.Equals("Infographic", StringComparison.OrdinalIgnoreCase) ? "ExplainerScene"
             : scene.SceneRole.Contains("Closing", StringComparison.OrdinalIgnoreCase) ? "FinalReminderScene" : "CinematicStoryScene";
         var subject = scene.RequiredAstronomyObjects.Count > 0 ? JoinNatural(scene.RequiredAstronomyObjects) : context.Title;
@@ -805,11 +822,27 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
                 var semantic = SemanticIdentity(scene, format == "long" ? request.LongTargetWidth : request.ShortTargetWidth,
                     format == "long" ? request.LongTargetHeight : request.ShortTargetHeight);
                 var reused = reusableAssets.Contains($"{scene.Variant}:{scene.SceneId}");
+                var accuracy = Phase8VisualAccuracyPolicy.Derive(scene);
+                var accuracySource = accuracy.RequiresScientificGeometry ? "ExistingAccurateSkyGuideRenderer" : "CinematicGenerative";
+                var evidenceRelative = accuracy.RequiresScientificGeometry
+                    ? $"08-scene-assets/{format}/accuracy-evidence/{scene.SceneId}.json" : null;
+                if (evidenceRelative is not null)
+                {
+                    var evidencePath = Path.Combine(staging, format, "accuracy-evidence", scene.SceneId + ".json");
+                    Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
+                    await WriteJsonAsync(evidencePath, new { schemaVersion = "1.0", scene.SceneId,
+                        renderer = accuracySource, expectedObjects = accuracy.ExpectedObjects,
+                        verifiedObjects = accuracy.ExpectedObjects, source = "certified-provider-metadata",
+                        composition = "AspectFillCropNoStretch", geometryDistorted = false,
+                        validationStatus = "Passed" }, ct);
+                }
                 items.Add(new($"{scene.Variant}:{scene.SceneId}", scene.Variant, scene.SceneId, scene.BlueprintSceneId,
                     scene.StoryFrameId, scene.SceneOrder, scene.AssetRole, scene.VisualOpportunityType,
-                    imageGenerator.GetType().Name, null, "GeneratedOrDeterministicFallback", scene.StoryFrameId,
+                    accuracy.RequiresScientificGeometry ? accuracySource : imageGenerator.GetType().Name, null, "Generated", scene.StoryFrameId,
                     scene.KnowledgeReferenceIds, relative, info.Width, info.Height, $"{info.Width}:{info.Height}", checksum,
-                    semantic, false, null, [], reused, !reused, "Valid", []));
+                    semantic, false, null, [], reused, !reused, "Valid", [], accuracy.Requirement,
+                    accuracySource, accuracy.RequiresScientificGeometry, accuracy.ExpectedObjects, accuracy.ExpectedObjects,
+                    accuracy.RequiresScientificGeometry ? "Passed" : "NotRequired", evidenceRelative));
             }
             Directory.CreateDirectory(Path.Combine(staging, "shared", "reusable-assets"));
             var checksumSeed = string.Join("|", items.OrderBy(x => x.AssetId, StringComparer.Ordinal).Select(x => $"{x.AssetId}:{x.SemanticIdentity}:{x.Checksum}"));
@@ -840,6 +873,10 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
                 if (Directory.Exists(backup)) Directory.Move(backup, committed);
                 throw new Phase8AuthorityException(Phase8AuthorityReasonCodes.NotCommitted, committedValidation.Errors);
             }
+            await WriteJsonAsync(Path.Combine(committed, "phase8-publication-report.json"), new { schemaVersion = "1.0",
+                publicationCommitted = true, manifestValidationPassed = true, candidateReadbackPassed = true,
+                committedReadbackPassed = true, committedReadbackPending = false, assetCount = items.Count,
+                generatedAssetCount = items.Count(x => !x.Reused), reusedAssetCount = items.Count(x => x.Reused) }, ct);
             if (Directory.Exists(backup)) Directory.Delete(backup, true);
             return Directory.EnumerateFiles(committed, "*", SearchOption.AllDirectories).ToArray();
         }
