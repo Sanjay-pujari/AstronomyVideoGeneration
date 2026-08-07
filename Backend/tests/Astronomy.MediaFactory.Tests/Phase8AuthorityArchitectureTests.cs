@@ -366,12 +366,12 @@ public sealed class Phase8AuthorityArchitectureTests
     }
 
     [Fact]
-    public void PhaseNineConsumesCommittedLongAuthorityBeforeGeneration()
+    public void PhaseNineDelegatesToMaterializationAuthorityWithoutGeneration()
     {
         var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
         var method = Slice(source, "PhaseValidateLongSceneImagesAsync", "PhaseValidateSceneAssetsAsync");
-        Assert.Contains("scene-asset-manifest.json", method);
-        Assert.Contains("PublicationState == \"Committed\"", method);
+        Assert.Contains("longSceneImagePublicationService.PublishAsync", method);
+        Assert.DoesNotContain("GenerateSceneAssetsV3Async", method);
     }
 
     [Fact]
