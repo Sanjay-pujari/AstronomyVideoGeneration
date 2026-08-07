@@ -26,8 +26,15 @@ public sealed class OrionContentGenerationPlanSeeder(MediaFactoryDbContext db, I
             if (existingById is not null)
             {
                 EnsureExistingMatchesFixture(existingById, fixture);
+                var requestedOutputs = JsonSerializer.Serialize(fixture.RequestedOutputTypes, JsonOptions);
+                var corrected = !string.Equals(existingById.RequestedOutputTypesJson, requestedOutputs, StringComparison.Ordinal);
+                if (corrected)
+                {
+                    existingById.RequestedOutputTypesJson = requestedOutputs;
+                    await db.SaveChangesAsync(cancellationToken);
+                }
                 if (transaction is not null) await transaction.CommitAsync(cancellationToken);
-                return new OrionContentGenerationPlanSeedResult(existingById.Id, existingById.Title ?? string.Empty, existingById.PrimaryAstronomyEventTypeCode ?? string.Empty, false, "Existing Orion plan already matched the canonical fixture.");
+                return new OrionContentGenerationPlanSeedResult(existingById.Id, existingById.Title ?? string.Empty, existingById.PrimaryAstronomyEventTypeCode ?? string.Empty, false, corrected ? "Corrected the existing Orion plan output profile to the canonical fixture." : "Existing Orion plan already matched the canonical fixture.");
             }
 
             var conflicts = await db.ContentGenerationPlans
