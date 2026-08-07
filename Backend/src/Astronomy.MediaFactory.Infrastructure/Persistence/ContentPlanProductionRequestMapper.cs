@@ -16,9 +16,7 @@ public sealed class ContentPlanProductionRequestMapper : IContentPlanProductionR
         var raw = ParseObject(intelligence.RawDataJson);
         var warnings = ReadStringArray(metadata, raw, "warnings");
         var sourceNotes = ReadStringArray(metadata, raw, "sourceNotes", "sources", "notes");
-        var requestedOutputs = ReadRequestedOutputs(plan.RequestedOutputTypesJson);
-        if (requestedOutputs.Count == 0)
-            requestedOutputs = ["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"];
+        var requestedOutputs = ResolveRequestedOutputs(plan, intelligence);
 
         var primaryObjects = ResolveObjects(intelligence, primary: true);
         var secondaryObjects = ResolveObjects(intelligence, primary: false);
@@ -94,6 +92,53 @@ public sealed class ContentPlanProductionRequestMapper : IContentPlanProductionR
             return SplitList(json);
         }
     }
+
+    private static List<string> ResolveRequestedOutputs(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence)
+    {
+        var persisted = ReadRequestedOutputs(plan.RequestedOutputTypesJson);
+        var legacyFullProductionProjection = IsLegacyFullProductionProjection(plan, intelligence, persisted);
+        if (persisted.Count > 0 && !legacyFullProductionProjection)
+            return persisted;
+
+        // RecommendedContentTypes is the existing astronomy output-profile contract.  Imported
+        // events persist it in metadata/raw data; prefer it over PlannedFormat, which is only the
+        // primary presentation format and must never remove another requested variant.
+        var metadata = ParseObject(intelligence.MetadataJson);
+        var raw = ParseObject(intelligence.RawDataJson);
+        var recommended = ReadStringArray(metadata, raw, "recommendedContentTypes").ToList();
+        if (recommended.Count > 0)
+            return recommended;
+
+        if (legacyFullProductionProjection || IsFullAstronomyProductionProfile(plan, intelligence))
+            return ["ShortVideo", "LongVideo", "Thumbnail"];
+
+        return persisted.Count > 0
+            ? persisted
+            : ["ShortVideo", "LongVideo", "HeroAsset", "Thumbnail"];
+    }
+
+    private static bool IsLegacyFullProductionProjection(
+        ContentGenerationPlan plan,
+        AstronomyEventIntelligence intelligence,
+        IReadOnlyCollection<string> outputs)
+    {
+        // This was the RC2 default projection: PlannedFormat=ShortVideo was copied to outputs and
+        // Thumbnail was appended even when the persisted production steps contained both variants.
+        // A true explicit [ShortVideo] plan does not match and remains short-only.
+        var isLegacyShortAndThumbnail = outputs.Count == 2
+            && outputs.Contains("ShortVideo", StringComparer.OrdinalIgnoreCase)
+            && outputs.Contains("Thumbnail", StringComparer.OrdinalIgnoreCase);
+        if (!isLegacyShortAndThumbnail) return false;
+
+        var hasLongWorkflow = plan.AssetPlanJson?.Contains("long", StringComparison.OrdinalIgnoreCase) == true;
+        return hasLongWorkflow || IsFullAstronomyProductionProfile(plan, intelligence);
+    }
+
+    private static bool IsFullAstronomyProductionProfile(ContentGenerationPlan plan, AstronomyEventIntelligence intelligence)
+        => string.Equals(plan.ContentCategoryCode, "AstronomyEducation", StringComparison.OrdinalIgnoreCase)
+           && (string.Equals(plan.PrimaryAstronomyEventTypeCode, "CONSTELLATION", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(intelligence.EventType, "CONSTELLATION", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(intelligence.ContentStrategy, "EvergreenConstellationEducation", StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyList<string> ResolveObjects(AstronomyEventIntelligence intelligence, bool primary)
     {

@@ -44,12 +44,27 @@ public sealed class OrionContentGenerationPlanSeederTests
         var registry = CreateFamilyRegistry();
         registry.Resolve(plan.PrimaryAstronomyEventTypeCode!).FamilyId.Should().Be("CONSTELLATION");
         seeder.ValidateFixture(await seeder.LoadFixtureAsync(CancellationToken.None));
-        plan.RequestedOutputTypesJson.Should().Contain("Long");
-        plan.RequestedOutputTypesJson.Should().Contain("Short");
+        JsonSerializer.Deserialize<string[]>(plan.RequestedOutputTypesJson!).Should().Equal("ShortVideo", "LongVideo", "Thumbnail");
         plan.PlannedObjectNamesJson.Should().Contain("Orion");
         plan.Status.Should().Be("Planned");
         plan.CompletedUtc.Should().BeNull();
         plan.PipelineRunId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Existing_orion_seed_is_corrected_to_full_production_output_profile()
+    {
+        await using var db = CreateDb();
+        var seeder = CreateSeeder(db);
+        await seeder.SeedAsync(CancellationToken.None);
+        var plan = await db.ContentGenerationPlans.SingleAsync(p => p.Id == OrionContentGenerationPlanSeeder.OrionPlanId);
+        plan.RequestedOutputTypesJson = "[\"ShortVideo\",\"Thumbnail\"]";
+        await db.SaveChangesAsync();
+
+        var result = await seeder.SeedAsync(CancellationToken.None);
+
+        result.Message.Should().Contain("Corrected");
+        JsonSerializer.Deserialize<string[]>(plan.RequestedOutputTypesJson!).Should().Equal("ShortVideo", "LongVideo", "Thumbnail");
     }
 
     [Fact]

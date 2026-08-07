@@ -11,7 +11,7 @@
   "plannedFormat": "LongAndShort",
   "status": "Planned",
   "planStatus": "ReadyForManualRun",
-  "requestedOutputTypes": ["Long", "Short"],
+  "requestedOutputTypes": ["ShortVideo", "LongVideo", "Thumbnail"],
   "plannedObjectNames": ["Orion", "Betelgeuse", "Rigel", "Orion Nebula"],
   "compatibilityNotes": "Orion is evergreen. Existing ContentGenerationPlan accepts nullable ScheduledUtc, so no artificial transient peak date is introduced. Observation guidance is seasonal rather than event-window based."
 }
