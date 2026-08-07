@@ -604,7 +604,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                             narrationQualityValidationPassed, contentFailures.Select(f => new ProviderOutputRejection(
                                 ParseSceneNumber(f.DocumentaryBeatId), f.SceneId, f.DetectedIssue, f.MatchedPhrase,
                                 SanitizePreview(parsedSceneCount > 0 && ParseSceneNumber(f.DocumentaryBeatId) > 0 ? parsedForMetadata![ParseSceneNumber(f.DocumentaryBeatId)] : null),
-                                DeterminePhraseOrigin(f.MatchedPhrase, performerPrompt, actualUserPrompt, narrationContextJson), nameof(GeneratedNarrationValidator), nameof(GeneratedNarrationValidator.Validate))).ToArray()));
+                                DeterminePhraseOrigin(f.MatchedPhrase, performerPrompt, actualUserPrompt, narrationContextJson), nameof(GeneratedNarrationValidator), nameof(GeneratedNarrationValidator.Validate), f.SourceField)).ToArray()));
                         await WriteAllTextUtf8Async(providerOutputValidationDiagnosticsPath, JsonSerializer.Serialize(new { attempts = providerValidationAttempts }, JsonOptions), cancellationToken);
                     }
                 }
@@ -3093,7 +3093,7 @@ public sealed record ProviderOutputValidationAttempt(string AttemptId, string Va
     bool JsonParseSucceeded, bool SchemaValidationPassed, int SceneCount, IReadOnlyList<int> ReturnedSceneNumbers,
     bool SceneMappingPassed, bool NarrationQualityValidationPassed, IReadOnlyList<ProviderOutputRejection> Rejections);
 public sealed record ProviderOutputRejection(int SceneNumber, string SceneId, string Rule, string MatchedPhrase,
-    string? SanitizedExcerpt, string PhraseOrigin, string ValidationClass, string ValidationMethod);
+    string? SanitizedExcerpt, string PhraseOrigin, string ValidationClass, string ValidationMethod, string RegexCategory);
 
 public static class ContextSchemaValidator
 {
@@ -3158,7 +3158,10 @@ public static class SpeakableContextPurityValidator
 
 public static class GeneratedNarrationValidator
 {
-    private static readonly Regex ProviderInternalIdentifierOrPlaceholder = new(@"\b(?:VQ|LO|CLM|CLAIM|KR|KNOWLEDGE)[-_]?[A-Z0-9]{2,}\b|\b(?:Advance|Outcome)\d{2,}\b|\bOrion Gold scene\b|\bscene\s+Fact\d+\b|\b(?:ViewerQuestionId|LearningObjectiveId|SceneId|ClaimId|FactKey|ScientificExplanation)\b|producer note|final narration remains owned|advance the certified", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex DelimitedInternalIdentifier = new(@"\b(?:VQ|LO|CLM|CLAIM|KR|KNOWLEDGE)[-_][A-Z0-9][A-Z0-9_.:-]*\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex CompactInternalIdentifier = new(@"\b(?:VQ|LO|CLM|KR)\d{2,}\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex AdvancePlaceholder = new(@"\b(?:Advance|Outcome)\d{2,}\b|\bOrion Gold scene\b|\bscene\s+Fact\d+\b|\b(?:ViewerQuestionId|LearningObjectiveId|SceneId|ClaimId|FactKey|ScientificExplanation)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex InternalOwnershipPhrase = new(@"producer note|final narration remains owned|advance the certified", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex InternalRegionCode = new(@"\b[A-Z]{2}-[A-Z0-9]{2,}(?:-[A-Z0-9]{2,})+\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex PascalCaseSemanticKey = new(@"\b(?:PlanetPairingApparentLineOfSightGeometry|ApparentAlignmentExplanation|ObservationTiming|BinocularGuidance|NarrativeRole|TransitionIntent|FactType|CapabilityId|[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+){2,})\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex IncompleteTransition = new(@"\bthrough the\s*[.!?]|\{[A-Za-z0-9_]+\}|<[^>]+>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -3174,9 +3177,12 @@ public static class GeneratedNarrationValidator
         foreach (var sentence in Regex.Split(text, @"(?<=[.!?।])\s+").Select(s => s.Trim()))
             Add(FactListFragment.Match(sentence), "StandaloneFactListFragment");
         Add(PlanningLeakage.Match(text), "PlanningLeakage");
-        Add(ProviderInternalIdentifierOrPlaceholder.Match(text), "ProviderInternalIdentifierOrPlaceholder");
+        Add(DelimitedInternalIdentifier.Match(text), "ProviderInternalIdentifierOrPlaceholder", "DelimitedInternalIdentifier");
+        Add(CompactInternalIdentifier.Match(text), "ProviderInternalIdentifierOrPlaceholder", "CompactInternalIdentifier");
+        Add(AdvancePlaceholder.Match(text), "ProviderInternalIdentifierOrPlaceholder", "AdvancePlaceholder");
+        Add(InternalOwnershipPhrase.Match(text), "ProviderInternalIdentifierOrPlaceholder", "InternalOwnershipPhrase");
         return failures;
-        void Add(Match m, string rule) { if (m.Success) failures.Add(new NarrationPurityFailure(format, string.Empty, string.Empty, "generatedNarration", rule, m.Value, m.Value, "documentary-script", "narration", "Blocking")); }
+        void Add(Match m, string rule, string category = "narration") { if (m.Success) failures.Add(new NarrationPurityFailure(format, string.Empty, string.Empty, "generatedNarration", rule, m.Value, m.Value, "documentary-script", category, "Blocking")); }
     }
 }
 
