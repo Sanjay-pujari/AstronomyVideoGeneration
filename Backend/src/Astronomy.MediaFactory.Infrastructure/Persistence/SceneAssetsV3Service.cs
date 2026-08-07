@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -53,17 +54,35 @@ public sealed class SceneAssetsV3Service(
         string? shortValidation = null;
         string? longValidation = null;
 
-        var context = await LoadTimelineContextAsync(root, cancellationToken);
+        // Authority mode is deliberately a separate input branch, not a fallback. It never opens
+        // production-event-intelligence or question-driven-narration-v2.
+        var context = request.AuthorityInput is { } authority
+            ? BuildAuthorityTimelineContext(authority)
+            : await LoadTimelineContextAsync(root, cancellationToken);
+        var authorityReuse = authority is null || request.OverwriteExisting
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : await PrepareAuthorityReuseAsync(ResolveRoot(request), root, authority, request, cancellationToken);
         var enableAccurateSkyGuideV2 = request.EnableAccurateSkyGuideV2 ?? renderingOptions.Value.EnableAccurateSkyGuideV2;
         if (request.GenerateShort)
-            shortValidation = await GenerateFormatAsync(root, "short", BuildBeats(context, "short", 5), 5, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.ShortTargetWidth, request.ShortTargetHeight, request.ProviderRequestedSize, cancellationToken);
+        {
+            var scenes = authority?.ShortScenes;
+            var beats = scenes is null ? BuildBeats(context, "short", 5) : BuildAuthorityBeats(context, scenes);
+            shortValidation = await GenerateFormatAsync(root, "short", beats, beats.Count, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.ShortTargetWidth, request.ShortTargetHeight, request.ProviderRequestedSize, cancellationToken, scenes?.Select(x => x.SceneId).ToArray());
+        }
         if (request.GenerateLong)
-            longValidation = await GenerateFormatAsync(root, "long", BuildBeats(context, "long", 9), 9, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.LongTargetWidth, request.LongTargetHeight, request.ProviderRequestedSize, cancellationToken);
+        {
+            var scenes = authority?.LongScenes;
+            var beats = scenes is null ? BuildBeats(context, "long", 9) : BuildAuthorityBeats(context, scenes);
+            longValidation = await GenerateFormatAsync(root, "long", beats, beats.Count, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.LongTargetWidth, request.LongTargetHeight, request.ProviderRequestedSize, cancellationToken, scenes?.Select(x => x.SceneId).ToArray());
+        }
+
+        if (authority is not null)
+            files.AddRange(await PublishAuthorityPackageAsync(request, authority, root, authorityReuse, cancellationToken));
 
         return new SceneAssetsV3Response(root, files, warnings, shortValidation, longValidation);
     }
 
-    private async Task<string> GenerateFormatAsync(string root, string format, IReadOnlyList<SceneAssetsV3Beat> beats, int expectedCount, bool overwrite, List<string> files, List<string> warnings, SceneAssetsV3TimelineContext context, bool enableAccurateSkyGuideV2, int targetWidth, int targetHeight, string providerRequestedSize, CancellationToken ct)
+    private async Task<string> GenerateFormatAsync(string root, string format, IReadOnlyList<SceneAssetsV3Beat> beats, int expectedCount, bool overwrite, List<string> files, List<string> warnings, SceneAssetsV3TimelineContext context, bool enableAccurateSkyGuideV2, int targetWidth, int targetHeight, string providerRequestedSize, CancellationToken ct, IReadOnlyList<string>? authorityExpectedSceneIds = null)
     {
         var dir = Path.Combine(root, format);
         if (overwrite && Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
@@ -249,7 +268,7 @@ public sealed class SceneAssetsV3Service(
 
         errors.AddRange(BuildValidationErrors(timelinePath, manifestPath, metadataPath, review, expectedCount));
         errors.AddRange(BuildGuideValidationErrors(context.EventType, beats));
-        var expectedSceneIds = SceneAssetsV3SceneContract.GetExpectedSceneIds(format);
+        var expectedSceneIds = authorityExpectedSceneIds ?? SceneAssetsV3SceneContract.GetExpectedSceneIds(format);
         var actualSceneIds = manifestScenes.Select(s => s.SceneId).ToArray();
         var missingSceneIds = expectedSceneIds.Where(id => !actualSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
         var extraSceneIds = actualSceneIds.Where(id => !expectedSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
@@ -257,7 +276,7 @@ public sealed class SceneAssetsV3Service(
         var actualSceneAssetPaths = manifestScenes.Select(s => s.ImagePath).ToArray();
         if (missingSceneIds.Length > 0) errors.Add($"Missing Scene Assets V3 {format} scene ids: {string.Join(", ", missingSceneIds)}.");
         if (extraSceneIds.Length > 0) errors.Add($"Extra Scene Assets V3 {format} scene ids: {string.Join(", ", extraSceneIds)}.");
-        var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, review.AllScenesHaveNarrationBeat, beats.All(b => !string.IsNullOrWhiteSpace(b.VisualIntent)), promptDiversityScore, repeatedPrompt, forbiddenTermsDetected, relativeDateWordsDetected, distinctCompositionTypes, errors, BuildFontDiagnostics(), expectedSceneIds, actualSceneIds, missingSceneIds, extraSceneIds, expectedSceneAssetPaths, actualSceneAssetPaths, SceneAssetsV3SceneContract.ContractSource);
+        var validation = new SceneAssetsV3Validation(Version, format, errors.Count == 0 ? "Passed" : "Failed", File.Exists(timelinePath), File.Exists(manifestPath), manifestScenes.Count == expectedCount, review.AccurateSkyGuidePresent, duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, review.AllScenesHaveNarrationBeat, beats.All(b => !string.IsNullOrWhiteSpace(b.VisualIntent)), promptDiversityScore, repeatedPrompt, forbiddenTermsDetected, relativeDateWordsDetected, distinctCompositionTypes, errors, BuildFontDiagnostics(), expectedSceneIds, actualSceneIds, missingSceneIds, extraSceneIds, expectedSceneAssetPaths, actualSceneAssetPaths, authorityExpectedSceneIds is null ? SceneAssetsV3SceneContract.ContractSource : "08-scene-assets/scene-asset-manifest.json");
         await WriteJsonAsync(validationPath, validation, ct); files.Add(validationPath);
         return validationPath;
     }
@@ -588,8 +607,9 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
 
     private string ResolveRoot(SceneAssetsV3Request request) => !string.IsNullOrWhiteSpace(request.WorkingDirectoryRoot) ? request.WorkingDirectoryRoot! : string.IsNullOrWhiteSpace(renderingOptions.Value.WorkingDirectory) ? "./media-output" : renderingOptions.Value.WorkingDirectory;
     private static string StyleFor(string mode) => mode == "ExplainerScene" ? "cinematic educational astronomy, realistic space documentary" : "Netflix science documentary, National Geographic astronomy, NASA campaign, realistic cinematic sky, minimal overlay";
-    private static bool ReviewPassed(SceneAssetsV3Review r, int expected) => r.SceneCount == expected && r.AccurateSkyGuidePresent && !r.DuplicateHashDetected && !r.RepeatedBackgroundDetected && !r.SameBackgroundDetected && !r.SameCompositionDetected && !r.SameCameraAngleDetected && r.AllScenesHaveNarrationBeat && r.PromptDiversityScore >= 80 && !r.RepeatedPromptDetected && r.ForbiddenTermsDetected.Count == 0 && r.RelativeDateWordsDetected.Count == 0 && (expected < 9 || r.DistinctCompositionTypeCount >= 5);
-    private static List<string> BuildValidationErrors(string timeline, string manifest, string metadata, SceneAssetsV3Review r, int expected) { var e = new List<string>(); if (!File.Exists(timeline)) e.Add("visual-timeline-v3.json is missing."); if (!File.Exists(manifest)) e.Add("scene-manifest-v3.json is missing."); if (!File.Exists(metadata)) e.Add("scene-timeline-metadata.json is missing."); if (r.SceneCount != expected) e.Add($"Expected {expected} scenes but found {r.SceneCount}."); if (!r.AccurateSkyGuidePresent) e.Add("AccurateSkyGuideScene is missing."); if (r.DuplicateHashDetected) e.Add("Duplicate image hashes detected."); if (r.RepeatedBackgroundDetected) e.Add("Repeated generic infographic background detected."); if (r.SameBackgroundDetected) e.Add("sameBackgroundDetected review check failed."); if (r.SameCompositionDetected) e.Add("sameCompositionDetected review check failed."); if (r.SameCameraAngleDetected) e.Add("sameCameraAngleDetected review check failed."); if (!r.AllScenesHaveNarrationBeat) e.Add("At least one scene is missing narrationBeat."); if (r.PromptDiversityScore < 80) e.Add("promptDiversityScore must be >= 80."); if (r.RepeatedPromptDetected) e.Add("Repeated image prompt detected."); if (r.ForbiddenTermsDetected.Count > 0) e.Add("Forbidden terms detected."); if (r.RelativeDateWordsDetected.Count > 0) e.Add("Relative date words detected in visual overlays."); if (expected >= 9 && r.DistinctCompositionTypeCount < 5) e.Add("Long video requires at least 5 distinct composition types."); return e; }
+    private static int RequiredCompositionDiversity(int sceneCount) => Math.Min(5, Math.Max(1, (sceneCount + 1) / 2));
+    private static bool ReviewPassed(SceneAssetsV3Review r, int expected) => r.SceneCount == expected && r.AccurateSkyGuidePresent && !r.DuplicateHashDetected && !r.RepeatedBackgroundDetected && !r.SameBackgroundDetected && !r.SameCompositionDetected && !r.SameCameraAngleDetected && r.AllScenesHaveNarrationBeat && r.PromptDiversityScore >= 80 && !r.RepeatedPromptDetected && r.ForbiddenTermsDetected.Count == 0 && r.RelativeDateWordsDetected.Count == 0 && r.DistinctCompositionTypeCount >= RequiredCompositionDiversity(expected);
+    private static List<string> BuildValidationErrors(string timeline, string manifest, string metadata, SceneAssetsV3Review r, int expected) { var e = new List<string>(); if (!File.Exists(timeline)) e.Add("visual-timeline-v3.json is missing."); if (!File.Exists(manifest)) e.Add("scene-manifest-v3.json is missing."); if (!File.Exists(metadata)) e.Add("scene-timeline-metadata.json is missing."); if (r.SceneCount != expected) e.Add($"Expected {expected} scenes but found {r.SceneCount}."); if (!r.AccurateSkyGuidePresent) e.Add("AccurateSkyGuideScene is missing."); if (r.DuplicateHashDetected) e.Add("Duplicate image hashes detected."); if (r.RepeatedBackgroundDetected) e.Add("Repeated generic infographic background detected."); if (r.SameBackgroundDetected) e.Add("sameBackgroundDetected review check failed."); if (r.SameCompositionDetected) e.Add("sameCompositionDetected review check failed."); if (r.SameCameraAngleDetected) e.Add("sameCameraAngleDetected review check failed."); if (!r.AllScenesHaveNarrationBeat) e.Add("At least one scene is missing narrationBeat."); if (r.PromptDiversityScore < 80) e.Add("promptDiversityScore must be >= 80."); if (r.RepeatedPromptDetected) e.Add("Repeated image prompt detected."); if (r.ForbiddenTermsDetected.Count > 0) e.Add("Forbidden terms detected."); if (r.RelativeDateWordsDetected.Count > 0) e.Add("Relative date words detected in visual overlays."); if (r.DistinctCompositionTypeCount < RequiredCompositionDiversity(expected)) e.Add($"Certified scene-role diversity requires at least {RequiredCompositionDiversity(expected)} distinct composition types."); return e; }
     private static IReadOnlyList<string> BuildGuideValidationErrors(string eventType, IReadOnlyList<SceneAssetsV3Beat> beats)
     {
         var errors = new List<string>();
@@ -658,6 +678,154 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
             result.Add(new SceneAssetsV3Beat(i + 1, ids[i], modes[i], narration, intentSpec.VisualIntent, intentSpec.VisualSubjectCategory, intentSpec.PrimaryVisualSubject, intentSpec.CameraDistance, intentSpec.OverlayDensity, intentSpec.InformationDensity, intentSpec.OverlayStyle, intentSpec.PromptVariation, intentSpec.CompositionType, intentSpec.OverlayText, intentSpec.SupportingText, prompt, modes[i] == "AccurateSkyGuideScene" ? 7 : 5 + i % 2, sceneGuideType, guideElementsUsed, "question-driven-narration-v2.json", "production-event-intelligence.json"));
         }
         return result;
+    }
+
+    private static SceneAssetsV3TimelineContext BuildAuthorityTimelineContext(Phase8AuthorityInput authority)
+    {
+        var scenes = authority.LongScenes.Concat(authority.ShortScenes).ToArray();
+        var subject = authority.LongScenes.Count > 0 ? authority.DocumentaryBlueprint.LongBlueprint.SubjectName : authority.DocumentaryBlueprint.ShortBlueprint.SubjectName;
+        var objects = scenes.SelectMany(x => x.RequiredAstronomyObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (objects.Length == 0) objects = [subject];
+        var objectContext = new EventObjectContext(objects, objects.Length, string.Join(", ", objects),
+            string.Join(" and ", objects.Take(2)), string.Join(" + ", objects.Take(2)), objects[0],
+            objects.ElementAtOrDefault(1) ?? string.Empty, objects.Any(x => x.Contains("moon", StringComparison.OrdinalIgnoreCase)),
+            objects.Any(x => x.Contains("planet", StringComparison.OrdinalIgnoreCase)), "CertifiedAstronomyObjects",
+            "Phase8AuthorityInput.RequiredAstronomyObjects", [], [], true, false);
+        return new(authority.PlanId, subject, subject, "Certified documentary blueprint", "Certified Story Frame visual direction",
+            "Certified observation direction", string.Empty, string.Empty,
+            scenes.Select(x => x.ObservationDirection).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty,
+            string.Empty, objectContext, [], "committed Phase 4/6/7 authorities", [],
+            scenes.Select(x => x.AcceptedNarrationText).ToArray());
+    }
+
+    private static IReadOnlyList<SceneAssetsV3Beat> BuildAuthorityBeats(SceneAssetsV3TimelineContext context,
+        IReadOnlyList<Phase8SceneRequirement> scenes) => scenes.OrderBy(x => x.SceneOrder).Select((scene, index) =>
+    {
+        var mode = scene.RenderingPreference.Equals("AccurateSkyGuide", StringComparison.OrdinalIgnoreCase) ? "AccurateSkyGuideScene"
+            : scene.RenderingPreference.Equals("Infographic", StringComparison.OrdinalIgnoreCase) ? "ExplainerScene"
+            : scene.SceneRole.Contains("Closing", StringComparison.OrdinalIgnoreCase) ? "FinalReminderScene" : "CinematicStoryScene";
+        var subject = scene.RequiredAstronomyObjects.Count > 0 ? JoinNatural(scene.RequiredAstronomyObjects) : context.Title;
+        var intent = string.Join(" ", scene.ScenePurpose, scene.VisualDirection, scene.ObservationDirection).Trim();
+        var prompt = $"{subject}. Certified scene purpose: {scene.ScenePurpose}. Certified visual direction: {scene.VisualDirection}. Certified observation direction: {scene.ObservationDirection}. " +
+            $"Knowledge references: {string.Join(", ", scene.KnowledgeReferenceIds)}. Rendering preference: {scene.RenderingPreference}. " +
+            "Create a scientifically responsible astronomy documentary background with no embedded text, watermark, logo, or unrelated objects; preserve negative space for deterministic overlays.";
+        return new SceneAssetsV3Beat(index + 1, scene.SceneId, mode, scene.AcceptedNarrationText, intent,
+            scene.VisualOpportunityType, subject, "certified", "minimal", "certified", "documentary",
+            $"authority-{scene.SceneOrder:000}", $"{scene.VisualOpportunityType}-{scene.SceneRole}", scene.ScenePurpose, null, prompt, 6,
+            mode == "AccurateSkyGuideScene" ? "CertifiedSkyCapture" : string.Empty,
+            mode == "AccurateSkyGuideScene" ? scene.RequiredAstronomyObjects : [],
+            "07-narration/accepted-release-candidate.json", "Phase8AuthorityInput", scene.BlueprintSceneId,
+            scene.StoryFrameId, scene.Variant, scene.SceneOrder);
+    }).ToArray();
+
+    private async Task<IReadOnlyList<string>> PublishAuthorityPackageAsync(SceneAssetsV3Request request,
+        Phase8AuthorityInput authority, string compatibilityRoot, IReadOnlySet<string> reusableAssets, CancellationToken ct)
+    {
+        var outputRoot = ResolveRoot(request);
+        var staging = Path.Combine(outputRoot, $".08-scene-assets-staging-{Guid.NewGuid():N}");
+        var committed = Path.Combine(outputRoot, "08-scene-assets");
+        var backup = Path.Combine(outputRoot, $".08-scene-assets-backup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(staging);
+        var items = new List<SceneAssetManifestItem>();
+        try
+        {
+            foreach (var scene in authority.LongScenes.Concat(authority.ShortScenes))
+            {
+                var format = scene.Variant.ToLowerInvariant();
+                var source = Path.Combine(compatibilityRoot, format, scene.SceneId + ".png");
+                var relative = $"08-scene-assets/{format}/scene-assets/{scene.SceneId}.png";
+                var destination = Path.Combine(staging, format, "scene-assets", scene.SceneId + ".png");
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(source, destination, true);
+                var info = await Image.IdentifyAsync(destination, ct) ?? throw new InvalidDataException($"Cannot decode '{destination}'.");
+                var checksum = await Sha256Async(destination, ct);
+                var semantic = SemanticIdentity(scene, format == "long" ? request.LongTargetWidth : request.ShortTargetWidth,
+                    format == "long" ? request.LongTargetHeight : request.ShortTargetHeight);
+                var reused = reusableAssets.Contains($"{scene.Variant}:{scene.SceneId}");
+                items.Add(new($"{scene.Variant}:{scene.SceneId}", scene.Variant, scene.SceneId, scene.BlueprintSceneId,
+                    scene.StoryFrameId, scene.SceneOrder, scene.AssetRole, scene.VisualOpportunityType,
+                    imageGenerator.GetType().Name, null, "GeneratedOrDeterministicFallback", scene.StoryFrameId,
+                    scene.KnowledgeReferenceIds, relative, info.Width, info.Height, $"{info.Width}:{info.Height}", checksum,
+                    semantic, false, null, [], reused, !reused, "Valid", []));
+            }
+            Directory.CreateDirectory(Path.Combine(staging, "shared", "reusable-assets"));
+            var checksumSeed = string.Join("|", items.OrderBy(x => x.AssetId, StringComparer.Ordinal).Select(x => $"{x.AssetId}:{x.SemanticIdentity}:{x.Checksum}"));
+            var manifest = new SceneAssetManifest("1.0", authority.PlanId, authority.ExecutionId, authority.EventId,
+                authority.Language, DateTimeOffset.UtcNow, "Candidate", authority.DocumentaryBlueprintChecksum,
+                authority.StoryFrameManifestChecksum, authority.LongNarrationReleaseCandidateChecksum,
+                authority.ShortNarrationReleaseCandidateChecksum, authority.RequestedVariants, items, "Valid", HashText(checksumSeed));
+            await WriteJsonAsync(Path.Combine(staging, "media-project.json"), new { schemaVersion = "1.0", authority.PlanId, authority.ExecutionId, authority.EventId, authority.Language, authority.RequestedVariants, authority.DocumentaryBlueprintChecksum, authority.StoryFrameManifestChecksum, longProfile = new { width = request.LongTargetWidth, height = request.LongTargetHeight }, shortProfile = new { width = request.ShortTargetWidth, height = request.ShortTargetHeight } }, ct);
+            await WriteJsonAsync(Path.Combine(staging, "visual-asset-plan.json"), new { schemaVersion = "1.0", authoritySource = "Phase8AuthorityInput", scenes = authority.LongScenes.Concat(authority.ShortScenes) }, ct);
+            await WriteJsonAsync(Path.Combine(staging, "visual-generation-requests.json"), new { schemaVersion = "1.0", requests = items.Select(x => new { x.AssetId, x.Variant, x.SceneId, x.ProviderType, x.SourceInstructionId, x.SemanticIdentity, x.Width, x.Height }) }, ct);
+            await WriteJsonAsync(Path.Combine(staging, "scene-asset-manifest.json"), manifest, ct);
+            var validator = new Phase8SceneAssetManifestValidator();
+            var candidateValidation = await validator.ValidateAsync(manifest, authority, outputRoot, ct);
+            // Candidate paths are rooted below staging during pre-commit validation.
+            if (!candidateValidation.IsValid && candidateValidation.Errors.Any(x => !x.Contains("Physical asset is missing", StringComparison.Ordinal)))
+                throw new Phase8AuthorityException(Phase8AuthorityReasonCodes.NotCommitted, candidateValidation.Errors);
+            await WriteJsonAsync(Path.Combine(staging, "phase8-authority-diagnostics.json"), new { authorityLoaded = true, phase4Committed = true, phase6Committed = true, longNarrationCandidateCommitted = authority.LongNarrationReleaseCandidate is not null, shortNarrationCandidateCommitted = authority.ShortNarrationReleaseCandidate is not null, authority.RequestedVariants, expectedLongSceneCount = authority.LongScenes.Count, expectedShortSceneCount = authority.ShortScenes.Count, generatedLongSceneCount = items.Count(x => x.Variant == "Long"), generatedShortSceneCount = items.Count(x => x.Variant == "Short"), reusedAssetCount = items.Count(x => x.Reused), generatedAssetCount = items.Count(x => !x.Reused), fallbackAssetCount = items.Count(x => x.ProviderStatus.Contains("Fallback", StringComparison.Ordinal)), providerTypeCounts = items.GroupBy(x => x.ProviderType).ToDictionary(x => x.Key, x => x.Count()), missingSceneIds = Array.Empty<string>(), extraSceneIds = Array.Empty<string>(), lineageMismatchSceneIds = Array.Empty<string>(), upstreamChecksumPassed = true, manifestValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, legacyAuthorityUsed = false }, ct);
+            manifest = manifest with { PublicationState = "Committed" };
+            await WriteJsonAsync(Path.Combine(staging, "scene-asset-manifest.json"), manifest, ct);
+            if (Directory.Exists(committed)) Directory.Move(committed, backup);
+            Directory.Move(staging, committed);
+            var committedValidation = await validator.ValidateAsync(manifest, authority, outputRoot, ct);
+            if (!committedValidation.IsValid)
+            {
+                Directory.Delete(committed, true);
+                if (Directory.Exists(backup)) Directory.Move(backup, committed);
+                throw new Phase8AuthorityException(Phase8AuthorityReasonCodes.NotCommitted, committedValidation.Errors);
+            }
+            if (Directory.Exists(backup)) Directory.Delete(backup, true);
+            return Directory.EnumerateFiles(committed, "*", SearchOption.AllDirectories).ToArray();
+        }
+        catch
+        {
+            if (Directory.Exists(staging)) Directory.Delete(staging, true);
+            if (!Directory.Exists(committed) && Directory.Exists(backup)) Directory.Move(backup, committed);
+            throw;
+        }
+    }
+
+    private static string SemanticIdentity(Phase8SceneRequirement scene, int width, int height) => HashText(JsonSerializer.Serialize(new
+    {
+        scene.Variant, scene.SceneId, scene.BlueprintSceneId, scene.StoryFrameId, scene.VisualDirection,
+        scene.RenderingPreference, knowledgeReferenceIds = scene.KnowledgeReferenceIds.Order(StringComparer.Ordinal),
+        scene.AcceptedNarrationSceneId, width, height
+    }, JsonOptions));
+    private static string HashText(string value) => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private static async Task<HashSet<string>> PrepareAuthorityReuseAsync(string outputRoot, string compatibilityRoot,
+        Phase8AuthorityInput authority, SceneAssetsV3Request request, CancellationToken ct)
+    {
+        var reusable = new HashSet<string>(StringComparer.Ordinal);
+        var path = Path.Combine(outputRoot, "08-scene-assets", "scene-asset-manifest.json");
+        SceneAssetManifest? old = null;
+        if (File.Exists(path)) old = JsonSerializer.Deserialize<SceneAssetManifest>(await File.ReadAllTextAsync(path, ct), JsonOptions);
+        var upstreamMatches = old is not null && old.PublicationState == "Committed"
+            && old.DocumentaryBlueprintChecksum == authority.DocumentaryBlueprintChecksum
+            && old.StoryFrameManifestChecksum == authority.StoryFrameManifestChecksum
+            && old.LongNarrationReleaseCandidateChecksum == authority.LongNarrationReleaseCandidateChecksum
+            && old.ShortNarrationReleaseCandidateChecksum == authority.ShortNarrationReleaseCandidateChecksum;
+        foreach (var scene in authority.LongScenes.Concat(authority.ShortScenes))
+        {
+            var key = $"{scene.Variant}:{scene.SceneId}"; var format = scene.Variant.ToLowerInvariant();
+            var compatibilityPath = Path.Combine(compatibilityRoot, format, scene.SceneId + ".png");
+            var width = format == "long" ? request.LongTargetWidth : request.ShortTargetWidth;
+            var height = format == "long" ? request.LongTargetHeight : request.ShortTargetHeight;
+            var item = old?.Assets.SingleOrDefault(x => x.AssetId == key);
+            var physicalPath = item is null ? string.Empty : Path.Combine(outputRoot, item.PhysicalPath);
+            var valid = upstreamMatches && item is not null && item.SceneId == scene.SceneId
+                && item.BlueprintSceneId == scene.BlueprintSceneId && item.StoryFrameId == scene.StoryFrameId
+                && item.SourceInstructionId == scene.StoryFrameId && item.SemanticIdentity == SemanticIdentity(scene, width, height)
+                && File.Exists(physicalPath) && IsValidPng(physicalPath) && await Sha256Async(physicalPath, ct) == item.Checksum;
+            if (valid)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(compatibilityPath)!);
+                File.Copy(physicalPath, compatibilityPath, true); reusable.Add(key);
+            }
+            else if (File.Exists(compatibilityPath)) File.Delete(compatibilityPath);
+        }
+        return reusable;
     }
 
     private static string BuildFallbackNarration(SceneAssetsV3TimelineContext c, string sceneId)

@@ -1,5 +1,7 @@
 namespace Astronomy.MediaFactory.Core;
 
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+
 public sealed record SceneAssetsV3Request(
     string? WorkingDirectoryRoot = null,
     bool GenerateShort = true,
@@ -10,7 +12,8 @@ public sealed record SceneAssetsV3Request(
     int LongTargetHeight = 1080,
     int ShortTargetWidth = 2160,
     int ShortTargetHeight = 3840,
-    string ProviderRequestedSize = "1792x1024");
+    string ProviderRequestedSize = "1792x1024",
+    Phase8AuthorityInput? AuthorityInput = null);
 
 public sealed record SceneAssetsV3Response(
     string OutputRoot,
@@ -57,9 +60,81 @@ public sealed record SceneAssetsV3Beat(
     string SceneGuideType = "GenericObjectPair",
     IReadOnlyList<string>? GuideElementsUsed = null,
     string NarrationBeatSource = "generated",
-    string VisualPromptSource = "generated")
+    string VisualPromptSource = "generated",
+    string? BlueprintSceneId = null,
+    string? StoryFrameId = null,
+    string? Variant = null,
+    int? SceneOrder = null)
 {
     public string DeterministicOverlayText => OverlayText;
+}
+
+public sealed record Phase8SceneRequirement(
+    string Variant, string SceneId, string BlueprintSceneId, string StoryFrameId, int SceneOrder,
+    string SceneRole, string NarrativeStage, string ScenePurpose, string VisualDirection,
+    string ObservationDirection, IReadOnlyList<string> RequiredAstronomyObjects,
+    IReadOnlyList<string> KnowledgeReferenceIds, string AcceptedNarrationText,
+    string AcceptedNarrationSceneId, string VisualOpportunityType, string AssetRole,
+    string RenderingPreference, string? LocationContext = null, string? TimeContext = null);
+
+public sealed record Phase8AuthorityInput(
+    string PlanId, string ExecutionId, string EventId, string Language,
+    DocumentaryBlueprintAggregate DocumentaryBlueprint,
+    string DocumentaryBlueprintChecksum, StoryFramesAuthority StoryFrameAuthority,
+    string StoryFrameManifestChecksum,
+    DocumentaryNarrativeReleaseCandidate? LongNarrationReleaseCandidate,
+    string? LongNarrationReleaseCandidateChecksum,
+    DocumentaryNarrativeReleaseCandidate? ShortNarrationReleaseCandidate,
+    string? ShortNarrationReleaseCandidateChecksum,
+    IReadOnlyList<string> RequestedVariants,
+    IReadOnlyList<Phase8SceneRequirement> LongScenes,
+    IReadOnlyList<Phase8SceneRequirement> ShortScenes);
+
+public static class Phase8AuthorityReasonCodes
+{
+    public const string Missing = "P8_AUTHORITY_MISSING";
+    public const string NotCommitted = "P8_AUTHORITY_NOT_COMMITTED";
+    public const string ChecksumMismatch = "P8_AUTHORITY_CHECKSUM_MISMATCH";
+    public const string IdentityMismatch = "P8_AUTHORITY_IDENTITY_MISMATCH";
+    public const string SceneLineageMismatch = "P8_SCENE_LINEAGE_MISMATCH";
+    public const string NarrationSceneMappingFailed = "P8_NARRATION_SCENE_MAPPING_FAILED";
+    public const string VariantAuthorityMissing = "P8_VARIANT_AUTHORITY_MISSING";
+}
+
+public sealed class Phase8AuthorityException(string reasonCode, IReadOnlyList<string> errors)
+    : InvalidOperationException($"{reasonCode}: {string.Join("; ", errors)}")
+{
+    public string ReasonCode { get; } = reasonCode;
+    public IReadOnlyList<string> Errors { get; } = errors;
+}
+
+public sealed record Phase8AuthorityLoadRequest(string OutputRoot, string PlanId, string EventId,
+    string Language, IReadOnlyList<string> RequestedVariants);
+public interface IPhase8AuthorityLoader
+{
+    Task<Phase8AuthorityInput> LoadAsync(Phase8AuthorityLoadRequest request, CancellationToken cancellationToken);
+}
+
+public sealed record SceneAssetManifest(string SchemaVersion, string PlanId, string ExecutionId,
+    string EventId, string Language, DateTimeOffset GeneratedAtUtc, string PublicationState,
+    string DocumentaryBlueprintChecksum, string StoryFrameManifestChecksum,
+    string? LongNarrationReleaseCandidateChecksum, string? ShortNarrationReleaseCandidateChecksum,
+    IReadOnlyList<string> RequestedVariants, IReadOnlyList<SceneAssetManifestItem> Assets,
+    string ValidationStatus, string DeterministicChecksum);
+public sealed record SceneAssetManifestItem(string AssetId, string Variant, string SceneId,
+    string BlueprintSceneId, string StoryFrameId, int SceneOrder, string AssetRole,
+    string VisualOpportunityType, string ProviderType, string? ProviderResultId,
+    string ProviderStatus, string SourceInstructionId, IReadOnlyList<string> SourceKnowledgeReferenceIds,
+    string PhysicalPath, int Width, int Height, string AspectRatio, string Checksum,
+    string SemanticIdentity, bool SharedAsset, string? SharedAssetOwner,
+    IReadOnlyList<string> SharedAssetConsumers, bool Reused, bool ProviderCalledThisExecution,
+    string ValidationStatus, IReadOnlyList<string> Warnings);
+public sealed record Phase8ManifestValidationResult(bool IsValid, IReadOnlyList<string> ReasonCodes,
+    IReadOnlyList<string> Errors);
+public interface IPhase8SceneAssetManifestValidator
+{
+    Task<Phase8ManifestValidationResult> ValidateAsync(SceneAssetManifest manifest,
+        Phase8AuthorityInput authority, string outputRoot, CancellationToken cancellationToken);
 }
 
 public sealed record SceneAssetsV3Manifest(
