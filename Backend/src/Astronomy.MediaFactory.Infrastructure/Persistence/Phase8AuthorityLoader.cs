@@ -14,78 +14,126 @@ public sealed class Phase8AuthorityLoader : IPhase8AuthorityLoader
     public async Task<Phase8AuthorityInput> LoadAsync(Phase8AuthorityLoadRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var blueprintPath = Path.Combine(request.OutputRoot, "04-blueprint", "documentary-blueprint.json");
-        var storyPath = Path.Combine(request.OutputRoot, "06-story-frames", "story-frames.json");
-        var indexPath = Path.Combine(request.OutputRoot, "06-story-frames", "story-frame-index.json");
-        RequireFile(blueprintPath, "Phase 4 documentary blueprint");
-        RequireFile(storyPath, "Phase 6 Story Frame authority");
-        RequireFile(indexPath, "Phase 6 Story Frame committed index");
+        var diagnostics = request.Diagnostics ?? new Phase8AuthorityLoadDiagnostics();
+        var stage = "phase4AuthorityLoad";
+        try
+        {
+            var blueprintPath = Path.Combine(request.OutputRoot, "04-blueprint", "documentary-blueprint.json");
+            var storyPath = Path.Combine(request.OutputRoot, "06-story-frames", "story-frames.json");
+            var indexPath = Path.Combine(request.OutputRoot, "06-story-frames", "story-frame-index.json");
+            diagnostics.Phase4AuthorityLoadStarted = true;
+            RequireFile(blueprintPath, "Phase 4 documentary blueprint");
+            var blueprint = await ReadAsync<DocumentaryBlueprintAggregate>(blueprintPath, cancellationToken);
+            if (!DocumentaryBlueprintProjectionChecksum.HasValidAggregateChecksum(blueprint))
+                Fail(Phase8AuthorityReasonCodes.ChecksumMismatch, "Phase 4 aggregate checksum readback failed.");
+            diagnostics.Phase4AuthorityLoaded = true;
 
-        var blueprint = await ReadAsync<DocumentaryBlueprintAggregate>(blueprintPath, cancellationToken);
-        var story = await ReadAsync<StoryFramesAuthority>(storyPath, cancellationToken);
-        var index = await ReadAsync<StoryFrameIndex>(indexPath, cancellationToken);
-        if (!string.Equals(story.SemanticChecksum, StoryFrameAuthorityChecksum.Authority(story), StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(index.Checksum, StoryFrameAuthorityChecksum.Index(index), StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(index.SourceStoryFramesChecksum, story.SemanticChecksum, StringComparison.OrdinalIgnoreCase))
-            Fail(Phase8AuthorityReasonCodes.ChecksumMismatch, "Phase 6 authority/index checksum readback failed.");
+            stage = "phase6AuthorityLoad";
+            diagnostics.Phase6AuthorityLoadStarted = true;
+            RequireFile(storyPath, "Phase 6 Story Frame authority");
+            RequireFile(indexPath, "Phase 6 Story Frame committed index");
+            var story = await ReadAsync<StoryFramesAuthority>(storyPath, cancellationToken);
+            var index = await ReadAsync<StoryFrameIndex>(indexPath, cancellationToken);
+            if (!string.Equals(story.SemanticChecksum, StoryFrameAuthorityChecksum.Authority(story), StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(index.Checksum, StoryFrameAuthorityChecksum.Index(index), StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(index.SourceStoryFramesChecksum, story.SemanticChecksum, StringComparison.OrdinalIgnoreCase))
+                Fail(Phase8AuthorityReasonCodes.ChecksumMismatch, "Phase 6 authority/index checksum readback failed.");
+            diagnostics.Phase6AuthorityLoaded = true;
 
-        var variants = request.RequestedVariants.Select(NormalizeVariant).Distinct(StringComparer.Ordinal).ToArray();
-        if (variants.Length == 0) Fail(Phase8AuthorityReasonCodes.VariantAuthorityMissing, "No Phase 8 variant was requested.");
-        if (!string.Equals(story.PlanId, request.PlanId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(story.EventId, request.EventId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(story.Language, request.Language, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(blueprint.PlanId, request.PlanId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(blueprint.EventId, request.EventId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(blueprint.Language, request.Language, StringComparison.OrdinalIgnoreCase))
-            Fail(Phase8AuthorityReasonCodes.IdentityMismatch, "Plan, event, or language differs across Phase 4/6 and the execution request.");
-        if (!DocumentaryBlueprintProjectionChecksum.HasValidAggregateChecksum(blueprint))
-            Fail(Phase8AuthorityReasonCodes.ChecksumMismatch, "Phase 4 aggregate checksum readback failed.");
-        foreach (var variant in variants)
-            if (!story.RequestedVariants.Contains(variant, StringComparer.OrdinalIgnoreCase))
-                Fail(Phase8AuthorityReasonCodes.VariantAuthorityMissing, $"Phase 6 has no committed {variant} authority.");
+            var variants = request.RequestedVariants.Select(NormalizeVariant).Distinct(StringComparer.Ordinal).ToArray();
+            if (variants.Length == 0) Fail(Phase8AuthorityReasonCodes.VariantAuthorityMissing, "No Phase 8 variant was requested.");
+            if (!string.Equals(story.PlanId, request.PlanId, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(story.EventId, request.EventId, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(story.Language, request.Language, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(blueprint.PlanId, request.PlanId, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(blueprint.EventId, request.EventId, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(blueprint.Language, request.Language, StringComparison.OrdinalIgnoreCase))
+                Fail(Phase8AuthorityReasonCodes.IdentityMismatch, "Plan, event, or language differs across Phase 4/6 and the execution request.");
+            foreach (var variant in variants)
+                if (!story.RequestedVariants.Contains(variant, StringComparer.OrdinalIgnoreCase))
+                    Fail(Phase8AuthorityReasonCodes.VariantAuthorityMissing, $"Phase 6 has no committed {variant} authority.");
 
-        var longCandidate = variants.Contains("Long")
-            ? await ReadCandidateAsync(request.OutputRoot, "long", cancellationToken) : null;
-        var shortCandidate = variants.Contains("Short")
-            ? await ReadCandidateAsync(request.OutputRoot, "short", cancellationToken) : null;
-        var longChecksum = longCandidate is null ? null : await HashFileAsync(CandidatePath(request.OutputRoot, "long"), cancellationToken);
-        var shortChecksum = shortCandidate is null ? null : await HashFileAsync(CandidatePath(request.OutputRoot, "short"), cancellationToken);
+            Phase7AcceptedReleaseCandidate? longCandidate = null;
+            Phase7AcceptedReleaseCandidate? shortCandidate = null;
+            string? longChecksum = null;
+            string? shortChecksum = null;
+            if (variants.Contains("Long"))
+            {
+                stage = "longNarrationAuthorityLoad";
+                diagnostics.LongNarrationAuthorityLoadStarted = true;
+                (longCandidate, longChecksum) = await ReadCandidateAsync(request, story, "long", cancellationToken);
+                diagnostics.LongNarrationAuthorityLoaded = true;
+            }
+            if (variants.Contains("Short"))
+            {
+                stage = "shortNarrationAuthorityLoad";
+                diagnostics.ShortNarrationAuthorityLoadStarted = true;
+                (shortCandidate, shortChecksum) = await ReadCandidateAsync(request, story, "short", cancellationToken);
+                diagnostics.ShortNarrationAuthorityLoaded = true;
+            }
 
-        var longScenes = variants.Contains("Long") ? Project("Long", story, blueprint, longCandidate!) : [];
-        var shortScenes = variants.Contains("Short") ? Project("Short", story, blueprint, shortCandidate!) : [];
-        return new(request.PlanId, story.ExecutionId, request.EventId, request.Language, blueprint,
-            blueprint.DeterministicChecksum, story, story.SemanticChecksum,
-            longCandidate, longChecksum, shortCandidate, shortChecksum, variants, longScenes, shortScenes);
+            stage = "authorityProjection";
+            diagnostics.AuthorityProjectionStarted = true;
+            var longScenes = variants.Contains("Long") ? Project("Long", story, blueprint, longCandidate!, longChecksum!) : [];
+            var shortScenes = variants.Contains("Short") ? Project("Short", story, blueprint, shortCandidate!, shortChecksum!) : [];
+            diagnostics.AuthorityProjectionCompleted = true;
+            return new(request.PlanId, story.ExecutionId, request.EventId, request.Language, blueprint,
+                blueprint.DeterministicChecksum, story, story.SemanticChecksum,
+                longCandidate, longChecksum, shortCandidate, shortChecksum, variants, longScenes, shortScenes);
+        }
+        catch (Exception ex)
+        {
+            diagnostics.AuthorityFailureStage = stage;
+            diagnostics.AuthorityFailureType = ex.GetType().Name;
+            diagnostics.AuthorityFailureMessage = ex.Message;
+            throw;
+        }
     }
 
     private static IReadOnlyList<Phase8SceneRequirement> Project(string variant, StoryFramesAuthority authority,
-        DocumentaryBlueprintAggregate aggregate, DocumentaryNarrativeReleaseCandidate candidate)
+        DocumentaryBlueprintAggregate aggregate, Phase7AcceptedReleaseCandidate candidate, string candidateChecksum)
     {
         var blueprint = variant.Equals("Long", StringComparison.OrdinalIgnoreCase) ? aggregate.LongBlueprint : aggregate.ShortBlueprint;
         var frames = authority.Frames.Where(x => x.Variant.Equals(variant, StringComparison.OrdinalIgnoreCase))
             .GroupBy(x => x.SceneId, StringComparer.Ordinal).OrderBy(x => x.Min(f => f.SceneNumber)).ToArray();
-        var passages = candidate.NarrativeDraft.Sections.SelectMany(x => x.Passages)
-            .GroupBy(x => x.SourceSceneId, StringComparer.Ordinal).ToDictionary(x => x.Key, x => x.ToArray(), StringComparer.Ordinal);
+        if (candidate.Scenes.Count != frames.Length || candidate.AcceptedSceneCount != candidate.Scenes.Count)
+            Fail(Phase8AuthorityReasonCodes.NarrationSceneMappingFailed, $"Accepted {variant} narration scene count does not match committed Story Frames.");
         var blueprintScenes = blueprint.Scenes.ToDictionary(x => x.SceneId, StringComparer.Ordinal);
+        var unused = candidate.Scenes.ToList();
         var projected = new List<Phase8SceneRequirement>();
         foreach (var group in frames)
         {
             var frame = group.OrderBy(x => x.FrameNumber).First();
             if (!blueprintScenes.TryGetValue(group.Key, out var scene))
                 Fail(Phase8AuthorityReasonCodes.SceneLineageMismatch, $"Story Frame scene '{group.Key}' has no Phase 4 blueprint scene.");
-            if (!passages.TryGetValue(group.Key, out var narration) || narration.Length == 0)
-                Fail(Phase8AuthorityReasonCodes.NarrationSceneMappingFailed, $"Accepted {variant} narration has no identity mapping for scene '{group.Key}'.");
+            // Governed precedence: SceneId, then StoryFrameId, then BlueprintSceneId. Order is only checked after identity mapping.
+            var narration = Unique(unused.Where(x => x.SceneId == group.Key), variant, group.Key)
+                ?? Unique(unused.Where(x => group.Any(f => f.FrameId == x.StoryFrameId)), variant, group.Key)
+                ?? Unique(unused.Where(x => x.BlueprintSceneId == scene.SceneId), variant, group.Key);
+            if (narration is null || string.IsNullOrWhiteSpace(narration.NarrationText))
+                Fail(Phase8AuthorityReasonCodes.NarrationSceneMappingFailed, $"Accepted {variant} narration has no unique identity mapping for scene '{group.Key}'.");
+            unused.Remove(narration);
+            if (narration.SceneNumber != frame.SceneNumber)
+                Fail(Phase8AuthorityReasonCodes.NarrationSceneMappingFailed, $"Accepted {variant} narration order differs at scene '{group.Key}'.");
             var visual = string.Join(" ", group.Select(x => x.VisualIntent).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal));
             var opportunity = scene.VisualOpportunities.FirstOrDefault();
             projected.Add(new(variant, group.Key, scene.SceneId, frame.FrameId, frame.SceneNumber,
                 frame.SceneRole, frame.NarrativeStage, scene.SceneObjective.Summary, visual,
                 frame.CameraDirection, group.SelectMany(x => x.ImageRequirements).Distinct(StringComparer.Ordinal).ToArray(),
                 group.SelectMany(x => x.KnowledgeReferenceIds).Concat(scene.KnowledgeReferences.Select(x => x.KnowledgeEntryId)).Distinct(StringComparer.Ordinal).ToArray(),
-                string.Join("\n", narration.OrderBy(x => x.PassageNumber).Select(x => x.Text)), group.Key,
-                opportunity?.Type ?? "Cinematic", "scene-background", ResolveRenderingPreference(frame, opportunity),
-                string.IsNullOrWhiteSpace(frame.Setting) ? null : frame.Setting));
+                narration.NarrationText, narration.SceneId, opportunity?.Type ?? "Cinematic", "scene-background",
+                ResolveRenderingPreference(frame, opportunity), string.IsNullOrWhiteSpace(frame.Setting) ? null : frame.Setting,
+                NarrationReleaseCandidateChecksum: candidateChecksum));
         }
+        if (unused.Count != 0) Fail(Phase8AuthorityReasonCodes.NarrationSceneMappingFailed, $"Accepted {variant} narration contains unmapped scenes.");
         return projected;
+    }
+
+    private static Phase7AcceptedNarrationScene? Unique(IEnumerable<Phase7AcceptedNarrationScene> matches, string variant, string sceneId)
+    {
+        var values = matches.Take(2).ToArray();
+        if (values.Length > 1) Fail(Phase8AuthorityReasonCodes.NarrationSceneMappingFailed, $"Accepted {variant} narration has duplicate identity mappings for scene '{sceneId}'.");
+        return values.SingleOrDefault();
     }
 
     private static string ResolveRenderingPreference(StoryFrameAuthorityFrame frame, VisualOpportunity? opportunity)
@@ -95,22 +143,59 @@ public sealed class Phase8AuthorityLoader : IPhase8AuthorityLoader
             ? "AccurateSkyGuide" : instruction.Contains("diagram", StringComparison.OrdinalIgnoreCase) ? "Infographic" : "Cinematic";
     }
 
-    private static async Task<DocumentaryNarrativeReleaseCandidate> ReadCandidateAsync(string root, string variant, CancellationToken ct)
+    private static async Task<(Phase7AcceptedReleaseCandidate Candidate, string Checksum)> ReadCandidateAsync(
+        Phase8AuthorityLoadRequest request, StoryFramesAuthority story, string variantPath, CancellationToken ct)
     {
-        var path = CandidatePath(root, variant);
-        if (!File.Exists(path)) Fail(Phase8AuthorityReasonCodes.VariantAuthorityMissing, $"Requested {variant} accepted release candidate is missing.");
-        var candidate = await ReadAsync<DocumentaryNarrativeReleaseCandidate>(path, ct);
-        if (!candidate.IsAccepted || !candidate.IsClean || !candidate.IsFullyResolved)
-            Fail(Phase8AuthorityReasonCodes.NotCommitted, $"Requested {variant} narration candidate is not accepted and clean.");
-        return candidate;
+        var path = CandidatePath(request.OutputRoot, variantPath);
+        if (!File.Exists(path)) Fail(Phase8AuthorityReasonCodes.VariantAuthorityMissing, $"Requested {variantPath} accepted release candidate is missing.");
+        var candidate = await ReadAsync<Phase7AcceptedReleaseCandidate>(path, ct);
+        var variant = NormalizeVariant(variantPath);
+        if (!string.Equals(candidate.Variant, variant, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(candidate.PlanId, request.PlanId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(candidate.ExecutionId, story.ExecutionId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(candidate.EventId, request.EventId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(candidate.Language, request.Language, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(candidate.SourceStoryFramesAuthorityId, story.AuthorityId, StringComparison.Ordinal)
+            || !string.Equals(candidate.SourceStoryFramesAuthorityChecksum, story.SemanticChecksum, StringComparison.OrdinalIgnoreCase))
+            Fail(Phase8AuthorityReasonCodes.IdentityMismatch, $"Requested {variant} narration identity or lineage differs from Phase 8 authorities.");
+        if (!candidate.AcceptanceResult.TryGetProperty("accepted", out var accepted) || accepted.ValueKind != JsonValueKind.True)
+            Fail(Phase8AuthorityReasonCodes.NotCommitted, $"Requested {variant} narration candidate is not accepted.");
+        if (candidate.Scenes.Count == 0 || candidate.Scenes.Any(x => string.IsNullOrWhiteSpace(x.SceneId) || string.IsNullOrWhiteSpace(x.NarrationText)))
+            Fail(Phase8AuthorityReasonCodes.NarrationSceneMappingFailed, $"Requested {variant} narration contains empty scene identity or text.");
+        var semantic = Hash(JsonSerializer.Serialize(candidate.Scenes, JsonOptions));
+        if (!string.Equals(candidate.DeterministicChecksum, semantic, StringComparison.OrdinalIgnoreCase))
+            Fail(Phase8AuthorityReasonCodes.ChecksumMismatch, $"Requested {variant} narration deterministic checksum failed.");
+        var checksum = await HashFileAsync(path, ct);
+        await ValidatePublicationAsync(request.OutputRoot, variantPath, checksum, ct);
+        return (candidate, checksum);
+    }
+
+    private static async Task ValidatePublicationAsync(string root, string variant, string checksum, CancellationToken ct)
+    {
+        var manifestPath = Path.Combine(root, "07-narration", "narration-manifest.json");
+        var certificationPath = Path.Combine(root, "07-narration", "narration-certification.json");
+        RequireFile(manifestPath, "Phase 7 narration manifest");
+        RequireFile(certificationPath, "Phase 7 narration certification");
+        using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath, ct));
+        using var certification = JsonDocument.Parse(await File.ReadAllTextAsync(certificationPath, ct));
+        var key = $"{variant}/accepted-release-candidate.json";
+        if (!manifest.RootElement.TryGetProperty("downstreamReady", out var ready) || ready.ValueKind != JsonValueKind.True
+            || !manifest.RootElement.GetProperty("candidateChecksums").TryGetProperty(key, out var expected)
+            || !string.Equals(expected.GetString(), checksum, StringComparison.OrdinalIgnoreCase)
+            || !certification.RootElement.TryGetProperty("acceptancePassed", out var acceptance) || acceptance.ValueKind != JsonValueKind.True
+            || !certification.RootElement.TryGetProperty("physicalReadbackPassed", out var readback) || readback.ValueKind != JsonValueKind.True
+            || !certification.RootElement.TryGetProperty("checksumsPassed", out var checksums) || checksums.ValueKind != JsonValueKind.True
+            || !certification.RootElement.TryGetProperty("downstreamReady", out var certified) || certified.ValueKind != JsonValueKind.True)
+            Fail(Phase8AuthorityReasonCodes.NotCommitted, $"Requested {NormalizeVariant(variant)} narration publication is not certified for downstream use.");
     }
 
     private static string CandidatePath(string root, string variant) => Path.Combine(root, "07-narration", variant, "accepted-release-candidate.json");
     private static string NormalizeVariant(string value) => value.Equals("long", StringComparison.OrdinalIgnoreCase) ? "Long" : value.Equals("short", StringComparison.OrdinalIgnoreCase) ? "Short" : value;
     private static void RequireFile(string path, string label) { if (!File.Exists(path)) Fail(Phase8AuthorityReasonCodes.Missing, $"{label} is missing at '{path}'."); }
-    private static async Task<T> ReadAsync<T>(string path, CancellationToken ct) =>
-        await JsonSerializer.DeserializeAsync<T>(File.OpenRead(path), JsonOptions, ct) ?? throw new Phase8AuthorityException(Phase8AuthorityReasonCodes.NotCommitted, [$"'{path}' did not contain a typed committed artifact."]);
+    private static async Task<T> ReadAsync<T>(string path, CancellationToken ct)
+    { await using var stream = File.OpenRead(path); return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, ct) ?? throw new Phase8AuthorityException(Phase8AuthorityReasonCodes.NotCommitted, [$"'{path}' did not contain a typed committed artifact."]); }
     private static async Task<string> HashFileAsync(string path, CancellationToken ct)
     { await using var stream = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant(); }
+    private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private static void Fail(string code, string message) => throw new Phase8AuthorityException(code, [message]);
 }

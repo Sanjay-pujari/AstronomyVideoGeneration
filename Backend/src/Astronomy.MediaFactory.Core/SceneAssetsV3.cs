@@ -1,6 +1,7 @@
 namespace Astronomy.MediaFactory.Core;
 
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using System.Text.Json;
 
 public sealed record SceneAssetsV3Request(
     string? WorkingDirectoryRoot = null,
@@ -75,16 +76,30 @@ public sealed record Phase8SceneRequirement(
     string ObservationDirection, IReadOnlyList<string> RequiredAstronomyObjects,
     IReadOnlyList<string> KnowledgeReferenceIds, string AcceptedNarrationText,
     string AcceptedNarrationSceneId, string VisualOpportunityType, string AssetRole,
-    string RenderingPreference, string? LocationContext = null, string? TimeContext = null);
+    string RenderingPreference, string? LocationContext = null, string? TimeContext = null,
+    string? NarrationReleaseCandidateChecksum = null);
+
+/// <summary>The frozen Phase 7 downstream artifact; deliberately contains no working-draft contract.</summary>
+public sealed record Phase7AcceptedNarrationScene(string SceneId, int SceneNumber, string BlueprintSceneId,
+    string StoryFrameId, IReadOnlyList<string> SelectedKnowledgeReferenceIds,
+    IReadOnlyList<string> SelectedClaimIds, string NarrationText);
+public sealed record Phase7AcceptedReleaseCandidate(string SchemaVersion, string AttemptId,
+    DateTimeOffset GeneratedUtc, string ReleaseCandidateId, string ExecutionId, string PlanId,
+    string EventId, string Language, string Variant, string SourceBlueprintAggregateId,
+    string SourceBlueprintAggregateChecksum, string SourceVariantBlueprintId,
+    string SourceVariantBlueprintChecksum, string SourceStoryFramesAuthorityId,
+    string SourceStoryFramesAuthorityChecksum, int BlueprintSceneCount, int AcceptedSceneCount,
+    IReadOnlyList<Phase7AcceptedNarrationScene> Scenes, JsonElement AcceptanceResult,
+    string DeterministicChecksum);
 
 public sealed record Phase8AuthorityInput(
     string PlanId, string ExecutionId, string EventId, string Language,
     DocumentaryBlueprintAggregate DocumentaryBlueprint,
     string DocumentaryBlueprintChecksum, StoryFramesAuthority StoryFrameAuthority,
     string StoryFrameManifestChecksum,
-    DocumentaryNarrativeReleaseCandidate? LongNarrationReleaseCandidate,
+    Phase7AcceptedReleaseCandidate? LongNarrationReleaseCandidate,
     string? LongNarrationReleaseCandidateChecksum,
-    DocumentaryNarrativeReleaseCandidate? ShortNarrationReleaseCandidate,
+    Phase7AcceptedReleaseCandidate? ShortNarrationReleaseCandidate,
     string? ShortNarrationReleaseCandidateChecksum,
     IReadOnlyList<string> RequestedVariants,
     IReadOnlyList<Phase8SceneRequirement> LongScenes,
@@ -108,8 +123,24 @@ public sealed class Phase8AuthorityException(string reasonCode, IReadOnlyList<st
     public IReadOnlyList<string> Errors { get; } = errors;
 }
 
+public sealed class Phase8AuthorityLoadDiagnostics
+{
+    public bool Phase4AuthorityLoadStarted { get; set; }
+    public bool Phase4AuthorityLoaded { get; set; }
+    public bool Phase6AuthorityLoadStarted { get; set; }
+    public bool Phase6AuthorityLoaded { get; set; }
+    public bool ShortNarrationAuthorityLoadStarted { get; set; }
+    public bool ShortNarrationAuthorityLoaded { get; set; }
+    public bool LongNarrationAuthorityLoadStarted { get; set; }
+    public bool LongNarrationAuthorityLoaded { get; set; }
+    public bool AuthorityProjectionStarted { get; set; }
+    public bool AuthorityProjectionCompleted { get; set; }
+    public string? AuthorityFailureStage { get; set; }
+    public string? AuthorityFailureType { get; set; }
+    public string? AuthorityFailureMessage { get; set; }
+}
 public sealed record Phase8AuthorityLoadRequest(string OutputRoot, string PlanId, string EventId,
-    string Language, IReadOnlyList<string> RequestedVariants);
+    string Language, IReadOnlyList<string> RequestedVariants, Phase8AuthorityLoadDiagnostics? Diagnostics = null);
 public interface IPhase8AuthorityLoader
 {
     Task<Phase8AuthorityInput> LoadAsync(Phase8AuthorityLoadRequest request, CancellationToken cancellationToken);
