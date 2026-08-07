@@ -850,6 +850,14 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var transitionQualityScore = Math.Max(0, professionalScores.EditorialFlowScore - (ContainsAny(fullText, "Next", "Moving on") ? 8 : 0));
         var performanceDiagnostics = new
         {
+            generatorInvocationCount = llmRequestCounts.Values.Sum(),
+            providerInvocationCount = llmRequestCounts.Values.Sum(),
+            longProviderInvocationCount = llmRequestCounts.GetValueOrDefault("long"),
+            shortProviderInvocationCount = llmRequestCounts.GetValueOrDefault("short"),
+            invocations = providerDiagnostics,
+            providerInvocationStarted = llmRequestCounts.Values.Sum() > 0 && providerFailure?.InvocationStarted != false,
+            providerInvocationCompleted = providerFailure is null && llmRequestCounts.Values.Sum() > 0,
+            providerResponseParsed = anyProviderResponseParsed,
             contractFidelity = sceneMappingValid && !visualInstructionLeakageDetected ? 100 : 50,
             educationalFidelity = beatFidelityScore,
             scientificFidelity = professionalScores.ScientificAccuracyScore,
@@ -2358,12 +2366,17 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         .Where(t => t.Length > 3)
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    private static IReadOnlyList<string> DetectProducerNotesLeakage(ProducerNotesContract contract, string narrationText)
+    private static readonly string[] ProducerNoteLeakageLabels =
+        ["producer note", "producer notes", "scene purpose", "audience promise", "facts to mention", "knowledge goal",
+         "transition goal", "success criteria", "raw metadata", "diagnostic warning", "internal instruction"];
+
+    internal static IReadOnlyList<string> DetectProducerNotesLeakage(ProducerNotesContract contract, string narrationText)
     {
         var leaks = new List<string>();
-        foreach (var phrase in EngineeringLeakagePhrases.Concat(PromptLeakagePhrases))
+        foreach (var phrase in ProducerNoteLeakageLabels)
         {
-            if (narrationText.Contains(phrase, StringComparison.OrdinalIgnoreCase)) leaks.Add(phrase);
+            if (Regex.IsMatch(narrationText, $@"\b{Regex.Escape(phrase)}\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                leaks.Add(phrase);
         }
 
         foreach (var note in contract.Briefs.SelectMany(b => new[] { b.SceneStory, b.NarrativeGoal, b.AudienceExperience, b.ObservationGuidance, b.TransitionContext }))

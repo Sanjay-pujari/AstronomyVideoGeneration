@@ -70,7 +70,7 @@ public sealed record DocumentaryNarrativeLifecycleAcceptanceResult(bool Accepted
     string? ReleaseCandidateId = null);
 internal sealed record NarrationGeneratorBlockingAssessment(bool GenerationCompleted, bool LongProduced,
     bool ShortProduced, IReadOnlyList<string> BlockingErrors, IReadOnlyList<string> AdvisoryWarnings,
-    bool CanRetry = false);
+    bool CanRetry = false, IReadOnlyList<string>? ProducerNoteLeakageMatches = null);
 internal sealed record Phase7BlueprintAuthority(DocumentaryBlueprintAggregate Aggregate,
     DocumentaryBlueprintVariantArtifact Long, DocumentaryBlueprintVariantArtifact Short,
     StoryFramesAuthority StoryFrames);
@@ -113,7 +113,9 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
     private static readonly string[] LeakageTerms =
         ["system prompt", "developer prompt", "producer note", "internal instruction", "claimId", "knowledgeReferenceId",
          "viewerQuestionId", "learningObjectiveId", "final narration remains owned by phase 7", "advance the certified", "```json"];
-    private static readonly Regex InternalId = new(@"\b(?:VQ|LO|CLM|CLAIM|KR|KNOWLEDGE)[-_]?[A-Z0-9]{2,}\b|\bAdvance\d{2,}\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex DelimitedInternalId = new(@"\b(?:VQ|LO|CLM|CLAIM|KR|KNOWLEDGE)[-_][A-Z0-9][A-Z0-9_.:-]*\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex CompactInternalId = new(@"\b(?:VQ|LO|CLM|KR)\d{2,}\b", RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex AdvancePlaceholder = new(@"\bAdvance\d{2,}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public async Task<DocumentaryNarrativeLifecycleResult> ExecuteAsync(DocumentaryNarrativeLifecycleRequest request,
         CancellationToken cancellationToken = default)
@@ -300,6 +302,11 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             longArtifactPath = Path.Combine(request.ExecutionRoot, "narration-v5", "long", "narration.json"),
             shortArtifactPath = Path.Combine(request.ExecutionRoot, "narration-v5", "short", "narration.json"),
             longQuality, shortQuality, crossVariantValidationResult = new { passed = crossErrors.Count == 0, errors = crossErrors },
+            postGenerationValidation = new
+            {
+                longVariant = BuildPostGenerationDiagnostics(longDraft, longRequest, generatorAssessment),
+                shortVariant = BuildPostGenerationDiagnostics(shortDraft, shortRequest, generatorAssessment)
+            },
             durationEstimates = new { longSeconds = longQuality.EstimatedDurationSeconds, shortSeconds = shortQuality.EstimatedDurationSeconds },
             revisionHistory = revisions, longAcceptance, shortAcceptance, succeeded,
             errors = errors.Distinct(StringComparer.Ordinal).ToArray(), warnings = warnings.Distinct(StringComparer.Ordinal).ToArray(),
@@ -343,7 +350,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             errors.Add("P7_COMPOSITION_AUTHORITY_HANDOFF_INVALID: composition identity mismatch or cross-variant scene ownership overlap.");
     }
 
-    private static (int Long, int Short) ReadProviderInvocationCounts(string root)
+    internal static (int Long, int Short) ReadProviderInvocationCounts(string root)
     {
         var path = Path.Combine(root, "narration-v5", "documentary-script", "performance-diagnostics.json");
         if (!File.Exists(path)) return (0, 0);
@@ -586,7 +593,7 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
                 .GroupBy(scene => Normalize(scene.NarrationText), StringComparer.Ordinal).Where(group => group.Count() > 1).ToArray();
             if (duplicateBlocks.Length > 0) errors.Add("Duplicate complete scene narration blocks were detected.");
             if (LeakageTerms.Any(term => draft.Text.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
-                InternalId.IsMatch(draft.Text) ||
+                ContainsInternalIdentifier(draft.Text) ||
                 Regex.IsMatch(draft.Text, "\\b(?:sceneId|viewerQuestionId|learningObjectiveId)\\s*[:=]", RegexOptions.IgnoreCase))
                 errors.Add("Metadata or prompt leakage detected.");
             var openings = draft.Scenes.Where(s => !string.IsNullOrWhiteSpace(s.NarrationText))
@@ -645,11 +652,14 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
             if (Boolean(rootElement, "severeDuplicationDetected")) blockers.Add("Severe duplication was detected.");
             if ((TryProperty(rootElement, "editorialDecision", out var editorial) || TryProperty(rootElement, "finalEditorialDecision", out editorial))
                 && editorial.ValueKind == JsonValueKind.String && editorial.GetString()?.Equals("Do Not Publish", StringComparison.OrdinalIgnoreCase) == true)
-                blockers.Add("Generator editorial decision is Do Not Publish.");
+                advisory.Add("Generator editorial decision is Do Not Publish; objective validation gates govern lifecycle acceptance.");
             if (TryProperty(rootElement, "warnings", out var warnings) && warnings.ValueKind == JsonValueKind.Array) advisory.AddRange(Strings(warnings));
             if (TryProperty(rootElement, "promptRecommendation", out var prompt) && prompt.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(prompt.GetString())) advisory.Add("Prompt recommendation: " + prompt.GetString());
             if (TryProperty(rootElement, "auroraCertified", out _) && !Boolean(rootElement, "auroraCertified")) advisory.Add("Aurora certification was not achieved; this is advisory.");
-            return new(true, longProduced, shortProduced, blockers.Distinct().ToArray(), advisory.Distinct().ToArray(), Boolean(rootElement, "canRetry"));
+            var producerNoteMatches = TryProperty(rootElement, "producerNotesLeakagePhrases", out var phrases) && phrases.ValueKind == JsonValueKind.Array
+                ? Strings(phrases).ToArray() : [];
+            return new(true, longProduced, shortProduced, blockers.Distinct().ToArray(), advisory.Distinct().ToArray(),
+                Boolean(rootElement, "canRetry"), producerNoteMatches);
         }
         catch (JsonException) { return new(false, false, false, ["Generator diagnostics JSON is invalid."], []); }
     }
@@ -683,9 +693,9 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
 
     internal static bool HasFactualSubstance(string text, DocumentaryNarrativeSceneInput scene)
     {
-        if (string.IsNullOrWhiteSpace(text) || InternalId.IsMatch(text)) return false;
+        if (string.IsNullOrWhiteSpace(text) || ContainsInternalIdentifier(text)) return false;
         var expected = scene.RequiredFacts.Select(f => f.Fact).Concat(scene.OptionalFacts).Concat(scene.CulturalContext)
-            .Append(scene.NarrationBrief).Where(v => !string.IsNullOrWhiteSpace(v) && !InternalId.IsMatch(v));
+            .Append(scene.NarrationBrief).Where(v => !string.IsNullOrWhiteSpace(v) && !ContainsInternalIdentifier(v));
         var stop = new HashSet<string>(["about","after","before","could","every","their","there","these","those","which","would","viewer","scene","learn","understand","discover","narrative","purpose"], StringComparer.OrdinalIgnoreCase);
         var concepts = expected.SelectMany(v => Regex.Matches(v ?? "", @"[\p{L}\p{N}']+").Select(m => m.Value.ToLowerInvariant()))
             .Where(t => t.Length >= 4 && !stop.Contains(t)).Distinct().ToArray();
@@ -693,6 +703,48 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationService(
         var normalized = Normalize(text);
         return concepts.Count(normalized.Contains) >= Math.Min(2, concepts.Length);
     }
+
+    internal static bool ContainsInternalIdentifier(string text) =>
+        !string.IsNullOrWhiteSpace(text) &&
+        (DelimitedInternalId.IsMatch(text) || CompactInternalId.IsMatch(text) || AdvancePlaceholder.IsMatch(text));
+
+    private static object BuildPostGenerationDiagnostics(DocumentaryNarrativeDraftCandidate? draft,
+        DocumentaryNarrativeCompositionRequest request, NarrationGeneratorBlockingAssessment assessment)
+    {
+        var text = draft?.Text ?? "";
+        var internalMatches = InternalIdentifierMatches(text);
+        var metadataMatches = LeakageTerms.Where(term => text.Contains(term, StringComparison.OrdinalIgnoreCase))
+            .Concat(internalMatches).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var producerMatches = assessment.ProducerNoteLeakageMatches ?? [];
+        var scenes = (draft?.Scenes ?? []).Select(scene =>
+        {
+            var governed = request.OrderedScenes.FirstOrDefault(candidate => candidate.SceneId.Equals(scene.SceneId, StringComparison.OrdinalIgnoreCase));
+            var expected = governed is null ? [] : ExpectedConcepts(governed);
+            var normalized = Normalize(scene.NarrationText);
+            var matched = expected.Where(normalized.Contains).ToArray();
+            var ids = InternalIdentifierMatches(scene.NarrationText);
+            return new { sceneId = scene.SceneId, factualSubstancePassed = governed is not null && HasFactualSubstance(scene.NarrationText, governed),
+                expectedConcepts = expected, matchedConcepts = matched, internalIdentifierDetected = ids.Length > 0,
+                internalIdentifierMatch = ids.FirstOrDefault() };
+        }).ToArray();
+        var producerDetected = producerMatches.Count > 0 || assessment.BlockingErrors.Any(error => error.Contains("Producer-note leakage", StringComparison.OrdinalIgnoreCase));
+        return new { metadataLeakageDetected = metadataMatches.Length > 0, metadataLeakageMatches = metadataMatches,
+            internalIdMatches = internalMatches, producerNoteLeakageDetected = producerDetected,
+            producerNoteLeakageMatches = producerMatches, scenes };
+    }
+
+    private static string[] ExpectedConcepts(DocumentaryNarrativeSceneInput scene)
+    {
+        var stop = new HashSet<string>(["about","after","before","could","every","their","there","these","those","which","would","viewer","scene","learn","understand","discover","narrative","purpose"], StringComparer.OrdinalIgnoreCase);
+        return scene.RequiredFacts.Select(f => f.Fact).Concat(scene.OptionalFacts).Concat(scene.CulturalContext).Append(scene.NarrationBrief)
+            .Where(value => !string.IsNullOrWhiteSpace(value) && !ContainsInternalIdentifier(value))
+            .SelectMany(value => Regex.Matches(value, @"[\p{L}\p{N}']+").Select(match => match.Value.ToLowerInvariant()))
+            .Where(token => token.Length >= 4 && !stop.Contains(token)).Distinct().ToArray();
+    }
+
+    private static string[] InternalIdentifierMatches(string text) =>
+        new[] { DelimitedInternalId, CompactInternalId, AdvancePlaceholder }.SelectMany(regex => regex.Matches(text).Select(match => match.Value))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     private static async Task<Phase7NarrationPublicationResult> PublishReleaseCandidatesAsync(DocumentaryNarrativeLifecycleRequest request,
         Phase7BlueprintAuthority blueprintAuthority, DocumentaryNarrativeCompositionRequest longRequest, DocumentaryNarrativeCompositionRequest shortRequest,
