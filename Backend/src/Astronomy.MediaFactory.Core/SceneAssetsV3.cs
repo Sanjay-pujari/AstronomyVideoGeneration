@@ -88,10 +88,23 @@ public enum AstronomicalAccuracyRequirement
     ObservationAccurate
 }
 
+public enum Phase8VisualStyle
+{
+    Cinematic,
+    HybridCinematic,
+    Infographic,
+    ScientificChart
+}
+
 /// <summary>Provider routing derived from certified scene meaning, independently of documentary role.</summary>
 public sealed record Phase8VisualAccuracyPlan(AstronomicalAccuracyRequirement Requirement,
     bool RequiresScientificGeometry, string RenderingStrategy, string PreferredProvider,
-    string FallbackProvider, IReadOnlyList<string> ExpectedObjects);
+    string FallbackProvider, IReadOnlyList<string> ExpectedObjects,
+    Phase8VisualStyle VisualStyle = Phase8VisualStyle.Cinematic,
+    string? BaseImageProvider = "AzureOpenAICinematicImageGenerator",
+    string? AstronomyGeometryProvider = null,
+    string FinalRenderer = "CinematicAspectFillRenderer",
+    bool AiImageRequired = true, bool InfographicRequired = false, bool ScientificOverlayRequired = false);
 
 public sealed record Phase8AstronomyRendererMetadata(string VisualRenderer, string AstronomyGeometryProvider,
     string? ImageGenerationProvider, IReadOnlyList<string> RenderedObjectIds,
@@ -127,10 +140,24 @@ public static class Phase8VisualAccuracyPolicy
             : geometry ? AstronomicalAccuracyRequirement.GeometryAccurate
             : scene.RequiredAstronomyObjects.Count > 0 ? AstronomicalAccuracyRequirement.ObjectAccurate
             : AstronomicalAccuracyRequirement.Contextual;
+        // Accuracy and presentation are deliberately independent axes.  Scientific geometry
+        // governs a layer; it does not turn a documentary shot into an infographic.
+        var explicitInfographic = new[] { "infographic", "observation card", "locator card", "diagram", "instructional graphic", "scientific chart" }
+            .Any(term => scene.RenderingPreference.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || scene.VisualDirection.Contains(term, StringComparison.OrdinalIgnoreCase));
+        var style = explicitInfographic ? Phase8VisualStyle.Infographic
+            : requires ? Phase8VisualStyle.HybridCinematic : Phase8VisualStyle.Cinematic;
+        var aiRequired = style is Phase8VisualStyle.Cinematic or Phase8VisualStyle.HybridCinematic;
         return new(requirement, requires,
-            requires ? "ScientificallyAccurateSkyCaptureWithAspectSafeComposition" : "CinematicDocumentary",
-            requires ? "ExistingAccurateSkyGuideRenderer" : "AzureOpenAICinematicImageGenerator",
-            requires ? "None" : "DeterministicSceneRenderer", scene.RequiredAstronomyObjects);
+            style == Phase8VisualStyle.HybridCinematic ? "CinematicBaseWithScientificGeometryOverlay"
+                : style == Phase8VisualStyle.Infographic ? "DeterministicInfographic" : "CinematicDocumentary",
+            aiRequired ? "AzureOpenAICinematicImageGenerator" : "DeterministicInfographicRenderer",
+            aiRequired ? "DeterministicSceneRenderer" : "None", scene.RequiredAstronomyObjects,
+            style, aiRequired ? "AzureOpenAICinematicImageGenerator" : null,
+            requires ? "HipparcosCatalogProjection" : null,
+            style == Phase8VisualStyle.HybridCinematic ? "HybridCinematicCompositionRenderer"
+                : style == Phase8VisualStyle.Infographic ? "DeterministicInfographicRenderer" : "CinematicAspectFillRenderer",
+            aiRequired, style == Phase8VisualStyle.Infographic, style == Phase8VisualStyle.HybridCinematic);
     }
 }
 
