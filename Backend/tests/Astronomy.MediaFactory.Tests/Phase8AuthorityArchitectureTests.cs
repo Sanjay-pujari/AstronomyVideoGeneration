@@ -92,6 +92,65 @@ public sealed class Phase8AuthorityArchitectureTests
     }
 
     [Fact]
+    public void GenericRequirementTextIsNotAstronomyObject()
+    {
+        var generic = "Downstream visual asset must implement the certified HighLevelVisualOpportunity opportunity.";
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Short", 1, objects: []));
+        Assert.DoesNotContain(generic, plan.ExpectedObjects);
+    }
+
+    [Fact]
+    public void OrionRecognitionSceneProjectsRealObjectIdsAndRequiresBeltStars()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Short", 3, "RecognitionGuide", "Where to look",
+            "Recognize Orion by its Belt", ["Orion", "Alnitak", "Alnilam", "Mintaka", "Betelgeuse", "Rigel"]));
+        Assert.All(new[] { "Orion", "Alnitak", "Alnilam", "Mintaka" }, x => Assert.Contains(x, plan.ExpectedObjects));
+        Assert.True(plan.RequiresScientificGeometry);
+    }
+
+    [Fact]
+    public void ScientificCertificationFailsWithoutRendererEvidence()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Short", 3, "RecognitionGuide", "Where to look",
+            "Find the Belt", ["Orion", "Alnitak", "Alnilam", "Mintaka"]));
+        Assert.False(Phase8ScientificCertification.IsCertified(plan, null));
+    }
+
+    [Fact]
+    public void VerifiedObjectsComeFromRendererMetadataAndStellariumEvidencePasses()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Short", 3, "RecognitionGuide", "Where to look",
+            "Find the Belt", ["Orion", "Alnitak", "Alnilam", "Mintaka"]));
+        var incomplete = Metadata(["Orion", "Alnitak"]);
+        Assert.False(Phase8ScientificCertification.IsCertified(plan, incomplete));
+        Assert.True(Phase8ScientificCertification.IsCertified(plan, Metadata(plan.ExpectedObjects)));
+    }
+
+    [Fact]
+    public void DeterministicGenericDiagramCannotClaimGeometryCertification()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Short", 3, "RecognitionGuide", "Where to look",
+            "Find Orion", ["Orion"]));
+        var generic = Metadata(["Orion"]) with { GeometrySource = "Deterministic generic diagram" };
+        Assert.False(Phase8ScientificCertification.IsCertified(plan, generic));
+    }
+
+    [Fact]
+    public void RecognitionSceneFinalAssetUsesTrustedGeometrySource()
+    {
+        var source = ReadInfrastructure("SceneAssetsV3Service.cs");
+        Assert.Contains("Hipparcos J2000 catalog", source);
+        Assert.Contains("Alnitak", source);
+        Assert.Contains("Alnilam", source);
+        Assert.Contains("Mintaka", source);
+        Assert.Contains("AspectFitNoStretch", source);
+    }
+
+    [Fact]
+    public void ContextualSceneDoesNotRequireScientificGeometry()
+        => Assert.False(Phase8VisualAccuracyPolicy.Derive(Scene("Short", 1, "OpeningHook", "Meet Orion")).RequiresScientificGeometry);
+
+    [Fact]
     public void AuthorityCleanupOwns08SceneAssets()
     {
         var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
@@ -305,6 +364,9 @@ public sealed class Phase8AuthorityArchitectureTests
         => new(variant, $"scene-{order:00}", $"blueprint-{order:00}", $"frame-{order:00}", order,
             role, "stage", purpose, string.Empty, string.Empty, objects ?? [], [], narration,
             $"narration-{order:00}", "HighLevelVisualOpportunity", "scene-background", "Cinematic");
+    private static Phase8AstronomyRendererMetadata Metadata(IReadOnlyList<string> rendered) => new(
+        "DeterministicCompositionRenderer", "Stellarium", null, rendered,
+        new Dictionary<string, string>(), "Stellarium", null, null, "60 degrees", "north-up", "AspectFitNoStretch", false);
     private static string Slice(string source, string start, string end)
     {
         var first = source.IndexOf(start, StringComparison.Ordinal); var last = source.IndexOf(end, first + start.Length, StringComparison.Ordinal);

@@ -93,6 +93,23 @@ public sealed record Phase8VisualAccuracyPlan(AstronomicalAccuracyRequirement Re
     bool RequiresScientificGeometry, string RenderingStrategy, string PreferredProvider,
     string FallbackProvider, IReadOnlyList<string> ExpectedObjects);
 
+public sealed record Phase8AstronomyRendererMetadata(string VisualRenderer, string AstronomyGeometryProvider,
+    string? ImageGenerationProvider, IReadOnlyList<string> RenderedObjectIds,
+    IReadOnlyDictionary<string, string> CatalogIdentifiers, string GeometrySource,
+    string? ObservationTime, string? ObserverLocation, string FieldOfView, string Orientation,
+    string CompositionMode, bool GeometryDistorted);
+
+public static class Phase8ScientificCertification
+{
+    private static readonly string[] TrustedGeometrySources = ["Stellarium", "Hipparcos J2000 catalog"];
+
+    public static bool IsCertified(Phase8VisualAccuracyPlan plan, Phase8AstronomyRendererMetadata? metadata)
+        => !plan.RequiresScientificGeometry || metadata is not null
+            && TrustedGeometrySources.Any(x => metadata.GeometrySource.Contains(x, StringComparison.OrdinalIgnoreCase))
+            && !metadata.GeometryDistorted
+            && plan.ExpectedObjects.All(expected => metadata.RenderedObjectIds.Contains(expected, StringComparer.OrdinalIgnoreCase));
+}
+
 public static class Phase8VisualAccuracyPolicy
 {
     private static readonly string[] GeometryIntent = ["where to look", "locate", "find ", "recogniz", "pattern", "belt", "relative placement", "configuration", "conjunction", "grouping"];
@@ -102,7 +119,8 @@ public static class Phase8VisualAccuracyPolicy
     {
         var semantics = string.Join(' ', scene.ScenePurpose, scene.VisualDirection, scene.ObservationDirection,
             scene.AcceptedNarrationText, string.Join(' ', scene.RequiredAstronomyObjects)).ToLowerInvariant();
-        var observation = ObservationIntent.Any(semantics.Contains);
+        var observation = ObservationIntent.Any(semantics.Contains)
+            && (scene.TimeContext is not null || scene.LocationContext is not null);
         var geometry = GeometryIntent.Any(semantics.Contains);
         var requires = observation || geometry;
         var requirement = observation ? AstronomicalAccuracyRequirement.ObservationAccurate
@@ -206,7 +224,9 @@ public sealed record SceneAssetManifestItem(string AssetId, string Variant, stri
     AstronomicalAccuracyRequirement AstronomicalAccuracyRequirement = AstronomicalAccuracyRequirement.Contextual,
     string AstronomicalAccuracySource = "CinematicGenerative", bool ScientificGeometryCertified = false,
     IReadOnlyList<string>? AstronomyObjectsExpected = null, IReadOnlyList<string>? AstronomyObjectsVerified = null,
-    string SkyGeometryValidationStatus = "NotRequired", string? AccuracyEvidencePath = null);
+    string SkyGeometryValidationStatus = "NotRequired", string? AccuracyEvidencePath = null,
+    bool RequiresScientificGeometry = false, string? VisualRenderer = null,
+    string? AstronomyGeometryProvider = null, string? ImageGenerationProvider = null);
 public sealed record Phase8ManifestValidationResult(bool IsValid, IReadOnlyList<string> ReasonCodes,
     IReadOnlyList<string> Errors);
 public interface IPhase8SceneAssetManifestValidator
