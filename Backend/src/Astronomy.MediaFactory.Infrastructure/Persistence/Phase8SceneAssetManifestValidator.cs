@@ -29,6 +29,16 @@ public sealed class Phase8SceneAssetManifestValidator : IPhase8SceneAssetManifes
                 Error(Phase8AuthorityReasonCodes.NotCommitted, $"Provider/source evidence is incomplete for '{key}'.");
             if (item.SharedAsset && (string.IsNullOrWhiteSpace(item.SharedAssetOwner) || item.SharedAssetConsumers.Count == 0))
                 Error(Phase8AuthorityReasonCodes.SceneLineageMismatch, $"Shared asset ownership is incomplete for '{key}'.");
+            var accuracy = Phase8VisualAccuracyPolicy.Derive(scene);
+            if (item.AstronomicalAccuracyRequirement != accuracy.Requirement)
+                Error(Phase8AuthorityReasonCodes.ScientificVisualRequirementUnsatisfied, $"Authority-derived accuracy classification differs for '{key}'.");
+            if (accuracy.RequiresScientificGeometry && (!item.ScientificGeometryCertified
+                || item.AstronomicalAccuracySource.Contains("Generative", StringComparison.OrdinalIgnoreCase)
+                || item.SkyGeometryValidationStatus != "Passed"
+                || string.IsNullOrWhiteSpace(item.AccuracyEvidencePath)
+                || accuracy.ExpectedObjects.Except(item.AstronomyObjectsVerified ?? [], StringComparer.OrdinalIgnoreCase).Any()))
+                Error(Phase8AuthorityReasonCodes.ScientificVisualRequirementUnsatisfied,
+                    $"Scientific provider metadata does not certify the required sky geometry for '{key}'.");
             var path = Path.GetFullPath(Path.Combine(outputRoot, item.PhysicalPath.Replace('/', Path.DirectorySeparatorChar)));
             if (!path.StartsWith(Path.GetFullPath(outputRoot), StringComparison.Ordinal) || !File.Exists(path)) { Error(Phase8AuthorityReasonCodes.NotCommitted, $"Physical asset is missing for '{key}'."); continue; }
             try

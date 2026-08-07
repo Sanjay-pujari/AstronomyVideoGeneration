@@ -54,6 +54,44 @@ public sealed class Phase8AuthorityArchitectureTests
     }
 
     [Fact]
+    public void BothVariantsOrionProduces12LongAnd4ShortAssets()
+    {
+        // Production ownership is the committed frame collection, never a Phase 8 constant.
+        var committedFrames = Enumerable.Range(1, 12).Select(i => Scene("Long", i)).Concat(
+            Enumerable.Range(1, 4).Select(i => Scene("Short", i))).ToArray();
+        Assert.Equal(12, committedFrames.Count(x => x.Variant == "Long"));
+        Assert.Equal(4, committedFrames.Count(x => x.Variant == "Short"));
+        Assert.Equal(16, committedFrames.Length);
+    }
+
+    [Fact]
+    public void RecognitionGuideWhereToLookRequiresScientificGeometry()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Short", 3, "RecognitionGuide", "Where to look",
+            "Find Orion from its Belt pattern", ["Orion", "Alnitak", "Alnilam", "Mintaka"]));
+        Assert.True(plan.RequiresScientificGeometry);
+        Assert.Equal(AstronomicalAccuracyRequirement.GeometryAccurate, plan.Requirement);
+        Assert.Equal("ExistingAccurateSkyGuideRenderer", plan.PreferredProvider);
+    }
+
+    [Fact]
+    public void GenericRecognitionGuideDoesNotAutomaticallyRequireStellarium()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Short", 2, "RecognitionGuide", "Introduce the story",
+            "A symbolic documentary portrait", []));
+        Assert.False(plan.RequiresScientificGeometry);
+        Assert.Equal("AzureOpenAICinematicImageGenerator", plan.PreferredProvider);
+    }
+
+    [Fact]
+    public void AzureCinematicAssetIsNotMarkedScientificGeometryCertified()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Short", 1));
+        Assert.False(plan.RequiresScientificGeometry);
+        Assert.Equal(AstronomicalAccuracyRequirement.Contextual, plan.Requirement);
+    }
+
+    [Fact]
     public void AuthorityCleanupOwns08SceneAssets()
     {
         var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
@@ -262,6 +300,11 @@ public sealed class Phase8AuthorityArchitectureTests
     }
 
     private static string ReadInfrastructure(string name) => File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Persistence", name));
+    private static Phase8SceneRequirement Scene(string variant, int order, string role = "OpeningHook",
+        string purpose = "What you will see", string narration = "A cinematic introduction", IReadOnlyList<string>? objects = null)
+        => new(variant, $"scene-{order:00}", $"blueprint-{order:00}", $"frame-{order:00}", order,
+            role, "stage", purpose, string.Empty, string.Empty, objects ?? [], [], narration,
+            $"narration-{order:00}", "HighLevelVisualOpportunity", "scene-background", "Cinematic");
     private static string Slice(string source, string start, string end)
     {
         var first = source.IndexOf(start, StringComparison.Ordinal); var last = source.IndexOf(end, first + start.Length, StringComparison.Ordinal);
