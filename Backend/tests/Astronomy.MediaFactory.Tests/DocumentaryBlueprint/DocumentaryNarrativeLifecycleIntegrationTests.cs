@@ -165,6 +165,78 @@ public sealed class DocumentaryNarrativeLifecycleIntegrationTests
             "Look up and let wonder guide you as the story continues into another remarkable moment.", governed).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("look")]
+    [InlineData("Look")]
+    [InlineData("looking")]
+    [InlineData("lore")]
+    [InlineData("Lore")]
+    [InlineData("long")]
+    [InlineData("Long")]
+    [InlineData("local")]
+    [InlineData("location")]
+    [InlineData("logical")]
+    [InlineData("lower")]
+    [InlineData("Krishna")]
+    public void Lifecycle_ordinary_words_are_not_internal_ids(string text) =>
+        DocumentaryNarrativeLifecycleIntegrationService.ContainsInternalIdentifier(text).Should().BeFalse();
+
+    [Theory]
+    [InlineData("LO-03")]
+    [InlineData("LO_03")]
+    [InlineData("LO12")]
+    [InlineData("VQ-03")]
+    [InlineData("CLM-123")]
+    [InlineData("CLAIM-ABC123")]
+    [InlineData("KR-42")]
+    [InlineData("KNOWLEDGE-ABC123")]
+    [InlineData("Advance03")]
+    public void Lifecycle_real_internal_ids_are_rejected(string text) =>
+        DocumentaryNarrativeLifecycleIntegrationService.ContainsInternalIdentifier(text).Should().BeTrue();
+
+    [Theory]
+    [InlineData("Look closely, and you'll see three stars aligned in a nearly perfect row: Alnitak, Alnilam, and Mintaka form Orion's Belt, framed by Betelgeuse and Rigel.", "Alnitak Alnilam Mintaka Belt Betelgeuse Rigel Orion")]
+    [InlineData("In Greek mythology Orion is a hunter, while Arabic lore, India and China preserve stories among stars and nebulae.", "Greek mythology Arabic lore India China stars nebulae Orion")]
+    [InlineData("Greek and Roman Orion traditions meet India's Mriga, Chinese traditions, and Arabic names.", "Greek Roman India Mriga Chinese Arabic Orion")]
+    [InlineData("The Belt stars Alnitak, Alnilam and Mintaka sit between Betelgeuse and Rigel near the celestial equator.", "Belt Alnitak Alnilam Mintaka Betelgeuse Rigel celestial equator")]
+    [InlineData("To find Orion, look for its distinctive Belt: Alnitak, Alnilam and Mintaka, between Betelgeuse and Rigel.", "Belt Alnitak Alnilam Mintaka Betelgeuse Rigel Orion")]
+    public void Real_Orion_scenes_have_factual_substance(string narration, string concepts)
+    {
+        var governed = new DocumentaryNarrativeSceneInput(1, "orion", "recognition", "Orion", "How?", "Recognize Orion", concepts,
+            [new("claim", concepts, [], [], 1m, [])], [], [], [], [], "", 20, "", "");
+        DocumentaryNarrativeLifecycleIntegrationService.HasFactualSubstance(narration, governed).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Generator_editorial_decision_is_advisory_when_objective_gates_pass()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "phase7-editorial-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "narration-v5"));
+            File.WriteAllText(Path.Combine(root, "narration-v5", "generator-validation-diagnostics.json"),
+                """{"longNarrationArtifactValid":true,"shortNarrationArtifactValid":true,"languageValidationPassed":true,"sceneMappingValid":true,"finalEditorialDecision":"Do Not Publish"}""");
+            var result = DocumentaryNarrativeLifecycleIntegrationService.AssessGeneratorResult(root, true, true);
+            result.BlockingErrors.Should().BeEmpty();
+            result.AdvisoryWarnings.Should().Contain(message => message.Contains("Do Not Publish"));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Long_and_short_provider_evidence_is_read_from_performance_diagnostics()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "phase7-provider-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "narration-v5", "documentary-script"));
+            File.WriteAllText(Path.Combine(root, "narration-v5", "documentary-script", "performance-diagnostics.json"),
+                """{"generatorInvocationCount":2,"longProviderInvocationCount":1,"shortProviderInvocationCount":1}""");
+            DocumentaryNarrativeLifecycleIntegrationService.ReadProviderInvocationCounts(root).Should().Be((1, 1));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
     [Fact]
     public void Retry_is_bounded_to_two_total_generator_attempts() =>
         DocumentaryNarrativeLifecycleIntegrationService.MaximumGenerationAttempts.Should().Be(2);
