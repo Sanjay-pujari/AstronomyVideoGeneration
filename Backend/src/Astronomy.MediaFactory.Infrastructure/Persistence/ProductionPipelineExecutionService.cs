@@ -90,7 +90,8 @@ public sealed partial class ProductionPipelineExecutionService(
     IPhase7NarrationAuthorityOrchestrator? phase7NarrationAuthorityOrchestrator = null,
     IFamilyNarrationProfileResolver? familyNarrationProfileResolver = null,
     IDocumentaryNarrativeLifecycleIntegrationService? documentaryNarrativeLifecycleIntegrationService = null,
-    IPhase8AuthorityLoader? phase8AuthorityLoader = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IPhase8AuthorityLoader? phase8AuthorityLoader = null,
+    ILongSceneImagePublicationService? longSceneImagePublicationService = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     // The action delegate and the generic phase-result writer are deliberately separate.
     // Preserve the publication transaction selected by the Phase 3 action so the stable
@@ -249,6 +250,7 @@ public sealed partial class ProductionPipelineExecutionService(
             if (!IsPhaseRequiredForRequestedOutputs(context, phase.No))
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], OutputTypeNotRequestedReason, false, cancellationToken);
+                if (phase.No == 9) skipped = skipped with { ReasonCode = Phase9ReasonCodes.LongNotRequested };
                 phaseResults.Add(skipped);
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
@@ -424,7 +426,9 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool IsPhaseRequiredForRequestedOutputs(ProductionPhaseContext context, int phaseNo)
         => phaseNo switch
         {
-            <= 10 => true,
+            <= 8 => true,
+            9 => IsRequestedOutput(context, "LongVideo"),
+            10 => true,
             11 => IsRequestedOutput(context, "HeroAsset"),
             12 => IsRequestedOutput(context, "Thumbnail"),
             13 => true,
@@ -3247,15 +3251,11 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         if (IsSceneAssetsV3Enabled(context))
         {
-            var manifestPath = Path.Combine(context.OutputRoot, "08-scene-assets", "scene-asset-manifest.json");
-            if (File.Exists(manifestPath))
-            {
-                var manifest = JsonSerializer.Deserialize<SceneAssetManifest>(await File.ReadAllTextAsync(manifestPath, cancellationToken), JsonOptions);
-                var longAssets = manifest?.Assets.Where(x => x.Variant.Equals("Long", StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
-                if (manifest?.PublicationState == "Committed" && longAssets.Length > 0 && longAssets.All(x => File.Exists(Path.Combine(context.OutputRoot, x.PhysicalPath))))
-                    return longAssets.Select(x => Path.Combine(context.OutputRoot, x.PhysicalPath)).Append(manifestPath).ToArray();
-            }
-            return await GenerateSceneAssetsV3Async(context, 9, "Generate Long Scene Images", generateShort: false, generateLong: true, cancellationToken);
+            if (longSceneImagePublicationService is null)
+                throw new InvalidOperationException("Phase 9 Long scene image publication service is not registered.");
+            var result = await longSceneImagePublicationService.PublishAsync(new(context.OutputRoot,
+                context.Request.PlanId.ToString("D"), context.EventId, context.Request.Language, context.OverwriteExisting), cancellationToken);
+            return result.OutputFiles;
         }
 
         var longValidation = ResolveSceneImageValidationPath(context.ExecutionContext.SceneRoot!, "long", preferSceneAssets: true);

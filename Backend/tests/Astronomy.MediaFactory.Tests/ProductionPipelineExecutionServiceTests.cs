@@ -1899,6 +1899,7 @@ Second display cue.
     {
         var context = CreateContext("NamedFullMoon", ["ShortVideo"]);
 
+        Assert.False(IsPhaseRequired(context, 9));
         Assert.True(IsPhaseRequired(context, 13));
         Assert.True(IsPhaseRequired(context, 14));
         Assert.False(IsPhaseRequired(context, 15));
@@ -1913,6 +1914,7 @@ Second display cue.
     {
         var context = CreateContext("MeteorShower", ["ShortVideo", "LongVideo"]);
 
+        Assert.True(IsPhaseRequired(context, 9));
         Assert.True(IsPhaseRequired(context, 13));
         Assert.True(IsPhaseRequired(context, 14));
         Assert.True(IsPhaseRequired(context, 15));
