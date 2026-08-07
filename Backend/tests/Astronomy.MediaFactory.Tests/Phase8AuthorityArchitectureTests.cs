@@ -202,6 +202,29 @@ public sealed class Phase8AuthorityArchitectureTests
     }
 
     [Fact]
+    public void LegacyCandidateSemanticChecksumDoesNotOverrideCommittedPhysicalState()
+    {
+        var source = ReadInfrastructure("Phase8AuthorityLoader.cs");
+        Assert.Contains("Legacy/NotAuthoritative/Advisory", source);
+        Assert.Contains("ExpectedPhysicalSha256, physical", source);
+        Assert.Contains("ValidatePublication(publication, variant)", source);
+        Assert.DoesNotContain("NarrationCandidateSemanticChecksumMismatch,", source);
+    }
+
+    [Fact]
+    public void PlanningArtifactsAreWrittenBeforeProviderGenerationAndSurviveFailure()
+    {
+        var source = ReadInfrastructure("SceneAssetsV3Service.cs");
+        var planning = source.IndexOf("WriteAuthorityPlanningPackageAsync(request, authority", StringComparison.Ordinal);
+        var generation = source.IndexOf("GenerateFormatAsync(root, \"short\"", planning, StringComparison.Ordinal);
+        Assert.True(planning >= 0 && generation > planning);
+        foreach (var artifact in new[] { "media-project.json", "visual-asset-plan.json", "visual-generation-requests.json",
+                     "authority-load-diagnostics.json", "visual-plan-diagnostics.json", "provider-failure-diagnostics.json",
+                     "publication-failure-report.json", "phase8-publication-report.json" })
+            Assert.Contains(artifact, source);
+    }
+
+    [Fact]
     public void AuthorityLoadingPublishesEveryStageDiagnostic()
     {
         var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");

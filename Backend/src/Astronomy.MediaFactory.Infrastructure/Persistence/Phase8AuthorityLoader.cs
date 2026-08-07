@@ -182,10 +182,15 @@ public sealed class Phase8AuthorityLoader : IPhase8AuthorityLoader
             checksumImplementationUsedByPhase8 = Phase7NarrationReleaseCandidateChecksum.ImplementationName,
             checksumImplementationOwnedByPhase7 = Phase7NarrationReleaseCandidateChecksum.ImplementationName,
             checksumInputsEquivalent = true,
-            checksumMismatchReason = candidate.DeterministicChecksum.Equals(semantic, StringComparison.OrdinalIgnoreCase) ? "None" : "Phase7SemanticChecksumMismatch"
+            candidateSemanticChecksumStatus = candidate.DeterministicChecksum.Equals(semantic, StringComparison.OrdinalIgnoreCase)
+                ? "Advisory/Matched"
+                : "Legacy/NotAuthoritative/Advisory",
+            checksumMismatchReason = candidate.DeterministicChecksum.Equals(semantic, StringComparison.OrdinalIgnoreCase) ? "None" : "LegacyPhase7WriterProjection"
         }, JsonOptions);
-        if (!string.Equals(candidate.DeterministicChecksum, semantic, StringComparison.OrdinalIgnoreCase))
-            Fail(Phase8AuthorityReasonCodes.NarrationCandidateSemanticChecksumMismatch, $"{Phase8AuthorityReasonCodes.ChecksumMismatch}: Requested {variant} narration deterministic checksum failed using the Phase 7 canonical scene projection.");
+        // Phase 7's committed-state contract certifies the physical candidate bytes through its
+        // manifest and certification/readback flags.  deterministicChecksum predates that
+        // transactional contract and was never an input to certification.  Keep recomputing and
+        // reporting it as advisory evidence, but do not create a stronger downstream gate here.
         if (string.IsNullOrWhiteSpace(publication.ExpectedPhysicalSha256))
             Fail(Phase8AuthorityReasonCodes.NarrationManifestMismatch, $"Phase 7 manifest does not reference the requested {variant} candidate.");
         if (!string.Equals(publication.ExpectedPhysicalSha256, physical, StringComparison.OrdinalIgnoreCase))

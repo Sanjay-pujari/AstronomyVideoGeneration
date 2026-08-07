@@ -63,24 +63,86 @@ public sealed class SceneAssetsV3Service(
         var authorityReuse = authority is null || request.OverwriteExisting
             ? new HashSet<string>(StringComparer.Ordinal)
             : await PrepareAuthorityReuseAsync(ResolveRoot(request), root, authority, request, cancellationToken);
-        var enableAccurateSkyGuideV2 = request.EnableAccurateSkyGuideV2 ?? renderingOptions.Value.EnableAccurateSkyGuideV2;
-        if (request.GenerateShort)
-        {
-            var scenes = authority?.ShortScenes;
-            var beats = scenes is null ? BuildBeats(context, "short", 5) : BuildAuthorityBeats(context, scenes);
-            shortValidation = await GenerateFormatAsync(root, "short", beats, beats.Count, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.ShortTargetWidth, request.ShortTargetHeight, request.ProviderRequestedSize, cancellationToken, scenes?.Select(x => x.SceneId).ToArray());
-        }
-        if (request.GenerateLong)
-        {
-            var scenes = authority?.LongScenes;
-            var beats = scenes is null ? BuildBeats(context, "long", 9) : BuildAuthorityBeats(context, scenes);
-            longValidation = await GenerateFormatAsync(root, "long", beats, beats.Count, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.LongTargetWidth, request.LongTargetHeight, request.ProviderRequestedSize, cancellationToken, scenes?.Select(x => x.SceneId).ToArray());
-        }
-
         if (authority is not null)
-            files.AddRange(await PublishAuthorityPackageAsync(request, authority, root, authorityReuse, cancellationToken));
+            await WriteAuthorityPlanningPackageAsync(request, authority, cancellationToken);
+        var enableAccurateSkyGuideV2 = request.EnableAccurateSkyGuideV2 ?? renderingOptions.Value.EnableAccurateSkyGuideV2;
+        try
+        {
+            if (request.GenerateShort)
+            {
+                var scenes = authority?.ShortScenes;
+                var beats = scenes is null ? BuildBeats(context, "short", 5) : BuildAuthorityBeats(context, scenes);
+                shortValidation = await GenerateFormatAsync(root, "short", beats, beats.Count, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.ShortTargetWidth, request.ShortTargetHeight, request.ProviderRequestedSize, cancellationToken, scenes?.Select(x => x.SceneId).ToArray());
+            }
+            if (request.GenerateLong)
+            {
+                var scenes = authority?.LongScenes;
+                var beats = scenes is null ? BuildBeats(context, "long", 9) : BuildAuthorityBeats(context, scenes);
+                longValidation = await GenerateFormatAsync(root, "long", beats, beats.Count, request.OverwriteExisting, files, warnings, context, enableAccurateSkyGuideV2, request.LongTargetWidth, request.LongTargetHeight, request.ProviderRequestedSize, cancellationToken, scenes?.Select(x => x.SceneId).ToArray());
+            }
+
+            if (authority is not null)
+                files.AddRange(await PublishAuthorityPackageAsync(request, authority, root, authorityReuse, cancellationToken));
+        }
+        catch (Exception ex) when (authority is not null)
+        {
+            await WriteAuthorityFailureArtifactsAsync(request, authority, ex, CancellationToken.None);
+            throw;
+        }
 
         return new SceneAssetsV3Response(root, files, warnings, shortValidation, longValidation);
+    }
+
+    private async Task WriteAuthorityPlanningPackageAsync(SceneAssetsV3Request request, Phase8AuthorityInput authority, CancellationToken ct)
+    {
+        var root = Path.Combine(ResolveRoot(request), "08-scene-assets");
+        Directory.CreateDirectory(root);
+        var scenes = authority.LongScenes.Concat(authority.ShortScenes).OrderBy(x => x.Variant).ThenBy(x => x.SceneOrder).ToArray();
+        await WriteJsonAsync(Path.Combine(root, "media-project.json"), new
+        {
+            schemaVersion = "1.0", authority.PlanId, authority.ExecutionId, authority.EventId, authority.Language,
+            authority.RequestedVariants, authority.DocumentaryBlueprintChecksum, authority.StoryFrameManifestChecksum,
+            shortNarrationReleaseCandidatePhysicalSha256 = authority.ShortNarrationReleaseCandidateChecksum,
+            longNarrationReleaseCandidatePhysicalSha256 = authority.LongNarrationReleaseCandidateChecksum,
+            expectedShortSceneCount = authority.ShortScenes.Count, expectedLongSceneCount = authority.LongScenes.Count,
+            targetWidth = request.ShortTargetWidth, targetHeight = request.ShortTargetHeight,
+            targetAspectRatio = $"{request.ShortTargetWidth}:{request.ShortTargetHeight}",
+            generationProfile = request.ProviderRequestedSize, createdAtUtc = DateTimeOffset.UtcNow
+        }, ct);
+        await WriteJsonAsync(Path.Combine(root, "visual-asset-plan.json"), new
+        {
+            schemaVersion = "1.0", authoritySource = "Phase8AuthorityInput",
+            scenes = scenes.Select(x => new { x.SceneId, x.BlueprintSceneId, x.StoryFrameId, x.SceneOrder, x.SceneRole,
+                x.ScenePurpose, x.VisualDirection, x.ObservationDirection, x.RequiredAstronomyObjects, x.KnowledgeReferenceIds,
+                x.AcceptedNarrationSceneId, acceptedNarrationReference = x.NarrationReleaseCandidateChecksum,
+                x.VisualOpportunityType, x.RenderingPreference, x.AssetRole,
+                targetWidth = x.Variant == "Short" ? request.ShortTargetWidth : request.LongTargetWidth,
+                targetHeight = x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight,
+                semanticIdentity = SemanticIdentity(x, x.Variant == "Short" ? request.ShortTargetWidth : request.LongTargetWidth,
+                    x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight) })
+        }, ct);
+        await WriteJsonAsync(Path.Combine(root, "visual-generation-requests.json"), new
+        {
+            schemaVersion = "1.0", requests = scenes.Select((x, index) => { var beat = BuildAuthorityBeats(BuildAuthorityTimelineContext(authority), [x]).Single();
+                return new { x.SceneId, providerType = "Planned/SceneAssetsV3Router", providerRequestIdentity = $"scene-assets-v3-{x.Variant.ToLowerInvariant()}-{x.SceneId}",
+                    instruction = beat.VisualPrompt, negativeConstraints = "no embedded text, watermark, logo, or unrelated objects",
+                    width = x.Variant == "Short" ? request.ShortTargetWidth : request.LongTargetWidth,
+                    height = x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight,
+                    renderingMode = beat.RenderMode, sourceBlueprintSceneId = x.BlueprintSceneId,
+                    sourceStoryFrameId = x.StoryFrameId, sourceNarrationSceneId = x.AcceptedNarrationSceneId }; })
+        }, ct);
+    }
+
+    private async Task WriteAuthorityFailureArtifactsAsync(SceneAssetsV3Request request, Phase8AuthorityInput authority, Exception ex, CancellationToken ct)
+    {
+        var diagnostics = Path.Combine(ResolveRoot(request), "08-scene-assets", "diagnostics");
+        Directory.CreateDirectory(diagnostics);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+        async Task Write(string name, object value) => await File.WriteAllTextAsync(Path.Combine(diagnostics, name), JsonSerializer.Serialize(value, options), ct);
+        await Write("authority-load-diagnostics.json", new { authorityLoaded = true, authority.RequestedVariants, expectedShortSceneCount = authority.ShortScenes.Count, expectedLongSceneCount = authority.LongScenes.Count });
+        await Write("visual-plan-diagnostics.json", new { planningArtifactsWritten = true, plannedSceneIds = authority.LongScenes.Concat(authority.ShortScenes).Select(x => x.SceneId) });
+        await Write("provider-failure-diagnostics.json", new { providerCalled = ex.Data.Contains("imageGenerationStartedUtc"), providerSucceeded = false, exceptionType = ex.GetType().Name, ex.Message });
+        await Write("publication-failure-report.json", new { publicationCommitted = false, committedManifestPublished = false, ex.Message, failedAtUtc = DateTimeOffset.UtcNow });
     }
 
     private async Task<string> GenerateFormatAsync(string root, string format, IReadOnlyList<SceneAssetsV3Beat> beats, int expectedCount, bool overwrite, List<string> files, List<string> warnings, SceneAssetsV3TimelineContext context, bool enableAccurateSkyGuideV2, int targetWidth, int targetHeight, string providerRequestedSize, CancellationToken ct, IReadOnlyList<string>? authorityExpectedSceneIds = null)
@@ -755,9 +817,8 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
                 authority.Language, DateTimeOffset.UtcNow, "Candidate", authority.DocumentaryBlueprintChecksum,
                 authority.StoryFrameManifestChecksum, authority.LongNarrationReleaseCandidateChecksum,
                 authority.ShortNarrationReleaseCandidateChecksum, authority.RequestedVariants, items, "Valid", HashText(checksumSeed));
-            await WriteJsonAsync(Path.Combine(staging, "media-project.json"), new { schemaVersion = "1.0", authority.PlanId, authority.ExecutionId, authority.EventId, authority.Language, authority.RequestedVariants, authority.DocumentaryBlueprintChecksum, authority.StoryFrameManifestChecksum, longProfile = new { width = request.LongTargetWidth, height = request.LongTargetHeight }, shortProfile = new { width = request.ShortTargetWidth, height = request.ShortTargetHeight } }, ct);
-            await WriteJsonAsync(Path.Combine(staging, "visual-asset-plan.json"), new { schemaVersion = "1.0", authoritySource = "Phase8AuthorityInput", scenes = authority.LongScenes.Concat(authority.ShortScenes) }, ct);
-            await WriteJsonAsync(Path.Combine(staging, "visual-generation-requests.json"), new { schemaVersion = "1.0", requests = items.Select(x => new { x.AssetId, x.Variant, x.SceneId, x.ProviderType, x.SourceInstructionId, x.SemanticIdentity, x.Width, x.Height }) }, ct);
+            foreach (var planningArtifact in new[] { "media-project.json", "visual-asset-plan.json", "visual-generation-requests.json" })
+                File.Copy(Path.Combine(committed, planningArtifact), Path.Combine(staging, planningArtifact), true);
             await WriteJsonAsync(Path.Combine(staging, "scene-asset-manifest.json"), manifest, ct);
             var validator = new Phase8SceneAssetManifestValidator();
             var candidateValidation = await validator.ValidateAsync(manifest, authority, outputRoot, ct);
@@ -765,6 +826,9 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
             if (!candidateValidation.IsValid && candidateValidation.Errors.Any(x => !x.Contains("Physical asset is missing", StringComparison.Ordinal)))
                 throw new Phase8AuthorityException(Phase8AuthorityReasonCodes.NotCommitted, candidateValidation.Errors);
             await WriteJsonAsync(Path.Combine(staging, "phase8-authority-diagnostics.json"), new { authorityLoaded = true, phase4Committed = true, phase6Committed = true, longNarrationCandidateCommitted = authority.LongNarrationReleaseCandidate is not null, shortNarrationCandidateCommitted = authority.ShortNarrationReleaseCandidate is not null, authority.RequestedVariants, expectedLongSceneCount = authority.LongScenes.Count, expectedShortSceneCount = authority.ShortScenes.Count, generatedLongSceneCount = items.Count(x => x.Variant == "Long"), generatedShortSceneCount = items.Count(x => x.Variant == "Short"), reusedAssetCount = items.Count(x => x.Reused), generatedAssetCount = items.Count(x => !x.Reused), fallbackAssetCount = items.Count(x => x.ProviderStatus.Contains("Fallback", StringComparison.Ordinal)), providerTypeCounts = items.GroupBy(x => x.ProviderType).ToDictionary(x => x.Key, x => x.Count()), missingSceneIds = Array.Empty<string>(), extraSceneIds = Array.Empty<string>(), lineageMismatchSceneIds = Array.Empty<string>(), upstreamChecksumPassed = true, manifestValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, legacyAuthorityUsed = false }, ct);
+            await WriteJsonAsync(Path.Combine(staging, "phase8-publication-report.json"), new { schemaVersion = "1.0", publicationCommitted = true,
+                manifestValidationPassed = true, candidateReadbackPassed = true, committedReadbackPending = true,
+                assetCount = items.Count, generatedAssetCount = items.Count(x => !x.Reused), reusedAssetCount = items.Count(x => x.Reused) }, ct);
             manifest = manifest with { PublicationState = "Committed" };
             await WriteJsonAsync(Path.Combine(staging, "scene-asset-manifest.json"), manifest, ct);
             if (Directory.Exists(committed)) Directory.Move(committed, backup);
