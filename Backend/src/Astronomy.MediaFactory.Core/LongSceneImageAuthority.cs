@@ -14,13 +14,20 @@ public static class Phase9ReasonCodes
     public const string SourceInvalid = "P9_SOURCE_ASSET_INVALID";
     public const string SourceDimensionMismatch = "P9_SOURCE_ASSET_DIMENSION_MISMATCH";
     public const string SourceLineageMismatch = "P9_SOURCE_ASSET_LINEAGE_MISMATCH";
+    public const string ScientificEvidenceInvalid = "P9_SCIENTIFIC_EVIDENCE_INVALID";
+    public const string SceneSetMismatch = "P9_SCENE_SET_MISMATCH";
 }
 
 public sealed record LongSceneImageManifest(string SchemaVersion, string PlanId, string ExecutionId,
     string EventId, string Language, string Variant, DateTimeOffset GeneratedAtUtc,
     string Phase8SceneAssetManifestChecksum, string Phase6StoryFrameManifestChecksum,
     int ExpectedSceneCount, int ActualSceneCount, IReadOnlyList<LongSceneImageManifestItem> Images,
-    string ValidationStatus, string PublicationState, string DeterministicChecksum, bool DownstreamReady);
+    string ValidationStatus, string PublicationState, string DeterministicChecksum, bool DownstreamReady)
+{
+    // Both names are published deliberately: Phase8AuthorityChecksum is the downstream
+    // lineage term, while the longer name identifies the concrete Phase 8 document.
+    public string Phase8AuthorityChecksum => Phase8SceneAssetManifestChecksum;
+}
 
 public sealed record LongSceneImageManifestItem(string AssetId, string SceneId, string BlueprintSceneId,
     string StoryFrameId, int SceneOrder, string SourcePhase8AssetId, string SourcePhase8SemanticIdentity,
