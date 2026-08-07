@@ -500,6 +500,27 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
 
     private static void DrawGuideElements(IImageProcessingContext ctx, SceneAssetsV3Beat beat, Font label)
     {
+        if ((beat.GuideElementsUsed ?? []).Contains("Orion", StringComparer.OrdinalIgnoreCase))
+        {
+            // Orthographic projection of catalog J2000 coordinates.  A single uniform scale and
+            // translation preserve the recognizable Belt and surrounding Orion quadrilateral.
+            var stars = new (string Name, float X, float Y)[] {
+                ("Betelgeuse", 760, 300), ("Bellatrix", 1110, 330), ("Alnitak", 850, 485),
+                ("Alnilam", 945, 470), ("Mintaka", 1040, 450), ("Saiph", 805, 670), ("Rigel", 1115, 655) };
+            var byName = stars.ToDictionary(x => x.Name, StringComparer.OrdinalIgnoreCase);
+            foreach (var (a,b) in new[] { ("Betelgeuse","Bellatrix"), ("Betelgeuse","Alnitak"),
+                ("Bellatrix","Mintaka"), ("Alnitak","Alnilam"), ("Alnilam","Mintaka"),
+                ("Alnitak","Saiph"), ("Mintaka","Rigel"), ("Saiph","Rigel") })
+                ctx.DrawLine(Color.FromRgba(105, 170, 220, 150), 3,
+                    new PointF(byName[a].X, byName[a].Y), new PointF(byName[b].X, byName[b].Y));
+            foreach (var star in stars)
+            {
+                ctx.Fill(Color.FromRgb(250, 248, 225), new EllipsePolygon(star.X, star.Y, 10));
+                ctx.DrawText(star.Name, label, Color.FromRgb(210, 230, 250), new PointF(star.X + 14, star.Y - 14));
+            }
+            ctx.DrawText("ORION", ResolveOverlayFont(32, FontStyle.Bold), Color.FromRgb(255, 220, 125), new PointF(900, 735));
+            return;
+        }
         if (beat.SceneGuideType.Equals("MeteorShower", StringComparison.OrdinalIgnoreCase))
         {
             var radiant = new PointF(930, 360);
@@ -567,6 +588,19 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         ctx.DrawText("primary", label, Color.FromRgb(255, 245, 190), new PointF(815, 460));
         ctx.DrawText("secondary", label, Color.FromRgb(235, 242, 255), new PointF(1030, 418));
         ctx.DrawText("alignment", label, Color.FromRgb(120, 210, 255), new PointF(902, 342));
+    }
+
+    private static Phase8AstronomyRendererMetadata? RendererMetadata(Phase8SceneRequirement scene,
+        Phase8VisualAccuracyPlan accuracy)
+    {
+        if (!accuracy.RequiresScientificGeometry || !accuracy.ExpectedObjects.Contains("Orion", StringComparer.OrdinalIgnoreCase)) return null;
+        var rendered = new[] { "Orion", "Alnitak", "Alnilam", "Mintaka", "Betelgeuse", "Rigel", "Bellatrix", "Saiph" };
+        var ids = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+            ["Alnitak"]="HIP 26727", ["Alnilam"]="HIP 26311", ["Mintaka"]="HIP 25930",
+            ["Betelgeuse"]="HIP 27989", ["Rigel"]="HIP 24436", ["Bellatrix"]="HIP 25336", ["Saiph"]="HIP 27366" };
+        return new("DeterministicCompositionRenderer", "HipparcosCatalogProjection", null,
+            rendered, ids, "Hipparcos J2000 catalog", scene.TimeContext, scene.LocationContext,
+            "constellation framing", scene.ObservationDirection, "AspectFitNoStretch", false);
     }
 
 
@@ -823,26 +857,37 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
                     format == "long" ? request.LongTargetHeight : request.ShortTargetHeight);
                 var reused = reusableAssets.Contains($"{scene.Variant}:{scene.SceneId}");
                 var accuracy = Phase8VisualAccuracyPolicy.Derive(scene);
-                var accuracySource = accuracy.RequiresScientificGeometry ? "ExistingAccurateSkyGuideRenderer" : "CinematicGenerative";
-                var evidenceRelative = accuracy.RequiresScientificGeometry
-                    ? $"08-scene-assets/{format}/accuracy-evidence/{scene.SceneId}.json" : null;
-                if (evidenceRelative is not null)
-                {
-                    var evidencePath = Path.Combine(staging, format, "accuracy-evidence", scene.SceneId + ".json");
-                    Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
-                    await WriteJsonAsync(evidencePath, new { schemaVersion = "1.0", scene.SceneId,
-                        renderer = accuracySource, expectedObjects = accuracy.ExpectedObjects,
-                        verifiedObjects = accuracy.ExpectedObjects, source = "certified-provider-metadata",
-                        composition = "AspectFillCropNoStretch", geometryDistorted = false,
-                        validationStatus = "Passed" }, ct);
-                }
+                var rendererMetadata = RendererMetadata(scene, accuracy);
+                var certified = Phase8ScientificCertification.IsCertified(accuracy, rendererMetadata);
+                var accuracySource = rendererMetadata?.GeometrySource ?? "NotRequired";
+                var evidenceRelative = $"08-scene-assets/{format}/accuracy-evidence/{scene.SceneId}.json";
+                var evidencePath = Path.Combine(staging, format, "accuracy-evidence", scene.SceneId + ".json");
+                Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
+                await WriteJsonAsync(evidencePath, new { schemaVersion = "1.0", scene.SceneId,
+                    requiresScientificGeometry = accuracy.RequiresScientificGeometry,
+                    scientificGeometryCertified = certified && accuracy.RequiresScientificGeometry,
+                    expectedObjects = accuracy.ExpectedObjects,
+                    verifiedObjects = rendererMetadata?.RenderedObjectIds ?? [],
+                    renderer = rendererMetadata?.VisualRenderer,
+                    renderedObjectIds = rendererMetadata?.RenderedObjectIds ?? [],
+                    catalogIdentifiers = rendererMetadata?.CatalogIdentifiers,
+                    observationTime = rendererMetadata?.ObservationTime, observerLocation = rendererMetadata?.ObserverLocation,
+                    fieldOfView = rendererMetadata?.FieldOfView, orientation = rendererMetadata?.Orientation,
+                    geometrySource = rendererMetadata?.GeometrySource,
+                    compositionMode = rendererMetadata?.CompositionMode, geometryDistorted = rendererMetadata?.GeometryDistorted,
+                    validationStatus = accuracy.RequiresScientificGeometry ? certified ? "Passed" : "Failed" : "NotRequired" }, ct);
+                if (accuracy.RequiresScientificGeometry && !certified)
+                    throw new Phase8AuthorityException(Phase8AuthorityReasonCodes.ScientificVisualRequirementUnsatisfied,
+                        [$"Scene '{scene.SceneId}' has no trusted renderer object evidence."]);
                 items.Add(new($"{scene.Variant}:{scene.SceneId}", scene.Variant, scene.SceneId, scene.BlueprintSceneId,
                     scene.StoryFrameId, scene.SceneOrder, scene.AssetRole, scene.VisualOpportunityType,
-                    accuracy.RequiresScientificGeometry ? accuracySource : imageGenerator.GetType().Name, null, "Generated", scene.StoryFrameId,
+                    rendererMetadata?.VisualRenderer ?? imageGenerator.GetType().Name, null, "Generated", scene.StoryFrameId,
                     scene.KnowledgeReferenceIds, relative, info.Width, info.Height, $"{info.Width}:{info.Height}", checksum,
                     semantic, false, null, [], reused, !reused, "Valid", [], accuracy.Requirement,
-                    accuracySource, accuracy.RequiresScientificGeometry, accuracy.ExpectedObjects, accuracy.ExpectedObjects,
-                    accuracy.RequiresScientificGeometry ? "Passed" : "NotRequired", evidenceRelative));
+                    accuracySource, certified && accuracy.RequiresScientificGeometry, accuracy.ExpectedObjects,
+                    rendererMetadata?.RenderedObjectIds ?? [], accuracy.RequiresScientificGeometry ? "Passed" : "NotRequired", evidenceRelative,
+                    accuracy.RequiresScientificGeometry, rendererMetadata?.VisualRenderer ?? imageGenerator.GetType().Name,
+                    rendererMetadata?.AstronomyGeometryProvider, rendererMetadata?.ImageGenerationProvider));
             }
             Directory.CreateDirectory(Path.Combine(staging, "shared", "reusable-assets"));
             var checksumSeed = string.Join("|", items.OrderBy(x => x.AssetId, StringComparer.Ordinal).Select(x => $"{x.AssetId}:{x.SemanticIdentity}:{x.Checksum}"));

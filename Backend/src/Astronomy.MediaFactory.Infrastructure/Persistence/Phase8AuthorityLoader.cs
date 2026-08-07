@@ -120,7 +120,7 @@ public sealed class Phase8AuthorityLoader : IPhase8AuthorityLoader
             var opportunity = scene.VisualOpportunities.FirstOrDefault();
             projected.Add(new(variant, group.Key, scene.SceneId, frame.FrameId, frame.SceneNumber,
                 frame.SceneRole, frame.NarrativeStage, scene.SceneObjective.Summary, visual,
-                frame.CameraDirection, group.SelectMany(x => x.ImageRequirements).Distinct(StringComparer.Ordinal).ToArray(),
+                frame.CameraDirection, ProjectAstronomyObjects(scene, frame, group),
                 group.SelectMany(x => x.KnowledgeReferenceIds).Concat(scene.KnowledgeReferences.Select(x => x.KnowledgeEntryId)).Distinct(StringComparer.Ordinal).ToArray(),
                 narration.NarrationText, narration.SceneId, opportunity?.Type ?? "Cinematic", "scene-background",
                 ResolveRenderingPreference(frame, opportunity), string.IsNullOrWhiteSpace(frame.Setting) ? null : frame.Setting,
@@ -128,6 +128,24 @@ public sealed class Phase8AuthorityLoader : IPhase8AuthorityLoader
         }
         if (unused.Count != 0) Fail(Phase8AuthorityReasonCodes.NarrationSceneMappingFailed, $"Accepted {variant} narration contains unmapped scenes.");
         return projected;
+    }
+
+    private static readonly string[] GovernedAstronomyObjects =
+        ["Orion", "Bellatrix", "Mintaka", "Alnilam", "Betelgeuse", "Alnitak", "Rigel", "Orion Nebula", "M42", "Saiph"];
+
+    internal static IReadOnlyList<string> ProjectAstronomyObjects(DocumentarySceneBlueprint scene,
+        StoryFrameAuthorityFrame frame, IEnumerable<StoryFrameAuthorityFrame> frames)
+    {
+        var semanticText = string.Join(' ', scene.SceneObjective.Summary, frame.SceneRole, frame.FrameRole,
+            frame.VisualIntent, frame.CameraDirection, string.Join(' ', frames.SelectMany(x => x.ImageRequirements)));
+        var values = GovernedAstronomyObjects.Where(x => semanticText.Contains(x, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (semanticText.Contains("Orion", StringComparison.OrdinalIgnoreCase) && !values.Contains("Orion")) values.Insert(0, "Orion");
+        if (semanticText.Contains("where to look", StringComparison.OrdinalIgnoreCase)
+            || semanticText.Contains("recogniz", StringComparison.OrdinalIgnoreCase)
+            || semanticText.Contains("belt", StringComparison.OrdinalIgnoreCase))
+            foreach (var value in new[] { "Orion", "Alnitak", "Alnilam", "Mintaka", "Betelgeuse", "Rigel", "Bellatrix", "Saiph" })
+                if (!values.Contains(value, StringComparer.OrdinalIgnoreCase)) values.Add(value);
+        return values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static Phase7AcceptedNarrationScene? Unique(IEnumerable<Phase7AcceptedNarrationScene> matches, string variant, string sceneId)
