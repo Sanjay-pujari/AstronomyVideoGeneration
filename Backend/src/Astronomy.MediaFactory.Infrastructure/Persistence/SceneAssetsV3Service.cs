@@ -56,7 +56,8 @@ public sealed class SceneAssetsV3Service(
 
         // Authority mode is deliberately a separate input branch, not a fallback. It never opens
         // production-event-intelligence or question-driven-narration-v2.
-        var context = request.AuthorityInput is { } authority
+        var authority = request.AuthorityInput;
+        var context = authority is not null
             ? BuildAuthorityTimelineContext(authority)
             : await LoadTimelineContextAsync(root, cancellationToken);
         var authorityReuse = authority is null || request.OverwriteExisting

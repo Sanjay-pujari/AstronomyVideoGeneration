@@ -2534,7 +2534,6 @@ public sealed partial class ProductionPipelineExecutionService(
         var root = Path.Combine(outputRoot, "scene-assets-v3", format);
         if (!Directory.Exists(root)) throw new InvalidOperationException($"Scene Assets V3 {format} folder is missing: {NormalizePath(root)}");
         var required = new[] { "visual-timeline-v3.json", "scene-manifest-v3.json", "scene-review-v3.json", "scene-timeline-metadata.json" }.Select(f => Path.Combine(root, f)).ToList();
-        var outputRoot = Directory.GetParent(Directory.GetParent(root)?.FullName ?? root)?.FullName ?? root;
         var authorityPath = Path.Combine(outputRoot, "08-scene-assets", "scene-asset-manifest.json");
         var authority = File.Exists(authorityPath) ? JsonSerializer.Deserialize<SceneAssetManifest>(File.ReadAllText(authorityPath), JsonOptions) : null;
         var authoritySceneIds = authority?.Assets.Where(x => x.Variant.Equals(format, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SceneOrder).Select(x => x.SceneId).ToArray();
@@ -15772,7 +15771,11 @@ public sealed partial class ProductionPipelineExecutionService(
         SceneAssetsV3Manifest? manifest = File.Exists(manifestPath) ? JsonSerializer.Deserialize<SceneAssetsV3Manifest>(File.ReadAllText(manifestPath), JsonOptions) : null;
         var images = Directory.Exists(root) ? Directory.EnumerateFiles(root, "*.png", SearchOption.TopDirectoryOnly).Select(NormalizePath).Order().ToArray() : Array.Empty<string>();
         var modes = manifest?.Scenes.Select(s => s.RenderMode).Distinct().Order().ToArray() ?? Array.Empty<string>();
-        var expectedSceneIds = SceneAssetsV3SceneContract.GetExpectedSceneIds(format);
+        var outputRoot = Directory.GetParent(Directory.GetParent(root)?.FullName ?? root)?.FullName ?? root;
+        var authorityPath = Path.Combine(outputRoot, "08-scene-assets", "scene-asset-manifest.json");
+        var authority = File.Exists(authorityPath) ? JsonSerializer.Deserialize<SceneAssetManifest>(File.ReadAllText(authorityPath), JsonOptions) : null;
+        var authoritySceneIds = authority?.Assets.Where(x => x.Variant.Equals(format, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.SceneOrder).Select(x => x.SceneId).ToArray();
+        IReadOnlyList<string> expectedSceneIds = authoritySceneIds is { Length: > 0 } ? authoritySceneIds : SceneAssetsV3SceneContract.GetExpectedSceneIds(format);
         var actualSceneIds = manifest?.Scenes.Select(s => s.SceneId).ToArray() ?? Array.Empty<string>();
         var missingSceneIds = expectedSceneIds.Where(id => !actualSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
         var extraSceneIds = actualSceneIds.Where(id => !expectedSceneIds.Contains(id, StringComparer.OrdinalIgnoreCase)).ToArray();
