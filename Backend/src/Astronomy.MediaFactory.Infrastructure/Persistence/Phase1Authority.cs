@@ -141,7 +141,28 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
             if(!full.StartsWith(root+Path.DirectorySeparatorChar,comparison))throw new InvalidOperationException($"Phase {phase} output target is outside the workspace: {full}");
             targets.Add(new(phase,full,directory,Path.GetRelativePath(root,full).Replace('\\','/'),validation?"Validation":compatibility?"Compatibility":"Authority",$"Phase{phase}",!compatibility&&!validation,compatibility,validation,false,true));
         }
-        Add(2,Path.Combine(root,"02-intelligence"));Add(3,Path.Combine(root,"03-questions"));Add(3,context.ExecutionContext.QuestionRoot);Add(4,Path.Combine(root,"04-blueprint"));Add(5,Path.Combine(root,"05-editorial"));Add(6,Path.Combine(root,"06-story-frames"));Add(7,context.ExecutionContext.NarrationRoot);Add(8,context.ExecutionContext.SceneRoot);Add(11,context.ExecutionContext.HeroRoot);Add(12,context.ExecutionContext.ThumbnailRoot);Add(13,Path.Combine(root,"gallery"));Add(14,Path.Combine(root,"sync"));Add(15,context.ExecutionContext.TtsRoot);Add(18,context.ExecutionContext.VideoAssemblyRoot);
+        Add(1,Path.Combine(root,"01-plan"));
+        Add(2,Path.Combine(root,"02-intelligence"));
+        Add(3,Path.Combine(root,"03-questions"));
+        Add(4,Path.Combine(root,"04-blueprint"));
+        Add(5,Path.Combine(root,"05-editorial"));
+        Add(6,Path.Combine(root,"06-story-frames"));
+        Add(7,Path.Combine(root,"narration-v5"));
+        Add(7,Path.Combine(root,"07-narration","narration-v5"),compatibility:true);
+        Add(8,Path.Combine(root,"08-scene-assets"));
+        Add(8,Path.Combine(root,"scene-assets-v3"),compatibility:true);
+        Add(9,Path.Combine(root,"09-long-scenes"));
+        Add(10,Path.Combine(root,"10-scene-validation"));
+        Add(11,context.ExecutionContext.HeroRoot);
+        Add(12,context.ExecutionContext.ThumbnailRoot);
+        Add(13,Path.Combine(root,"gallery"));
+        Add(14,Path.Combine(root,"sync"));
+        Add(15,context.ExecutionContext.TtsRoot);
+        Add(16,Path.Combine(root,"duration-calibration"));
+        Add(17,Path.Combine(root,"motion"));
+        Add(18,context.ExecutionContext.VideoAssemblyRoot);
+        Add(19,Path.Combine(root,"video-qa"));
+        Add(20,Path.Combine(root,"publishing"));
         for(var phase=Math.Max(2,start);phase<=Math.Min(20,end);phase++)Add(phase,Path.Combine(context.ExecutionContext.ValidationRoot!,$"phase-{phase:00}-validation.json"),false,validation:true);
         var comparer=OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal;
         var deduplicated=targets.GroupBy(x=>x.Path,comparer).Select(g=>g.OrderBy(x=>x.PhaseNo).First()).ToArray();
@@ -165,6 +186,53 @@ public static class UpstreamPhaseMutationGuard
         if(target.PhaseNo>=startPhaseNo)return;
         throw new InvalidOperationException($"RC2_UPSTREAM_PHASE_MUTATION_ATTEMPT: startPhaseNo={startPhaseNo}; targetPhaseNo={target.PhaseNo}; targetPath={target.Path}; targetOwner={target.Owner}; operation={operation}");
     }
+}
+
+/// <summary>
+/// The final physical deletion boundary for range overwrite cleanup.  Callers must supply
+/// registry-owned targets; applicability and range ownership are rechecked here even when a
+/// planner has already filtered the candidates.
+/// </summary>
+public static class PhaseOwnedCleanupExecutor
+{
+    public static bool TryDelete(
+        PhaseOutputTarget target,
+        int requestedStartPhase,
+        int requestedEndPhase,
+        IReadOnlySet<int> rebuildableApplicablePhases,
+        List<string> deletedFiles,
+        List<string> deletedDirectories,
+        List<CleanupDeletionDenied> denied)
+    {
+        var allowed = target.PhaseNo >= requestedStartPhase
+            && target.PhaseNo <= requestedEndPhase
+            && rebuildableApplicablePhases.Contains(target.PhaseNo)
+            && target.CanDeleteOnOverwrite;
+        if (!allowed)
+        {
+            denied.Add(new(target.Path, target.PhaseNo, requestedStartPhase, requestedEndPhase,
+                target.PhaseNo < requestedStartPhase || target.PhaseNo > requestedEndPhase
+                    ? "Artifact owner is outside the requested rebuild range."
+                    : "Artifact owner is not an applicable rebuild phase."));
+            return false;
+        }
+
+        if (target.IsDirectory)
+        {
+            if (!Directory.Exists(target.Path)) return true;
+            deletedFiles.AddRange(Directory.EnumerateFiles(target.Path, "*", SearchOption.AllDirectories).Select(Normalize));
+            deletedDirectories.Add(Normalize(target.Path));
+            Directory.Delete(target.Path, recursive: true);
+            return true;
+        }
+
+        if (!File.Exists(target.Path)) return true;
+        deletedFiles.Add(Normalize(target.Path));
+        File.Delete(target.Path);
+        return true;
+    }
+
+    private static string Normalize(string path) => Path.GetFullPath(path).Replace('\\', '/');
 }
 public sealed record Phase1DownstreamInvalidationState(string TransactionId,string WorkspaceRoot,string QuarantineRoot,IReadOnlyList<Phase1DownstreamPathMove> Moves,bool HasMutatedActiveState,bool IsFullyStaged);
 public sealed class Phase1DownstreamStagingException(string message,Phase1DownstreamInvalidationState state,Exception? inner=null):IOException(message,inner){public Phase1DownstreamInvalidationState State{get;}=state;}

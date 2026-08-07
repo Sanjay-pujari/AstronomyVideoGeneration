@@ -409,7 +409,19 @@ public sealed record ProductionPhaseContext(
     ContentPlanExecutionMode ExecutionMode = ContentPlanExecutionMode.Normal,
     IReadOnlyList<string>? DeletedFilesDueToOverwrite = null,
     IReadOnlyList<string>? DeletedDirectoriesDueToOverwrite = null,
-    IReadOnlyList<string>? SkippedDirectoriesDueToOverwrite = null);
+    IReadOnlyList<string>? SkippedDirectoriesDueToOverwrite = null,
+    IReadOnlyList<CleanupDeletionDenied>? CleanupDeletionDenied = null,
+    IReadOnlyList<int>? CleanupApplicablePhases = null,
+    IReadOnlyList<int>? CleanupRebuildPhases = null,
+    bool CleanupRequested = false,
+    bool CleanupExecuted = false);
+
+public sealed record CleanupDeletionDenied(
+    string Path,
+    int OwnerPhase,
+    int RequestedStartPhase,
+    int RequestedEndPhase,
+    string Reason);
 
 public sealed record ProductionPhaseResult(
     int PhaseNo,
@@ -438,6 +450,11 @@ public sealed record ProductionPhaseResult(
 /// <summary>Canonical classification for completion of a requested production-phase range.</summary>
 public static class ProductionPhaseSatisfaction
 {
+    private static readonly HashSet<string> GovernedNotApplicableReasonCodes = new(StringComparer.Ordinal)
+    {
+        "P9_LONG_NOT_REQUESTED"
+    };
+
     private static readonly HashSet<string> SatisfiedReuseReasonCodes = new(StringComparer.Ordinal)
     {
         "P1_RESUME_REUSABLE",
@@ -458,7 +475,10 @@ public static class ProductionPhaseSatisfaction
 
     public static bool IsSatisfied(ProductionPhaseResult result) =>
         result.Status == ProductionPhaseStatus.Succeeded ||
-        result.Status == ProductionPhaseStatus.Skipped && IsRecognizedReuse(result);
+        result.Status == ProductionPhaseStatus.Skipped && (IsRecognizedReuse(result) || IsGovernedNotApplicable(result));
+
+    public static bool IsGovernedNotApplicable(ProductionPhaseResult result) =>
+        result.ReasonCode is not null && GovernedNotApplicableReasonCodes.Contains(result.ReasonCode);
 
     public static bool IsRecognizedReuse(ProductionPhaseResult result) =>
         IsRecognizedReuseReasonCode(result.ReasonCode);

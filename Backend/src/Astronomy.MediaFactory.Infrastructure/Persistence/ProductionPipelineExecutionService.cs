@@ -164,12 +164,25 @@ public sealed partial class ProductionPipelineExecutionService(
         var deletedFilesDueToOverwrite = new List<string>();
         var deletedDirectoriesDueToOverwrite = new List<string>();
         var skippedDirectoriesDueToOverwrite = new List<string>();
+        var cleanupDeletionDenied = new List<CleanupDeletionDenied>();
 
         Directory.CreateDirectory(outputRoot);
         Directory.CreateDirectory(executionContext.ValidationRoot!);
 
-        var context = new ProductionPhaseContext(request, productionRequest, eventIdResolution.EventId ?? Guid.Empty, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite, deletedDirectoriesDueToOverwrite, skippedDirectoriesDueToOverwrite);
-        var genericOverwriteCleanupExecuted = ShouldRunGenericOverwriteCleanup(request.OverwriteExisting, startPhaseNo);
+        var context = new ProductionPhaseContext(request, productionRequest, eventIdResolution.EventId ?? Guid.Empty, eventId, outputRoot, executionContext, productionIntelligence, strategy, request.DryRun, request.OverwriteExisting, startPhaseNo, endPhaseNo, request.RetryFailedOnly, request.ExecutionMode, deletedFilesDueToOverwrite, deletedDirectoriesDueToOverwrite, skippedDirectoriesDueToOverwrite, cleanupDeletionDenied);
+        var applicablePhases = PhaseDefinitions()
+            .Where(phase => phase.No >= startPhaseNo && phase.No <= endPhaseNo && IsPhaseRequiredForRequestedOutputs(context, phase.No))
+            .Select(phase => phase.No)
+            .ToArray();
+        var rebuildPhases = request.OverwriteExisting && !request.DryRun ? applicablePhases : Array.Empty<int>();
+        var genericOverwriteCleanupExecuted = ShouldRunGenericOverwriteCleanup(request.OverwriteExisting, startPhaseNo) && rebuildPhases.Length > 0;
+        context = context with
+        {
+            CleanupApplicablePhases = applicablePhases,
+            CleanupRebuildPhases = rebuildPhases,
+            CleanupRequested = request.OverwriteExisting,
+            CleanupExecuted = genericOverwriteCleanupExecuted
+        };
         LogBuildAndCleanupIdentity(request, requestedStartPhaseNo, startPhaseNo, requestedEndPhaseNo, genericOverwriteCleanupExecuted);
         // Phase 1 has a dedicated atomic publication lifecycle. Generic cleanup before it
         // would destroy stable validation/manifest state, and its transaction exclusively
@@ -181,8 +194,6 @@ public sealed partial class ProductionPipelineExecutionService(
             LogPhase15SrtExistence(context, "after-cleanup");
         }
 
-        Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "short"));
-        Directory.CreateDirectory(Path.Combine(executionContext.SceneRoot!, "long"));
         warnings.Add($"sceneApprovalStagingRoot={NormalizePath(executionContext.SceneRoot!)}");
         warnings.Add($"sceneApprovalNormalizedRoot={NormalizePath(GetSceneApprovalNormalizedRoot(outputRoot))}");
 
@@ -15230,6 +15241,17 @@ public sealed partial class ProductionPipelineExecutionService(
             deletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             cleanupDeletedFiles = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             cleanupDeletedDirectories = context.DeletedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
+            cleanupRequested = context.CleanupRequested,
+            cleanupExecuted = context.CleanupExecuted,
+            cleanupPhaseRange = $"{context.StartPhaseNo}-{context.EndPhaseNo}",
+            cleanupApplicablePhases = context.CleanupApplicablePhases ?? Array.Empty<int>(),
+            cleanupRebuildPhases = context.CleanupRebuildPhases ?? Array.Empty<int>(),
+            cleanupOwnedRoots = ResolvePhaseOwnedOutputRoots(context, context.StartPhaseNo, context.EndPhaseNo)
+                .Where(root => (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(root.OwnerPhase)).Select(root => NormalizePath(root.Path)).ToArray(),
+            cleanupProtectedRoots = ResolvePhaseOwnedOutputRoots(context, 1, 20)
+                .Where(root => !(context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(root.OwnerPhase)).Select(root => NormalizePath(root.Path)).ToArray(),
+            cleanupDeletionDenied = context.CleanupDeletionDenied ?? Array.Empty<CleanupDeletionDenied>(),
+            upstreamArtifactsDeleted = false,
             cleanupSkippedDirectories = context.SkippedDirectoriesDueToOverwrite ?? Array.Empty<string>(),
             sceneAssetsVersion = sceneAssetsV3Diagnostics?.SceneAssetsVersion,
             sceneAssetsV3Enabled = sceneAssetsV3Diagnostics?.SceneAssetsV3Enabled,
@@ -15251,7 +15273,7 @@ public sealed partial class ProductionPipelineExecutionService(
             phase10SceneAssetsV3Validation = sceneAssetsV3Diagnostics?.Phase10SceneAssetsV3Validation,
             sceneAssetsHookDiagnostics = phaseNo is 8 or 9 or 10 ? ReadSceneAssetsHookDiagnostics(context, phaseNo) : null,
             preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context),
-            executedPhaseNumbers = sceneAssetsV3Diagnostics?.ExecutedPhaseNumbers ?? (status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo } : Array.Empty<int>()),
+            executedPhaseNumbers = status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo } : Array.Empty<int>(),
             filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             filesGeneratedThisRun = resultOutputFiles,
             inputFiles = phase3Certification?.InputFiles ?? inputFiles,
@@ -17291,105 +17313,30 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private void ClearPhaseRangeOutputsForOverwrite(ProductionPhaseContext context, int? deferredStartPhaseNo = null)
     {
-        var deletedFiles = context.DeletedFilesDueToOverwrite as List<string>;
-        var deletedDirectories = context.DeletedDirectoriesDueToOverwrite as List<string>;
-        var skippedDirectories = context.SkippedDirectoriesDueToOverwrite as List<string>;
         var deleteStartPhaseNo = deferredStartPhaseNo ?? context.StartPhaseNo;
-        var deleteEndPhaseNo = context.EndPhaseNo;
+        var configuredRebuildPhases = context.CleanupRebuildPhases
+            ?? Enumerable.Range(deleteStartPhaseNo, context.EndPhaseNo - deleteStartPhaseNo + 1).ToArray();
+        var rebuildPhases = configuredRebuildPhases
+            .Where(phaseNo => phaseNo >= deleteStartPhaseNo && phaseNo <= context.EndPhaseNo)
+            .ToHashSet();
+        if (rebuildPhases.Count == 0) return;
 
-        if (deleteStartPhaseNo <= 3 && deleteEndPhaseNo >= 3)
+        var resolver = new PhaseOutputTargetResolver();
+        var candidates = resolver.Resolve(context, deleteStartPhaseNo, context.EndPhaseNo)
+            .Where(target => rebuildPhases.Contains(target.PhaseNo))
+            .ToArray();
+        var deletedFiles = context.DeletedFilesDueToOverwrite as List<string> ?? [];
+        var deletedDirectories = context.DeletedDirectoriesDueToOverwrite as List<string> ?? [];
+        var denied = context.CleanupDeletionDenied as List<CleanupDeletionDenied> ?? [];
+
+        foreach (var candidate in candidates)
         {
-            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "03-questions"), deletedFiles, deletedDirectories);
-            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-answer-set.json"), deletedFiles);
-            // Phase 3 is an upstream authority. Existing phase validation records are the pipeline's
-            // success state, so removing downstream records prevents stale Phase 4-20 resume decisions.
-            for (var downstreamPhaseNo = 4; downstreamPhaseNo <= 20; downstreamPhaseNo++)
-                DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{downstreamPhaseNo:00}-validation.json"), deletedFiles);
+            var deleted = PhaseOwnedCleanupExecutor.TryDelete(candidate, deleteStartPhaseNo, context.EndPhaseNo,
+                rebuildPhases, deletedFiles, deletedDirectories, denied);
+            if (!deleted)
+                logger.LogError("Cleanup deletion denied for {Path}; owner phase {OwnerPhase}; requested range {StartPhase}-{EndPhase}.",
+                    candidate.Path, candidate.PhaseNo, deleteStartPhaseNo, context.EndPhaseNo);
         }
-
-        if (deleteStartPhaseNo <= 4 && deleteEndPhaseNo >= 4)
-        {
-            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "04-blueprint"), deletedFiles, deletedDirectories);
-            for (var downstreamPhaseNo = 5; downstreamPhaseNo <= 20; downstreamPhaseNo++)
-                DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{downstreamPhaseNo:00}-validation.json"), deletedFiles);
-            logger.LogInformation("Phase 4 overwrite invalidated Phase 5-20 validation state while preserving Phase 1-3 authority. ExecutionId={ExecutionId}", context.Request.PlanId);
-        }
-
-        if (deleteStartPhaseNo <= 5 && deleteEndPhaseNo >= 5)
-        {
-            // Keep the current complete authority until the Phase 5 atomic swap has a validated replacement.
-            for (var downstreamPhaseNo = 6; downstreamPhaseNo <= 20; downstreamPhaseNo++)
-                DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{downstreamPhaseNo:00}-validation.json"), deletedFiles);
-            logger.LogInformation("Phase 5 overwrite invalidated Phase 6-20 validation state while preserving Phase 1-4 authority. ExecutionId={ExecutionId}", context.Request.PlanId);
-        }
-
-        if (deleteStartPhaseNo <= 6 && deleteEndPhaseNo >= 6)
-        {
-            DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, "phase-06-validation.json"), deletedFiles);
-            for (var downstreamPhaseNo = 7; downstreamPhaseNo <= 20; downstreamPhaseNo++)
-                DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{downstreamPhaseNo:00}-validation.json"), deletedFiles);
-        }
-
-        if (deleteStartPhaseNo <= 7 && deleteEndPhaseNo >= 7)
-        {
-            // This branch is intentionally limited to retired narration-v5 output. It must not
-            // delete or rewrite P7.1A-owned 07-narration/knowledge,
-            // validation/phase-07-knowledge-validation.json, phase-manifest.json, or
-            // .phase-07-knowledge-publication.json. IPhase7KnowledgeTransactionCoordinator
-            // exclusively owns their backup, replacement, rollback, recovery, and mutation.
-            PreservePhase7DiagnosticEvidenceForOverwrite(context);
-            DeleteProductionSubtree(BuildNarrationV5Root(context), deletedFiles, deletedDirectories);
-            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "07-narration", "narration-v5"), deletedFiles, deletedDirectories);
-            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration.json"), deletedFiles);
-            DeleteFileIfExists(Path.Combine(context.ExecutionContext.QuestionRoot!, "question-driven-narration-review.json"), deletedFiles);
-        }
-
-        if (deleteStartPhaseNo <= 9 && deleteEndPhaseNo >= 8)
-        {
-            if (IsSceneAssetsV3Enabled(context))
-            {
-                DeleteProductionSubtree(Path.Combine(context.OutputRoot, "08-scene-assets"), deletedFiles, deletedDirectories);
-                DeleteProductionSubtree(Path.Combine(context.OutputRoot, "scene-assets-v3"), deletedFiles, deletedDirectories);
-            }
-            else
-            {
-                DeleteProductionSubtree(context.ExecutionContext.SceneRoot!, deletedFiles, deletedDirectories);
-                DeleteProductionSubtree(Path.Combine(context.ExecutionContext.QuestionRoot!, "scene-approval-v3"), deletedFiles, deletedDirectories);
-                DeleteProductionSubtree(GetSceneApprovalNormalizedRoot(context.OutputRoot), deletedFiles, deletedDirectories);
-            }
-        }
-
-        if (deleteStartPhaseNo <= 11 && deleteEndPhaseNo >= 11)
-            DeleteProductionSubtree(context.ExecutionContext.HeroRoot!, deletedFiles, deletedDirectories);
-
-        if (deleteStartPhaseNo <= 12 && deleteEndPhaseNo >= 12)
-            DeleteProductionSubtree(context.ExecutionContext.ThumbnailRoot!, deletedFiles, deletedDirectories);
-
-        if (deleteStartPhaseNo <= 13 && deleteEndPhaseNo >= 13)
-            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "gallery"), deletedFiles, deletedDirectories);
-
-        if (deleteStartPhaseNo <= 14 && deleteEndPhaseNo >= 14)
-            DeleteProductionSubtree(Path.Combine(context.OutputRoot, "sync"), deletedFiles, deletedDirectories);
-
-        if (deleteStartPhaseNo <= 15 && deleteEndPhaseNo >= 15)
-        {
-            skippedDirectories?.Add(NormalizePath(context.ExecutionContext.NarrationRoot!));
-            skippedDirectories?.Add(NormalizePath(Path.Combine(context.ExecutionContext.NarrationRoot!, "subtitles")));
-            DeleteProductionSubtree(context.ExecutionContext.TtsRoot!, deletedFiles, deletedDirectories);
-        }
-
-        if (deleteStartPhaseNo <= 17 && deleteEndPhaseNo >= 16)
-            DeleteProductionSubtree(context.ExecutionContext.TtsRoot!, deletedFiles, deletedDirectories);
-
-        if (deleteStartPhaseNo <= 19 && deleteEndPhaseNo >= 18)
-            DeleteProductionSubtree(context.ExecutionContext.VideoAssemblyRoot!, deletedFiles, deletedDirectories);
-
-        var firstValidationToDelete = Math.Max(deleteStartPhaseNo, 1);
-        var lastValidationToDelete = Math.Min(deleteEndPhaseNo, 20);
-        for (var phaseNo = firstValidationToDelete; phaseNo <= lastValidationToDelete; phaseNo++)
-            DeleteFileIfExists(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json"), deletedFiles);
-
-        FailIfPhase15CleanupRemovedNarrationSubtitles(context);
     }
 
     private static void ValidatePartialPhaseExecutionContract(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, List<string> errors)
@@ -17448,8 +17395,8 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var deleted = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>();
         return ResolvePhaseOwnedOutputRoots(context, 1, 20)
-            .Where(root => deleted.Any(path => NormalizePath(path).StartsWith(NormalizePath(root), StringComparison.OrdinalIgnoreCase)))
-            .Select(NormalizePath)
+            .Where(root => deleted.Any(path => NormalizePath(path).StartsWith(NormalizePath(root.Path), StringComparison.OrdinalIgnoreCase)))
+            .Select(root => NormalizePath(root.Path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
@@ -17458,8 +17405,8 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         if (context.PipelineRequest.DependencyExpansionMode != DependencyExpansionMode.ReadOnly) return Array.Empty<string>();
         return ResolvePhaseOwnedOutputRoots(context, 1, context.StartPhaseNo - 1)
-            .Where(Directory.Exists)
-            .Select(NormalizePath)
+            .Where(root => Directory.Exists(root.Path))
+            .Select(root => NormalizePath(root.Path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
@@ -17471,29 +17418,34 @@ public sealed partial class ProductionPipelineExecutionService(
 
         return new
         {
+            cleanupRequested = context.CleanupRequested,
+            cleanupExecuted = context.CleanupExecuted,
             phaseRange = $"{deleteStartPhaseNo}-{deleteEndPhaseNo}",
             phaseNumbers = Enumerable.Range(deleteStartPhaseNo, deleteEndPhaseNo - deleteStartPhaseNo + 1).ToArray(),
-            ownedOutputRoots = ResolvePhaseOwnedOutputRoots(context, deleteStartPhaseNo, deleteEndPhaseNo).Select(NormalizePath).ToArray(),
+            applicablePhases = context.CleanupApplicablePhases ?? Array.Empty<int>(),
+            rebuildPhases = context.CleanupRebuildPhases ?? Array.Empty<int>(),
+            ownedOutputRoots = ResolvePhaseOwnedOutputRoots(context, deleteStartPhaseNo, deleteEndPhaseNo)
+                .Where(root => (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(root.OwnerPhase))
+                .Select(root => NormalizePath(root.Path)).ToArray(),
+            protectedRoots = ResolvePhaseOwnedOutputRoots(context, 1, 20)
+                .Where(root => !(context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(root.OwnerPhase))
+                .Select(root => NormalizePath(root.Path)).ToArray(),
+            cleanupDeletionDenied = context.CleanupDeletionDenied ?? Array.Empty<CleanupDeletionDenied>(),
+            upstreamArtifactsDeleted = (context.DeletedFilesDueToOverwrite ?? Array.Empty<string>()).Any(path =>
+                ResolvePhaseOwnedOutputRoots(context, 1, deleteStartPhaseNo - 1).Any(root => IsPathUnder(path, root.Path) || IsSamePath(path, root.Path))),
             validationFiles = Enumerable.Range(deleteStartPhaseNo, deleteEndPhaseNo - deleteStartPhaseNo + 1)
                 .Select(phaseNo => NormalizePath(Path.Combine(context.ExecutionContext.ValidationRoot!, $"phase-{phaseNo:00}-validation.json")))
                 .ToArray()
         };
     }
 
-    private static IReadOnlyList<string> ResolvePhaseOwnedOutputRoots(ProductionPhaseContext context, int startPhaseNo, int endPhaseNo)
-    {
-        var roots = new List<string>();
-        if (startPhaseNo <= 7 && endPhaseNo >= 7) roots.Add(BuildNarrationV5Root(context));
-        if (startPhaseNo <= 9 && endPhaseNo >= 8) roots.Add(context.ExecutionContext.SceneRoot!);
-        if (startPhaseNo <= 11 && endPhaseNo >= 11) roots.Add(context.ExecutionContext.HeroRoot!);
-        if (startPhaseNo <= 12 && endPhaseNo >= 12) roots.Add(context.ExecutionContext.ThumbnailRoot!);
-        if (startPhaseNo <= 13 && endPhaseNo >= 13) roots.Add(Path.Combine(context.OutputRoot, "gallery"));
-        if (startPhaseNo <= 14 && endPhaseNo >= 14) roots.Add(Path.Combine(context.OutputRoot, "sync"));
-        if (startPhaseNo <= 15 && endPhaseNo >= 15) roots.Add(context.ExecutionContext.TtsRoot!);
-        if (startPhaseNo <= 17 && endPhaseNo >= 16) roots.Add(context.ExecutionContext.TtsRoot!);
-        if (startPhaseNo <= 19 && endPhaseNo >= 18) roots.Add(context.ExecutionContext.VideoAssemblyRoot!);
-        return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-    }
+    private sealed record OwnedOutputRoot(int OwnerPhase, string Path);
+
+    private static IReadOnlyList<OwnedOutputRoot> ResolvePhaseOwnedOutputRoots(ProductionPhaseContext context, int startPhaseNo, int endPhaseNo)
+        => new PhaseOutputTargetResolver().Resolve(context, startPhaseNo, endPhaseNo)
+            .Where(target => target.IsDirectory)
+            .Select(target => new OwnedOutputRoot(target.PhaseNo, target.Path))
+            .ToArray();
 
     private static IReadOnlyList<string> BuildPreservedValidationFilesDiagnostics(ProductionPhaseContext context)
     {

@@ -3170,12 +3170,10 @@ Second display cue.
         Assert.False(Directory.Exists(context.ExecutionContext.TtsRoot!));
         var normalizedDeleted = deletedDirectories.Select(NormalizeTestPath).ToArray();
         var normalizedSkipped = skippedDirectories.Select(NormalizeTestPath).ToArray();
-        var narrationRoot = NormalizeTestPath(context.ExecutionContext.NarrationRoot!);
         var subtitlesRoot = NormalizeTestPath(Path.Combine(context.ExecutionContext.NarrationRoot!, "subtitles"));
         Assert.DoesNotContain(subtitlesRoot, normalizedDeleted, StringComparer.OrdinalIgnoreCase);
         Assert.Contains(NormalizeTestPath(context.ExecutionContext.TtsRoot!), normalizedDeleted, StringComparer.OrdinalIgnoreCase);
-        Assert.Contains(narrationRoot, normalizedSkipped, StringComparer.OrdinalIgnoreCase);
-        Assert.Contains(subtitlesRoot, normalizedSkipped, StringComparer.OrdinalIgnoreCase);
+        Assert.Empty(normalizedSkipped);
     }
 
     private static string NormalizeTestPath(string path) => path.Replace('\\', '/').TrimEnd('/');
@@ -3237,6 +3235,125 @@ Second display cue.
         Assert.Equal("Welcome to Drashyam", diagnostics.GetType().GetProperty("HookGreetingText")!.GetValue(diagnostics));
         Assert.Equal("Jupiter and Venus make the western sky feel cinematic tonight.", diagnostics.GetType().GetProperty("HookBeforePrefixFirst120Chars")!.GetValue(diagnostics));
         Assert.StartsWith("Welcome to Drashyam. Jupiter and Venus", (string)diagnostics.GetType().GetProperty("HookAfterPrefixFirst120Chars")!.GetValue(diagnostics)!);
+    }
+
+    [Fact]
+    public void Phase9OverwriteCannotDeletePhase8()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]) with { StartPhaseNo = 9, EndPhaseNo = 9 };
+        var phase8Root = Path.Combine(context.OutputRoot, "08-scene-assets");
+        Directory.CreateDirectory(phase8Root);
+        var authority = Path.Combine(phase8Root, "scene-asset-manifest.json");
+        File.WriteAllText(authority, "committed-phase-8");
+        var before = File.ReadAllBytes(authority);
+        var target = new PhaseOutputTarget(8, phase8Root, true, "08-scene-assets", "Authority", "Phase8", true, false, false, false, true);
+        var denied = new List<CleanupDeletionDenied>();
+
+        var deleted = PhaseOwnedCleanupExecutor.TryDelete(target, 9, 9, new HashSet<int> { 9 }, [], [], denied);
+
+        Assert.False(deleted);
+        Assert.Equal(before, File.ReadAllBytes(authority));
+        Assert.Single(denied);
+    }
+
+    [Fact]
+    public void Phase9CannotDeleteSceneAssetsV3()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "scene-assets-v3");
+        Directory.CreateDirectory(root);
+        var file = Path.Combine(root, "short.png");
+        File.WriteAllText(file, "phase-8-compatibility");
+        var target = new PhaseOutputTarget(8, root, true, "scene-assets-v3", "Compatibility", "Phase8", false, true, false, false, true);
+
+        Assert.False(PhaseOwnedCleanupExecutor.TryDelete(target, 9, 9, new HashSet<int> { 9 }, [], [], []));
+        Assert.True(File.Exists(file));
+    }
+
+    [Fact]
+    public void SkippedPhase9PerformsNoPhysicalCleanup()
+    {
+        var context = CreateContext("Orion", ["ShortVideo"]) with { StartPhaseNo = 9, EndPhaseNo = 9 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 9, 9);
+        var rebuildPhases = new HashSet<int>();
+        var deletedFiles = new List<string>();
+        var deletedDirectories = new List<string>();
+
+        foreach (var target in targets)
+            PhaseOwnedCleanupExecutor.TryDelete(target, 9, 9, rebuildPhases, deletedFiles, deletedDirectories, []);
+
+        Assert.Empty(deletedFiles);
+        Assert.Empty(deletedDirectories);
+    }
+
+    [Fact]
+    public void Phase9CanDeleteItsOwn09LongScenes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "09-long-scenes");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "old.png"), "old");
+        var target = new PhaseOutputTarget(9, root, true, "09-long-scenes", "Authority", "Phase9", true, false, false, false, true);
+
+        Assert.True(PhaseOwnedCleanupExecutor.TryDelete(target, 9, 9, new HashSet<int> { 9 }, [], [], []));
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Theory]
+    [InlineData(10, 9)]
+    [InlineData(14, 13)]
+    [InlineData(20, 19)]
+    public void LaterPhaseCannotDeleteEarlierPhase(int requestedPhase, int ownerPhase)
+    {
+        var target = new PhaseOutputTarget(ownerPhase, Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), true, "upstream", "Authority", $"Phase{ownerPhase}", true, false, false, false, true);
+        var denied = new List<CleanupDeletionDenied>();
+        Assert.False(PhaseOwnedCleanupExecutor.TryDelete(target, requestedPhase, requestedPhase, new HashSet<int> { requestedPhase }, [], [], denied));
+        Assert.Equal(ownerPhase, Assert.Single(denied).OwnerPhase);
+    }
+
+    [Fact]
+    public void RequestedRange9To10CannotDeletePhase8()
+    {
+        var target = new PhaseOutputTarget(8, Path.Combine(Path.GetTempPath(), "08-scene-assets"), true, "08-scene-assets", "Authority", "Phase8", true, false, false, false, true);
+        Assert.False(PhaseOwnedCleanupExecutor.TryDelete(target, 9, 10, new HashSet<int> { 9, 10 }, [], [], []));
+    }
+
+    [Fact]
+    public void RequestedRange8To9MayDelete8And9OwnedOutputsOnly()
+    {
+        foreach (var phase in new[] { 8, 9 })
+        {
+            var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), $"phase-{phase}");
+            Directory.CreateDirectory(root);
+            var target = new PhaseOutputTarget(phase, root, true, $"phase-{phase}", "Authority", $"Phase{phase}", true, false, false, false, true);
+            Assert.True(PhaseOwnedCleanupExecutor.TryDelete(target, 8, 9, new HashSet<int> { 8, 9 }, [], [], []));
+        }
+    }
+
+    [Fact]
+    public void ReadOnlyDependencyAndCommittedAuthorityCannotBeDeleted()
+    {
+        var target = new PhaseOutputTarget(8, Path.Combine(Path.GetTempPath(), "committed-phase-8"), true, "08-scene-assets", "Authority", "Phase8", true, false, false, false, true);
+        var denied = new List<CleanupDeletionDenied>();
+        Assert.False(PhaseOwnedCleanupExecutor.TryDelete(target, 9, 9, new HashSet<int> { 9 }, [], [], denied));
+        Assert.Contains("outside", Assert.Single(denied).Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CleanupExecutorRejectsPathWhoseOwnerIsOutsideRange()
+    {
+        var target = new PhaseOutputTarget(7, Path.Combine(Path.GetTempPath(), "07-narration"), true, "07-narration", "Authority", "Phase7", true, false, false, false, true);
+        Assert.False(PhaseOwnedCleanupExecutor.TryDelete(target, 9, 10, new HashSet<int> { 9, 10 }, [], [], []));
+    }
+
+    [Fact]
+    public void CentralOwnershipRegistryAssignsSceneAssetsTo8AndLongScenesTo9()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]);
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 8, 10);
+        Assert.Contains(targets, target => target.PhaseNo == 8 && target.RelativePath == "08-scene-assets");
+        Assert.Contains(targets, target => target.PhaseNo == 8 && target.RelativePath == "scene-assets-v3" && target.IsCompatibility);
+        Assert.Contains(targets, target => target.PhaseNo == 9 && target.RelativePath == "09-long-scenes");
+        Assert.Contains(targets, target => target.PhaseNo == 10 && target.RelativePath == "10-scene-validation");
+        Assert.DoesNotContain(targets, target => target.PhaseNo == 9 && target.RelativePath.Contains("scene-approval-v3", StringComparison.Ordinal));
     }
 
     private static ProductionPhaseContext CreateContext(string eventType, IReadOnlyList<string> requestedOutputs, string? shortTitleOverride = null, bool enableSceneVariants = false)
