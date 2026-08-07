@@ -110,6 +110,10 @@ public static class Phase8AuthorityReasonCodes
     public const string Missing = "P8_AUTHORITY_MISSING";
     public const string NotCommitted = "P8_AUTHORITY_NOT_COMMITTED";
     public const string ChecksumMismatch = "P8_AUTHORITY_CHECKSUM_MISMATCH";
+    public const string NarrationCandidatePhysicalChecksumMismatch = "P8_NARRATION_CANDIDATE_PHYSICAL_CHECKSUM_MISMATCH";
+    public const string NarrationCandidateSemanticChecksumMismatch = "P8_NARRATION_CANDIDATE_SEMANTIC_CHECKSUM_MISMATCH";
+    public const string NarrationManifestMismatch = "P8_NARRATION_MANIFEST_MISMATCH";
+    public const string NarrationCertificationInvalid = "P8_NARRATION_CERTIFICATION_INVALID";
     public const string IdentityMismatch = "P8_AUTHORITY_IDENTITY_MISMATCH";
     public const string SceneLineageMismatch = "P8_SCENE_LINEAGE_MISMATCH";
     public const string NarrationSceneMappingFailed = "P8_NARRATION_SCENE_MAPPING_FAILED";
@@ -138,6 +142,7 @@ public sealed class Phase8AuthorityLoadDiagnostics
     public string? AuthorityFailureStage { get; set; }
     public string? AuthorityFailureType { get; set; }
     public string? AuthorityFailureMessage { get; set; }
+    public string? NarrationChecksumDiagnostics { get; set; }
 }
 public sealed record Phase8AuthorityLoadRequest(string OutputRoot, string PlanId, string EventId,
     string Language, IReadOnlyList<string> RequestedVariants, Phase8AuthorityLoadDiagnostics? Diagnostics = null);
