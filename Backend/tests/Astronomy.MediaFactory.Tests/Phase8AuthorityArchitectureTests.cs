@@ -5,6 +5,64 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Phase8AuthorityArchitectureTests
 {
     [Fact]
+    public void Rc2ProductionUsesAuthoritySceneAssetsV3WithoutFeatureFlag()
+        => Assert.True(ProductionPipelineExecutionService.ShouldUseAuthoritySceneAssetsV3(useProductionPipeline: true, enableSceneAssetsV3: false));
+
+    [Fact]
+    public void LegacyCompatibilityModeCanStillUseVariants()
+        => Assert.False(ProductionPipelineExecutionService.ShouldUseAuthoritySceneAssetsV3(useProductionPipeline: false, enableSceneAssetsV3: false));
+
+    [Fact]
+    public void AuthorityModeNeverReadsEnrichedQuestionPlan()
+    {
+        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        var method = Slice(source, "private async Task<IReadOnlyList<string>> GenerateSceneAssetsV3Async", "private async Task<StoryFrameV4ComparisonExecutionResult>");
+        Assert.DoesNotContain("question-driven-scene-plan.enriched.json", method);
+        Assert.DoesNotContain("ValidateSceneApprovalTextBeforeRendering", method);
+        Assert.DoesNotContain("RenderPhase8SceneVisualVariantsAsync", method);
+    }
+
+    [Fact]
+    public void AuthorityFailureDoesNotFallbackToLegacy()
+    {
+        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        var method = Slice(source, "private async Task<IReadOnlyList<string>> GenerateSceneAssetsV3Async", "private async Task<StoryFrameV4ComparisonExecutionResult>");
+        Assert.Contains("phase8AuthorityLoader.LoadAsync", method);
+        Assert.Contains("throw;", method);
+        Assert.DoesNotContain("question-driven-scene-plan.enriched.json", method);
+    }
+
+    [Fact]
+    public void ShortOnlyOrionRequestsFourScenes()
+    {
+        var request = new Phase8AuthorityLoadRequest("root", "plan", "event", "en", ["Short"]);
+        Assert.Contains("Short", request.RequestedVariants);
+        Assert.DoesNotContain("Long", request.RequestedVariants);
+        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        Assert.Contains("expectedShortSceneCount\"] = requestedShort ? Phase8AuthoritySceneCount", source);
+    }
+
+    [Fact]
+    public void BothRequestedOrionProduces12And4()
+    {
+        var request = new Phase8AuthorityLoadRequest("root", "plan", "event", "en", ["Long", "Short"]);
+        Assert.Equal(["Long", "Short"], request.RequestedVariants);
+        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        Assert.Contains("authority.ShortScenes.Count", source);
+        Assert.Contains("authority.LongScenes.Count", source);
+    }
+
+    [Fact]
+    public void AuthorityCleanupOwns08SceneAssets()
+    {
+        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        var method = Slice(source, "private void ClearPhaseRangeOutputsForOverwrite", "private static void DeleteFileIfExists");
+        Assert.Contains("IsSceneAssetsV3Enabled(context)", method);
+        Assert.Contains("\"08-scene-assets\"", method);
+        Assert.Contains("\"scene-assets-v3\"", method);
+    }
+
+    [Fact]
     public void AuthorityRequest_PreservesExactLineageAndAcceptedNarration()
     {
         var properties = typeof(Phase8SceneRequirement).GetProperties().Select(x => x.Name).ToHashSet();

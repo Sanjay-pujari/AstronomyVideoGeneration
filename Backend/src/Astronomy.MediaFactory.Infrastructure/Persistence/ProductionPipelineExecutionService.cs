@@ -401,7 +401,14 @@ public sealed partial class ProductionPipelineExecutionService(
         (20, "Publishing Package", PhaseFinalValidationAsync)
     ];
 
-    private static bool IsSceneAssetsV3Enabled(ProductionPhaseContext context) => context.PipelineRequest.EnableSceneAssetsV3;
+    // RC2 production execution is the certified authority-driven path.  The flag is retained
+    // solely so non-production callers can explicitly opt into V3 while compatibility callers
+    // can continue to exercise the legacy implementations.
+    private static bool IsSceneAssetsV3Enabled(ProductionPhaseContext context)
+        => ShouldUseAuthoritySceneAssetsV3(context.ExecutionContext.UseProductionPipeline, context.PipelineRequest.EnableSceneAssetsV3);
+
+    internal static bool ShouldUseAuthoritySceneAssetsV3(bool useProductionPipeline, bool enableSceneAssetsV3)
+        => useProductionPipeline || enableSceneAssetsV3;
 
     private static string ResolvePhaseName(ProductionPhaseContext context, int phaseNo, string fallback)
         => IsSceneAssetsV3Enabled(context) ? phaseNo switch
@@ -2189,8 +2196,23 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseGenerateSceneImagesAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        if (IsSceneAssetsV3Enabled(context))
-            return await GenerateSceneAssetsV3Async(context, 8, "Format-Aware Scene Asset Generation", generateShort: IsRequestedOutput(context, "ShortVideo"), generateLong: IsRequestedOutput(context, "LongVideo"), cancellationToken);
+        var authoritySelected = IsSceneAssetsV3Enabled(context);
+        var selectedBranch = authoritySelected
+            ? "AuthoritySceneAssetsV3"
+            : context.PipelineRequest.EnableSceneVariants ? "LegacySceneVariants" : "LegacyInfographic";
+        var requestedShort = IsRequestedOutput(context, "ShortVideo");
+        var requestedLong = IsRequestedOutput(context, "LongVideo");
+        var requestedThumbnail = IsRequestedOutput(context, "Thumbnail");
+        var entryDiagnostics = BuildSceneAssetsHookDiagnostics(context, 8, "Format-Aware Scene Asset Generation", requestedShort && requestedLong ? "both" : requestedLong ? "long" : "short", beforeExecution: true);
+        PopulatePhase8BranchDiagnostics(entryDiagnostics, context, selectedBranch, requestedShort, requestedLong, requestedThumbnail);
+        await WriteSceneAssetsHookDiagnosticsAsync(context, entryDiagnostics, cancellationToken);
+        logger.LogInformation(
+            "Phase 8 routing: EnableSceneAssetsV3={EnableSceneAssetsV3}; EnableSceneVariants={EnableSceneVariants}; EnableAccurateSkyGuideV2={EnableAccurateSkyGuideV2}; RequestedShort={RequestedShort}; RequestedLong={RequestedLong}; RequestedThumbnail={RequestedThumbnail}; IsSceneAssetsV3Enabled={IsSceneAssetsV3Enabled}; SelectedBranch={SelectedBranch}",
+            context.PipelineRequest.EnableSceneAssetsV3, context.PipelineRequest.EnableSceneVariants, context.PipelineRequest.EnableAccurateSkyGuideV2,
+            requestedShort, requestedLong, requestedThumbnail, authoritySelected, selectedBranch);
+
+        if (authoritySelected)
+            return await GenerateSceneAssetsV3Async(context, 8, "Format-Aware Scene Asset Generation", generateShort: requestedShort, generateLong: requestedLong, cancellationToken);
 
         if (!context.PipelineRequest.EnableSceneVariants)
         {
@@ -2220,6 +2242,8 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         var format = generateShort && !generateLong ? "short" : generateLong && !generateShort ? "long" : "both";
         await WriteSceneAssetsHookDiagnosticsAsync(context, BuildSceneAssetsHookDiagnostics(context, phaseNo, phaseName, format, beforeExecution: true), cancellationToken);
+        if (phaseNo == 8)
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d => PopulatePhase8BranchDiagnostics(d, context, "AuthoritySceneAssetsV3", generateShort, generateLong, IsRequestedOutput(context, "Thumbnail")), cancellationToken);
         try
         {
             if (sceneAssetsV3Service is null)
@@ -2246,10 +2270,12 @@ public sealed partial class ProductionPipelineExecutionService(
 
             if (phase8AuthorityLoader is null)
                 throw new InvalidOperationException("P8_AUTHORITY_MISSING: IPhase8AuthorityLoader is not registered.");
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d => d["phase8AuthorityLoaderCalled"] = true, cancellationToken);
             var requestedVariants = new[] { generateLong ? "Long" : null, generateShort ? "Short" : null }.Where(x => x is not null).Cast<string>().ToArray();
             var authority = await phase8AuthorityLoader.LoadAsync(new Phase8AuthorityLoadRequest(context.OutputRoot,
                 context.ExecutionContext.ContentGenerationPlanId?.ToString() ?? context.Request.PlanId.ToString(),
                 context.EventId, context.Request.Language, requestedVariants), cancellationToken);
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d => d["phase8AuthorityLoaded"] = true, cancellationToken);
             var response = await sceneAssetsV3Service.GenerateAsync(new SceneAssetsV3Request(context.OutputRoot, generateShort, generateLong,
                 context.OverwriteExisting, context.PipelineRequest.EnableAccurateSkyGuideV2, AuthorityInput: authority), cancellationToken);
             if (!Directory.Exists(Path.Combine(context.OutputRoot, "scene-assets-v3")))
@@ -15530,6 +15556,28 @@ public sealed partial class ProductionPipelineExecutionService(
         static bool sceneAssetsV3ServiceAvailable(ProductionPhaseContext _) => true;
     }
 
+    private static void PopulatePhase8BranchDiagnostics(JsonObject diagnostics, ProductionPhaseContext context, string selectedBranch, bool requestedShort, bool requestedLong, bool requestedThumbnail)
+    {
+        var authoritySelected = selectedBranch == "AuthoritySceneAssetsV3";
+        diagnostics["phase8ExecutionMode"] = context.ExecutionContext.UseProductionPipeline ? "RC2Production" : "Compatibility";
+        diagnostics["selectedSceneAssetBranch"] = selectedBranch;
+        diagnostics["enableSceneAssetsV3Flag"] = context.PipelineRequest.EnableSceneAssetsV3;
+        diagnostics["enableSceneVariantsFlag"] = context.PipelineRequest.EnableSceneVariants;
+        diagnostics["enableAccurateSkyGuideV2Flag"] = context.PipelineRequest.EnableAccurateSkyGuideV2;
+        diagnostics["authoritySceneAssetsV3Selected"] = authoritySelected;
+        diagnostics["legacySceneVariantsSelected"] = selectedBranch == "LegacySceneVariants";
+        diagnostics["legacyInfographicSelected"] = selectedBranch == "LegacyInfographic";
+        diagnostics["phase8AuthorityLoaderCalled"] = false;
+        diagnostics["phase8AuthorityLoaded"] = false;
+        diagnostics["requestedShort"] = requestedShort;
+        diagnostics["requestedLong"] = requestedLong;
+        diagnostics["requestedThumbnail"] = requestedThumbnail;
+        diagnostics["expectedShortSceneCount"] = requestedShort ? Phase8AuthoritySceneCount(context.OutputRoot, "Short", 0) : 0;
+        diagnostics["expectedLongSceneCount"] = requestedLong ? Phase8AuthoritySceneCount(context.OutputRoot, "Long", 0) : 0;
+        diagnostics["legacyEnrichedPlanReadAttempted"] = false;
+        diagnostics["legacyNarrationV2ReadAttempted"] = false;
+    }
+
     private JsonObject BuildSceneAssetsValidationHookDiagnostics(ProductionPhaseContext context, bool beforeExecution)
         => new()
         {
@@ -15614,6 +15662,22 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             phaseNo = 8,
             phaseName = "Format-Aware Scene Asset Generation",
+            phase8ExecutionMode = context.ExecutionContext.UseProductionPipeline ? "RC2Production" : "FeatureFlagAuthority",
+            selectedSceneAssetBranch = "AuthoritySceneAssetsV3",
+            enableSceneAssetsV3Flag = context.PipelineRequest.EnableSceneAssetsV3,
+            enableSceneVariantsFlag = context.PipelineRequest.EnableSceneVariants,
+            authoritySceneAssetsV3Selected = true,
+            legacySceneVariantsSelected = false,
+            legacyInfographicSelected = false,
+            phase8AuthorityLoaderCalled = true,
+            phase8AuthorityLoaded = true,
+            requestedShort = shortRequested,
+            requestedLong = longRequested,
+            expectedShortSceneCount = shortRequested ? shortDiag.ExpectedSceneCount : 0,
+            expectedLongSceneCount = longRequested ? longDiag.ExpectedSceneCount : 0,
+            v3GeneratorCalled = true,
+            legacyEnrichedPlanReadAttempted = false,
+            legacyNarrationV2ReadAttempted = false,
             status = errors.Count == 0 ? "Passed" : "Failed",
             publicationCommitted,
             downstreamReady = errors.Count == 0 && publicationCommitted,
@@ -17179,9 +17243,17 @@ public sealed partial class ProductionPipelineExecutionService(
 
         if (deleteStartPhaseNo <= 9 && deleteEndPhaseNo >= 8)
         {
-            DeleteProductionSubtree(context.ExecutionContext.SceneRoot!, deletedFiles, deletedDirectories);
-            DeleteProductionSubtree(Path.Combine(context.ExecutionContext.QuestionRoot!, "scene-approval-v3"), deletedFiles, deletedDirectories);
-            DeleteProductionSubtree(GetSceneApprovalNormalizedRoot(context.OutputRoot), deletedFiles, deletedDirectories);
+            if (IsSceneAssetsV3Enabled(context))
+            {
+                DeleteProductionSubtree(Path.Combine(context.OutputRoot, "08-scene-assets"), deletedFiles, deletedDirectories);
+                DeleteProductionSubtree(Path.Combine(context.OutputRoot, "scene-assets-v3"), deletedFiles, deletedDirectories);
+            }
+            else
+            {
+                DeleteProductionSubtree(context.ExecutionContext.SceneRoot!, deletedFiles, deletedDirectories);
+                DeleteProductionSubtree(Path.Combine(context.ExecutionContext.QuestionRoot!, "scene-approval-v3"), deletedFiles, deletedDirectories);
+                DeleteProductionSubtree(GetSceneApprovalNormalizedRoot(context.OutputRoot), deletedFiles, deletedDirectories);
+            }
         }
 
         if (deleteStartPhaseNo <= 11 && deleteEndPhaseNo >= 11)
