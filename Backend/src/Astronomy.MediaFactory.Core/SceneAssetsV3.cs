@@ -253,7 +253,16 @@ public sealed record SceneAssetManifestItem(string AssetId, string Variant, stri
     IReadOnlyList<string>? AstronomyObjectsExpected = null, IReadOnlyList<string>? AstronomyObjectsVerified = null,
     string SkyGeometryValidationStatus = "NotRequired", string? AccuracyEvidencePath = null,
     bool RequiresScientificGeometry = false, string? VisualRenderer = null,
-    string? AstronomyGeometryProvider = null, string? ImageGenerationProvider = null);
+    string? AstronomyGeometryProvider = null, string? ImageGenerationProvider = null)
+{
+    // Phase 8's published vocabulary is intentionally explicit.  Keep the original CLR
+    // members for compatibility with the Phase 9 reader while exposing the frozen contract
+    // names in the JSON manifest.
+    public string VisualStyle => ProviderType;
+    public string? BaseImageProvider => ImageGenerationProvider;
+    public string? FinalRenderer => VisualRenderer;
+    public string PhysicalSha256 => Checksum;
+}
 public sealed record Phase8ManifestValidationResult(bool IsValid, IReadOnlyList<string> ReasonCodes,
     IReadOnlyList<string> Errors);
 public interface IPhase8SceneAssetManifestValidator

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "phase8-acceptance-plan-v1",
+  "planId": "20000000-0000-0000-0000-000000000001",
+  "eventId": "constellation-iau-ori",
+  "language": "en",
+  "title": "Orion: How to Find the Hunter Constellation",
+  "requestedOutputs": [
+    "ShortVideo",
+    "LongVideo",
+    "Thumbnail"
+  ],
+  "startPhaseNo": 8,
+  "endPhaseNo": 8,
+  "authorityPolicy": "Reuse execution-scoped committed Phase 4, Phase 6, and Phase 7 authorities"
+}

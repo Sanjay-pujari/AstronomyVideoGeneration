@@ -32,6 +32,17 @@ public sealed class Phase8SceneAssetManifestValidator : IPhase8SceneAssetManifes
             var accuracy = Phase8VisualAccuracyPolicy.Derive(scene);
             if (item.AstronomicalAccuracyRequirement != accuracy.Requirement)
                 Error(Phase8AuthorityReasonCodes.ScientificVisualRequirementUnsatisfied, $"Authority-derived accuracy classification differs for '{key}'.");
+            if (!string.Equals(item.VisualStyle, accuracy.VisualStyle.ToString(), StringComparison.Ordinal)
+                || !string.Equals(item.FinalRenderer, accuracy.FinalRenderer, StringComparison.Ordinal))
+                Error(Phase8AuthorityReasonCodes.NotCommitted, $"Published visual strategy differs from authority for '{key}'.");
+            if (accuracy.AiImageRequired && (!string.Equals(item.BaseImageProvider, "AzureOpenAICinematicImageGenerator", StringComparison.Ordinal)
+                || !string.Equals(item.ProviderStatus, "Generated", StringComparison.Ordinal)))
+                Error(Phase8AuthorityReasonCodes.NotCommitted,
+                    $"Cinematic asset '{key}' was not produced by the governed Azure cinematic/hybrid pipeline.");
+            if (accuracy.InfographicRequired && (item.BaseImageProvider is not null
+                || !string.Equals(item.FinalRenderer, "DeterministicInfographicRenderer", StringComparison.Ordinal)))
+                Error(Phase8AuthorityReasonCodes.NotCommitted,
+                    $"Explicit infographic asset '{key}' has invalid renderer provenance.");
             if (accuracy.RequiresScientificGeometry && (!item.ScientificGeometryCertified
                 || item.AstronomicalAccuracySource.Contains("Generative", StringComparison.OrdinalIgnoreCase)
                 || item.SkyGeometryValidationStatus != "Passed"

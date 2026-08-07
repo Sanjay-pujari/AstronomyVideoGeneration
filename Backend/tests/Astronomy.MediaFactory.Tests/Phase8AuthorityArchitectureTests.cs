@@ -54,6 +54,31 @@ public sealed class Phase8AuthorityArchitectureTests
         Assert.Contains("authority.LongScenes.Count", source);
     }
 
+    [Theory]
+    [InlineData("ShortVideo", "requestedShort")]
+    [InlineData("LongVideo", "requestedLong")]
+    public void RequestedVariantComesFromExactPipelineRequestedOutput(string output, string resolvedFlag)
+    {
+        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        Assert.Contains($"var {resolvedFlag} = IsRequestedOutput(context, \"{output}\")", source);
+        Assert.Contains("context.Request.RequestedOutputs.Any", source);
+        Assert.DoesNotContain($"var {resolvedFlag} = Phase8AuthoritySceneCount", source);
+    }
+
+    [Fact]
+    public void BothVariantAcceptanceFixtureIsProductionShapedAndDoesNotMutateShortOnlyPlan()
+    {
+        var path = Path.Combine(RepositoryTestPaths.Root(), "Backend", "tests",
+            "Astronomy.MediaFactory.Tests", "Fixtures", "Phase8", "orion-both-variant-production-plan.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var outputs = document.RootElement.GetProperty("requestedOutputs").EnumerateArray()
+            .Select(x => x.GetString()).ToArray();
+        Assert.Contains("ShortVideo", outputs);
+        Assert.Contains("LongVideo", outputs);
+        Assert.Equal(8, document.RootElement.GetProperty("startPhaseNo").GetInt32());
+        Assert.Equal(8, document.RootElement.GetProperty("endPhaseNo").GetInt32());
+    }
+
     [Fact]
     public void BothVariantsOrionProduces12LongAnd4ShortAssets()
     {
@@ -170,6 +195,54 @@ public sealed class Phase8AuthorityArchitectureTests
         Assert.Equal(Phase8VisualStyle.Infographic, plan.VisualStyle);
         Assert.False(plan.AiImageRequired);
         Assert.True(plan.InfographicRequired);
+    }
+
+    [Fact]
+    public void LongCinematicSceneRoutesToAzureAtConfiguredLandscapeProfile()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Long", 1));
+        var defaults = new SceneAssetsV3Request();
+        Assert.Equal(Phase8VisualStyle.Cinematic, plan.VisualStyle);
+        Assert.Equal("AzureOpenAICinematicImageGenerator", plan.BaseImageProvider);
+        Assert.Equal("CinematicAspectFillRenderer", plan.FinalRenderer);
+        Assert.Equal((1920, 1080), (defaults.LongTargetWidth, defaults.LongTargetHeight));
+        Assert.NotEqual((defaults.ShortTargetWidth, defaults.ShortTargetHeight),
+            (defaults.LongTargetWidth, defaults.LongTargetHeight));
+    }
+
+    [Fact]
+    public void LongScientificSceneUsesHybridCinematicRatherThanDefaultInfographic()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Long", 6, "RecognitionGuide", "Where to look",
+            "Recognize Orion from the Belt", ["Orion", "Alnitak", "Alnilam", "Mintaka"]));
+        Assert.Equal(Phase8VisualStyle.HybridCinematic, plan.VisualStyle);
+        Assert.True(plan.AiImageRequired);
+        Assert.False(plan.InfographicRequired);
+        Assert.Equal("AzureOpenAICinematicImageGenerator", plan.BaseImageProvider);
+        Assert.Equal("HipparcosCatalogProjection", plan.AstronomyGeometryProvider);
+        Assert.Equal("HybridCinematicCompositionRenderer", plan.FinalRenderer);
+    }
+
+    [Fact]
+    public void ManifestExposesFrozenPhase8StrategyAndChecksumNames()
+    {
+        var properties = typeof(SceneAssetManifestItem).GetProperties().Select(x => x.Name).ToHashSet();
+        foreach (var name in new[] { "VisualStyle", "BaseImageProvider", "FinalRenderer", "PhysicalSha256" })
+            Assert.Contains(name, properties);
+        var validator = ReadInfrastructure("Phase8SceneAssetManifestValidator.cs");
+        Assert.Contains("was not produced by the governed Azure cinematic/hybrid pipeline", validator);
+        Assert.Contains("Explicit infographic asset", validator);
+    }
+
+    [Fact]
+    public void DiagnosticsAreVariantScopedAndRejectLegacyNineSceneOwnership()
+    {
+        var source = ReadInfrastructure("SceneAssetsV3Service.cs");
+        foreach (var name in new[] { "requestedShort", "requestedLong", "azureGeneratedShortCount",
+                     "azureGeneratedLongCount", "hybridShortCount", "hybridLongCount",
+                     "explicitInfographicShortCount", "explicitInfographicLongCount",
+                     "missingShortSceneIds", "missingLongSceneIds", "legacyNineSceneContractUsed" })
+            Assert.Contains(name, source);
     }
 
     [Fact]
