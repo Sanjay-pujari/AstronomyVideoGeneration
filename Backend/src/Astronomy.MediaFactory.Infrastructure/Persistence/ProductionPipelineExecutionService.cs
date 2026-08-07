@@ -2244,6 +2244,7 @@ public sealed partial class ProductionPipelineExecutionService(
         await WriteSceneAssetsHookDiagnosticsAsync(context, BuildSceneAssetsHookDiagnostics(context, phaseNo, phaseName, format, beforeExecution: true), cancellationToken);
         if (phaseNo == 8)
             await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d => PopulatePhase8BranchDiagnostics(d, context, "AuthoritySceneAssetsV3", generateShort, generateLong, IsRequestedOutput(context, "Thumbnail")), cancellationToken);
+        var authorityLoadDiagnostics = new Phase8AuthorityLoadDiagnostics();
         try
         {
             if (sceneAssetsV3Service is null)
@@ -2260,7 +2261,9 @@ public sealed partial class ProductionPipelineExecutionService(
             await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d =>
             {
                 d["sceneAssetsVersionDecision"] = "V3";
-                d["decisionReason"] = "enableSceneAssetsV3=true";
+                d["decisionReason"] = context.ExecutionContext.UseProductionPipeline
+                    ? "RC2ProductionAuthoritySceneAssetsV3"
+                    : "EnableSceneAssetsV3Flag";
                 d["selectedGenerator"] = generateShort && generateLong ? "SceneAssetsV3FormatAwareGenerator" : generateShort ? "SceneAssetsV3ShortGenerator" : "SceneAssetsV3LongGenerator";
                 d["selectedGeneratorClass"] = sceneAssetsV3Service.GetType().Name;
                 d["legacyV2GeneratorCalled"] = false;
@@ -2274,8 +2277,14 @@ public sealed partial class ProductionPipelineExecutionService(
             var requestedVariants = new[] { generateLong ? "Long" : null, generateShort ? "Short" : null }.Where(x => x is not null).Cast<string>().ToArray();
             var authority = await phase8AuthorityLoader.LoadAsync(new Phase8AuthorityLoadRequest(context.OutputRoot,
                 context.ExecutionContext.ContentGenerationPlanId?.ToString() ?? context.Request.PlanId.ToString(),
-                context.EventId, context.Request.Language, requestedVariants), cancellationToken);
-            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d => d["phase8AuthorityLoaded"] = true, cancellationToken);
+                context.EventId, context.Request.Language, requestedVariants, authorityLoadDiagnostics), cancellationToken);
+            await UpdateSceneAssetsHookDiagnosticsAsync(context, phaseNo, d =>
+            {
+                d["phase8AuthorityLoaded"] = true;
+                PopulateAuthorityLoadDiagnostics(d, authorityLoadDiagnostics);
+                d["expectedShortSceneCount"] = authority.ShortScenes.Count;
+                d["expectedLongSceneCount"] = authority.LongScenes.Count;
+            }, cancellationToken);
             var response = await sceneAssetsV3Service.GenerateAsync(new SceneAssetsV3Request(context.OutputRoot, generateShort, generateLong,
                 context.OverwriteExisting, context.PipelineRequest.EnableAccurateSkyGuideV2, AuthorityInput: authority), cancellationToken);
             if (!Directory.Exists(Path.Combine(context.OutputRoot, "scene-assets-v3")))
@@ -2301,6 +2310,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 if (string.IsNullOrWhiteSpace(d["actualOutputRoot"]?.GetValue<string>()))
                     d["actualOutputRoot"] = NormalizePath(Path.Combine(context.OutputRoot, "scene-assets-v3"));
                 PopulatePhase8FormatAwareDiagnostics(d, context, generateLong, generateShort, []);
+                PopulateAuthorityLoadDiagnostics(d, authorityLoadDiagnostics);
                 d["exceptionType"] = ex.GetType().Name;
                 d["exceptionMessage"] = ex.Message;
                 if (ex.Data.Contains("currentAssetCode")) d["currentAssetCode"] = ex.Data["currentAssetCode"]?.ToString() ?? string.Empty;
@@ -15576,6 +15586,24 @@ public sealed partial class ProductionPipelineExecutionService(
         diagnostics["expectedLongSceneCount"] = requestedLong ? Phase8AuthoritySceneCount(context.OutputRoot, "Long", 0) : 0;
         diagnostics["legacyEnrichedPlanReadAttempted"] = false;
         diagnostics["legacyNarrationV2ReadAttempted"] = false;
+        PopulateAuthorityLoadDiagnostics(diagnostics, new Phase8AuthorityLoadDiagnostics());
+    }
+
+    private static void PopulateAuthorityLoadDiagnostics(JsonObject diagnostics, Phase8AuthorityLoadDiagnostics stages)
+    {
+        diagnostics["phase4AuthorityLoadStarted"] = stages.Phase4AuthorityLoadStarted;
+        diagnostics["phase4AuthorityLoaded"] = stages.Phase4AuthorityLoaded;
+        diagnostics["phase6AuthorityLoadStarted"] = stages.Phase6AuthorityLoadStarted;
+        diagnostics["phase6AuthorityLoaded"] = stages.Phase6AuthorityLoaded;
+        diagnostics["shortNarrationAuthorityLoadStarted"] = stages.ShortNarrationAuthorityLoadStarted;
+        diagnostics["shortNarrationAuthorityLoaded"] = stages.ShortNarrationAuthorityLoaded;
+        diagnostics["longNarrationAuthorityLoadStarted"] = stages.LongNarrationAuthorityLoadStarted;
+        diagnostics["longNarrationAuthorityLoaded"] = stages.LongNarrationAuthorityLoaded;
+        diagnostics["authorityProjectionStarted"] = stages.AuthorityProjectionStarted;
+        diagnostics["authorityProjectionCompleted"] = stages.AuthorityProjectionCompleted;
+        diagnostics["authorityFailureStage"] = stages.AuthorityFailureStage ?? "";
+        diagnostics["authorityFailureType"] = stages.AuthorityFailureType ?? "";
+        diagnostics["authorityFailureMessage"] = stages.AuthorityFailureMessage ?? "";
     }
 
     private JsonObject BuildSceneAssetsValidationHookDiagnostics(ProductionPhaseContext context, bool beforeExecution)

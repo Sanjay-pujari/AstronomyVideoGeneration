@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Core;
+using System.Text.Json;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -102,6 +103,113 @@ public sealed class Phase8AuthorityArchitectureTests
         Assert.Contains("accepted-release-candidate.json", source);
         Assert.DoesNotContain("narration-v5", source.ToLowerInvariant());
         Assert.DoesNotContain("question-driven-narration-v2", source.ToLowerInvariant());
+    }
+
+    [Fact]
+    public void AcceptedReleaseCandidateDoesNotRequireNarrativeDraft()
+    {
+        const string json = """
+            {"schemaVersion":"2.0","attemptId":"attempt","generatedUtc":"2026-08-07T00:00:00Z",
+             "releaseCandidateId":"short-accepted","executionId":"execution","planId":"plan","eventId":"orion",
+             "language":"en","variant":"Short","sourceBlueprintAggregateId":"blueprint","sourceBlueprintAggregateChecksum":"bp-checksum",
+             "sourceVariantBlueprintId":"short-blueprint","sourceVariantBlueprintChecksum":"variant-checksum",
+             "sourceStoryFramesAuthorityId":"story-authority","sourceStoryFramesAuthorityChecksum":"story-checksum",
+             "blueprintSceneCount":4,"acceptedSceneCount":4,
+             "scenes":[
+               {"sceneId":"orion-short-01","sceneNumber":1,"blueprintSceneId":"orion-short-01","storyFrameId":"sf-01","selectedKnowledgeReferenceIds":[],"selectedClaimIds":[],"narrationText":"Orion rises over the winter horizon."},
+               {"sceneId":"orion-short-02","sceneNumber":2,"blueprintSceneId":"orion-short-02","storyFrameId":"sf-02","selectedKnowledgeReferenceIds":[],"selectedClaimIds":[],"narrationText":"Three belt stars mark its center."},
+               {"sceneId":"orion-short-03","sceneNumber":3,"blueprintSceneId":"orion-short-03","storyFrameId":"sf-03","selectedKnowledgeReferenceIds":[],"selectedClaimIds":[],"narrationText":"Use the belt to orient your view."},
+               {"sceneId":"orion-short-04","sceneNumber":4,"blueprintSceneId":"orion-short-04","storyFrameId":"sf-04","selectedKnowledgeReferenceIds":[],"selectedClaimIds":[],"narrationText":"Look from a dark location."}],
+             "acceptanceResult":{"accepted":true,"reason":"Accepted"},"deterministicChecksum":"checksum"}
+            """;
+        var accepted = JsonSerializer.Deserialize<Phase7AcceptedReleaseCandidate>(json,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(accepted);
+        Assert.Equal(4, accepted.AcceptedSceneCount);
+        Assert.Equal(4, accepted.Scenes.Count);
+
+        var source = ReadInfrastructure("Phase8AuthorityLoader.cs");
+        Assert.Contains("ReadAsync<Phase7AcceptedReleaseCandidate>", source);
+        Assert.DoesNotContain("DocumentaryNarrativeReleaseCandidate", source);
+        Assert.DoesNotContain("NarrativeDraft", source);
+    }
+
+    [Fact]
+    public void AuthorityModeNeverConstructsNarrativeDraft()
+    {
+        var source = ReadInfrastructure("Phase8AuthorityLoader.cs");
+        Assert.DoesNotContain("new DocumentaryNarrativeDraft", source);
+        Assert.DoesNotContain("NarrativeLifecycle", source);
+    }
+
+    [Fact]
+    public void ShortOnlyLoadsOnlyShortAcceptedCandidate()
+    {
+        var source = ReadInfrastructure("Phase8AuthorityLoader.cs");
+        Assert.Contains("if (variants.Contains(\"Short\"))", source);
+        Assert.Contains("if (variants.Contains(\"Long\"))", source);
+        Assert.DoesNotContain("blueprint.LongBlueprint.Scenes.Count", source);
+    }
+
+    [Fact]
+    public void AcceptedNarrationMapsToCommittedStoryFramesByGovernedIdentity()
+    {
+        var source = ReadInfrastructure("Phase8AuthorityLoader.cs");
+        var sceneId = source.IndexOf("x.SceneId == group.Key", StringComparison.Ordinal);
+        var storyFrameId = source.IndexOf("f.FrameId == x.StoryFrameId", StringComparison.Ordinal);
+        var blueprintSceneId = source.IndexOf("x.BlueprintSceneId == scene.SceneId", StringComparison.Ordinal);
+        Assert.True(sceneId >= 0 && sceneId < storyFrameId && storyFrameId < blueprintSceneId);
+        Assert.Contains("candidate.Scenes.Count != frames.Length", source);
+    }
+
+    [Fact]
+    public void MissingShortCandidateFailsPrecisely()
+    {
+        var source = ReadInfrastructure("Phase8AuthorityLoader.cs");
+        Assert.Contains("Phase8AuthorityReasonCodes.VariantAuthorityMissing", source);
+        Assert.Contains("accepted release candidate is missing", source);
+    }
+
+    [Fact]
+    public void MissingNarrationSceneMappingFailsPrecisely()
+        => Assert.Contains("Phase8AuthorityReasonCodes.NarrationSceneMappingFailed", ReadInfrastructure("Phase8AuthorityLoader.cs"));
+
+    [Fact]
+    public void Phase6CommittedAuthorityIsUsedAndLegacyStoryFrameV4ComparisonNotRequired()
+    {
+        var source = ReadInfrastructure("Phase8AuthorityLoader.cs");
+        Assert.Contains("06-story-frames", source);
+        Assert.Contains("story-frames.json", source);
+        Assert.Contains("story-frame-index.json", source);
+        Assert.DoesNotContain("short-story-frames", source);
+        Assert.DoesNotContain("long-story-frames", source);
+    }
+
+    [Fact]
+    public void OrionShortAuthorityCountComesFromProjection()
+    {
+        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        Assert.Contains("d[\"expectedShortSceneCount\"] = authority.ShortScenes.Count", source);
+        Assert.Contains("d[\"expectedLongSceneCount\"] = authority.LongScenes.Count", source);
+    }
+
+    [Fact]
+    public void RoutingDiagnosticsReportTrueReason()
+    {
+        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        Assert.Contains("RC2ProductionAuthoritySceneAssetsV3", source);
+        Assert.Contains("enableSceneAssetsV3Flag", source);
+    }
+
+    [Fact]
+    public void AuthorityLoadingPublishesEveryStageDiagnostic()
+    {
+        var source = ReadInfrastructure("ProductionPipelineExecutionService.cs");
+        foreach (var name in new[] { "phase4AuthorityLoadStarted", "phase4AuthorityLoaded", "phase6AuthorityLoadStarted",
+                     "phase6AuthorityLoaded", "shortNarrationAuthorityLoadStarted", "shortNarrationAuthorityLoaded",
+                     "longNarrationAuthorityLoadStarted", "longNarrationAuthorityLoaded", "authorityProjectionStarted",
+                     "authorityProjectionCompleted", "authorityFailureStage", "authorityFailureType", "authorityFailureMessage" })
+            Assert.Contains($"diagnostics[\"{name}\"]", source);
     }
 
     [Fact]
