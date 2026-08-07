@@ -71,7 +71,9 @@ public sealed class Phase8AuthorityArchitectureTests
             "Find Orion from its Belt pattern", ["Orion", "Alnitak", "Alnilam", "Mintaka"]));
         Assert.True(plan.RequiresScientificGeometry);
         Assert.Equal(AstronomicalAccuracyRequirement.GeometryAccurate, plan.Requirement);
-        Assert.Equal("ExistingAccurateSkyGuideRenderer", plan.PreferredProvider);
+        Assert.Equal("AzureOpenAICinematicImageGenerator", plan.PreferredProvider);
+        Assert.Equal(Phase8VisualStyle.HybridCinematic, plan.VisualStyle);
+        Assert.Equal("HipparcosCatalogProjection", plan.AstronomyGeometryProvider);
     }
 
     [Fact]
@@ -149,6 +151,29 @@ public sealed class Phase8AuthorityArchitectureTests
     [Fact]
     public void ContextualSceneDoesNotRequireScientificGeometry()
         => Assert.False(Phase8VisualAccuracyPolicy.Derive(Scene("Short", 1, "OpeningHook", "Meet Orion")).RequiresScientificGeometry);
+
+    [Fact]
+    public void ScientificGeometryDoesNotAutomaticallyRouteToInfographic()
+    {
+        var plan = Phase8VisualAccuracyPolicy.Derive(Scene("Short", 3, "RecognitionGuide", "Where to look", "Recognize the Belt", ["Orion", "Alnitak", "Alnilam", "Mintaka"]));
+        Assert.True(plan.AiImageRequired);
+        Assert.False(plan.InfographicRequired);
+        Assert.Equal("HybridCinematicCompositionRenderer", plan.FinalRenderer);
+    }
+
+    [Fact]
+    public void InfographicRendererIsUsedOnlyForExplicitInfographicStyle()
+    {
+        var scene = Scene("Short", 2) with { RenderingPreference = "Infographic" };
+        var plan = Phase8VisualAccuracyPolicy.Derive(scene);
+        Assert.Equal(Phase8VisualStyle.Infographic, plan.VisualStyle);
+        Assert.False(plan.AiImageRequired);
+        Assert.True(plan.InfographicRequired);
+    }
+
+    [Fact]
+    public void SemanticIdentityIncludesResolvedVisualStrategy()
+        => Assert.Contains("visualStrategy = Phase8VisualAccuracyPolicy.Derive(scene)", ReadInfrastructure("SceneAssetsV3Service.cs"));
 
     [Fact]
     public void AuthorityCleanupOwns08SceneAssets()

@@ -118,6 +118,10 @@ public sealed class SceneAssetsV3Service(
                 x.VisualOpportunityType, x.RenderingPreference, x.AssetRole,
                 renderingStrategy = accuracy.RenderingStrategy, astronomicalAccuracyRequirement = accuracy.Requirement,
                 preferredProvider = accuracy.PreferredProvider, fallbackProvider = accuracy.FallbackProvider,
+                visualStyle = accuracy.VisualStyle, accuracyRequirement = accuracy.Requirement,
+                baseImageProvider = accuracy.BaseImageProvider, astronomyGeometryProvider = accuracy.AstronomyGeometryProvider,
+                finalRenderer = accuracy.FinalRenderer, aiImageRequired = accuracy.AiImageRequired,
+                infographicRequired = accuracy.InfographicRequired, scientificOverlayRequired = accuracy.ScientificOverlayRequired,
                 requiresScientificGeometry = accuracy.RequiresScientificGeometry,
                 targetWidth = x.Variant == "Short" ? request.ShortTargetWidth : request.LongTargetWidth,
                 targetHeight = x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight,
@@ -127,8 +131,12 @@ public sealed class SceneAssetsV3Service(
         await WriteJsonAsync(Path.Combine(root, "visual-generation-requests.json"), new
         {
             schemaVersion = "1.0", requests = scenes.Select((x, index) => { var beat = BuildAuthorityBeats(BuildAuthorityTimelineContext(authority), [x]).Single(); var accuracy = Phase8VisualAccuracyPolicy.Derive(x);
-                return new { x.SceneId, providerType = accuracy.PreferredProvider, providerRequestIdentity = $"scene-assets-v3-{x.Variant.ToLowerInvariant()}-{x.SceneId}",
-                    instruction = beat.VisualPrompt, negativeConstraints = "no embedded text, watermark, logo, or unrelated objects",
+                return new { x.SceneId, visualStyle = accuracy.VisualStyle,
+                    aiGeneration = accuracy.AiImageRequired ? new { provider = accuracy.BaseImageProvider, promptIdentity = HashText(beat.VisualPrompt), targetStyle = "cinematic astronomy documentary", nativeDimensions = request.ProviderRequestedSize } : null,
+                    astronomyGeometry = new { required = accuracy.RequiresScientificGeometry, provider = accuracy.AstronomyGeometryProvider, objects = accuracy.ExpectedObjects },
+                    composition = new { strategy = accuracy.FinalRenderer, targetWidth = x.Variant == "Short" ? request.ShortTargetWidth : request.LongTargetWidth, targetHeight = x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight },
+                    providerType = accuracy.PreferredProvider, providerRequestIdentity = $"scene-assets-v3-{x.Variant.ToLowerInvariant()}-{x.SceneId}",
+                    instruction = beat.VisualPrompt, negativeConstraints = "no embedded text, watermark, logo, infographic panels, fantasy stars, or unrelated objects",
                     width = x.Variant == "Short" ? request.ShortTargetWidth : request.LongTargetWidth,
                     height = x.Variant == "Short" ? request.ShortTargetHeight : request.LongTargetHeight,
                     renderingMode = beat.RenderMode, astronomicalAccuracyRequirement = accuracy.Requirement,
@@ -180,9 +188,11 @@ public sealed class SceneAssetsV3Service(
             foreach (var beat in beats)
             {
                 var imagePath = Path.Combine(dir, beat.SceneId + ".png");
+                var authorityInfographic = beat.VisualPromptSource == "Phase8AuthorityInput" && beat.RenderMode == "ExplicitInfographicScene";
+                var authorityHybrid = beat.VisualPromptSource == "Phase8AuthorityInput" && beat.RenderMode == "HybridCinematicScene";
                 var authorityAccurateSky = beat.VisualPromptSource == "Phase8AuthorityInput" && beat.RenderMode == "AccurateSkyGuideScene";
                 var guideV2Enabled = !authorityAccurateSky && enableAccurateSkyGuideV2 && beat.RenderMode == "AccurateSkyGuideScene";
-                var providerCalled = beat.RenderMode is not "AccurateSkyGuideScene" || guideV2Enabled;
+                var providerCalled = !authorityInfographic && (beat.RenderMode is not "AccurateSkyGuideScene" || guideV2Enabled);
                 var providerSucceeded = false;
                 var fallbackUsed = false;
                 string? accurateSkyGuidePromptPath = null;
@@ -246,6 +256,8 @@ public sealed class SceneAssetsV3Service(
                 }
 
                 await EnsureFinalDimensionsAsync(imagePath, targetWidth, targetHeight, ct);
+                if (authorityHybrid)
+                    await CompositeHipparcosOverlayAsync(imagePath, beat.GuideElementsUsed ?? [], targetWidth, targetHeight, ct);
 
                 var forbiddenDetected = EventContentGuard.DetectForbiddenTerms(string.Join(Environment.NewLine, beat.NarrationBeat, beat.VisualIntent, beat.VisualPrompt, beat.OverlayText, beat.SupportingText ?? string.Empty), context.ForbiddenTerms);
                 var providerName = providerCalled ? imageGenerator.GetType().Name : "DeterministicRenderer";
@@ -332,7 +344,7 @@ public sealed class SceneAssetsV3Service(
         var sameBackground = DetectRepeatedMetadata(beats, b => BackgroundSignature(b));
         var sameComposition = DetectRepeatedMetadata(beats, b => CompositionSignature(b));
         var sameCameraAngle = DetectRepeatedMetadata(beats, b => CameraSignature(b));
-        var review = new SceneAssetsV3Review(manifestScenes.Count, manifestScenes.Any(s => s.RenderMode == "AccurateSkyGuideScene"), manifestScenes.Count(s => s.RenderMode is "CinematicStoryScene" or "FinalReminderScene"), manifestScenes.Count(s => s.RenderMode == "ExplainerScene"), manifestScenes.Count(s => s.RenderMode == "ViewingTipsScene"), duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, manifestScenes.All(s => !string.IsNullOrWhiteSpace(s.NarrationBeat)), beats.Select(b => b.VisualIntent).ToArray(), promptDiversityScore, repeatedPrompt, forbiddenTermsDetected, overlayDensityScore, relativeDateWordsDetected, distinctCompositionTypes, "Failed");
+        var review = new SceneAssetsV3Review(manifestScenes.Count, manifestScenes.Any(s => s.RenderMode is "AccurateSkyGuideScene" or "HybridCinematicScene"), manifestScenes.Count(s => s.RenderMode is "CinematicStoryScene" or "HybridCinematicScene" or "FinalReminderScene"), manifestScenes.Count(s => s.RenderMode is "ExplainerScene" or "ExplicitInfographicScene"), manifestScenes.Count(s => s.RenderMode == "ViewingTipsScene"), duplicate, repeated, sameBackground, sameComposition, sameCameraAngle, manifestScenes.All(s => !string.IsNullOrWhiteSpace(s.NarrationBeat)), beats.Select(b => b.VisualIntent).ToArray(), promptDiversityScore, repeatedPrompt, forbiddenTermsDetected, overlayDensityScore, relativeDateWordsDetected, distinctCompositionTypes, "Failed");
         review = review with { Status = ReviewPassed(review, expectedCount) ? "Passed" : "Failed" };
         EventContentGuard.ValidateObject("SceneAssetsV3Service", "sceneReview", review, context.ForbiddenTerms);
         await WriteJsonAsync(reviewPath, review, ct); files.Add(reviewPath);
@@ -389,6 +401,35 @@ public sealed class SceneAssetsV3Service(
             Mode = ResizeMode.Crop,
             Position = AnchorPositionMode.Center
         }));
+        await image.SaveAsPngAsync(path, new PngEncoder(), ct);
+    }
+
+    private static async Task CompositeHipparcosOverlayAsync(string path, IReadOnlyList<string> requestedObjects,
+        int width, int height, CancellationToken ct)
+    {
+        // Normalized J2000 projection anchors. They are drawn after the cinematic aspect-fill,
+        // so the geometry layer itself is never stretched by provider-native dimensions.
+        var anchors = new Dictionary<string, PointF>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Betelgeuse"] = new(.31f, .27f), ["Bellatrix"] = new(.61f, .29f),
+            ["Alnitak"] = new(.39f, .48f), ["Alnilam"] = new(.50f, .46f), ["Mintaka"] = new(.61f, .44f),
+            ["Saiph"] = new(.38f, .70f), ["Rigel"] = new(.66f, .68f)
+        };
+        using var image = await Image.LoadAsync<Rgba32>(path, ct);
+        var active = anchors.Where(x => requestedObjects.Contains(x.Key, StringComparer.OrdinalIgnoreCase)).ToArray();
+        if (active.Length == 0 && requestedObjects.Contains("Orion", StringComparer.OrdinalIgnoreCase)) active = anchors.ToArray();
+        image.Mutate(ctx =>
+        {
+            PointF P(PointF p) => new(p.X * width, p.Y * height);
+            var belt = new[] { "Alnitak", "Alnilam", "Mintaka" }.Where(anchors.ContainsKey).Select(x => P(anchors[x])).ToArray();
+            if (belt.Length == 3) ctx.DrawLine(Color.FromRgba(120, 190, 255, 115), Math.Max(2, width / 720f), belt);
+            foreach (var star in active)
+            {
+                var point = P(star.Value);
+                ctx.Fill(Color.FromRgba(245, 250, 255, 220), new EllipsePolygon(point, Math.Max(4, width / 360f)));
+                ctx.Draw(Color.FromRgba(125, 195, 255, 125), Math.Max(2, width / 1080f), new EllipsePolygon(point, Math.Max(10, width / 150f)));
+            }
+        });
         await image.SaveAsPngAsync(path, new PngEncoder(), ct);
     }
 
@@ -598,7 +639,7 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         var ids = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
             ["Alnitak"]="HIP 26727", ["Alnilam"]="HIP 26311", ["Mintaka"]="HIP 25930",
             ["Betelgeuse"]="HIP 27989", ["Rigel"]="HIP 24436", ["Bellatrix"]="HIP 25336", ["Saiph"]="HIP 27366" };
-        return new("DeterministicCompositionRenderer", "HipparcosCatalogProjection", null,
+        return new("HybridCinematicCompositionRenderer", "HipparcosCatalogProjection", "AzureOpenAICinematicImageGenerator",
             rendered, ids, "Hipparcos J2000 catalog", scene.TimeContext, scene.LocationContext,
             "constellation framing", scene.ObservationDirection, "AspectFitNoStretch", false);
     }
@@ -814,20 +855,20 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         IReadOnlyList<Phase8SceneRequirement> scenes) => scenes.OrderBy(x => x.SceneOrder).Select((scene, index) =>
     {
         var accuracy = Phase8VisualAccuracyPolicy.Derive(scene);
-        var mode = accuracy.RequiresScientificGeometry ? "AccurateSkyGuideScene"
-            : scene.RenderingPreference.Equals("AccurateSkyGuide", StringComparison.OrdinalIgnoreCase) ? "AccurateSkyGuideScene"
-            : scene.RenderingPreference.Equals("Infographic", StringComparison.OrdinalIgnoreCase) ? "ExplainerScene"
+        var mode = accuracy.VisualStyle == Phase8VisualStyle.HybridCinematic ? "HybridCinematicScene"
+            : accuracy.VisualStyle is Phase8VisualStyle.Infographic or Phase8VisualStyle.ScientificChart ? "ExplicitInfographicScene"
             : scene.SceneRole.Contains("Closing", StringComparison.OrdinalIgnoreCase) ? "FinalReminderScene" : "CinematicStoryScene";
         var subject = scene.RequiredAstronomyObjects.Count > 0 ? JoinNatural(scene.RequiredAstronomyObjects) : context.Title;
         var intent = string.Join(" ", scene.ScenePurpose, scene.VisualDirection, scene.ObservationDirection).Trim();
-        var prompt = $"{subject}. Certified scene purpose: {scene.ScenePurpose}. Certified visual direction: {scene.VisualDirection}. Certified observation direction: {scene.ObservationDirection}. " +
-            $"Knowledge references: {string.Join(", ", scene.KnowledgeReferenceIds)}. Rendering preference: {scene.RenderingPreference}. " +
-            "Create a scientifically responsible astronomy documentary background with no embedded text, watermark, logo, or unrelated objects; preserve negative space for deterministic overlays.";
+        var framing = scene.Variant.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "vertical portrait composition" : "wide landscape composition";
+        var prompt = $"Cinematic astrophotography documentary scene showing {subject}. {scene.ScenePurpose}. {scene.VisualDirection}. {scene.ObservationDirection}. " +
+            $"Use a realistic dark-sky setting, natural stellar appearance, deep-blue night palette, high dynamic range, scene-specific composition, and {framing}. " +
+            "No text, labels, watermark, logo, infographic panels, decorative fantasy stars, or unrelated celestial objects.";
         return new SceneAssetsV3Beat(index + 1, scene.SceneId, mode, scene.AcceptedNarrationText, intent,
             scene.VisualOpportunityType, subject, "certified", "minimal", "certified", "documentary",
             $"authority-{scene.SceneOrder:000}", $"{scene.VisualOpportunityType}-{scene.SceneRole}", scene.ScenePurpose, null, prompt, 6,
-            mode == "AccurateSkyGuideScene" ? "CertifiedSkyCapture" : string.Empty,
-            mode == "AccurateSkyGuideScene" ? scene.RequiredAstronomyObjects : [],
+            mode == "HybridCinematicScene" ? "CertifiedSkyCapture" : string.Empty,
+            mode == "HybridCinematicScene" ? scene.RequiredAstronomyObjects : [],
             "07-narration/accepted-release-candidate.json", "Phase8AuthorityInput", scene.BlueprintSceneId,
             scene.StoryFrameId, scene.Variant, scene.SceneOrder);
     }).ToArray();
@@ -841,6 +882,15 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         var backup = Path.Combine(outputRoot, $".08-scene-assets-backup-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
         var items = new List<SceneAssetManifestItem>();
+        var generationEvidence = new Dictionary<string, SceneAssetsV3ManifestScene>(StringComparer.Ordinal);
+        foreach (var variant in authority.RequestedVariants)
+        {
+            var format = variant.ToLowerInvariant();
+            var evidencePath = Path.Combine(compatibilityRoot, format, "scene-manifest-v3.json");
+            if (!File.Exists(evidencePath)) continue;
+            var evidence = JsonSerializer.Deserialize<SceneAssetsV3Manifest>(await File.ReadAllTextAsync(evidencePath, ct), JsonOptions);
+            foreach (var generatedScene in evidence?.Scenes ?? []) generationEvidence[$"{variant}:{generatedScene.SceneId}"] = generatedScene;
+        }
         try
         {
             foreach (var scene in authority.LongScenes.Concat(authority.ShortScenes))
@@ -856,6 +906,7 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
                 var semantic = SemanticIdentity(scene, format == "long" ? request.LongTargetWidth : request.ShortTargetWidth,
                     format == "long" ? request.LongTargetHeight : request.ShortTargetHeight);
                 var reused = reusableAssets.Contains($"{scene.Variant}:{scene.SceneId}");
+                generationEvidence.TryGetValue($"{scene.Variant}:{scene.SceneId}", out var providerEvidence);
                 var accuracy = Phase8VisualAccuracyPolicy.Derive(scene);
                 var rendererMetadata = RendererMetadata(scene, accuracy);
                 var certified = Phase8ScientificCertification.IsCertified(accuracy, rendererMetadata);
@@ -881,13 +932,13 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
                         [$"Scene '{scene.SceneId}' has no trusted renderer object evidence."]);
                 items.Add(new($"{scene.Variant}:{scene.SceneId}", scene.Variant, scene.SceneId, scene.BlueprintSceneId,
                     scene.StoryFrameId, scene.SceneOrder, scene.AssetRole, scene.VisualOpportunityType,
-                    rendererMetadata?.VisualRenderer ?? imageGenerator.GetType().Name, null, "Generated", scene.StoryFrameId,
+                    accuracy.VisualStyle.ToString(), null, providerEvidence?.ProviderSucceeded == true ? "Generated" : accuracy.AiImageRequired ? "Fallback" : "Generated", scene.StoryFrameId,
                     scene.KnowledgeReferenceIds, relative, info.Width, info.Height, $"{info.Width}:{info.Height}", checksum,
-                    semantic, false, null, [], reused, !reused, "Valid", [], accuracy.Requirement,
+                    semantic, false, null, [], reused, !reused && providerEvidence?.ProviderCalled == true, "Valid", [], accuracy.Requirement,
                     accuracySource, certified && accuracy.RequiresScientificGeometry, accuracy.ExpectedObjects,
                     rendererMetadata?.RenderedObjectIds ?? [], accuracy.RequiresScientificGeometry ? "Passed" : "NotRequired", evidenceRelative,
-                    accuracy.RequiresScientificGeometry, rendererMetadata?.VisualRenderer ?? imageGenerator.GetType().Name,
-                    rendererMetadata?.AstronomyGeometryProvider, rendererMetadata?.ImageGenerationProvider));
+                    accuracy.RequiresScientificGeometry, accuracy.FinalRenderer,
+                    accuracy.AstronomyGeometryProvider, providerEvidence?.ProviderSucceeded == true ? accuracy.BaseImageProvider : null));
             }
             Directory.CreateDirectory(Path.Combine(staging, "shared", "reusable-assets"));
             var checksumSeed = string.Join("|", items.OrderBy(x => x.AssetId, StringComparer.Ordinal).Select(x => $"{x.AssetId}:{x.SemanticIdentity}:{x.Checksum}"));
@@ -903,7 +954,7 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
             // Candidate paths are rooted below staging during pre-commit validation.
             if (!candidateValidation.IsValid && candidateValidation.Errors.Any(x => !x.Contains("Physical asset is missing", StringComparison.Ordinal)))
                 throw new Phase8AuthorityException(Phase8AuthorityReasonCodes.NotCommitted, candidateValidation.Errors);
-            await WriteJsonAsync(Path.Combine(staging, "phase8-authority-diagnostics.json"), new { authorityLoaded = true, phase4Committed = true, phase6Committed = true, longNarrationCandidateCommitted = authority.LongNarrationReleaseCandidate is not null, shortNarrationCandidateCommitted = authority.ShortNarrationReleaseCandidate is not null, authority.RequestedVariants, expectedLongSceneCount = authority.LongScenes.Count, expectedShortSceneCount = authority.ShortScenes.Count, generatedLongSceneCount = items.Count(x => x.Variant == "Long"), generatedShortSceneCount = items.Count(x => x.Variant == "Short"), reusedAssetCount = items.Count(x => x.Reused), generatedAssetCount = items.Count(x => !x.Reused), fallbackAssetCount = items.Count(x => x.ProviderStatus.Contains("Fallback", StringComparison.Ordinal)), providerTypeCounts = items.GroupBy(x => x.ProviderType).ToDictionary(x => x.Key, x => x.Count()), missingSceneIds = Array.Empty<string>(), extraSceneIds = Array.Empty<string>(), lineageMismatchSceneIds = Array.Empty<string>(), upstreamChecksumPassed = true, manifestValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, legacyAuthorityUsed = false }, ct);
+            await WriteJsonAsync(Path.Combine(staging, "phase8-authority-diagnostics.json"), new { authorityLoaded = true, phase4Committed = true, phase6Committed = true, longNarrationCandidateCommitted = authority.LongNarrationReleaseCandidate is not null, shortNarrationCandidateCommitted = authority.ShortNarrationReleaseCandidate is not null, authority.RequestedVariants, expectedLongSceneCount = authority.LongScenes.Count, expectedShortSceneCount = authority.ShortScenes.Count, generatedLongSceneCount = items.Count(x => x.Variant == "Long"), generatedShortSceneCount = items.Count(x => x.Variant == "Short"), reusedAssetCount = items.Count(x => x.Reused), generatedAssetCount = items.Count(x => !x.Reused), azureGeneratedAssetCount = items.Count(x => !x.Reused && x.ImageGenerationProvider == "AzureOpenAICinematicImageGenerator"), deterministicInfographicAssetCount = items.Count(x => x.ProviderType == nameof(Phase8VisualStyle.Infographic)), hybridAssetCount = items.Count(x => x.ProviderType == nameof(Phase8VisualStyle.HybridCinematic)), azureCallsCount = items.Count(x => x.ProviderCalledThisExecution), fallbackAssetCount = items.Count(x => x.ProviderStatus.Contains("Fallback", StringComparison.Ordinal)), providerTypeCounts = items.GroupBy(x => x.ProviderType).ToDictionary(x => x.Key, x => x.Count()), missingSceneIds = Array.Empty<string>(), extraSceneIds = Array.Empty<string>(), lineageMismatchSceneIds = Array.Empty<string>(), upstreamChecksumPassed = true, manifestValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, legacyAuthorityUsed = false }, ct);
             await WriteJsonAsync(Path.Combine(staging, "phase8-publication-report.json"), new { schemaVersion = "1.0", publicationCommitted = true,
                 manifestValidationPassed = true, candidateReadbackPassed = true, committedReadbackPending = true,
                 assetCount = items.Count, generatedAssetCount = items.Count(x => !x.Reused), reusedAssetCount = items.Count(x => x.Reused) }, ct);
@@ -936,6 +987,7 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
     private static string SemanticIdentity(Phase8SceneRequirement scene, int width, int height) => HashText(JsonSerializer.Serialize(new
     {
         scene.Variant, scene.SceneId, scene.BlueprintSceneId, scene.StoryFrameId, scene.VisualDirection,
+        visualStrategy = Phase8VisualAccuracyPolicy.Derive(scene),
         scene.RenderingPreference, knowledgeReferenceIds = scene.KnowledgeReferenceIds.Order(StringComparer.Ordinal),
         scene.AcceptedNarrationSceneId, width, height
     }, JsonOptions));
