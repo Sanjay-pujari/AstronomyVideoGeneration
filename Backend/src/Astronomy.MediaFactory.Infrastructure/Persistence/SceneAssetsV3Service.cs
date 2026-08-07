@@ -498,7 +498,7 @@ Scene goal: {beat.SceneId}; {beat.NarrationBeat}
         _ => ["Face listed direction", "Use open horizon", "Check the best local time"]
     };
 
-    private static void DrawGuideElements(IImageProcessingContext ctx, SceneAssetsV3Beat beat, Font label)
+    private void DrawGuideElements(IImageProcessingContext ctx, SceneAssetsV3Beat beat, Font label)
     {
         if ((beat.GuideElementsUsed ?? []).Contains("Orion", StringComparer.OrdinalIgnoreCase))
         {
