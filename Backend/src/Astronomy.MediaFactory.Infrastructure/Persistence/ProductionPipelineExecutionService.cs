@@ -15604,6 +15604,7 @@ public sealed partial class ProductionPipelineExecutionService(
         diagnostics["authorityFailureStage"] = stages.AuthorityFailureStage ?? "";
         diagnostics["authorityFailureType"] = stages.AuthorityFailureType ?? "";
         diagnostics["authorityFailureMessage"] = stages.AuthorityFailureMessage ?? "";
+        diagnostics["narrationChecksumDiagnostics"] = stages.NarrationChecksumDiagnostics ?? "";
     }
 
     private JsonObject BuildSceneAssetsValidationHookDiagnostics(ProductionPhaseContext context, bool beforeExecution)
