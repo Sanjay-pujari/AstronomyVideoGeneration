@@ -217,6 +217,19 @@ public sealed partial class ProductionPipelineExecutionService(
         foreach (var phase in PhaseDefinitions())
         {
             if (phase.No < startPhaseNo || phase.No > endPhaseNo) continue;
+            // Applicability is decided exclusively from RequestedOutputs and before any
+            // downstream authority recovery or output validation. In particular, a Phase 11
+            // request without HeroAsset must be reportable as NotApplicable without Hero or
+            // upstream files being present.
+            if (!IsPhaseRequiredForRequestedOutputs(context, phase.No))
+            {
+                var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], OutputTypeNotRequestedReason, false, cancellationToken);
+                if (phase.No == 9) skipped = skipped with { ReasonCode = Phase9ReasonCodes.LongNotRequested };
+                if (phase.No == 11) skipped = skipped with { ReasonCode = Phase11ReasonCodes.NotRequested };
+                phaseResults.Add(skipped);
+                await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
+                continue;
+            }
             if (phase.No >= 5 && context.ExecutionContext.PublishedDocumentaryBlueprintAggregate is null)
             {
                 // A run beginning downstream of Phase 4 is resume/recovery. Only that path
@@ -264,15 +277,6 @@ public sealed partial class ProductionPipelineExecutionService(
                     { ReasonCode = "P4PUB_ALREADY_PUBLISHED" });
                     continue;
                 }
-            }
-            if (!IsPhaseRequiredForRequestedOutputs(context, phase.No))
-            {
-                var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], OutputTypeNotRequestedReason, false, cancellationToken);
-                if (phase.No == 9) skipped = skipped with { ReasonCode = Phase9ReasonCodes.LongNotRequested };
-                if (phase.No == 11) skipped = skipped with { ReasonCode = Phase11ReasonCodes.NotRequested };
-                phaseResults.Add(skipped);
-                await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
-                continue;
             }
             if (!request.OverwriteExisting && phase.No == 3 && PreviousPhaseSucceeded(context, 3) && PreviousPhaseRequiredOutputsExist(context, 3))
             {
@@ -443,28 +447,34 @@ public sealed partial class ProductionPipelineExecutionService(
     private const string OutputTypeNotRequestedReason = "Output type not requested";
 
     private static bool IsPhaseRequiredForRequestedOutputs(ProductionPhaseContext context, int phaseNo)
+        => IsPhaseRequiredForRequestedOutputs(context.Request.RequestedOutputs, phaseNo);
+
+    internal static bool IsPhaseRequiredForRequestedOutputs(IReadOnlyList<string> requestedOutputs, int phaseNo)
         => phaseNo switch
         {
             <= 8 => true,
-            9 => IsRequestedOutput(context, "LongVideo"),
+            9 => IsRequestedOutput(requestedOutputs, "LongVideo"),
             10 => true,
-            11 => IsRequestedOutput(context, "HeroAsset"),
-            12 => IsRequestedOutput(context, "Thumbnail"),
+            11 => IsRequestedOutput(requestedOutputs, "HeroAsset"),
+            12 => IsRequestedOutput(requestedOutputs, "Thumbnail"),
             13 => true,
             14 => true,
-            15 => IsRequestedOutput(context, "LongVideo"),
-            16 => IsRequestedOutput(context, "LongVideo") || IsRequestedOutput(context, "ShortVideo"),
-            17 => IsRequestedOutput(context, "LongVideo"),
+            15 => IsRequestedOutput(requestedOutputs, "LongVideo"),
+            16 => IsRequestedOutput(requestedOutputs, "LongVideo") || IsRequestedOutput(requestedOutputs, "ShortVideo"),
+            17 => IsRequestedOutput(requestedOutputs, "LongVideo"),
             // Phase 18 assembles both video formats; keep this aligned with the
             // LongVideo completion map as well as the short-video contract.
-            18 => IsRequestedOutput(context, "ShortVideo") || IsRequestedOutput(context, "LongVideo"),
-            19 => IsRequestedOutput(context, "LongVideo"),
+            18 => IsRequestedOutput(requestedOutputs, "ShortVideo") || IsRequestedOutput(requestedOutputs, "LongVideo"),
+            19 => IsRequestedOutput(requestedOutputs, "LongVideo"),
             20 => true,
             _ => true
         };
 
     private static bool IsRequestedOutput(ProductionPhaseContext context, string outputType)
-        => context.Request.RequestedOutputs.Any(output => string.Equals(output, outputType, StringComparison.OrdinalIgnoreCase));
+        => IsRequestedOutput(context.Request.RequestedOutputs, outputType);
+
+    private static bool IsRequestedOutput(IReadOnlyList<string> requestedOutputs, string outputType)
+        => requestedOutputs.Any(output => string.Equals(output, outputType, StringComparison.OrdinalIgnoreCase));
 
     private static bool CalculatePipelineSuccess(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, IReadOnlyList<string> errors)
     {
@@ -15201,7 +15211,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase7NarrationDiagnostics = phaseNo == 7
             ? BuildPhase7NarrationDiagnostics(BuildQuestionDrivenNarrationRequest(context), context)
             : null;
-        var phase11HeroDiagnostics = phaseNo == 11
+        // Hero V6 diagnostics inspect legacy compatibility files. They are post-generation
+        // validation only: a skipped/not-applicable phase and the Phase 11 authority path
+        // must never treat the phase's own output as an input prerequisite.
+        var phase11HeroDiagnostics = ShouldValidateLegacyHeroOutputs(phaseNo, status, IsSceneAssetsV3Enabled(context))
             ? BuildPhase11HeroDiagnostics(context)
             : null;
         var phase12ThumbnailDiagnostics = phaseNo == 12
@@ -16916,6 +16929,9 @@ public sealed partial class ProductionPipelineExecutionService(
             throw new InvalidOperationException($"Hero V6 validation failed: canonical hero files are missing or empty at '{string.Join("', '", missingCanonicalHeroFiles)}'.");
         return new Phase11HeroDiagnostics("V6.5", heroOutputPath, generatedVariantPaths, generatedVariantFileExists, generatedVariantFileSizes, heroOutputPath, canonicalHeroFinalExists, canonicalHeroFinalFileSize, canonicalCopyApplied, missingCanonicalHeroFiles, true, true, false, false, false, true, true, true, true, true, false, true, 85, 15, heroContract, validatorContract, rendererContract, validationProfileUsed, renderedBlocks, forbiddenBlocks, contractMismatch, failureBranchName);
     }
+
+    internal static bool ShouldValidateLegacyHeroOutputs(int phaseNo, ProductionPhaseStatus status, bool useResponsiveHeroAuthority)
+        => phaseNo == 11 && status == ProductionPhaseStatus.Succeeded && !useResponsiveHeroAuthority;
 
     private static string ReadHeroContractDiagnosticValue(string layoutValidationPath, string propertyName)
     {
