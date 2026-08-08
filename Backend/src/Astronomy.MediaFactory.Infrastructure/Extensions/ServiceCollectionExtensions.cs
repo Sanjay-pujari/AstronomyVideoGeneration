@@ -847,6 +847,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.DocumentaryBlueprintPauseTestEvaluator>();
         services.AddScoped<Astronomy.MediaFactory.Core.DocumentaryBlueprint.IDocumentaryBlueprintCertificationIntegrationService, DocumentaryBlueprintCertificationIntegrationService>();
         services.AddScoped<IHeroAssetIntelligenceEngine, HeroAssetIntelligenceEngine>();
+        services.AddScoped<IResponsiveHeroAuthorityService, ResponsiveHeroAuthorityService>();
         services.AddScoped<IHeroAssetSceneSelector, HeroAssetSceneSelector>();
         services.AddScoped<IHeroCompositionEngine, HeroCompositionEngine>();
         services.AddScoped<IHeroAssetStoryGenerator, HeroAssetStoryGenerator>();
