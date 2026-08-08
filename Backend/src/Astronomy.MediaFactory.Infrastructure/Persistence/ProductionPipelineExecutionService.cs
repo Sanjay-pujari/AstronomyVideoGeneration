@@ -760,7 +760,6 @@ public sealed partial class ProductionPipelineExecutionService(
                 ? phaseNo == 3 ? (context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED")
                     : phaseNo == 8 && IsSceneAssetsV3Enabled(context) ? "Authority scene assets generated, validated, committed and read back."
                     : phase9Publication?.Reason ?? "Validation passed."
-                    : "Validation passed."
                 : BuildPhase7RequiredOutputFailureReason(requiredOutputDiagnostics, missing);
             var inputFiles = phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot);
             return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, inputFiles, outputs, warnings, missing, reason, missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics,
