@@ -39,4 +39,34 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
     [Fact]
     public void Phase12AcceptsCurrentCertifiedOrionPhase11Authority() =>
         Assert.True(ResponsiveThumbnailAuthorityService.PublishedChecksumsAgree(Orion, Orion, Orion));
+
+    [Fact]
+    public void ThumbnailDuplicateCopyDetectionIsCaseInsensitive()
+    {
+        Assert.True(ResponsiveThumbnailAuthorityService.DuplicateCopyDetected("Orion constellation guide!", " ORION, constellation   guide "));
+        Assert.False(ResponsiveThumbnailAuthorityService.DuplicateCopyDetected("FIND ORION", "Orion constellation guide"));
+    }
+
+    [Fact]
+    public void ConstellationThumbnailUsesDeterministicObjectCopy()
+    {
+        var copy = ResponsiveThumbnailAuthorityService.BuildThumbnailCopy("CONSTELLATION", ["Orion"], "Orion", "Orion constellation guide");
+
+        Assert.Equal("FIND ORION", copy.Headline);
+        Assert.Equal("Constellation.FindCertifiedPrimaryObject", copy.Rule);
+        Assert.Equal(2, copy.WordCount);
+    }
+
+    [Fact]
+    public void EvergreenConstellationDoesNotAddTonight()
+    {
+        var copy = ResponsiveThumbnailAuthorityService.BuildThumbnailCopy("CONSTELLATION", ["Lyra"], "Lyra", "Lyra constellation guide");
+
+        Assert.DoesNotContain("TONIGHT", copy.Headline, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("NOW", copy.Headline, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HeadlineWordBudgetEnforcedForCertifiedConstellationCopy() =>
+        Assert.InRange(ResponsiveThumbnailAuthorityService.BuildThumbnailCopy("CONSTELLATION", ["Ursa Major"], "Ursa Major", "Guide").WordCount, 2, 5);
 }
