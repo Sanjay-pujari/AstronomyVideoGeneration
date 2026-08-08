@@ -889,6 +889,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILongSceneImageManifestValidator, LongSceneImageManifestValidator>();
         services.AddScoped<IPhase9CommittedAuthorityReader, Phase9CommittedAuthorityReader>();
         services.AddScoped<ILongSceneImagePublicationService, LongSceneImagePublicationService>();
+        services.AddScoped<ISceneAssetCertificationService, SceneAssetCertificationService>();
         services.AddScoped<IProductionVisualComposerService, ProductionVisualComposerService>();
         services.AddScoped<ISceneEditorialPreviewService, SceneEditorialPreviewService>();
         services.AddScoped<IAstronomyAssetProductionJobService, AstronomyAssetProductionJobService>();
