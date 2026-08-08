@@ -34,6 +34,15 @@ public sealed class ResponsiveHeroPositiveExecutionTests : IDisposable
         Assert.Equal(Phase11ReasonCodes.Accepted, result.ReasonCode);
         Assert.Equal("Responsive Hero assets generated, validated, committed and read back.", result.Reason);
         Assert.False(string.IsNullOrWhiteSpace(result.ManifestChecksum));
+        Assert.Equal("Valid", result.ManifestValidationStatus);
+        Assert.Equal("Valid", result.ValidationStatus);
+        Assert.True(result.PublicationCommitted);
+        Assert.True(result.SemanticValidationPassed);
+        Assert.True(result.ChecksumValidationPassed);
+        Assert.True(result.ManifestValidationPassed);
+        Assert.True(result.CommittedStateValidationPassed);
+        Assert.True(result.DownstreamReady);
+        Assert.NotNull(result.HeroAuthorityDiagnostics);
         Assert.Equal(upstreamBefore, SnapshotUpstream());
 
         var authorityRoot = Path.Combine(root, "11-hero");
@@ -77,6 +86,7 @@ public sealed class ResponsiveHeroPositiveExecutionTests : IDisposable
         Assert.True(diag.GetProperty("committedReadbackPassed").GetBoolean());
         Assert.True(diag.GetProperty("downstreamReady").GetBoolean());
         Assert.False(diag.GetProperty("upstreamArtifactsModified").GetBoolean());
+        Assert.False(Directory.Exists(authorityRoot + ".staging"));
     }
 
     private void WriteCommittedAuthorities(CertificationRequest request)

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
@@ -454,6 +455,14 @@ public sealed record ProductionPhaseResult(
     public bool AlreadyPublished { get; init; }
     public bool PublicationCommitted { get; init; }
     public bool CommittedStateValidationPassed { get; init; }
+    public string? AuthorityChecksum { get; init; }
+    public string? ManifestValidationStatus { get; init; }
+    public string? ValidationStatus { get; init; }
+    public bool? SemanticValidationPassed { get; init; }
+    public bool? ChecksumValidationPassed { get; init; }
+    public bool? ManifestValidationPassed { get; init; }
+    public bool? DownstreamReady { get; init; }
+    public JsonElement? Phase11HeroDiagnostics { get; init; }
     public IReadOnlyList<Phase7AuthorityStageResult> InternalStageResults { get; init; } = [];
     public Phase7NarrationAuthorityOrchestrationResult? Phase7NarrationAuthorityResult { get; init; }
 }

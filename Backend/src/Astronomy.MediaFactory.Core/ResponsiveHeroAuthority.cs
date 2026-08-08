@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Astronomy.MediaFactory.Core;
 
 public static class Phase11ReasonCodes
@@ -16,7 +18,18 @@ public sealed record ResponsiveHeroRequest(string OutputRoot, string PlanId, str
     string Language, string Title, string? Subtitle, string EventFamily, bool OverwriteExisting);
 
 public sealed record ResponsiveHeroResult(string ReasonCode, string Reason,
-    string ManifestChecksum, IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles);
+    string ManifestChecksum, IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles)
+{
+    public string ManifestValidationStatus { get; init; } = "Valid";
+    public string ValidationStatus { get; init; } = "Valid";
+    public bool PublicationCommitted { get; init; }
+    public bool SemanticValidationPassed { get; init; }
+    public bool ChecksumValidationPassed { get; init; }
+    public bool ManifestValidationPassed { get; init; }
+    public bool CommittedStateValidationPassed { get; init; }
+    public bool DownstreamReady { get; init; }
+    public JsonElement? HeroAuthorityDiagnostics { get; init; }
+}
 
 public interface IResponsiveHeroAuthorityService
 {
