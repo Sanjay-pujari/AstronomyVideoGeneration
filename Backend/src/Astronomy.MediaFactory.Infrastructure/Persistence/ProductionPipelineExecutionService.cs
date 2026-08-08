@@ -92,12 +92,14 @@ public sealed partial class ProductionPipelineExecutionService(
     IDocumentaryNarrativeLifecycleIntegrationService? documentaryNarrativeLifecycleIntegrationService = null,
     IPhase8AuthorityLoader? phase8AuthorityLoader = null,
     ILongSceneImagePublicationService? longSceneImagePublicationService = null,
-    ISceneAssetCertificationService? sceneAssetCertificationService = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    ISceneAssetCertificationService? sceneAssetCertificationService = null,
+    IResponsiveHeroAuthorityService? responsiveHeroAuthorityService = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     // The action delegate and the generic phase-result writer are deliberately separate.
     // Preserve the publication transaction selected by the Phase 3 action so the stable
     // post-commit report records that transaction rather than manufacturing another id.
     private readonly ConcurrentDictionary<string, string> phase3PublicationTransactions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ResponsiveHeroResult> phase11AuthorityResults = new(StringComparer.OrdinalIgnoreCase);
     // The phase action has a legacy files-only return type. Retain the authoritative
     // Phase 9 result so the generic validation mapper can publish its commit evidence.
     private readonly ConcurrentDictionary<string, LongSceneImagePublicationResult> phase9PublicationResults = new(StringComparer.OrdinalIgnoreCase);
@@ -267,6 +269,7 @@ public sealed partial class ProductionPipelineExecutionService(
             {
                 var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], OutputTypeNotRequestedReason, false, cancellationToken);
                 if (phase.No == 9) skipped = skipped with { ReasonCode = Phase9ReasonCodes.LongNotRequested };
+                if (phase.No == 11) skipped = skipped with { ReasonCode = Phase11ReasonCodes.NotRequested };
                 phaseResults.Add(skipped);
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
@@ -760,14 +763,16 @@ public sealed partial class ProductionPipelineExecutionService(
                 && phase9PublicationResults.TryGetValue(context.OutputRoot, out var acceptedPhase9) ? acceptedPhase9 : null;
             var phase10Certification = phaseNo == 10 && missing.Length == 0 && IsSceneAssetsV3Enabled(context)
                 && phase10CertificationResults.TryGetValue(context.OutputRoot, out var acceptedPhase10) ? acceptedPhase10 : null;
+            var phase11Authority = phaseNo == 11 && missing.Length == 0 && IsSceneAssetsV3Enabled(context)
+                && phase11AuthorityResults.TryGetValue(context.OutputRoot, out var acceptedPhase11) ? acceptedPhase11 : null;
             var reason = missing.Length == 0
                 ? phaseNo == 3 ? (context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED")
                     : phaseNo == 8 && IsSceneAssetsV3Enabled(context) ? "Authority scene assets generated, validated, committed and read back."
-                    : phase9Publication?.Reason ?? phase10Certification?.Reason ?? "Validation passed."
+                    : phase9Publication?.Reason ?? phase10Certification?.Reason ?? phase11Authority?.Reason ?? "Validation passed."
                 : BuildPhase7RequiredOutputFailureReason(requiredOutputDiagnostics, missing);
-            var inputFiles = phase10Certification?.InputFiles ?? (phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot));
+            var inputFiles = phase11Authority?.InputFiles ?? phase10Certification?.InputFiles ?? (phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot));
             return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, inputFiles, outputs, warnings, missing, reason, missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics,
-                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode);
+                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode ?? phase11Authority?.ReasonCode);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
@@ -3343,6 +3348,19 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseGenerateHeroAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
+        if (IsSceneAssetsV3Enabled(context))
+        {
+            if (responsiveHeroAuthorityService is null)
+                throw new InvalidOperationException("P11_AUTHORITY_SERVICE_MISSING: Responsive Hero authority service is not registered.");
+            var intelligence = context.ProductionEventIntelligence;
+            var title = string.IsNullOrWhiteSpace(intelligence.HeroTitle) ? intelligence.Title : intelligence.HeroTitle;
+            var result = await responsiveHeroAuthorityService.PublishAsync(new(context.OutputRoot,
+                context.ExecutionContext.ContentGenerationPlanId?.ToString() ?? context.Request.PlanId.ToString(),
+                context.EventId, context.Request.Language, title!, intelligence.ShortTitle, intelligence.EventType,
+                context.OverwriteExisting), cancellationToken);
+            phase11AuthorityResults[context.OutputRoot] = result;
+            return result.OutputFiles;
+        }
         var response = await heroEngine.GenerateHeroAssetsAsync(new HeroAssetStoryGenerationRequest(context.EventId, context.Request.RegionId, context.Request.Language, false, context.OverwriteExisting, HeroAssetGenerationPhase.Full, context.ExecutionContext, context.Request), cancellationToken);
         return await ValidateAndMaterializeHeroContractAsync(context, response, renderingOptions.Value.EnableStrictHeroOverlayValidation, outputArtifactsOptions?.Value ?? new OutputArtifactsOptions(), cancellationToken);
     }
