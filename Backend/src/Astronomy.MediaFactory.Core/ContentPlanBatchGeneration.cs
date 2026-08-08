@@ -452,7 +452,8 @@ public static class ProductionPhaseSatisfaction
 {
     private static readonly HashSet<string> GovernedNotApplicableReasonCodes = new(StringComparer.Ordinal)
     {
-        "P9_LONG_NOT_REQUESTED"
+        Phase9ReasonCodes.LongNotRequested,
+        Phase11ReasonCodes.NotRequested
     };
 
     private static readonly HashSet<string> SatisfiedReuseReasonCodes = new(StringComparer.Ordinal)
@@ -478,6 +479,7 @@ public static class ProductionPhaseSatisfaction
         result.Status == ProductionPhaseStatus.Skipped && (IsRecognizedReuse(result) || IsGovernedNotApplicable(result));
 
     public static bool IsGovernedNotApplicable(ProductionPhaseResult result) =>
+        result.Status == ProductionPhaseStatus.Skipped &&
         result.ReasonCode is not null && GovernedNotApplicableReasonCodes.Contains(result.ReasonCode);
 
     public static bool IsRecognizedReuse(ProductionPhaseResult result) =>
@@ -600,7 +602,9 @@ public sealed record SuccessAggregationDiagnostics(
     int FailedPlans = 0,
     string SuccessAggregationMode = "PartialPhaseRange",
     IReadOnlyList<int>? SatisfiedPhaseNumbers = null,
-    IReadOnlyList<int>? ReusedPhaseNumbers = null);
+    IReadOnlyList<int>? ReusedPhaseNumbers = null,
+    IReadOnlyList<int>? NotApplicablePhaseNumbers = null,
+    IReadOnlyList<int>? SkippedPhaseNumbers = null);
 
 public sealed record RequestedOutputCompletion(
     string OutputType,

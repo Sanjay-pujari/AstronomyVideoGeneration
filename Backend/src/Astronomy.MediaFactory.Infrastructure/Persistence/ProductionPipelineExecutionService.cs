@@ -223,9 +223,8 @@ public sealed partial class ProductionPipelineExecutionService(
             // upstream files being present.
             if (!IsPhaseRequiredForRequestedOutputs(context, phase.No))
             {
-                var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], OutputTypeNotRequestedReason, false, cancellationToken);
-                if (phase.No == 9) skipped = skipped with { ReasonCode = Phase9ReasonCodes.LongNotRequested };
-                if (phase.No == 11) skipped = skipped with { ReasonCode = Phase11ReasonCodes.NotRequested };
+                var reasonCode = GovernedNotApplicableReasonCode(phase.No);
+                var skipped = await WritePhaseValidationAsync(context, phase.No, ResolvePhaseName(context, phase.No, phase.Name), ProductionPhaseStatus.Skipped, [], [], [], [], OutputTypeNotRequestedReason, false, cancellationToken, reasonCodeOverride: reasonCode);
                 phaseResults.Add(skipped);
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
@@ -445,6 +444,13 @@ public sealed partial class ProductionPipelineExecutionService(
         } : fallback;
 
     private const string OutputTypeNotRequestedReason = "Output type not requested";
+
+    public static string? GovernedNotApplicableReasonCode(int phaseNo) => phaseNo switch
+    {
+        9 => Phase9ReasonCodes.LongNotRequested,
+        11 => Phase11ReasonCodes.NotRequested,
+        _ => null
+    };
 
     private static bool IsPhaseRequiredForRequestedOutputs(ProductionPhaseContext context, int phaseNo)
         => IsPhaseRequiredForRequestedOutputs(context.Request.RequestedOutputs, phaseNo);
