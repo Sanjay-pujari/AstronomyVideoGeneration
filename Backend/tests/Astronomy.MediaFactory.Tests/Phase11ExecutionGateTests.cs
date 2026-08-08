@@ -9,6 +9,20 @@ public sealed class Phase11ExecutionGateTests
     private static readonly string[] HeroOutputs = ["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"];
 
     [Fact]
+    public void ManualOverrideWithHeroAssetMakesPhase11Applicable()
+    {
+        var resolved = ContentPlanProductionExecutionService.ResolveRequestedOutputs(NonHeroOutputs, HeroOutputs);
+        Assert.True(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(resolved.AfterResolution, 11));
+    }
+
+    [Fact]
+    public void Phase11ExecutesWhenOverrideContainsHeroAsset() => ManualOverrideWithHeroAssetMakesPhase11Applicable();
+
+    [Fact]
+    public void Phase11StillSkipsWithoutHeroAsset() =>
+        Assert.False(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(NonHeroOutputs, 11));
+
+    [Fact]
     public void ExplicitHeroAssetMakesPhase11Applicable() =>
         Assert.True(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(HeroOutputs, 11));
 

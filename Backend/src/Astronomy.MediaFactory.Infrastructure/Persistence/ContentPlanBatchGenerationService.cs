@@ -112,7 +112,8 @@ public sealed class ContentPlanBatchGenerationService(
             var mappedOutputs = new ContentPlanProductionRequestMapper()
                 .Map(selectedPlanEntities[0], selectedPlanEntities[0].AstronomyEventIntelligence!)
                 .RequestedOutputs;
-            var outputDiagnostics = ContentPlanProductionExecutionService.ResolveRequestedOutputs(mappedOutputs, request.RequestedOutputs);
+            var manualOutputOverride = request.RequestedOutputsOverride ?? request.RequestedOutputs;
+            var outputDiagnostics = ContentPlanProductionExecutionService.ResolveRequestedOutputs(mappedOutputs, manualOutputOverride);
 
             var execution = await productionExecution.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
                 selectedPlans[0].ContentGenerationPlanId,
@@ -133,7 +134,7 @@ public sealed class ContentPlanBatchGenerationService(
                 MotionPreviewOnly: request.MotionPreviewOnly,
                 MotionV2Strength: request.MotionV2Strength,
                 DependencyExpansionMode: request.DependencyExpansionMode,
-                RequestedOutputs: request.RequestedOutputs), cancellationToken);
+                RequestedOutputs: manualOutputOverride), cancellationToken);
 
             ValidateExactPlanIdExecutionResult(effectivePlanId, execution.PlanId, exactPlanIdMode);
 

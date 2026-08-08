@@ -10,18 +10,18 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class ResponsiveHeroPositiveExecutionTests : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private readonly string root = Path.Combine(Path.GetTempPath(), $"phase11-orion-positive-{Guid.NewGuid():N}");
+    private readonly string root = ResolveOutputRoot();
 
     [Fact]
     public async Task OrionHeroCertificationPlanPublishesResponsiveAuthorityWithoutMutatingUpstream()
     {
         var request = ReadCertificationRequest();
-        Assert.Equal(["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"], request.RequestedOutputs);
+        Assert.Equal(["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"], request.RequestedOutputsOverride);
         Assert.Equal(11, request.StartPhaseNo);
         Assert.Equal(11, request.EndPhaseNo);
         Assert.Equal("ReadOnly", request.DependencyExpansionMode);
         Assert.True(request.OverwriteExisting);
-        Assert.True(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(request.RequestedOutputs, 11));
+        Assert.True(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(request.RequestedOutputsOverride, 11));
 
         WriteCommittedAuthorities(request);
         var upstreamBefore = SnapshotUpstream();
@@ -153,11 +153,17 @@ public sealed class ResponsiveHeroPositiveExecutionTests : IDisposable
     }
 
     private sealed record CertificationRequest(string PlanId, string EventId, string Language, string Title,
-        string Subtitle, IReadOnlyList<string> RequestedOutputs, int StartPhaseNo, int EndPhaseNo,
+        string Subtitle, IReadOnlyList<string> RequestedOutputsOverride, int StartPhaseNo, int EndPhaseNo,
         string DependencyExpansionMode, bool OverwriteExisting);
+
+    private static string ResolveOutputRoot() =>
+        Environment.GetEnvironmentVariable("PHASE11_CERTIFICATION_OUTPUT_ROOT") is { Length: > 0 } configured
+            ? Path.GetFullPath(configured)
+            : Path.Combine(Path.GetTempPath(), $"phase11-orion-positive-{Guid.NewGuid():N}");
 
     public void Dispose()
     {
-        if (Directory.Exists(root)) Directory.Delete(root, true);
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PHASE11_CERTIFICATION_OUTPUT_ROOT"))
+            && Directory.Exists(root)) Directory.Delete(root, true);
     }
 }

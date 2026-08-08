@@ -7,7 +7,7 @@
   "language": "en",
   "title": "Orion constellation guide",
   "subtitle": "Orion: How to Find the Hunter Constellation",
-  "requestedOutputs": [
+  "requestedOutputsOverride": [
     "ShortVideo",
     "LongVideo",
     "Thumbnail",

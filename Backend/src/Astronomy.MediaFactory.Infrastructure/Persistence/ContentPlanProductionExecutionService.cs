@@ -69,6 +69,7 @@ public sealed class ContentPlanProductionExecutionService(
             string.Join(",", outputResolution.BeforeOverride),
             string.Join(",", outputResolution.Override),
             string.Join(",", outputResolution.AfterResolution));
+        AssertManualPhase11OutputOverrideApplied(request, productionRequest);
         var warnings = new List<string>(productionRequest.Warnings);
         if (resolvedRange.DependencyExpansionApplied)
             warnings.Add($"Expanded rebuild range from {requestedStartPhaseNo}-{requestedEndPhaseNo} to {startPhaseNo}-{endPhaseNo} because dependencyExpansionMode=Rebuild.");
@@ -236,7 +237,7 @@ public sealed class ContentPlanProductionExecutionService(
 
     private static IReadOnlyList<string> NormalizeRequestedOutputs(IReadOnlyList<string> outputs, string source)
     {
-        string[] canonical = ["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"];
+        string[] canonical = ["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset", "Gallery"];
         var normalized = new List<string>();
         foreach (var value in outputs.Where(value => !string.IsNullOrWhiteSpace(value)))
         {
@@ -253,6 +254,19 @@ public sealed class ContentPlanProductionExecutionService(
         IReadOnlyList<string> BeforeOverride,
         IReadOnlyList<string> Override,
         IReadOnlyList<string> AfterResolution);
+
+    internal static void AssertManualPhase11OutputOverrideApplied(
+        ContentPlanProductionExecutionRequest request,
+        ContentPlanProductionPipelineRequest productionRequest)
+    {
+        var manualHeroRequested = request.RequestedOutputs?.Any(output =>
+            string.Equals(output?.Trim(), "HeroAsset", StringComparison.OrdinalIgnoreCase)) == true;
+        var phase11Requested = (request.StartPhaseNo ?? 1) <= 11 && (request.EndPhaseNo ?? 20) >= 11;
+        if (manualHeroRequested && phase11Requested
+            && !productionRequest.RequestedOutputs.Any(output =>
+                string.Equals(output, "HeroAsset", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("RC2_MANUAL_OUTPUT_OVERRIDE_NOT_APPLIED");
+    }
 
     private static bool PhaseSucceeded(IReadOnlyList<ProductionPhaseResult>? phaseResults, int phaseNo)
         => phaseResults?.Any(p => p.PhaseNo == phaseNo && p.Status == ProductionPhaseStatus.Succeeded) == true;

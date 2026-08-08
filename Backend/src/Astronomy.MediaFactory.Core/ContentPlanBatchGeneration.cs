@@ -51,6 +51,9 @@ public sealed record BatchGenerateFromPlansRequest(
     bool MotionPreviewOnly = false,
     string? MotionV2Strength = null,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly,
+    IReadOnlyList<string>? RequestedOutputsOverride = null,
+    // Kept for source compatibility with pre-Phase-11 callers. New manual RC2
+    // requests must use RequestedOutputsOverride.
     IReadOnlyList<string>? RequestedOutputs = null);
 
 public sealed record BatchGenerateFromPlansResponse(
