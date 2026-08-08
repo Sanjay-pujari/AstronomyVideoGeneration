@@ -7,6 +7,37 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class ProductionOutputSelectionTests
 {
     [Fact]
+    public void ManualRequestedOutputsOverrideReplacesPersistedOutputs()
+    {
+        var resolved = ContentPlanProductionExecutionService.ResolveRequestedOutputs(
+            ["ShortVideo", "LongVideo", "Thumbnail"], ["HeroAsset", "Gallery"]);
+
+        Assert.Equal(["HeroAsset", "Gallery"], resolved.AfterResolution);
+        Assert.Equal("ManualOverride", resolved.Source);
+    }
+
+    [Fact]
+    public void ManualOverrideDoesNotPersistChangesToPlan()
+    {
+        string[] persisted = ["ShortVideo", "LongVideo", "Thumbnail"];
+        _ = ContentPlanProductionExecutionService.ResolveRequestedOutputs(persisted, ["HeroAsset"]);
+        Assert.Equal(["ShortVideo", "LongVideo", "Thumbnail"], persisted);
+    }
+
+    [Fact]
+    public void ManualHeroOverrideDoesNotModifyPersistedPlan() => ManualOverrideDoesNotPersistChangesToPlan();
+
+    [Fact]
+    public void EmptyManualOverrideUsesPersistedPlan()
+    {
+        var resolved = ContentPlanProductionExecutionService.ResolveRequestedOutputs(
+            ["ShortVideo", "LongVideo", "Thumbnail"], []);
+
+        Assert.Equal(resolved.BeforeOverride, resolved.AfterResolution);
+        Assert.Equal("PersistedPlan", resolved.Source);
+    }
+
+    [Fact]
     public void FullAstronomyProfileRequestsShortLongThumbnail()
     {
         var request = Map(["ShortVideo", "Thumbnail"], fullProfile: true);
@@ -37,12 +68,12 @@ public sealed class ProductionOutputSelectionTests
     }
 
     [Fact]
-    public void ExplicitHeroAssetNotRemovedByPlannedFormatShortVideo() => Assert.Equal(
+    public void PlannedFormatCannotRemoveHeroAssetOverride() => Assert.Equal(
         ["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"],
         Map(["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"], plannedFormat: "ShortVideo").RequestedOutputs);
 
     [Fact]
-    public void ExplicitHeroAssetNotRemovedByNormalization()
+    public void NormalizationCannotRemoveHeroAssetOverride()
     {
         var resolved = ContentPlanProductionExecutionService.ResolveRequestedOutputs(
             ["ShortVideo"], ["shortvideo", "LongVideo", "Thumbnail", "heroasset", "HeroAsset"]);
