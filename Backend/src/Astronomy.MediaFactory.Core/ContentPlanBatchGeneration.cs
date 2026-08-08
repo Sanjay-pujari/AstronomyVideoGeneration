@@ -51,6 +51,7 @@ public sealed record BatchGenerateFromPlansRequest(
     bool MotionPreviewOnly = false,
     string? MotionV2Strength = null,
     DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly,
+    [property: JsonPropertyName("requestedOutputsOverride")]
     IReadOnlyList<string>? RequestedOutputsOverride = null,
     // Kept for source compatibility with pre-Phase-11 callers. New manual RC2
     // requests must use RequestedOutputsOverride.
@@ -124,6 +125,7 @@ public sealed record BatchGenerateFromPlansResponse(
     IReadOnlyList<string>? RequestedOutputsBeforeOverride = null,
     IReadOnlyList<string>? RequestedOutputsOverride = null,
     IReadOnlyList<string>? RequestedOutputsAfterResolution = null,
+    IReadOnlyList<string>? ManualRequestedOutputsOverrideReceived = null,
     string? RequestedPlanLanguage = null,
     string? RequestedLanguage = null,
     bool LanguageMismatchDetected = false,
