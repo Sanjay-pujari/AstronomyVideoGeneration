@@ -485,7 +485,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private static bool CalculatePipelineSuccess(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults, IReadOnlyList<string> errors)
     {
         if (context.StartPhaseNo == 12 && context.EndPhaseNo == 12)
-            return IsPhase12ThumbnailV9Successful(context, phaseResults);
+            return IsPhase12ThumbnailAuthoritySuccessful(context, phaseResults);
 
         if (errors.Count > 0) return false;
         foreach (var result in phaseResults)
@@ -498,33 +498,26 @@ public sealed partial class ProductionPipelineExecutionService(
         return true;
     }
 
-    private static bool IsPhase12ThumbnailV9Successful(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
+    private static bool IsPhase12ThumbnailAuthoritySuccessful(ProductionPhaseContext context, IReadOnlyList<ProductionPhaseResult> phaseResults)
     {
         var phase12 = phaseResults.LastOrDefault(result => result.PhaseNo == 12);
         if (phase12 is null || phase12.Status != ProductionPhaseStatus.Succeeded) return false;
 
-        var validationCandidates = new[]
-        {
-            Path.Combine(context.ExecutionContext.ThumbnailRoot!, "debug", "phase-12-validation.json"),
-            Path.Combine(context.ExecutionContext.ThumbnailRoot!, "phase-12-validation.json")
-        };
-        var validationPath = validationCandidates.FirstOrDefault(File.Exists);
-        if (validationPath is null) return false;
+        var validationPath = Path.Combine(context.OutputRoot, "validation", "phase-12-validation.json");
+        var manifestPath = Path.Combine(context.OutputRoot, "12-thumbnails", "thumbnail-asset-manifest.json");
+        if (!File.Exists(validationPath) || !File.Exists(manifestPath)) return false;
 
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(validationPath));
             var root = document.RootElement;
-            var validationPassed = GetJsonBool(root, "validationPassed") || GetJsonBool(root, "semanticValidationPassed");
+            var validationPassed = GetJsonString(root, "validationStatus", string.Empty).Equals("Valid", StringComparison.OrdinalIgnoreCase);
             var status = GetJsonString(root, "status", string.Empty);
-            var statusSucceeded = string.IsNullOrWhiteSpace(status) || status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase);
-            var selectedRenderer = GetJsonString(root, "selectedRenderer", string.Empty);
-            var thumbnailVersion = GetJsonString(root, "thumbnailVersion", string.Empty);
-            var v9Result = selectedRenderer.Equals("ThumbnailV9AiFinalThumbnailComposer", StringComparison.OrdinalIgnoreCase)
-                || thumbnailVersion.Equals("V9", StringComparison.OrdinalIgnoreCase);
+            var statusSucceeded = status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase);
             var requiredOutputs = new[] { "thumbnail-landscape.png", "thumbnail-portrait.png", "thumbnail-square.png" }
-                .Select(name => Path.Combine(context.ExecutionContext.ThumbnailRoot!, name));
-            return validationPassed && statusSucceeded && v9Result && requiredOutputs.All(File.Exists);
+                .Select(name => Path.Combine(context.OutputRoot, "12-thumbnails", name));
+            return validationPassed && statusSucceeded && GetJsonBool(root, "downstreamReady")
+                && GetJsonBool(root, "committedReadbackPassed") && requiredOutputs.All(File.Exists);
         }
         catch (JsonException)
         {
@@ -3393,61 +3386,15 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseGenerateThumbnailsAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        var outputs = new List<string>();
-        var thumbnailRoot = context.ExecutionContext.ThumbnailRoot!;
-        var stepDiagnostics = new List<JsonObject>();
-        var v8Enabled = IsThumbnailV8Enabled();
+        // Phase 12 is an artifact dependency, not a request dependency: Thumbnail alone
+        // enters this route and consumes the already committed Phase 11 authority.
+        return await ResponsiveThumbnailAuthorityService.PublishAsync(
+            context.OutputRoot,
+            context.ExecutionContext.ContentGenerationPlanId?.ToString() ?? context.Request.PlanId.ToString(),
+            context.EventId,
+            context.Request.Language,
+            cancellationToken);
 
-        try
-        {
-            foreach (var phase in new[] { "Intelligence", "Composition", "SceneSelection", "Images" })
-            {
-                var step = CreateThumbnailV8StepDiagnostic(phase, v8Enabled);
-                stepDiagnostics.Add(step);
-                try
-                {
-                    var response = await thumbnailEngine.GenerateThumbnailAssetsAsync(new ThumbnailAssetGenerationRequest { EventId = context.EventId, RegionId = context.Request.RegionId, Language = context.Request.Language, Phase = phase, DryRun = false, OverwriteExisting = context.OverwriteExisting, EnableThumbnailV8 = v8Enabled, ThumbnailStyle = "ScrollStopping", ThumbnailVisualStyle = "PhotoCinematic", ProductionContext = context.ExecutionContext }, cancellationToken);
-                    UpdateThumbnailV8StepDiagnostic(step, response, v8Enabled);
-                    if (v8Enabled
-                        && (response.RequestedRenderer.Contains("V7", StringComparison.OrdinalIgnoreCase)
-                            || response.ActualRendererUsed.Contains("V7", StringComparison.OrdinalIgnoreCase)
-                            || response.OutputWriteSource.Contains("V7", StringComparison.OrdinalIgnoreCase)
-                            || response.GeneratedFiles.Any(file => file.Contains("V7", StringComparison.OrdinalIgnoreCase))))
-                        throw new InvalidOperationException("Thumbnail V8 routing guard failed: selected renderer/output contains V7 while V9 is enabled.");
-                    outputs.AddRange(response.GeneratedFiles);
-                }
-                catch (Exception ex)
-                {
-                    UpdateThumbnailV8StepException(step, ex, phase, v8Enabled, thumbnailRoot);
-                    await EnsureThumbnailV8DiagnosticsAsync(thumbnailRoot, stepDiagnostics, outputs, ex, cancellationToken);
-                    await EnsureThumbnailV8Phase12ValidationAsync(thumbnailRoot, outputs, ex, cancellationToken);
-                    throw;
-                }
-            }
-
-            var thumbnailSceneManifestPath = Path.Combine(thumbnailRoot, "thumbnail-scene-manifest.json");
-            if (!File.Exists(thumbnailSceneManifestPath))
-                throw new InvalidOperationException($"Thumbnail generation failed contract validation: thumbnail-scene-manifest.json is required at '{NormalizePath(thumbnailSceneManifestPath)}'.");
-
-            if (v8Enabled)
-            {
-                await EnsureThumbnailV8DiagnosticsAsync(thumbnailRoot, stepDiagnostics, outputs, null, cancellationToken);
-                await EnsureThumbnailV8Phase12ValidationAsync(thumbnailRoot, outputs, null, cancellationToken);
-                ValidateThumbnailV8Contract(thumbnailRoot);
-            }
-            else if (thumbnailOptions?.Value.EnableThumbnailV7 == true)
-                ValidateThumbnailV7Contract(thumbnailRoot);
-            else
-                ValidateCtrThumbnailV6Contract(thumbnailRoot);
-            outputs.Add(thumbnailSceneManifestPath);
-            return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        }
-        catch (Exception ex) when (v8Enabled)
-        {
-            await EnsureThumbnailV8DiagnosticsAsync(thumbnailRoot, stepDiagnostics, outputs, ex, cancellationToken);
-            await EnsureThumbnailV8Phase12ValidationAsync(thumbnailRoot, outputs, ex, cancellationToken);
-            throw;
-        }
     }
 
     private static JsonObject CreateThumbnailV8StepDiagnostic(string stepName, bool v8Enabled)
