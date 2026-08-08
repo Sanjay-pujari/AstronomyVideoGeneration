@@ -134,12 +134,12 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
     public IReadOnlyList<PhaseOutputTarget> Resolve(ProductionPhaseContext context,int start,int end)
     {
         var root=Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.OutputRoot));var comparison=OperatingSystem.IsWindows()?StringComparison.OrdinalIgnoreCase:StringComparison.Ordinal;var targets=new List<PhaseOutputTarget>();
-        void Add(int phase,string? path,bool directory=true,bool compatibility=false,bool validation=false)
+        void Add(int phase,string? path,bool directory=true,bool compatibility=false,bool validation=false,bool canDeleteOnOverwrite=true)
         {
             if(phase<start||phase>end||string.IsNullOrWhiteSpace(path))return;
             var full=Path.GetFullPath(path);
             if(!full.StartsWith(root+Path.DirectorySeparatorChar,comparison))throw new InvalidOperationException($"Phase {phase} output target is outside the workspace: {full}");
-            targets.Add(new(phase,full,directory,Path.GetRelativePath(root,full).Replace('\\','/'),validation?"Validation":compatibility?"Compatibility":"Authority",$"Phase{phase}",!compatibility&&!validation,compatibility,validation,false,true));
+            targets.Add(new(phase,full,directory,Path.GetRelativePath(root,full).Replace('\\','/'),validation?"Validation":compatibility?"Compatibility":"Authority",$"Phase{phase}",!compatibility&&!validation,compatibility,validation,false,canDeleteOnOverwrite));
         }
         Add(1,Path.Combine(root,"01-plan"));
         Add(2,Path.Combine(root,"02-intelligence"));
@@ -153,7 +153,10 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
         Add(8,Path.Combine(root,"scene-assets-v3"),compatibility:true);
         Add(9,Path.Combine(root,"09-long-scenes"));
         Add(10,Path.Combine(root,"10-scene-validation"));
-        Add(11,context.ExecutionContext.HeroRoot);
+        // The responsive authority publisher owns transactional replacement of 11-hero;
+        // outer overwrite cleanup must identify it as Phase 11 without deleting it first.
+        Add(11,Path.Combine(root,"11-hero"),canDeleteOnOverwrite:false);
+        Add(11,context.ExecutionContext.HeroRoot,compatibility:true);
         Add(12,context.ExecutionContext.ThumbnailRoot);
         Add(13,Path.Combine(root,"gallery"));
         Add(14,Path.Combine(root,"sync"));

@@ -105,8 +105,20 @@ public sealed class ResponsiveHeroAuthorityService : IResponsiveHeroAuthoritySer
             committedReadbackPassed = true, manifestChecksum = checksum, heroVariantCount = 3, generatedVariantCount = 3, reusedVariantCount = 0,
             upstreamArtifactsModified = false, generatedAtUtc = DateTimeOffset.UtcNow }, ct);
         if (Directory.Exists(backup)) Directory.Delete(backup, true);
+        var stagingRoot = root + ".staging";
+        if (Directory.Exists(stagingRoot) && !Directory.EnumerateFileSystemEntries(stagingRoot).Any())
+            Directory.Delete(stagingRoot);
         return new(Phase11ReasonCodes.Accepted, "Responsive Hero assets generated, validated, committed and read back.", checksum,
-            [p10Path, p8Path], Directory.EnumerateFiles(root).ToArray());
+            [p10Path, p8Path], Directory.EnumerateFiles(root).ToArray())
+        {
+            PublicationCommitted = true,
+            SemanticValidationPassed = true,
+            ChecksumValidationPassed = true,
+            ManifestValidationPassed = true,
+            CommittedStateValidationPassed = true,
+            DownstreamReady = true,
+            HeroAuthorityDiagnostics = JsonSerializer.SerializeToElement(diagnostics, Json)
+        };
     }
 
     private static SceneAssetManifestItem ValidateSource(string root, SceneAssetManifestItem item)

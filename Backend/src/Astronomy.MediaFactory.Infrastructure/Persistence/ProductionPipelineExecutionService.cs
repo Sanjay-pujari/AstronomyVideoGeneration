@@ -15269,6 +15269,8 @@ public sealed partial class ProductionPipelineExecutionService(
             && phase9PublicationResults.TryRemove(context.OutputRoot, out var phase9Result) ? phase9Result : null;
         var phase10Certification = phaseNo == 10 && IsSceneAssetsV3Enabled(context)
             && phase10CertificationResults.TryRemove(context.OutputRoot, out var phase10Result) ? phase10Result : null;
+        var phase11Certification = phaseNo == 11 && IsSceneAssetsV3Enabled(context)
+            && phase11AuthorityResults.TryRemove(context.OutputRoot, out var phase11Result) ? phase11Result : null;
         if (phase3Certification is { Passed: false })
         {
             status = ProductionPhaseStatus.Failed;
@@ -15284,8 +15286,16 @@ public sealed partial class ProductionPipelineExecutionService(
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason)
         {
             ReasonCode = reasonCode,
-            PublicationCommitted = phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? false,
-            CommittedStateValidationPassed = phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed ?? false
+            PublicationCommitted = phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? false),
+            CommittedStateValidationPassed = phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed ?? false),
+            AuthorityChecksum = phase11Certification?.ManifestChecksum,
+            ManifestValidationStatus = phase11Certification?.ManifestValidationStatus,
+            ValidationStatus = phase11Certification?.ValidationStatus,
+            SemanticValidationPassed = phase11Certification?.SemanticValidationPassed,
+            ChecksumValidationPassed = phase11Certification?.ChecksumValidationPassed,
+            ManifestValidationPassed = phase11Certification?.ManifestValidationPassed,
+            DownstreamReady = phase11Certification?.DownstreamReady,
+            Phase11HeroDiagnostics = phase11Certification?.HeroAuthorityDiagnostics
         };
         if (phaseNo == 14 && File.Exists(validationPath))
             return result;
@@ -15386,32 +15396,32 @@ public sealed partial class ProductionPipelineExecutionService(
             reason,
             executionKind = phase1Outcome?.Kind.ToString(),
             reasonCode,
-            generated = phaseNo == 3 ? phase3Certification?.Generated : phase1Outcome is not null && !phase1Outcome.Reused,
+            generated = phase11Certification is not null ? true : phaseNo == 3 ? phase3Certification?.Generated : phase1Outcome is not null && !phase1Outcome.Reused,
             reused = phaseNo == 3 ? phase3Certification?.Reused : phase1Outcome?.Reused,
             regenerated = phaseNo == 3 ? phase3Certification?.Regenerated : phase1Outcome?.Kind.ToString().StartsWith("Regenerated",StringComparison.Ordinal) == true,
             materialized = phase9Certification?.Manifest.Images.Count > 0 ? true : (bool?)null,
             materializedAssetCount = phase9Certification?.Manifest.Images.Count,
             recovered = phaseNo == 3 ? phase3Certification?.Recovered : phase1Outcome?.RecoveryStatus.Recovered,
             recoveryStatus = phase1Outcome?.RecoveryStatus,
-            authorityChecksum = phase10Certification?.Certification.DeterministicChecksum ?? phase9Certification?.Manifest.DeterministicChecksum ?? phase8Certification?.AuthorityChecksum ?? phase1Outcome?.AuthorityChecksum,
+            authorityChecksum = phase11Certification?.ManifestChecksum ?? phase10Certification?.Certification.DeterministicChecksum ?? phase9Certification?.Manifest.DeterministicChecksum ?? phase8Certification?.AuthorityChecksum ?? phase1Outcome?.AuthorityChecksum,
             requestIdentityChecksum = phase1Outcome?.RequestIdentityChecksum,
             compatibilityValidationStatus = phase3Certification?.CompatibilityValidationStatus ?? phase1Outcome?.CompatibilityProjectionStatus,
-            manifestValidationStatus = phase10Certification is not null ? "Valid" : phase9Certification is null ? phase8Certification?.ManifestValidationStatus ?? phase3Certification?.ManifestValidationStatus ?? phase1Outcome?.ManifestStatus : phase9Certification.ManifestValidationPassed ? "Valid" : "Invalid",
+            manifestValidationStatus = phase11Certification?.ManifestValidationStatus ?? (phase10Certification is not null ? "Valid" : phase9Certification is null ? phase8Certification?.ManifestValidationStatus ?? phase3Certification?.ManifestValidationStatus ?? phase1Outcome?.ManifestStatus : phase9Certification.ManifestValidationPassed ? "Valid" : "Invalid"),
             replacedExistingAuthority = phase1Outcome?.ReplacedExistingAuthority,
             downstreamInvalidated = phase1Outcome?.DownstreamInvalidated,
             rollbackPerformed = phase1Outcome?.RollbackPerformed ?? false,
             rollbackSucceeded = phase1Outcome?.RollbackSucceeded ?? false,
             transactionId = phaseNo == 1 ? phase1Outcome?.PublicationTransactionId : phase3Certification?.TransactionId,
-            publicationCommitted = phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? (phaseNo == 5 ? status == ProductionPhaseStatus.Succeeded : phaseNo == 3 ? phase3Certification?.PublicationCommitted == true : phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid"),
-            validationStatus = phase10Certification is not null ? "Valid" : phase9Certification is null ? phase8Certification?.ValidationStatus ?? (phaseNo == 5 && status == ProductionPhaseStatus.Succeeded ? "Valid" : phase3Certification?.ValidationStatus ?? phase1Outcome?.ValidationStatus) : phase9Certification.CommittedStateValidationPassed ? "Valid" : "Invalid",
-            semanticValidationPassed = phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.SemanticValidationPassed ?? phase3Certification?.SemanticValidationPassed ?? phase12ThumbnailDiagnostics?.SemanticValidationPassed,
-            checksumValidationPassed = phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ChecksumValidationPassed ?? phase3Certification?.ChecksumValidationPassed,
-            manifestValidationPassed = phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ManifestValidationPassed ?? phase3Certification?.ManifestValidationPassed,
-            committedStateValidationPassed = phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed,
+            publicationCommitted = phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? (phaseNo == 5 ? status == ProductionPhaseStatus.Succeeded : phaseNo == 3 ? phase3Certification?.PublicationCommitted == true : phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid")),
+            validationStatus = phase11Certification?.ValidationStatus ?? (phase10Certification is not null ? "Valid" : phase9Certification is null ? phase8Certification?.ValidationStatus ?? (phaseNo == 5 && status == ProductionPhaseStatus.Succeeded ? "Valid" : phase3Certification?.ValidationStatus ?? phase1Outcome?.ValidationStatus) : phase9Certification.CommittedStateValidationPassed ? "Valid" : "Invalid"),
+            semanticValidationPassed = phase11Certification?.SemanticValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.SemanticValidationPassed ?? phase3Certification?.SemanticValidationPassed ?? phase12ThumbnailDiagnostics?.SemanticValidationPassed),
+            checksumValidationPassed = phase11Certification?.ChecksumValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ChecksumValidationPassed ?? phase3Certification?.ChecksumValidationPassed),
+            manifestValidationPassed = phase11Certification?.ManifestValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ManifestValidationPassed ?? phase3Certification?.ManifestValidationPassed),
+            committedStateValidationPassed = phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed),
             compatibilityEquivalencePassed = phase3Certification?.CompatibilityEquivalencePassed,
             phase2LineageValidationPassed = phase3Certification?.Phase2LineageValidationPassed,
             questionPlanReconciliationPassed = phase3Certification?.QuestionPlanReconciliationPassed,
-            downstreamReady = phase10Certification?.Certification.DownstreamReady ?? phase9Certification?.DownstreamReady ?? phase8Certification?.DownstreamReady ?? phase3Certification?.DownstreamReady,
+            downstreamReady = phase11Certification?.DownstreamReady ?? phase10Certification?.Certification.DownstreamReady ?? phase9Certification?.DownstreamReady ?? phase8Certification?.DownstreamReady ?? phase3Certification?.DownstreamReady,
             questionCount = phase3Certification?.QuestionCount,
             learningObjectiveCount = phase3Certification?.LearningObjectiveCount,
             questionPlanTotalCount = phase3Certification?.QuestionPlanTotalCount,
@@ -15475,7 +15485,7 @@ public sealed partial class ProductionPipelineExecutionService(
             duplicateHashGroups = phase8SceneVariantDiagnostics?.DuplicateHashGroups,
             sceneVariantManifestPath = phase8SceneVariantDiagnostics?.ManifestPath,
             failureReason = phase8SceneVariantDiagnostics?.FailureReason,
-            phase11HeroDiagnostics,
+            phase11HeroDiagnostics = (object?)phase11Certification?.HeroAuthorityDiagnostics ?? phase11HeroDiagnostics,
             heroVersion = phase11HeroDiagnostics?.HeroVersion,
             heroOutputPath = phase11HeroDiagnostics?.HeroOutputPath,
             heroDateAdded = phase11HeroDiagnostics?.DateAdded,
