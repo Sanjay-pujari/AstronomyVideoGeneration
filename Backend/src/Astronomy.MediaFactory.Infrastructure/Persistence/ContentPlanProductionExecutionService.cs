@@ -47,7 +47,9 @@ public sealed class ContentPlanProductionExecutionService(
         var intelligence = plan.AstronomyEventIntelligence
             ?? throw new ArgumentException($"ContentGenerationPlan '{request.ContentGenerationPlanId}' is not linked to AstronomyEventIntelligence.", nameof(request));
 
-        var productionRequest = mapper.Map(plan, intelligence);
+        var mappedProductionRequest = mapper.Map(plan, intelligence);
+        var outputResolution = ResolveRequestedOutputs(mappedProductionRequest.RequestedOutputs, request.RequestedOutputs);
+        var productionRequest = mappedProductionRequest with { RequestedOutputs = outputResolution.AfterResolution };
         var executionMode = request.ExecutionMode;
         var isCompletedPlanRerun = IsProductionCompleted(plan) && executionMode is ContentPlanExecutionMode.RebuildOutputs or ContentPlanExecutionMode.RerunPhase or ContentPlanExecutionMode.FullRebuild;
         var requestedStartPhaseNo = ResolveStartPhaseNo(request);
@@ -60,7 +62,13 @@ public sealed class ContentPlanProductionExecutionService(
         if (string.IsNullOrWhiteSpace(outputRoot))
             throw new InvalidOperationException($"OutputRoot could not be resolved for content generation plan '{plan.Id:D}'.");
 
-        logger.LogInformation("Using Astronomy V1 production pipeline for content plan {PlanId}", plan.Id);
+        logger.LogInformation(
+            "Using Astronomy V1 production pipeline for content plan {PlanId}. RequestedOutputsSource={RequestedOutputsSource}; RequestedOutputsBeforeOverride={RequestedOutputsBeforeOverride}; RequestedOutputsOverride={RequestedOutputsOverride}; RequestedOutputsAfterResolution={RequestedOutputsAfterResolution}",
+            plan.Id,
+            outputResolution.Source,
+            string.Join(",", outputResolution.BeforeOverride),
+            string.Join(",", outputResolution.Override),
+            string.Join(",", outputResolution.AfterResolution));
         var warnings = new List<string>(productionRequest.Warnings);
         if (resolvedRange.DependencyExpansionApplied)
             warnings.Add($"Expanded rebuild range from {requestedStartPhaseNo}-{requestedEndPhaseNo} to {startPhaseNo}-{endPhaseNo} because dependencyExpansionMode=Rebuild.");
@@ -214,6 +222,37 @@ public sealed class ContentPlanProductionExecutionService(
             Category: productionRequest.Category,
             PlannedFormat: productionRequest.PlannedFormat,
             EnableSubtitles: request.EnableSubtitles);
+
+    internal static RequestedOutputsResolution ResolveRequestedOutputs(
+        IReadOnlyList<string> persistedOutputs,
+        IReadOnlyList<string>? manualOverride)
+    {
+        var before = NormalizeRequestedOutputs(persistedOutputs, "persisted plan");
+        var suppliedOverride = NormalizeRequestedOutputs(manualOverride ?? [], "manual override");
+        return suppliedOverride.Count == 0
+            ? new("PersistedPlan", before, [], before)
+            : new("ManualOverride", before, suppliedOverride, suppliedOverride);
+    }
+
+    private static IReadOnlyList<string> NormalizeRequestedOutputs(IReadOnlyList<string> outputs, string source)
+    {
+        string[] canonical = ["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"];
+        var normalized = new List<string>();
+        foreach (var value in outputs.Where(value => !string.IsNullOrWhiteSpace(value)))
+        {
+            var match = canonical.FirstOrDefault(item => string.Equals(item, value.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+                throw new ArgumentException($"Unsupported requested output '{value}' in {source}. Supported values: {string.Join(", ", canonical)}.");
+            if (!normalized.Contains(match, StringComparer.OrdinalIgnoreCase)) normalized.Add(match);
+        }
+        return normalized;
+    }
+
+    internal sealed record RequestedOutputsResolution(
+        string Source,
+        IReadOnlyList<string> BeforeOverride,
+        IReadOnlyList<string> Override,
+        IReadOnlyList<string> AfterResolution);
 
     private static bool PhaseSucceeded(IReadOnlyList<ProductionPhaseResult>? phaseResults, int phaseNo)
         => phaseResults?.Any(p => p.PhaseNo == phaseNo && p.Status == ProductionPhaseStatus.Succeeded) == true;
