@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "phase11-positive-certification-plan-v1",
+  "planId": "20000000-0000-0000-0000-000000000001",
+  "eventId": "constellation-iau-ori",
+  "eventType": "CONSTELLATION",
+  "primaryObject": "Orion",
+  "language": "en",
+  "title": "Orion constellation guide",
+  "subtitle": "Orion: How to Find the Hunter Constellation",
+  "requestedOutputs": [
+    "ShortVideo",
+    "LongVideo",
+    "Thumbnail",
+    "HeroAsset"
+  ],
+  "startPhaseNo": 11,
+  "endPhaseNo": 11,
+  "dependencyExpansionMode": "ReadOnly",
+  "overwriteExisting": true,
+  "authorityPolicy": "Reuse committed Phase 10 certification and committed Phase 8 cinematic rasters without mutation"
+}
