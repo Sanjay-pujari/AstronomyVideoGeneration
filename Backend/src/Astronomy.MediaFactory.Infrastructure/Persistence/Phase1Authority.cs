@@ -157,7 +157,10 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
         // outer overwrite cleanup must identify it as Phase 11 without deleting it first.
         Add(11,Path.Combine(root,"11-hero"),canDeleteOnOverwrite:false);
         Add(11,context.ExecutionContext.HeroRoot,compatibility:true);
-        Add(12,context.ExecutionContext.ThumbnailRoot);
+        // 12-thumbnails is the sole Phase 12 authority. The legacy thumbnails root is a
+        // compatibility projection and must not be deleted or treated as semantic input.
+        Add(12,Path.Combine(root,"12-thumbnails"),canDeleteOnOverwrite:false);
+        Add(12,context.ExecutionContext.ThumbnailRoot,compatibility:true,canDeleteOnOverwrite:false);
         Add(13,Path.Combine(root,"gallery"));
         Add(14,Path.Combine(root,"sync"));
         Add(15,context.ExecutionContext.TtsRoot);

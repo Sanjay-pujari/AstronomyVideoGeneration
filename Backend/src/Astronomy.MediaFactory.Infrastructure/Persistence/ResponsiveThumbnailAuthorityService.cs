@@ -25,15 +25,18 @@ internal static class ResponsiveThumbnailAuthorityService
     {
         var heroPath = Path.Combine(outputRoot, "11-hero", "hero-asset-manifest.json");
         var heroReportPath = Path.Combine(outputRoot, "11-hero", "phase11-publication-report.json");
+        var heroValidationPath = Path.Combine(outputRoot, "validation", "phase-11-validation.json");
         var p10Path = Path.Combine(outputRoot, "10-scene-validation", "scene-asset-certification.json");
         var p10ReportPath = Path.Combine(outputRoot, "10-scene-validation", "phase10-publication-report.json");
         var p8Path = Path.Combine(outputRoot, "08-scene-assets", "scene-asset-manifest.json");
         Require(File.Exists(heroPath), "P12_HERO_AUTHORITY_MISSING", "Phase 11 Hero authority is missing.");
         Require(File.Exists(heroReportPath), "P12_HERO_AUTHORITY_INVALID", "Phase 11 publication report is missing.");
+        Require(File.Exists(heroValidationPath), "P12_HERO_AUTHORITY_INVALID", "Canonical Phase 11 validation is missing.");
         Require(File.Exists(p10Path) && File.Exists(p10ReportPath) && File.Exists(p8Path), "P12_SCENE_CERTIFICATION_INVALID", "Phase 10/8 lineage authority is missing.");
 
         using var heroDoc = JsonDocument.Parse(await File.ReadAllTextAsync(heroPath, ct));
         using var heroReportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(heroReportPath, ct));
+        using var heroValidationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(heroValidationPath, ct));
         using var p10Doc = JsonDocument.Parse(await File.ReadAllTextAsync(p10Path, ct));
         using var p10ReportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(p10ReportPath, ct));
         using var p8Doc = JsonDocument.Parse(await File.ReadAllTextAsync(p8Path, ct));
@@ -48,8 +51,17 @@ internal static class ResponsiveThumbnailAuthorityService
         Require(Flag(heroReportDoc.RootElement, "publicationCommitted") && Flag(heroReportDoc.RootElement, "candidateReadbackPassed")
             && Flag(heroReportDoc.RootElement, "committedReadbackPassed"), "P12_HERO_AUTHORITY_INVALID", "Phase 11 committed readback evidence failed.");
         var heroChecksum = Text(hero, "deterministicChecksum");
-        Require(Text(heroReportDoc.RootElement, "manifestChecksum") == heroChecksum && VerifyHeroChecksum(hero, p10, p8),
-            "P12_HERO_AUTHORITY_INVALID", "Phase 11 authority checksum is invalid.");
+        var publicationChecksum = Text(heroReportDoc.RootElement, "manifestChecksum");
+        var validationChecksum = Text(heroValidationDoc.RootElement, "authorityChecksum");
+        var checksumsAgree = PublishedChecksumsAgree(heroChecksum, publicationChecksum, validationChecksum);
+        Require(checksumsAgree, "P12_HERO_AUTHORITY_INVALID",
+            $"Phase 11 published checksums disagree (manifest={heroChecksum}, publication={publicationChecksum}, validation={validationChecksum}).");
+        var heroValidation = heroValidationDoc.RootElement;
+        Require(Text(heroValidation, "manifestValidationStatus") == "Valid" && Text(heroValidation, "validationStatus") == "Valid"
+            && Flag(heroValidation, "publicationCommitted") && Flag(heroValidation, "semanticValidationPassed")
+            && Flag(heroValidation, "checksumValidationPassed") && Flag(heroValidation, "manifestValidationPassed")
+            && Flag(heroValidation, "committedStateValidationPassed") && Flag(heroValidation, "downstreamReady"),
+            "P12_HERO_AUTHORITY_INVALID", "Canonical Phase 11 validation evidence is not accepted.");
         Require(Text(p10, "validationStatus") == "Valid" && Text(p10, "publicationState") == "Committed" && Flag(p10, "downstreamReady"),
             "P12_SCENE_CERTIFICATION_INVALID", "Phase 10 must be Valid, Committed, and downstream ready.");
         Require(Flag(p10ReportDoc.RootElement, "publicationCommitted") && Flag(p10ReportDoc.RootElement, "committedReadbackPassed"),
@@ -59,6 +71,7 @@ internal static class ResponsiveThumbnailAuthorityService
         Require(Text(p10, "phase8SceneAssetAuthorityChecksum") == Text(p8, "deterministicChecksum"),
             "P12_SOURCE_LINEAGE_MISMATCH", "Phase 11 -> Phase 10 -> Phase 8 lineage does not match.");
         Require(Text(hero, "phase10CertificationChecksum") == Sha(p10Path), "P12_SOURCE_LINEAGE_MISMATCH", "Phase 11 Phase 10 physical lineage is stale.");
+        Require(Text(hero, "phase8SceneAssetManifestChecksum") == Sha(p8Path), "P12_SOURCE_LINEAGE_MISMATCH", "Phase 11 Phase 8 physical lineage is stale.");
 
         var title = Text(hero, "title");
         Require(!string.IsNullOrWhiteSpace(title), "P12_COPY_AUTHORITY_MISSING", "Phase 11 accepted title is missing.");
@@ -67,6 +80,21 @@ internal static class ResponsiveThumbnailAuthorityService
         var variants = hero.GetProperty("variants").EnumerateArray().ToDictionary(x => Text(x, "variant"), StringComparer.OrdinalIgnoreCase);
         var profiles = new[] { new Profile("Landscape", 1280, 720, 72, 52), new Profile("Square", 1080, 1080, 70, 64), new Profile("Portrait", 1080, 1920, 76, 76) };
         Require(profiles.All(x => variants.ContainsKey(x.Role)), "P12_HERO_AUTHORITY_INVALID", "All three responsive Hero roles are required.");
+
+        // The semantic checksum is certified by the three committed Phase 11 surfaces above.
+        // Independently verify every physical raster rather than attempting to reverse-engineer
+        // Phase 11's publisher-specific semantic checksum canonicalization.
+        foreach (var profile in profiles)
+        {
+            var variant = variants[profile.Role];
+            var path = Path.GetFullPath(Path.Combine(outputRoot, Text(variant, "physicalPath")));
+            Require(File.Exists(path) && new FileInfo(path).Length > 0, "P12_HERO_AUTHORITY_INVALID", $"{profile.Role} Hero raster is missing or empty.");
+            Require(Sha(path).Equals(Text(variant, "physicalSha256"), StringComparison.OrdinalIgnoreCase), "P12_HERO_AUTHORITY_INVALID", $"{profile.Role} Hero physical checksum failed.");
+            using var image = Image.Load(path);
+            Require(image.Width == variant.GetProperty("width").GetInt32() && image.Height == variant.GetProperty("height").GetInt32(), "P12_HERO_AUTHORITY_INVALID", $"{profile.Role} Hero manifest dimensions do not match the raster.");
+            var expected = profile.Role == "Landscape" ? (1920, 1080) : profile.Role == "Square" ? (1080, 1080) : (1080, 1920);
+            Require(image.Width == expected.Item1 && image.Height == expected.Item2, "P12_HERO_AUTHORITY_INVALID", $"{profile.Role} Hero profile dimensions are invalid.");
+        }
 
         var root = Path.Combine(outputRoot, "12-thumbnails");
         var transaction = Guid.NewGuid().ToString("N");
@@ -111,6 +139,10 @@ internal static class ResponsiveThumbnailAuthorityService
         manifest = manifest with { DeterministicChecksum = AuthorityChecksum(manifest) };
         await Write(Path.Combine(staging, "thumbnail-asset-manifest.json"), manifest, ct);
         var diagnostics = new { phase12Applicable = true, thumbnailRequested = true, phase11AuthorityLoaded = true, phase11AuthorityChecksum = heroChecksum,
+            phase11ManifestDeterministicChecksum = heroChecksum, phase11PublicationManifestChecksum = publicationChecksum,
+            phase11ValidationAuthorityChecksum = validationChecksum, phase11ChecksumsAgree = checksumsAgree,
+            phase11VariantPhysicalChecksumsPassed = true, phase11VariantDimensionsPassed = true, phase11AuthorityValidationPassed = true,
+            phase10LineageValidationPassed = true,
             phase11Committed = true, phase11DownstreamReady = true, phase10AuthorityLoaded = true, phase10AuthorityChecksum = Text(p10, "deterministicChecksum"),
             phase10Committed = true, phase10DownstreamReady = true, landscapeSourceHeroRole = "Landscape", squareSourceHeroRole = "Square", portraitSourceHeroRole = "Portrait",
             landscapeSourceChecksum = items[0].SourceHeroPhysicalSha256, squareSourceChecksum = items[1].SourceHeroPhysicalSha256, portraitSourceChecksum = items[2].SourceHeroPhysicalSha256,
@@ -154,15 +186,12 @@ internal static class ResponsiveThumbnailAuthorityService
         var maxWords = role == "Landscape" ? 4 : role == "Square" ? 5 : 6;
         return string.Join(' ', normalized.Split(' ').Take(maxWords)).ToUpperInvariant();
     }
+    internal static bool PublishedChecksumsAgree(string manifestChecksum, string publicationChecksum, string validationChecksum) =>
+        !string.IsNullOrWhiteSpace(manifestChecksum)
+        && publicationChecksum.Equals(manifestChecksum, StringComparison.OrdinalIgnoreCase)
+        && validationChecksum.Equals(manifestChecksum, StringComparison.OrdinalIgnoreCase);
     private static string? EventBadge(string eventType) => string.IsNullOrWhiteSpace(eventType) ? null : eventType.ToUpperInvariant() switch
     { "CONSTELLATION" => "CONSTELLATION", "ECLIPSE" => "ECLIPSE", "METEORSHOWER" or "METEOR SHOWER" => "METEOR SHOWER", "CONJUNCTION" => "CONJUNCTION", _ => null };
-    private static bool VerifyHeroChecksum(JsonElement hero, JsonElement p10, JsonElement p8)
-    {
-        var variants = string.Join(',', hero.GetProperty("variants").EnumerateArray().Select(x => JsonSerializer.Serialize(x)));
-        var seed = string.Join('|', Text(hero, "planId"), Text(p10, "deterministicChecksum"), Text(p8, "deterministicChecksum"), Text(hero, "title"), Text(hero, "subtitle"),
-            "CertifiedRasterHeroRenderer", "HeroV6.5-CertifiedSource", "Responsive-2.0", variants);
-        return Hash(seed) == Text(hero, "deterministicChecksum");
-    }
     private static string AuthorityChecksum(ThumbnailManifest value)
     {
         var semantic = value with { CreatedUtc = default, DeterministicChecksum = "" };
