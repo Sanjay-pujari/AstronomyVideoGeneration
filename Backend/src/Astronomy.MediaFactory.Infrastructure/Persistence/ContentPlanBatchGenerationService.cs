@@ -109,6 +109,10 @@ public sealed class ContentPlanBatchGenerationService(
 
             var requestedStartPhaseNo = ResolveStartPhaseNo(request, executionMode);
             var requestedEndPhaseNo = ResolveEndPhaseNo(request);
+            var mappedOutputs = new ContentPlanProductionRequestMapper()
+                .Map(selectedPlanEntities[0], selectedPlanEntities[0].AstronomyEventIntelligence!)
+                .RequestedOutputs;
+            var outputDiagnostics = ContentPlanProductionExecutionService.ResolveRequestedOutputs(mappedOutputs, request.RequestedOutputs);
 
             var execution = await productionExecution.ExecuteContentPlanWithProductionPipelineAsync(new ContentPlanProductionExecutionRequest(
                 selectedPlans[0].ContentGenerationPlanId,
@@ -128,7 +132,8 @@ public sealed class ContentPlanBatchGenerationService(
                 PublishApproved: request.PublishApproved,
                 MotionPreviewOnly: request.MotionPreviewOnly,
                 MotionV2Strength: request.MotionV2Strength,
-                DependencyExpansionMode: request.DependencyExpansionMode), cancellationToken);
+                DependencyExpansionMode: request.DependencyExpansionMode,
+                RequestedOutputs: request.RequestedOutputs), cancellationToken);
 
             ValidateExactPlanIdExecutionResult(effectivePlanId, execution.PlanId, exactPlanIdMode);
 
@@ -195,6 +200,10 @@ public sealed class ContentPlanBatchGenerationService(
                 PublishGateChecked: execution.PublishGateChecked,
                 PublishApproved: execution.PublishApproved,
                 Phase19ReviewApproved: execution.Phase19ReviewApproved,
+                RequestedOutputsSource: outputDiagnostics.Source,
+                RequestedOutputsBeforeOverride: outputDiagnostics.BeforeOverride,
+                RequestedOutputsOverride: outputDiagnostics.Override,
+                RequestedOutputsAfterResolution: execution.ProductionPipelineRequest.RequestedOutputs,
                 RequestedPlanLanguage: languageMismatch.RequestedPlanLanguage,
                 RequestedLanguage: languageMismatch.RequestedLanguage,
                 LanguageMismatchDetected: languageMismatch.LanguageMismatchDetected,

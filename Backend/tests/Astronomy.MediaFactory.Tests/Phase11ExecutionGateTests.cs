@@ -9,6 +9,22 @@ public sealed class Phase11ExecutionGateTests
     private static readonly string[] HeroOutputs = ["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"];
 
     [Fact]
+    public void ExplicitHeroAssetMakesPhase11Applicable() =>
+        Assert.True(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(HeroOutputs, 11));
+
+    [Fact]
+    public void NoHeroAssetStillMakesPhase11NotApplicable() =>
+        Assert.False(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(NonHeroOutputs, 11));
+
+    [Fact]
+    public void ThumbnailDoesNotImplicitlyAddHeroAsset() =>
+        Assert.False(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(["Thumbnail"], 11));
+
+    [Fact]
+    public void PlannedHeroEngineStepDoesNotImplicitlyAddHeroAsset() =>
+        Assert.False(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(NonHeroOutputs, 11));
+
+    [Fact]
     public void Phase11RangeWithHeroNotRequestedSkipsBeforeHeroValidation()
     {
         Assert.False(ProductionPipelineExecutionService.IsPhaseRequiredForRequestedOutputs(NonHeroOutputs, 11));

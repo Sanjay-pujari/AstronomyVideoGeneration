@@ -50,7 +50,8 @@ public sealed record BatchGenerateFromPlansRequest(
     bool PublishApproved = false,
     bool MotionPreviewOnly = false,
     string? MotionV2Strength = null,
-    DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
+    DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly,
+    IReadOnlyList<string>? RequestedOutputs = null);
 
 public sealed record BatchGenerateFromPlansResponse(
     bool Success,
@@ -116,6 +117,10 @@ public sealed record BatchGenerateFromPlansResponse(
     bool PublishGateChecked = false,
     bool PublishApproved = false,
     bool Phase19ReviewApproved = false,
+    string? RequestedOutputsSource = null,
+    IReadOnlyList<string>? RequestedOutputsBeforeOverride = null,
+    IReadOnlyList<string>? RequestedOutputsOverride = null,
+    IReadOnlyList<string>? RequestedOutputsAfterResolution = null,
     string? RequestedPlanLanguage = null,
     string? RequestedLanguage = null,
     bool LanguageMismatchDetected = false,
@@ -298,7 +303,8 @@ public sealed record ContentPlanProductionExecutionRequest(
     bool PublishApproved = false,
     bool MotionPreviewOnly = false,
     string? MotionV2Strength = null,
-    DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly);
+    DependencyExpansionMode DependencyExpansionMode = DependencyExpansionMode.ReadOnly,
+    IReadOnlyList<string>? RequestedOutputs = null);
 
 public sealed record ProductionExecutionContext(
     Guid ContentGenerationPlanId,

@@ -37,6 +37,45 @@ public sealed class ProductionOutputSelectionTests
     }
 
     [Fact]
+    public void ExplicitHeroAssetNotRemovedByPlannedFormatShortVideo() => Assert.Equal(
+        ["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"],
+        Map(["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"], plannedFormat: "ShortVideo").RequestedOutputs);
+
+    [Fact]
+    public void ExplicitHeroAssetNotRemovedByNormalization()
+    {
+        var resolved = ContentPlanProductionExecutionService.ResolveRequestedOutputs(
+            ["ShortVideo"], ["shortvideo", "LongVideo", "Thumbnail", "heroasset", "HeroAsset"]);
+
+        Assert.Equal(["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"], resolved.AfterResolution);
+    }
+
+    [Fact]
+    public void ManualRequestedOutputsOverridePreservesHeroAsset()
+    {
+        var resolved = ContentPlanProductionExecutionService.ResolveRequestedOutputs(
+            ["ShortVideo", "LongVideo", "Thumbnail"],
+            ["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"]);
+
+        Assert.Equal("ManualOverride", resolved.Source);
+        Assert.Equal(["ShortVideo", "LongVideo", "Thumbnail"], resolved.BeforeOverride);
+        Assert.Equal(["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"], resolved.Override);
+        Assert.Equal(resolved.Override, resolved.AfterResolution);
+    }
+
+    [Fact]
+    public void HeroAssetSurvivesProductionPipelineRequestMapping()
+    {
+        var mapped = Map(["ShortVideo", "LongVideo", "Thumbnail"]);
+        var resolved = ContentPlanProductionExecutionService.ResolveRequestedOutputs(
+            mapped.RequestedOutputs, ["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset"]);
+        var pipelineRequest = new ProductionPipelineRequest(
+            mapped with { RequestedOutputs = resolved.AfterResolution }, Guid.NewGuid(), "/tmp/output", false);
+
+        Assert.Contains("HeroAsset", pipelineRequest.Request.RequestedOutputs);
+    }
+
+    [Fact]
     public void LegacyShortProjectionWithBothVariantWorkflowResolvesConfiguredProductionProfile()
     {
         var request = Map(["ShortVideo", "Thumbnail"], assetPlanJson: "{\"plannedProductionSteps\":[\"Scene Engine Short\",\"Scene Engine Long\"]}");
