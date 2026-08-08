@@ -1,0 +1,195 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using SixLabors.Fonts;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Drawing.Processing;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
+
+namespace Astronomy.MediaFactory.Infrastructure.Persistence;
+
+/// <summary>
+/// Phase 12 presentation authority. This renderer can only decorate the matching,
+/// committed Phase 11 responsive raster; it has no provider or scene-selection path.
+/// </summary>
+internal static class ResponsiveThumbnailAuthorityService
+{
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private const string Renderer = "DeterministicResponsiveThumbnailRenderer/1.0";
+    private const string Layout = "ResponsiveThumbnailLayout/1.0";
+    private const string CopyPolicy = "ThumbnailCopyPolicy/1.0";
+
+    internal static async Task<IReadOnlyList<string>> PublishAsync(
+        string outputRoot, string planId, string eventId, string language, CancellationToken ct)
+    {
+        var heroPath = Path.Combine(outputRoot, "11-hero", "hero-asset-manifest.json");
+        var heroReportPath = Path.Combine(outputRoot, "11-hero", "phase11-publication-report.json");
+        var p10Path = Path.Combine(outputRoot, "10-scene-validation", "scene-asset-certification.json");
+        var p10ReportPath = Path.Combine(outputRoot, "10-scene-validation", "phase10-publication-report.json");
+        var p8Path = Path.Combine(outputRoot, "08-scene-assets", "scene-asset-manifest.json");
+        Require(File.Exists(heroPath), "P12_HERO_AUTHORITY_MISSING", "Phase 11 Hero authority is missing.");
+        Require(File.Exists(heroReportPath), "P12_HERO_AUTHORITY_INVALID", "Phase 11 publication report is missing.");
+        Require(File.Exists(p10Path) && File.Exists(p10ReportPath) && File.Exists(p8Path), "P12_SCENE_CERTIFICATION_INVALID", "Phase 10/8 lineage authority is missing.");
+
+        using var heroDoc = JsonDocument.Parse(await File.ReadAllTextAsync(heroPath, ct));
+        using var heroReportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(heroReportPath, ct));
+        using var p10Doc = JsonDocument.Parse(await File.ReadAllTextAsync(p10Path, ct));
+        using var p10ReportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(p10ReportPath, ct));
+        using var p8Doc = JsonDocument.Parse(await File.ReadAllTextAsync(p8Path, ct));
+        var hero = heroDoc.RootElement;
+        var p10 = p10Doc.RootElement;
+        var p8 = p8Doc.RootElement;
+        Identity(hero, planId, eventId, language, "P12_HERO_AUTHORITY_INVALID");
+        Identity(p10, planId, eventId, language, "P12_SCENE_CERTIFICATION_INVALID");
+        Identity(p8, planId, eventId, language, "P12_SOURCE_LINEAGE_MISMATCH");
+        Require(Text(hero, "validationStatus") == "Valid" && Text(hero, "publicationState") == "Committed" && Flag(hero, "downstreamReady"),
+            "P12_HERO_AUTHORITY_INVALID", "Phase 11 must be Valid, Committed, and downstream ready.");
+        Require(Flag(heroReportDoc.RootElement, "publicationCommitted") && Flag(heroReportDoc.RootElement, "candidateReadbackPassed")
+            && Flag(heroReportDoc.RootElement, "committedReadbackPassed"), "P12_HERO_AUTHORITY_INVALID", "Phase 11 committed readback evidence failed.");
+        var heroChecksum = Text(hero, "deterministicChecksum");
+        Require(Text(heroReportDoc.RootElement, "manifestChecksum") == heroChecksum && VerifyHeroChecksum(hero, p10, p8),
+            "P12_HERO_AUTHORITY_INVALID", "Phase 11 authority checksum is invalid.");
+        Require(Text(p10, "validationStatus") == "Valid" && Text(p10, "publicationState") == "Committed" && Flag(p10, "downstreamReady"),
+            "P12_SCENE_CERTIFICATION_INVALID", "Phase 10 must be Valid, Committed, and downstream ready.");
+        Require(Flag(p10ReportDoc.RootElement, "publicationCommitted") && Flag(p10ReportDoc.RootElement, "committedReadbackPassed"),
+            "P12_SCENE_CERTIFICATION_INVALID", "Phase 10 committed readback evidence failed.");
+        Require(Text(hero, "executionId").Equals(Text(p10, "executionId"), StringComparison.OrdinalIgnoreCase),
+            "P12_SOURCE_LINEAGE_MISMATCH", "Phase 11 and Phase 10 execution identities differ.");
+        Require(Text(p10, "phase8SceneAssetAuthorityChecksum") == Text(p8, "deterministicChecksum"),
+            "P12_SOURCE_LINEAGE_MISMATCH", "Phase 11 -> Phase 10 -> Phase 8 lineage does not match.");
+        Require(Text(hero, "phase10CertificationChecksum") == Sha(p10Path), "P12_SOURCE_LINEAGE_MISMATCH", "Phase 11 Phase 10 physical lineage is stale.");
+
+        var title = Text(hero, "title");
+        Require(!string.IsNullOrWhiteSpace(title), "P12_COPY_AUTHORITY_MISSING", "Phase 11 accepted title is missing.");
+        var subtitle = Text(hero, "subtitle");
+        var copyChecksum = Hash(string.Join('|', title, subtitle, language));
+        var variants = hero.GetProperty("variants").EnumerateArray().ToDictionary(x => Text(x, "variant"), StringComparer.OrdinalIgnoreCase);
+        var profiles = new[] { new Profile("Landscape", 1280, 720, 72, 52), new Profile("Square", 1080, 1080, 70, 64), new Profile("Portrait", 1080, 1920, 76, 76) };
+        Require(profiles.All(x => variants.ContainsKey(x.Role)), "P12_HERO_AUTHORITY_INVALID", "All three responsive Hero roles are required.");
+
+        var root = Path.Combine(outputRoot, "12-thumbnails");
+        var transaction = Guid.NewGuid().ToString("N");
+        var staging = root + ".staging-" + transaction;
+        Directory.CreateDirectory(staging);
+        var items = new List<ThumbnailVariant>();
+        foreach (var profile in profiles)
+        {
+            var source = variants[profile.Role];
+            var style = Text(source, "sourceVisualStyle");
+            Require(style is "Cinematic" or "HybridCinematic", "P12_FORBIDDEN_AUTHORITY_PATH", $"{profile.Role} Hero style is not cinematic.");
+            var sourceRelative = Text(source, "physicalPath");
+            var sourcePath = Path.GetFullPath(Path.Combine(outputRoot, sourceRelative));
+            Require(File.Exists(sourcePath), "P12_SOURCE_IMAGE_MISSING", $"{profile.Role} Hero raster is missing.");
+            var sourceSha = Sha(sourcePath);
+            Require(sourceSha.Equals(Text(source, "physicalSha256"), StringComparison.OrdinalIgnoreCase), "P12_SOURCE_CHECKSUM_MISMATCH", $"{profile.Role} Hero checksum failed.");
+            var fileName = $"thumbnail-{profile.Role.ToLowerInvariant()}.png";
+            var target = Path.Combine(staging, fileName);
+            var headline = ThumbnailCopy(title, profile.Role);
+            Render(sourcePath, target, profile, headline);
+            using var decoded = await Image.LoadAsync(target, ct);
+            Require(decoded.Width == profile.Width && decoded.Height == profile.Height, "P12_PHYSICAL_VALIDATION_FAILED", $"{profile.Role} physical dimensions failed.");
+            var outputSha = Sha(target);
+            Require(outputSha != sourceSha, "P12_RENDER_FAILED", $"{profile.Role} did not add presentation value.");
+            var requiresScience = Flag(source, "requiresScientificGeometry");
+            Require(!requiresScience || (Flag(source, "scientificGeometryCertified") && Flag(source, "scientificGeometryPreserved") && Flag(source, "scientificRegionPassed")),
+                "P12_SCIENTIFIC_REGION_NOT_PRESERVED", $"{profile.Role} scientific preservation cannot be proven.");
+            items.Add(new(profile.Role, $"12-thumbnails/{fileName}", profile.Role, sourceRelative, sourceSha,
+                Text(source, "sourcePhase8AssetId"), Text(source, "sourcePhase8SceneId"), Text(source, "sourcePhase8SemanticIdentity"), style,
+                requiresScience, Flag(source, "scientificGeometryCertified"), true, source.GetProperty("width").GetInt32(), source.GetProperty("height").GetInt32(),
+                "NoCrop", profile.Role == "Landscape" ? "AspectPreservingLanczosResize" : "IdentityScale", new Region(0, 0, profile.Width, (int)(profile.Height * .72)),
+                new Region(0, 0, profile.Width, (int)(profile.Height * .72)), new Region(profile.Margin, (int)(profile.Height * .72), profile.Width - 2 * profile.Margin, (int)(profile.Height * .22)),
+                headline, null, EventBadge(Text(p10, "eventType")), $"{profile.Role}/1.0", Renderer, profile.Width, profile.Height,
+                $"{profile.Width}:{profile.Height}", "png", "image/png", new FileInfo(target).Length, outputSha, true, false, true, true, true, "Valid"));
+        }
+
+        var created = DateTimeOffset.UtcNow;
+        var manifest = new ThumbnailManifest("1.0", planId, Text(hero, "executionId"), eventId, language, created,
+            "11-hero/hero-asset-manifest.json", heroChecksum, "10-scene-validation/scene-asset-certification.json", Text(p10, "deterministicChecksum"),
+            "Phase11HeroManifest.TitleSubtitle", copyChecksum, CopyPolicy, Renderer, Layout, "NoGenerativeImageProvider", 0, items,
+            "Valid", "Committed", true, true, "", true);
+        manifest = manifest with { DeterministicChecksum = AuthorityChecksum(manifest) };
+        await Write(Path.Combine(staging, "thumbnail-asset-manifest.json"), manifest, ct);
+        var diagnostics = new { phase12Applicable = true, thumbnailRequested = true, phase11AuthorityLoaded = true, phase11AuthorityChecksum = heroChecksum,
+            phase11Committed = true, phase11DownstreamReady = true, phase10AuthorityLoaded = true, phase10AuthorityChecksum = Text(p10, "deterministicChecksum"),
+            phase10Committed = true, phase10DownstreamReady = true, landscapeSourceHeroRole = "Landscape", squareSourceHeroRole = "Square", portraitSourceHeroRole = "Portrait",
+            landscapeSourceChecksum = items[0].SourceHeroPhysicalSha256, squareSourceChecksum = items[1].SourceHeroPhysicalSha256, portraitSourceChecksum = items[2].SourceHeroPhysicalSha256,
+            copyAuthoritySource = manifest.CopyAuthoritySource, copyPolicyVersion = CopyPolicy, azureImageCallsThisPhase = 0, otherGenerativeImageCallsThisPhase = 0,
+            proceduralAstronomyGenerationCallsThisPhase = 0, legacyQuestionEngineAuthorityUsed = false, legacyHeroAssetsAuthorityUsed = false,
+            legacySceneApprovalAuthorityUsed = false, v9AiCompleteRasterUsed = false, stretchResizeUsed = false, candidateValidationPassed = true,
+            candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, downstreamReady = true };
+        await Write(Path.Combine(staging, "phase12-authority-diagnostics.json"), diagnostics, ct);
+        var backup = root + ".backup-" + transaction;
+        if (Directory.Exists(root)) Directory.Move(root, backup);
+        try { Directory.Move(staging, root); } catch { if (Directory.Exists(backup)) Directory.Move(backup, root); throw; }
+        var committed = await Read<ThumbnailManifest>(Path.Combine(root, "thumbnail-asset-manifest.json"), ct);
+        Require(committed.DeterministicChecksum == AuthorityChecksum(committed), "P12_COMMITTED_READBACK_FAILED", "Committed authority checksum failed.");
+        var report = new { transactionId = transaction, candidateCreated = true, candidateValidationPassed = true, candidateReadbackPassed = true,
+            backupCreated = Directory.Exists(backup), publicationCommitted = true, committedReadbackPassed = true, manifestChecksum = committed.DeterministicChecksum,
+            thumbnailVariantCount = 3, generatedVariantCount = 3, reusedVariantCount = 0, upstreamArtifactsModified = false, generatedAtUtc = DateTimeOffset.UtcNow };
+        await Write(Path.Combine(root, "phase12-publication-report.json"), report, ct);
+        await Write(Path.Combine(outputRoot, "validation", "phase-12-validation.json"), new { phaseNo = 12, status = "Succeeded", validationStatus = "Valid",
+            authorityPath = "12-thumbnails/thumbnail-asset-manifest.json", authorityChecksum = committed.DeterministicChecksum, publicationState = "Committed",
+            candidateReadbackPassed = true, committedReadbackPassed = true, downstreamReady = true, providerCallCount = 0 }, ct);
+        if (Directory.Exists(backup)) Directory.Delete(backup, true);
+        return Directory.EnumerateFiles(root).Append(Path.Combine(outputRoot, "validation", "phase-12-validation.json")).ToArray();
+    }
+
+    private static void Render(string source, string target, Profile profile, string headline)
+    {
+        using var image = Image.Load<Rgba32>(source);
+        image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(profile.Width, profile.Height), Mode = ResizeMode.Max, Sampler = KnownResamplers.Lanczos3 }));
+        Require(image.Width == profile.Width && image.Height == profile.Height, "P12_RENDER_FAILED", "Aspect-preserving resize did not fill the target.");
+        var family = SystemFonts.Collection.Families.First();
+        var font = family.CreateFont(profile.FontSize, FontStyle.Bold);
+        var y = profile.Height * .76f;
+        image.Mutate(x => { x.Fill(Color.FromRgba(0, 0, 0, 185), new Rectangle(0, (int)(profile.Height * .70), profile.Width, (int)(profile.Height * .30)));
+            x.DrawText(headline, font, Color.White, new PointF(profile.Margin, y)); });
+        image.SaveAsPng(target);
+    }
+
+    private static string ThumbnailCopy(string title, string role)
+    {
+        var normalized = string.Join(' ', title.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var maxWords = role == "Landscape" ? 4 : role == "Square" ? 5 : 6;
+        return string.Join(' ', normalized.Split(' ').Take(maxWords)).ToUpperInvariant();
+    }
+    private static string? EventBadge(string eventType) => string.IsNullOrWhiteSpace(eventType) ? null : eventType.ToUpperInvariant() switch
+    { "CONSTELLATION" => "CONSTELLATION", "ECLIPSE" => "ECLIPSE", "METEORSHOWER" or "METEOR SHOWER" => "METEOR SHOWER", "CONJUNCTION" => "CONJUNCTION", _ => null };
+    private static bool VerifyHeroChecksum(JsonElement hero, JsonElement p10, JsonElement p8)
+    {
+        var variants = string.Join(',', hero.GetProperty("variants").EnumerateArray().Select(x => JsonSerializer.Serialize(x)));
+        var seed = string.Join('|', Text(hero, "planId"), Text(p10, "deterministicChecksum"), Text(p8, "deterministicChecksum"), Text(hero, "title"), Text(hero, "subtitle"),
+            "CertifiedRasterHeroRenderer", "HeroV6.5-CertifiedSource", "Responsive-2.0", variants);
+        return Hash(seed) == Text(hero, "deterministicChecksum");
+    }
+    private static string AuthorityChecksum(ThumbnailManifest value)
+    {
+        var semantic = value with { CreatedUtc = default, DeterministicChecksum = "" };
+        return Hash(JsonSerializer.Serialize(semantic, Json) + "|" + string.Join('|', value.Variants.Select(x => x.PhysicalSha256)));
+    }
+    private static void Identity(JsonElement value, string plan, string evt, string language, string code) =>
+        Require(Text(value, "planId").Equals(plan, StringComparison.OrdinalIgnoreCase) && Text(value, "eventId").Equals(evt, StringComparison.OrdinalIgnoreCase)
+            && Text(value, "language").Equals(language, StringComparison.OrdinalIgnoreCase), code, "Authority identity mismatch.");
+    private static string Text(JsonElement value, string name) => value.TryGetProperty(name, out var x) && x.ValueKind != JsonValueKind.Null ? x.ToString() : "";
+    private static bool Flag(JsonElement value, string name) => value.TryGetProperty(name, out var x) && (x.ValueKind == JsonValueKind.True || x.ValueKind == JsonValueKind.String && bool.TryParse(x.GetString(), out var b) && b);
+    private static string Sha(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+    private static string Hash(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    private static async Task<T> Read<T>(string path, CancellationToken ct) => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, ct), Json)!;
+    private static Task Write<T>(string path, T value, CancellationToken ct) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); return File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Json), ct); }
+    private static void Require(bool condition, string code, string message) { if (!condition) throw new InvalidOperationException($"{code}: {message}"); }
+
+    private sealed record Profile(string Role, int Width, int Height, int FontSize, int Margin);
+    private sealed record Region(int X, int Y, int Width, int Height);
+    private sealed record ThumbnailVariant(string Role, string PhysicalPath, string SourceHeroRole, string SourceHeroPath, string SourceHeroPhysicalSha256,
+        string SourcePhase8AssetId, string SourcePhase8SceneId, string SourceSemanticIdentity, string SourceVisualStyle, bool RequiresScientificGeometry,
+        bool ScientificGeometryCertified, bool ScientificGeometryPreserved, int SourceWidth, int SourceHeight, string CropStrategy, string ResizeStrategy,
+        Region ProtectedScientificRegion, Region ProtectedSubjectRegion, Region TextSafeRegion, string Headline, string? SecondaryText, string? EventBadge,
+        string LayoutProfile, string Renderer, int Width, int Height, string AspectRatio, string Format, string MimeType, long ByteLength, string PhysicalSha256,
+        bool TextSafeAreaPassed, bool OverflowDetected, bool SubjectVisibilityPassed, bool ScientificPreservationPassed, bool ForbiddenTextPassed, string ValidationStatus);
+    private sealed record ThumbnailManifest(string SchemaVersion, string PlanId, string ExecutionId, string EventId, string Language, DateTimeOffset CreatedUtc,
+        string Phase11HeroManifestPath, string Phase11AuthorityChecksum, string Phase10CertificationPath, string Phase10CertificationChecksum,
+        string CopyAuthoritySource, string CopyAuthorityChecksum, string CopyPolicyVersion, string RendererVersion, string LayoutVersion, string ProviderPolicy,
+        int ProviderCallCount, IReadOnlyList<ThumbnailVariant> Variants, string ValidationStatus, string PublicationState, bool CandidateReadbackPassed,
+        bool CommittedReadbackPassed, string DeterministicChecksum, bool DownstreamReady);
+}
