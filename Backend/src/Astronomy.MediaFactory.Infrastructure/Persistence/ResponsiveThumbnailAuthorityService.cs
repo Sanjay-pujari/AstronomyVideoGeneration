@@ -190,7 +190,7 @@ internal static class ResponsiveThumbnailAuthorityService
         Require(image.Width == profile.Width && image.Height == profile.Height, "P12_RENDER_FAILED", "Aspect-preserving resize did not fill the target.");
         var family = SystemFonts.Collection.Families.First();
         var font = family.CreateFont(profile.FontSize, FontStyle.Bold);
-        var y = profile.Height * (profile.VisualEmphasis + .035f);
+        var y = (float)(profile.Height * (profile.VisualEmphasis + .035));
         var display = profile.Role == "Landscape" ? headline : headline.Replace(' ', '\n');
         image.Mutate(x => { x.Fill(Color.FromRgba(0, 0, 0, 210), new Rectangle(0, (int)(profile.Height * profile.VisualEmphasis), profile.Width, profile.Height));
             x.DrawText(display, font, Color.White, new PointF(profile.Margin, y)); });
