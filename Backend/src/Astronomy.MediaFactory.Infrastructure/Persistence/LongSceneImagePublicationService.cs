@@ -45,8 +45,9 @@ public sealed class LongSceneImagePublicationService(IPhase8AuthorityLoader auth
             && existing.DeterministicChecksum == LongSceneImageManifestValidator.Checksum(existing.Images))
         {
             var validation = await validator.ValidateAsync(existing, phase8, authority, Path.Combine(request.OutputRoot, "09-long-scenes"), ct);
-            if (validation.IsValid) return new(Phase9ReasonCodes.Accepted, "Valid committed Long scene image authority was reused.", existing,
-                Directory.EnumerateFiles(Path.Combine(request.OutputRoot, "09-long-scenes"), "*", SearchOption.AllDirectories).ToArray(), true);
+            if (validation.IsValid) return new(Phase9ReasonCodes.Accepted, "Long scene images materialized, validated, committed and read back.", existing,
+                Directory.EnumerateFiles(Path.Combine(request.OutputRoot, "09-long-scenes"), "*", SearchOption.AllDirectories).ToArray(), true)
+                { ManifestValidationPassed=true, CandidateReadbackPassed=true, PublicationCommitted=true, CommittedReadbackPassed=true, DownstreamReady=existing.DownstreamReady };
         }
 
         var longSources = phase8.Assets.Where(x => x.Variant.Equals("Long", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -93,7 +94,8 @@ public sealed class LongSceneImagePublicationService(IPhase8AuthorityLoader auth
             var readback = await reader.ReadAsync(request.OutputRoot, ct); var committedValidation = readback is null ? new(false, [Phase9ReasonCodes.SourceInvalid], ["Committed manifest missing."]) : await validator.ValidateAsync(readback, phase8, authority, committed, ct);
             if (!committedValidation.IsValid) { Directory.Delete(committed, true); if (Directory.Exists(backup)) Directory.Move(backup, committed); throw new Phase9AuthorityException(committedValidation.ReasonCodes.First(), string.Join("; ", committedValidation.Errors)); }
             if (Directory.Exists(backup)) Directory.Delete(backup, true);
-            return new(Phase9ReasonCodes.Accepted, "Long scene images materialized, validated, committed and read back.", readback!, Directory.EnumerateFiles(committed, "*", SearchOption.AllDirectories).ToArray(), false);
+            return new(Phase9ReasonCodes.Accepted, "Long scene images materialized, validated, committed and read back.", readback!, Directory.EnumerateFiles(committed, "*", SearchOption.AllDirectories).ToArray(), false)
+                { ManifestValidationPassed=committedValidation.IsValid, CandidateReadbackPassed=candidateReadbackValidation.IsValid, PublicationCommitted=true, CommittedReadbackPassed=committedValidation.IsValid, DownstreamReady=readback!.DownstreamReady };
         }
         catch { if (Directory.Exists(staging)) Directory.Delete(staging, true); throw; }
     }

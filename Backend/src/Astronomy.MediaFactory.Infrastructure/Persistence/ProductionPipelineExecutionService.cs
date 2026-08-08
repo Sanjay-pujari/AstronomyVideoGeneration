@@ -97,6 +97,9 @@ public sealed partial class ProductionPipelineExecutionService(
     // Preserve the publication transaction selected by the Phase 3 action so the stable
     // post-commit report records that transaction rather than manufacturing another id.
     private readonly ConcurrentDictionary<string, string> phase3PublicationTransactions = new(StringComparer.OrdinalIgnoreCase);
+    // The phase action has a legacy files-only return type. Retain the authoritative
+    // Phase 9 result so the generic validation mapper can publish its commit evidence.
+    private readonly ConcurrentDictionary<string, LongSceneImagePublicationResult> phase9PublicationResults = new(StringComparer.OrdinalIgnoreCase);
     // Carries the exact, validated read-back returned by Phase 4 across the in-process
     // phase boundary. Disk is intentionally not consulted by downstream phases in the
     // same run; the authority reader remains the resume/recovery boundary.
@@ -751,13 +754,17 @@ public sealed partial class ProductionPipelineExecutionService(
                 ?? outputs.Where(p => !File.Exists(p) && !Directory.Exists(p)).Select(p => $"Expected output was not found: {p}").ToArray();
             var phase10TitleDiagnostics = phaseNo == 10 ? ReadPhase10TitleDiagnostics(outputs) : null;
             var warnings = phaseNo == 18 ? ReadPhase18Warnings(context) : [];
+            var phase9Publication = phaseNo == 9 && missing.Length == 0 && IsSceneAssetsV3Enabled(context)
+                && phase9PublicationResults.TryGetValue(context.OutputRoot, out var acceptedPhase9) ? acceptedPhase9 : null;
             var reason = missing.Length == 0
                 ? phaseNo == 3 ? (context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED")
                     : phaseNo == 8 && IsSceneAssetsV3Enabled(context) ? "Authority scene assets generated, validated, committed and read back."
+                    : phase9Publication?.Reason ?? "Validation passed."
                     : "Validation passed."
                 : BuildPhase7RequiredOutputFailureReason(requiredOutputDiagnostics, missing);
-            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, [], outputs, warnings, missing, reason, missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics,
-                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : null);
+            var inputFiles = phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot);
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, inputFiles, outputs, warnings, missing, reason, missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics,
+                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase9Publication?.ReasonCode);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
@@ -3266,6 +3273,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 throw new InvalidOperationException("Phase 9 Long scene image publication service is not registered.");
             var result = await longSceneImagePublicationService.PublishAsync(new(context.OutputRoot,
                 context.Request.PlanId.ToString("D"), context.EventId, context.Request.Language, context.OverwriteExisting), cancellationToken);
+            phase9PublicationResults[context.OutputRoot] = result;
             return result.OutputFiles;
         }
 
@@ -15035,6 +15043,38 @@ public sealed partial class ProductionPipelineExecutionService(
         }
     }
 
+    private static IReadOnlyList<string> Phase9AuthorityInputFiles(string outputRoot) =>
+    [
+        NormalizePath(Path.Combine(outputRoot, "08-scene-assets", "scene-asset-manifest.json")),
+        NormalizePath(Path.Combine(outputRoot, "08-scene-assets", "phase8-publication-report.json")),
+        NormalizePath(Path.Combine(outputRoot, "06-story-frames", "story-frames.json")),
+        NormalizePath(Path.Combine(outputRoot, "06-story-frames", "story-frame-index.json"))
+    ];
+
+    private static object BuildPhase9LongSceneAuthorityDiagnostics(string outputRoot, LongSceneImagePublicationResult result)
+    {
+        var images = result.Manifest.Images;
+        return new
+        {
+            authorityManifestPath = NormalizePath(Path.Combine(outputRoot, "09-long-scenes", "long-scene-image-manifest.json")),
+            expectedSceneCount = result.Manifest.ExpectedSceneCount,
+            actualSceneCount = result.Manifest.ActualSceneCount,
+            missingSceneIds = Array.Empty<string>(),
+            extraSceneIds = Array.Empty<string>(),
+            materializedSceneCount = images.Count(x => x.Materialized),
+            cinematicAssetCount = images.Count(x => x.VisualStyle == "Cinematic"),
+            hybridCinematicAssetCount = images.Count(x => x.VisualStyle == "HybridCinematic"),
+            explicitInfographicAssetCount = images.Count(x => x.VisualStyle == "Infographic"),
+            azureCallsThisPhase = 0,
+            sceneAssetsV3GenerationCallsThisPhase = 0,
+            infographicRendererCallsThisPhase = 0,
+            candidateReadbackPassed = result.CandidateReadbackPassed,
+            publicationCommitted = result.PublicationCommitted,
+            committedReadbackPassed = result.CommittedReadbackPassed,
+            downstreamReady = result.DownstreamReady
+        };
+    }
+
     private Phase3CertificationEvidence BuildPhase3CertificationEvidence(ProductionPhaseContext context)
     {
         var root = Path.Combine(context.OutputRoot, "03-questions");
@@ -15176,6 +15216,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase8Certification = phaseNo == 8 && IsSceneAssetsV3Enabled(context)
             ? ReadPhase8PublicationCertification(context.OutputRoot)
             : null;
+        var phase9Certification = phaseNo == 9 && IsSceneAssetsV3Enabled(context)
+            && phase9PublicationResults.TryRemove(context.OutputRoot, out var phase9Result) ? phase9Result : null;
         if (phase3Certification is { Passed: false })
         {
             status = ProductionPhaseStatus.Failed;
@@ -15191,8 +15233,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason)
         {
             ReasonCode = reasonCode,
-            PublicationCommitted = phase8Certification?.PublicationCommitted ?? false,
-            CommittedStateValidationPassed = phase8Certification?.CommittedStateValidationPassed ?? false
+            PublicationCommitted = phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? false,
+            CommittedStateValidationPassed = phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed ?? false
         };
         if (phaseNo == 14 && File.Exists(validationPath))
             return result;
@@ -15270,6 +15312,7 @@ public sealed partial class ProductionPipelineExecutionService(
             repeatedBackgroundDetected = sceneAssetsV3Diagnostics?.RepeatedBackgroundDetected,
             phase8SceneAssetsV3Diagnostics = sceneAssetsV3Diagnostics?.Phase8SceneAssetsV3Diagnostics,
             phase9SceneAssetsV3Diagnostics = sceneAssetsV3Diagnostics?.Phase9SceneAssetsV3Diagnostics,
+            phase9LongSceneAuthorityDiagnostics = phase9Certification is null ? null : BuildPhase9LongSceneAuthorityDiagnostics(context.OutputRoot, phase9Certification),
             phase10SceneAssetsV3Validation = sceneAssetsV3Diagnostics?.Phase10SceneAssetsV3Validation,
             sceneAssetsHookDiagnostics = phaseNo is 8 or 9 or 10 ? ReadSceneAssetsHookDiagnostics(context, phaseNo) : null,
             preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context),
@@ -15295,27 +15338,29 @@ public sealed partial class ProductionPipelineExecutionService(
             generated = phaseNo == 3 ? phase3Certification?.Generated : phase1Outcome is not null && !phase1Outcome.Reused,
             reused = phaseNo == 3 ? phase3Certification?.Reused : phase1Outcome?.Reused,
             regenerated = phaseNo == 3 ? phase3Certification?.Regenerated : phase1Outcome?.Kind.ToString().StartsWith("Regenerated",StringComparison.Ordinal) == true,
+            materialized = phase9Certification?.Manifest.Images.Count > 0 ? true : (bool?)null,
+            materializedAssetCount = phase9Certification?.Manifest.Images.Count,
             recovered = phaseNo == 3 ? phase3Certification?.Recovered : phase1Outcome?.RecoveryStatus.Recovered,
             recoveryStatus = phase1Outcome?.RecoveryStatus,
-            authorityChecksum = phase8Certification?.AuthorityChecksum ?? phase1Outcome?.AuthorityChecksum,
+            authorityChecksum = phase9Certification?.Manifest.DeterministicChecksum ?? phase8Certification?.AuthorityChecksum ?? phase1Outcome?.AuthorityChecksum,
             requestIdentityChecksum = phase1Outcome?.RequestIdentityChecksum,
             compatibilityValidationStatus = phase3Certification?.CompatibilityValidationStatus ?? phase1Outcome?.CompatibilityProjectionStatus,
-            manifestValidationStatus = phase8Certification?.ManifestValidationStatus ?? phase3Certification?.ManifestValidationStatus ?? phase1Outcome?.ManifestStatus,
+            manifestValidationStatus = phase9Certification is null ? phase8Certification?.ManifestValidationStatus ?? phase3Certification?.ManifestValidationStatus ?? phase1Outcome?.ManifestStatus : phase9Certification.ManifestValidationPassed ? "Valid" : "Invalid",
             replacedExistingAuthority = phase1Outcome?.ReplacedExistingAuthority,
             downstreamInvalidated = phase1Outcome?.DownstreamInvalidated,
             rollbackPerformed = phase1Outcome?.RollbackPerformed ?? false,
             rollbackSucceeded = phase1Outcome?.RollbackSucceeded ?? false,
             transactionId = phaseNo == 1 ? phase1Outcome?.PublicationTransactionId : phase3Certification?.TransactionId,
-            publicationCommitted = phase8Certification?.PublicationCommitted ?? (phaseNo == 5 ? status == ProductionPhaseStatus.Succeeded : phaseNo == 3 ? phase3Certification?.PublicationCommitted == true : phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid"),
-            validationStatus = phase8Certification?.ValidationStatus ?? (phaseNo == 5 && status == ProductionPhaseStatus.Succeeded ? "Valid" : phase3Certification?.ValidationStatus ?? phase1Outcome?.ValidationStatus),
-            semanticValidationPassed = phase8Certification?.SemanticValidationPassed ?? phase3Certification?.SemanticValidationPassed ?? phase12ThumbnailDiagnostics?.SemanticValidationPassed,
-            checksumValidationPassed = phase8Certification?.ChecksumValidationPassed ?? phase3Certification?.ChecksumValidationPassed,
-            manifestValidationPassed = phase8Certification?.ManifestValidationPassed ?? phase3Certification?.ManifestValidationPassed,
-            committedStateValidationPassed = phase8Certification?.CommittedStateValidationPassed,
+            publicationCommitted = phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? (phaseNo == 5 ? status == ProductionPhaseStatus.Succeeded : phaseNo == 3 ? phase3Certification?.PublicationCommitted == true : phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid"),
+            validationStatus = phase9Certification is null ? phase8Certification?.ValidationStatus ?? (phaseNo == 5 && status == ProductionPhaseStatus.Succeeded ? "Valid" : phase3Certification?.ValidationStatus ?? phase1Outcome?.ValidationStatus) : phase9Certification.CommittedStateValidationPassed ? "Valid" : "Invalid",
+            semanticValidationPassed = phase9Certification?.ManifestValidationPassed ?? phase8Certification?.SemanticValidationPassed ?? phase3Certification?.SemanticValidationPassed ?? phase12ThumbnailDiagnostics?.SemanticValidationPassed,
+            checksumValidationPassed = phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ChecksumValidationPassed ?? phase3Certification?.ChecksumValidationPassed,
+            manifestValidationPassed = phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ManifestValidationPassed ?? phase3Certification?.ManifestValidationPassed,
+            committedStateValidationPassed = phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed,
             compatibilityEquivalencePassed = phase3Certification?.CompatibilityEquivalencePassed,
             phase2LineageValidationPassed = phase3Certification?.Phase2LineageValidationPassed,
             questionPlanReconciliationPassed = phase3Certification?.QuestionPlanReconciliationPassed,
-            downstreamReady = phase8Certification?.DownstreamReady ?? phase3Certification?.DownstreamReady,
+            downstreamReady = phase9Certification?.DownstreamReady ?? phase8Certification?.DownstreamReady ?? phase3Certification?.DownstreamReady,
             questionCount = phase3Certification?.QuestionCount,
             learningObjectiveCount = phase3Certification?.LearningObjectiveCount,
             questionPlanTotalCount = phase3Certification?.QuestionPlanTotalCount,
@@ -15932,16 +15977,18 @@ public sealed partial class ProductionPipelineExecutionService(
         var shortDiag = BuildSceneAssetsV3FormatDiagnostics(shortRoot, "short", Phase8AuthoritySceneCount(context.OutputRoot, "Short", SceneAssetsV3SceneContract.GetExpectedSceneIds("short").Count));
         var longDiag = BuildSceneAssetsV3FormatDiagnostics(longRoot, "long", Phase8AuthoritySceneCount(context.OutputRoot, "Long", SceneAssetsV3SceneContract.GetExpectedSceneIds("long").Count));
         var relevant = phaseNo == 8 ? shortDiag : phaseNo == 9 ? longDiag : null;
+        if (phaseNo == 9 && relevant is not null)
+            relevant = relevant with { ProviderCalled = false, ProviderSucceeded = false };
         var validation = phaseNo == 10 ? new SceneAssetsV3ValidationDiagnostics(
             shortDiag.SceneCount == 5 && shortDiag.VisualTimelinePath.Length > 0 && shortDiag.SceneManifestPath.Length > 0 && shortDiag.SceneReviewPath.Length > 0 && shortDiag.AccurateSkyGuidePresent,
             longDiag.SceneCount == 9 && longDiag.VisualTimelinePath.Length > 0 && longDiag.SceneManifestPath.Length > 0 && longDiag.SceneReviewPath.Length > 0 && longDiag.AccurateSkyGuidePresent,
             shortDiag.SceneCount, longDiag.SceneCount, BuildSceneAssetsV3Missing(shortRoot, "short"), BuildSceneAssetsV3Missing(longRoot, "long"), shortDiag.AccurateSkyGuidePresent, longDiag.AccurateSkyGuidePresent, false, false,
             BuildSceneAssetsV3Missing(shortRoot, "short").Count == 0 && BuildSceneAssetsV3Missing(longRoot, "long").Count == 0 && shortDiag.SceneCount == 5 && longDiag.SceneCount == 9 && shortDiag.AccurateSkyGuidePresent && longDiag.AccurateSkyGuidePresent) : null;
         var storyFrame = BuildCurrentStoryFrameV4Diagnostics(context);
-        return new SceneAssetsV3PhaseDiagnostics("V3", true, NormalizePath(root), NormalizePath(shortRoot), NormalizePath(longRoot), phaseNo is 8 or 9, false,
+        return new SceneAssetsV3PhaseDiagnostics("V3", true, NormalizePath(root), NormalizePath(shortRoot), NormalizePath(longRoot), phaseNo == 8, false,
             relevant?.VisualTimelinePath.Length > 0 || phaseNo == 10, relevant?.SceneManifestPath.Length > 0 || phaseNo == 10, relevant?.SceneReviewPath.Length > 0 || phaseNo == 10,
             new[] { "CinematicStoryScene", "ExplainerScene", "AccurateSkyGuideScene", "ViewingTipsScene", "FinalReminderScene" },
-            (relevant ?? shortDiag).AccurateSkyGuidePresent, (relevant ?? shortDiag).AllScenesHaveNarrationBeat, false, false, new[] { 8, 9, 10 }, phaseNo == 8 ? shortDiag : null, phaseNo == 9 ? longDiag : null, validation,
+            (relevant ?? shortDiag).AccurateSkyGuidePresent, (relevant ?? shortDiag).AllScenesHaveNarrationBeat, false, false, new[] { 8, 9, 10 }, phaseNo == 8 ? shortDiag : null, phaseNo == 9 ? relevant : null, validation,
             storyFrame.Requested, storyFrame.RegenerateRequested, storyFrame.AlreadyComplete, storyFrame.GenerationSkipped, storyFrame.GenerationInvocationCount, storyFrame.Requested, storyFrame.Executed, storyFrame.LongStoryFramesRoot, storyFrame.ShortStoryFramesRoot, storyFrame.LongStoryFrameCount, storyFrame.ShortStoryFrameCount, storyFrame.Warnings, storyFrame.Errors, true);
     }
 

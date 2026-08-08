@@ -47,7 +47,15 @@ public interface ILongSceneImageManifestValidator
 public sealed record LongSceneImagePublicationRequest(string OutputRoot, string PlanId, string EventId,
     string Language, bool OverwriteExisting);
 public sealed record LongSceneImagePublicationResult(string ReasonCode, string Reason,
-    LongSceneImageManifest Manifest, IReadOnlyList<string> OutputFiles, bool Reused);
+    LongSceneImageManifest Manifest, IReadOnlyList<string> OutputFiles, bool Reused)
+{
+    public bool ManifestValidationPassed { get; init; }
+    public bool CandidateReadbackPassed { get; init; }
+    public bool PublicationCommitted { get; init; }
+    public bool CommittedReadbackPassed { get; init; }
+    public bool DownstreamReady { get; init; }
+    public bool CommittedStateValidationPassed => ManifestValidationPassed && CandidateReadbackPassed && CommittedReadbackPassed;
+}
 public interface ILongSceneImagePublicationService
 {
     Task<LongSceneImagePublicationResult> PublishAsync(LongSceneImagePublicationRequest request,
