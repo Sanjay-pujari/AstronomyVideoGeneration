@@ -324,6 +324,7 @@ public sealed class ContentPlanProductionExecutionService(
             .OrderBy(result => result.PhaseNo)
             .ToArray();
         var reusedResults = observedResults.Where(ProductionPhaseSatisfaction.IsRecognizedReuse).ToArray();
+        var notApplicableResults = observedResults.Where(ProductionPhaseSatisfaction.IsGovernedNotApplicable).ToArray();
         var satisfiedResults = observedResults.Where(ProductionPhaseSatisfaction.IsSatisfied).ToArray();
         // Executed means the production body ran; reuse is reported separately even when a
         // legacy phase convention represents reuse with Succeeded rather than Skipped.
@@ -339,6 +340,9 @@ public sealed class ContentPlanProductionExecutionService(
             .Distinct()
             .OrderBy(phaseNo => phaseNo)
             .ToArray();
+        // A requested range can be completely resolved without running a production body
+        // (for example, when its output type was not requested). The authoritative terminal
+        // outcomes, rather than a non-empty executed set, determine success.
         var allSucceeded = observedResults.Length > 0 && observedResults.All(ProductionPhaseSatisfaction.IsSatisfied);
         var outOfScope = (requestedOutputCompletion ?? [])
             .Where(output => string.Equals(output.Status, "OutOfScope", StringComparison.OrdinalIgnoreCase) || string.Equals(output.Status, "NotRun", StringComparison.OrdinalIgnoreCase))
@@ -348,10 +352,12 @@ public sealed class ContentPlanProductionExecutionService(
             .ToArray();
         var satisfied = satisfiedResults.Select(result => result.PhaseNo).Distinct().OrderBy(x => x).ToArray();
         var reused = reusedResults.Select(result => result.PhaseNo).Distinct().OrderBy(x => x).ToArray();
+        var notApplicable = notApplicableResults.Select(result => result.PhaseNo).Distinct().OrderBy(x => x).ToArray();
+        var skipped = observedResults.Where(result => result.Status == ProductionPhaseStatus.Skipped).Select(result => result.PhaseNo).Distinct().OrderBy(x => x).ToArray();
         var lastCompletedPhaseNo = satisfied.Cast<int?>().LastOrDefault();
         var lastFailedPhaseNo = failed.Cast<int?>().LastOrDefault();
         var success = allSucceeded && failed.Length == 0;
-        return new(requestedStartPhase, requestedEndPhase, executed, allSucceeded, failed, outOfScope, lastCompletedPhaseNo, lastFailedPhaseNo, success, success, success ? 0 : 1, "PartialPhaseRange", satisfied, reused);
+        return new(requestedStartPhase, requestedEndPhase, executed, allSucceeded, failed, outOfScope, lastCompletedPhaseNo, lastFailedPhaseNo, success, success, success ? 0 : 1, "PartialPhaseRange", satisfied, reused, notApplicable, skipped);
     }
 
     public static IReadOnlyList<string> BuildAuthoritativeErrors(IReadOnlyList<string>? orchestrationErrors, IReadOnlyList<ProductionPhaseResult>? phaseResults)
