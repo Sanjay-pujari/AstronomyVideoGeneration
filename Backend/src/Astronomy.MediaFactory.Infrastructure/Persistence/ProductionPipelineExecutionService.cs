@@ -15230,6 +15230,12 @@ public sealed partial class ProductionPipelineExecutionService(
                 ? phase3Certification?.Recovered == true ? "P3_RECOVERED" : phase3Certification?.Reused == true ? "P3_REUSED" : context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED"
                 : "P3_COMMITTED_VALIDATION_FAILED"
             : null);
+        if (phaseNo == 12)
+        {
+            reasonCode = status == ProductionPhaseStatus.Succeeded
+                ? "P12_THUMBNAIL_AUTHORITY_ACCEPTED"
+                : Regex.Match(reason ?? string.Empty, @"^(P12_[A-Z0-9_]+):").Groups[1].Value is { Length: > 0 } code ? code : reasonCode;
+        }
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason)
         {
             ReasonCode = reasonCode,
@@ -15361,7 +15367,7 @@ public sealed partial class ProductionPipelineExecutionService(
             transactionId = phaseNo == 1 ? phase1Outcome?.PublicationTransactionId : phase3Certification?.TransactionId,
             publicationCommitted = phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? (phaseNo == 5 ? status == ProductionPhaseStatus.Succeeded : phaseNo == 3 ? phase3Certification?.PublicationCommitted == true : phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid")),
             validationStatus = phase11Certification?.ValidationStatus ?? (phase10Certification is not null ? "Valid" : phase9Certification is null ? phase8Certification?.ValidationStatus ?? (phaseNo == 5 && status == ProductionPhaseStatus.Succeeded ? "Valid" : phase3Certification?.ValidationStatus ?? phase1Outcome?.ValidationStatus) : phase9Certification.CommittedStateValidationPassed ? "Valid" : "Invalid"),
-            semanticValidationPassed = phase11Certification?.SemanticValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.SemanticValidationPassed ?? phase3Certification?.SemanticValidationPassed ?? phase12ThumbnailDiagnostics?.SemanticValidationPassed),
+            semanticValidationPassed = phaseNo == 12 && status != ProductionPhaseStatus.Succeeded ? false : phase11Certification?.SemanticValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.SemanticValidationPassed ?? phase3Certification?.SemanticValidationPassed ?? phase12ThumbnailDiagnostics?.SemanticValidationPassed),
             checksumValidationPassed = phase11Certification?.ChecksumValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ChecksumValidationPassed ?? phase3Certification?.ChecksumValidationPassed),
             manifestValidationPassed = phase11Certification?.ManifestValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ManifestValidationPassed ?? phase3Certification?.ManifestValidationPassed),
             committedStateValidationPassed = phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed),
@@ -17501,7 +17507,7 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static IReadOnlyList<OwnedOutputRoot> ResolvePhaseOwnedOutputRoots(ProductionPhaseContext context, int startPhaseNo, int endPhaseNo)
         => new PhaseOutputTargetResolver().Resolve(context, startPhaseNo, endPhaseNo)
-            .Where(target => target.IsDirectory)
+            .Where(target => target.IsDirectory && target.IsAuthority)
             .Select(target => new OwnedOutputRoot(target.PhaseNo, target.Path))
             .ToArray();
 

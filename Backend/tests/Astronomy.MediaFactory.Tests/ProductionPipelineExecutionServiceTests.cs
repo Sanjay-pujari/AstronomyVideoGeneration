@@ -3257,6 +3257,51 @@ Second display cue.
     }
 
     [Fact]
+    public void Phase12Owns12Thumbnails()
+    {
+        var context = CreateContext("Orion", ["Thumbnail"]) with { StartPhaseNo = 12, EndPhaseNo = 12 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 12, 12);
+
+        Assert.Contains(targets, x => x.IsAuthority && x.RelativePath == "12-thumbnails");
+    }
+
+    [Fact]
+    public void Phase12DoesNotTreatLegacyThumbnailsAsSemanticAuthority()
+    {
+        var context = CreateContext("Orion", ["Thumbnail"]) with { StartPhaseNo = 12, EndPhaseNo = 12 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 12, 12);
+
+        Assert.DoesNotContain(targets, x => x.IsAuthority && x.RelativePath == "thumbnails");
+        Assert.Contains(targets, x => x.IsCompatibility && x.RelativePath == "thumbnails" && !x.CanDeleteOnOverwrite);
+    }
+
+    [Theory]
+    [InlineData(11, "11-hero")]
+    [InlineData(10, "10-scene-validation")]
+    [InlineData(8, "08-scene-assets")]
+    public void Phase12CannotDeleteUpstreamAuthority(int phase, string relativePath)
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), relativePath);
+        Directory.CreateDirectory(root);
+        var file = Path.Combine(root, "authority.json");
+        File.WriteAllText(file, "certified");
+        var target = new PhaseOutputTarget(phase, root, true, relativePath, "Authority", $"Phase{phase}", true, false, false, false, true);
+
+        Assert.False(PhaseOwnedCleanupExecutor.TryDelete(target, 12, 12, new HashSet<int> { 12 }, [], [], []));
+        Assert.True(File.Exists(file));
+    }
+
+    [Fact]
+    public void Phase12OverwriteTargets12ThumbnailsOnly()
+    {
+        var context = CreateContext("Orion", ["Thumbnail"]) with { StartPhaseNo = 12, EndPhaseNo = 12 };
+        var deletable = new PhaseOutputTargetResolver().Resolve(context, 12, 12).Where(x => x.CanDeleteOnOverwrite).ToArray();
+
+        Assert.DoesNotContain(deletable, x => x.RelativePath == "thumbnails");
+        Assert.DoesNotContain(deletable, x => x.RelativePath is "11-hero" or "10-scene-validation" or "08-scene-assets");
+    }
+
+    [Fact]
     public void Phase9CannotDeleteSceneAssetsV3()
     {
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "scene-assets-v3");
