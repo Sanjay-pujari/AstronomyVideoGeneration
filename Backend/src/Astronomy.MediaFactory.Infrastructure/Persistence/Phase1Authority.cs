@@ -210,6 +210,15 @@ public static class PhaseOwnedCleanupExecutor
         List<string> deletedDirectories,
         List<CleanupDeletionDenied> denied)
     {
+        // Transactional publishers replace their own authority roots after validating a
+        // staging candidate.  They are intentionally non-deletable by outer cleanup; that
+        // is a successful hand-off, not a denied deletion attempt.
+        if (!target.CanDeleteOnOverwrite
+            && target.PhaseNo >= requestedStartPhase
+            && target.PhaseNo <= requestedEndPhase
+            && rebuildableApplicablePhases.Contains(target.PhaseNo))
+            return true;
+
         var allowed = target.PhaseNo >= requestedStartPhase
             && target.PhaseNo <= requestedEndPhase
             && rebuildableApplicablePhases.Contains(target.PhaseNo)
