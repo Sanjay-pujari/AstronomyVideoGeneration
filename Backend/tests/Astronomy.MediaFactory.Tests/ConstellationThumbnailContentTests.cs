@@ -78,7 +78,55 @@ public sealed class ConstellationThumbnailContentTests
     {
         var plan = OrionShortTitlePlan([]);
         Assert.Equal("SPOT THE FAMOUS BELT", plan.Hook);
-        Assert.Equal("M42", plan.SupportingHighlight);
+        Assert.Equal("ORION NEBULA • M42", plan.SupportingHighlight);
+    }
+
+    [Theory]
+    [InlineData("Andromeda Galaxy / M31", "ANDROMEDA GALAXY • M31")]
+    [InlineData("Pleiades / M45", "PLEIADES • M45")]
+    public void AstronomyObjectAliasFormatsDisplayNameAndCatalogId(string source, string expected) =>
+        Assert.Equal(expected, MatureThumbnailCandidatePublisher.FormatAstronomyObjectForThumbnail(source).DisplayValue);
+
+    [Fact] public void OrionNebulaM42FormatsAsAudienceFriendlyDisplay() =>
+        Assert.Equal("ORION NEBULA • M42", MatureThumbnailCandidatePublisher.FormatAstronomyObjectForThumbnail("Orion Nebula / M42").DisplayValue);
+
+    [Fact] public void CatalogIdAloneIsLastResort()
+    {
+        var display = MatureThumbnailCandidatePublisher.FormatAstronomyObjectForThumbnail("Orion Nebula / M42").DisplayValue;
+        Assert.NotEqual("M42", display);
+        Assert.EndsWith("M42", display);
+    }
+
+    [Fact] public void DisplayFormattingPreservesAuthoritySourceValue()
+    {
+        var formatted = MatureThumbnailCandidatePublisher.FormatAstronomyObjectForThumbnail("Orion Nebula / M42");
+        Assert.Equal("Orion Nebula / M42", formatted.SourceValue);
+        Assert.Equal("AstronomyObjectAlias.DisplayNamePlusCatalogId", formatted.TransformationRule);
+    }
+
+    [Theory]
+    [InlineData("Landscape")]
+    [InlineData("Square")]
+    [InlineData("Portrait")]
+    public void AllProfilesSelectAudienceFriendlyOrionNebulaDisplay(string profile)
+    {
+        var selected = Select(profile, profile == "Landscape" ? 1280 : 1080, profile == "Portrait" ? 768 : 432);
+        Assert.Contains(selected, fact => fact.DisplayValue == "ORION NEBULA • M42");
+    }
+
+    [Fact] public void SupportingHighlightDoesNotOverlapSubject()
+    {
+        var source = File.ReadAllText(SourcePath());
+        Assert.Contains("subjectOverlapDetected = false", source);
+        Assert.Contains("supportingHighlightClipped = false", source);
+    }
+
+    [Fact] public void NoAdditionalFactsAddedByMicroPolish()
+    {
+        var plan = OrionShortTitlePlan([]);
+        Assert.Equal(["Hook", "DeepSky"], plan.Facts.Select(x => x.Category));
+        Assert.DoesNotContain(plan.Facts, fact => new[] { "Betelgeuse", "Rigel", "Bellatrix", "Saiph" }
+            .Any(name => fact.DisplayValue.Contains(name, StringComparison.OrdinalIgnoreCase)));
     }
 
     [Fact] public void ConstellationPlannerConsumesCertifiedKnowledgeContext()
@@ -113,5 +161,12 @@ public sealed class ConstellationThumbnailContentTests
     {
         var facts = MatureThumbnailCandidatePublisher.BuildConstellationContent("CONSTELLATION", "Orion", OrionClaims).CertifiedFacts;
         return MatureThumbnailCandidatePublisher.SelectThumbnailFactsForAspect("CONSTELLATION", aspect, facts, new Rectangle(0, 0, width, height));
+    }
+
+    private static string SourcePath()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Astronomy.MediaFactory.slnx"))) directory = directory.Parent;
+        return Path.Combine(directory?.FullName ?? throw new DirectoryNotFoundException(), "src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "MatureThumbnailCandidatePublisher.cs");
     }
 }
