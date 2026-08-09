@@ -3392,11 +3392,26 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         // Phase 12 is an artifact dependency, not a request dependency: Thumbnail alone
         // enters this route and consumes the already committed Phase 11 authority.
+        var eventType = FirstNonEmpty(
+            context.ProductionEventIntelligence.EventType,
+            context.Request.EventType,
+            context.ExecutionContext.EventType);
+        var intelligenceHasPrimaryObjects = context.ProductionEventIntelligence.PrimaryObjects is { Count: > 0 };
+        var primaryObjects = intelligenceHasPrimaryObjects
+            ? context.ProductionEventIntelligence.PrimaryObjects
+            : context.Request.PrimaryObjects;
+        var eventIdentitySource = !string.IsNullOrWhiteSpace(context.ProductionEventIntelligence.EventType)
+            || intelligenceHasPrimaryObjects
+            ? "ProductionEventIntelligence"
+            : "ProductionPipelineRequest";
         var result = await ResponsiveThumbnailAuthorityService.PublishAsync(
             context.OutputRoot,
             context.ExecutionContext.ContentGenerationPlanId?.ToString() ?? context.Request.PlanId.ToString(),
             context.EventId,
             context.Request.Language,
+            eventType,
+            primaryObjects,
+            eventIdentitySource,
             cancellationToken);
         phase12AuthorityResults[context.OutputRoot] = result;
         return result.OutputFiles;
@@ -15177,7 +15192,8 @@ public sealed partial class ProductionPipelineExecutionService(
             ? BuildPhase11HeroDiagnostics(context)
             : null;
         var phase12AuthorityDiagnosticsPath = Path.Combine(context.OutputRoot, "12-thumbnails", "phase12-authority-diagnostics.json");
-        var phase12ThumbnailAuthorityDiagnostics = phaseNo == 12 && File.Exists(phase12AuthorityDiagnosticsPath)
+        var phase12ThumbnailAuthorityDiagnostics = ShouldExposePhase12AuthorityDiagnostics(
+            phaseNo, status, phase12AuthorityResults.ContainsKey(context.OutputRoot), File.Exists(phase12AuthorityDiagnosticsPath))
             ? JsonNode.Parse(await File.ReadAllTextAsync(phase12AuthorityDiagnosticsPath, cancellationToken))
             : null;
         var phase12ThumbnailDiagnostics = phaseNo == 12 && phase12ThumbnailAuthorityDiagnostics is null
@@ -15569,6 +15585,10 @@ public sealed partial class ProductionPipelineExecutionService(
             await RefreshPhase12ValidationPersistenceDiagnosticsAsync(result.ValidationReportPath, cancellationToken);
         return result;
     }
+
+    internal static bool ShouldExposePhase12AuthorityDiagnostics(
+        int phaseNo, ProductionPhaseStatus status, bool hasCurrentAuthorityResult, bool diagnosticsFileExists) =>
+        phaseNo == 12 && status == ProductionPhaseStatus.Succeeded && hasCurrentAuthorityResult && diagnosticsFileExists;
 
 
 
