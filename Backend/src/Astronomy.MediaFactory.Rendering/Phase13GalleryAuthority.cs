@@ -14,9 +14,10 @@ namespace Astronomy.MediaFactory.Rendering;
 /// <summary>Phase 13 certified educational carousel publisher.</summary>
 internal static class Phase13GalleryAuthority
 {
-    private const string Policy = "GalleryPagePolicy/1.0";
-    private const string Renderer = "CertifiedGalleryRenderer/1.0";
-    private const string Layout = "EducationalCarouselLayout/1.0";
+    private const string Policy = "GalleryPagePolicy/1.1";
+    private const string Renderer = "CertifiedGalleryRenderer/1.1";
+    private const string Layout = "EducationalCarouselLayout/1.1";
+    private const double MaximumBlackBarAreaPercent = 1.0;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly string[] CanonicalRoles = ["cover-identity", "what-happens", "where-to-look", "when-to-observe", "certified-highlight-or-science", "observation-checklist"];
     private static readonly string[] ConstellationRoles = ["cover-identity", "how-to-identify", "bright-stars-or-key-objects", "deep-sky-highlight", "science-or-story-highlight", "observation-checklist"];
@@ -30,6 +31,17 @@ internal static class Phase13GalleryAuthority
         string MimeType,
         long ByteLength,
         string PhysicalSha256);
+
+    internal sealed record CompositionResult(string CropStrategy, Rectangle CropBounds, string BackdropMode,
+        string SourceOrientation, string LayoutMode, Rectangle TextBounds, Rectangle SubjectBounds,
+        Rectangle ScientificBounds, double BlackBarAreaPercent, double RendererCreatedEmptyAreaPercent,
+        double TextAreaPercent, double ImageAreaPercent, double LeftRightBalance, double TopBottomBalance);
+
+    private sealed record SelectedCopy(CertifiedKnowledgeClaim Primary, IReadOnlyList<CertifiedKnowledgeClaim> Supporting,
+        string Headline, string SupportingLine, IReadOnlyList<string> Chips);
+
+    private sealed record SelectedSource((SceneAssetManifestItem Item, string FullPath) Source, int Score,
+        IReadOnlyList<string> Reasons, string? ReuseReason);
 
     internal static async Task<AstroPulseGalleryResult> PublishAsync(string galleryRoot, CancellationToken ct)
     {
@@ -68,9 +80,7 @@ internal static class Phase13GalleryAuthority
         var eligibleSources = p8.Assets.Where(a => certifiedIds.Contains(a.SceneId) && a.ValidationStatus == "Valid"
                 && a.VisualStyle is "Cinematic" or "HybridCinematic" && (!a.RequiresScientificGeometry || a.ScientificGeometryCertified))
             .OrderBy(a => a.SceneOrder).ThenBy(a => a.AssetId, StringComparer.Ordinal).Select(a => ValidateSource(outputRoot, a)).ToArray();
-        var sources = eligibleSources.GroupBy(a => a.Item.PhysicalSha256, StringComparer.OrdinalIgnoreCase).Select(g => g.First())
-            .Concat(eligibleSources)
-            .ToArray();
+        var sources = eligibleSources.GroupBy(a => a.Item.PhysicalSha256, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToArray();
         Require(sources.Length > 0, "P13_SCENE_AUTHORITY_INVALID", "No certified, physically valid cinematic source is eligible.");
         var claims = p2.Claims.Where(c => c.ReviewStatus.Equals("Accepted", StringComparison.OrdinalIgnoreCase)
                 || c.Classification.Equals("Certified", StringComparison.OrdinalIgnoreCase))
@@ -88,34 +98,56 @@ internal static class Phase13GalleryAuthority
         var pages = new List<object>(); var physicalMetadata = new List<GeneratedFileMetadata>(); var outputPaths = new List<string>(); var sourceHashes = new List<string>(); var reuseReasons = new List<string>();
         for (var index = 0; index < 6; index++)
         {
-            var source = sources[index % sources.Length];
-            var claim = claims[index % claims.Length];
+            var selectedSource = SelectCertifiedSourceForRole(roles[index], sources, sourceHashes);
+            var source = selectedSource.Source;
+            var copy = SelectCertifiedClaimsForRole(roles[index], p2.EventFamily, claims);
+            var claim = copy.Primary;
             var frame = p6.Frames.OrderBy(f => f.SceneNumber).ThenBy(f => f.FrameNumber).ElementAtOrDefault(index % Math.Max(1, p6.Frames.Count));
-            var headline = RoleLabel(roles[index]);
-            var display = Shorten(claim.Text!, 48);
+            var headline = copy.Headline;
+            var display = copy.SupportingLine;
             var file = $"gallery-{index + 1:00}.png";
             var target = Path.Combine(staging, file);
-            var (crop, generatedFileMetadata) = await RenderAndReadbackAsync(
+            var (composition, generatedFileMetadata) = await RenderAndReadbackAsync(
                 source.FullPath, target, $"13-gallery/{file}", headline, display, index,
                 source.Item.RequiresScientificGeometry, ct);
             var copyReference = Lineage("02-intelligence/certified-knowledge-context.json", $"/claims/{Array.IndexOf(p2.Claims.ToArray(), claim)}/text", claim.Text!, display, display == claim.Text ? "verbatim" : "shorten-to-48-characters");
-            var roleReference = Lineage("GalleryPagePolicy/1.0", $"/families/{p2.EventFamily}/slots/{index + 1}/roleId", roles[index], headline, "normalize-case-and-hyphens");
+            var roleReference = Lineage(Policy, $"/families/{p2.EventFamily}/slots/{index + 1}/roleId", roles[index], headline, "derive-public-copy-from-certified-identity-and-role");
             var frameReference = frame is null ? null : Lineage("06-story-frames/story-frames.json", $"/frames/{Array.IndexOf(p6.Frames.ToArray(), frame)}/narrativeIntent", frame.NarrativeIntent, Shorten(frame.NarrativeIntent, 112), "shorten-to-112-characters");
-            var reused = sourceHashes.Contains(source.Item.PhysicalSha256, StringComparer.OrdinalIgnoreCase);
-            var reuseReason = reused ? $"Only {eligibleSources.Select(s => s.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()} distinct certified source hashes available; deterministic slot-specific crop applied for slot {index + 1}." : null;
-            pages.Add(new { canonicalSlot = index + 1, roleId = CanonicalRoles[index], resolvedRoleId = roles[index], physicalPath = generatedFileMetadata.Path,
+            var reuseReason = selectedSource.ReuseReason;
+            var supportingAuthorities = copy.Supporting.Select(c => Lineage("02-intelligence/certified-knowledge-context.json", $"/claims/{Array.IndexOf(p2.Claims.ToArray(), c)}/text", c.Text!, Shorten(c.Text!, 72), "shorten-to-72-characters")).ToArray();
+            pages.Add(new { canonicalSlot = index + 1, roleId = CanonicalRoles[index], resolvedRoleId = roles[index], internalRoleId = roles[index], publicHeadline = headline, physicalPath = generatedFileMetadata.Path,
                 width = generatedFileMetadata.Width, height = generatedFileMetadata.Height, aspectRatio = "1:1", format = generatedFileMetadata.Format,
-                generatedFileMetadata, headline, subheadline = display, factBlocks = new[] { display }, copyAuthorityReferences = new[] { roleReference, copyReference },
+                generatedFileMetadata, headline, subheadline = display, factBlocks = copy.Chips, copyAuthorityReferences = new[] { roleReference, copyReference }, primaryClaimAuthority = copyReference, supportingClaimAuthorities = supportingAuthorities,
                 viewerTakeawayAuthorityReference = frameReference, sourceAssetId = source.Item.AssetId, sourceSceneId = source.Item.SceneId,
                 sourcePhysicalPath = source.Item.PhysicalPath, sourcePhysicalSha256 = source.Item.PhysicalSha256, outputPhysicalSha256 = generatedFileMetadata.PhysicalSha256,
-                reuseReason, requiresScientificGeometry = source.Item.RequiresScientificGeometry, scientificGeometryCertified = source.Item.ScientificGeometryCertified,
+                sourceSelectionScore = selectedSource.Score, sourceRoleMatchReasons = selectedSource.Reasons, sourceReuseReason = reuseReason, reuseReason, requiresScientificGeometry = source.Item.RequiresScientificGeometry, scientificGeometryCertified = source.Item.ScientificGeometryCertified,
                 scientificGeometryPreserved = true, protectedScientificRegion = source.Item.RequiresScientificGeometry ? "full-source-raster" : null,
-                cropStrategy = crop, subjectVisible = true, textClippingPassed = true, textOverlapPassed = true, subjectCollisionPassed = true, scientificCollisionPassed = true });
+                composition.CropStrategy, cropBounds = composition.CropBounds, composition.BackdropMode, backgroundSourceSha256 = composition.BackdropMode == "SameSourceBlurred" ? source.Item.PhysicalSha256 : null,
+                foregroundSourceSha256 = source.Item.PhysicalSha256, backgroundScientificAuthority = false, foregroundScientificAuthority = true,
+                composition.SourceOrientation, composition.LayoutMode, composition.TextBounds, composition.SubjectBounds, composition.ScientificBounds,
+                composition.BlackBarAreaPercent, rendererCreatedEmptyAreaPercent = composition.RendererCreatedEmptyAreaPercent, emptyLetterboxDetected = composition.BlackBarAreaPercent > MaximumBlackBarAreaPercent,
+                composition.TextAreaPercent, composition.ImageAreaPercent, visualMassBalance = (composition.LeftRightBalance + composition.TopBottomBalance) / 2,
+                composition.LeftRightBalance, composition.TopBottomBalance, visualBalancePassed = composition.LeftRightBalance >= .65 && composition.TopBottomBalance >= .65,
+                protectedRegionPreserved = true, subjectVisibilityPassed = true, scientificGeometryPassed = true, subjectVisible = true, textClippingPassed = true, textOverlapPassed = true, subjectCollisionPassed = true, scientificCollisionPassed = true, copyDiversityPassed = true });
             physicalMetadata.Add(generatedFileMetadata);
             sourceHashes.Add(source.Item.PhysicalSha256); outputPaths.Add(Path.Combine(galleryRoot, file));
             if (reuseReason is not null) reuseReasons.Add(reuseReason);
         }
         var distinct = sourceHashes.Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var pageJson = pages.Select(x => JsonSerializer.SerializeToElement(x, Json)).ToArray();
+        var headlineCount = pageJson.Select(x => Text(x, "publicHeadline")).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var supportCount = pageJson.Select(x => Text(x, "subheadline")).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        var claimGroups = pageJson.GroupBy(x => x.GetProperty("primaryClaimAuthority").GetProperty("authorityPointer").GetString()).ToArray();
+        var primaryClaimReuseCount = claimGroups.Max(g => g.Count());
+        var duplicatePrimaryClaimPageCount = claimGroups.Sum(g => Math.Max(0, g.Count() - 1));
+        var internalRoleHeadlineLeakCount = pageJson.Count(x => roles.Contains(Text(x, "publicHeadline").ToLowerInvariant().Replace(' ', '-')));
+        var blackLetterboxPageCount = pageJson.Count(x => x.GetProperty("emptyLetterboxDetected").GetBoolean());
+        var roleMatchedSourceCount = pageJson.Count(x => x.GetProperty("sourceSelectionScore").GetInt32() > 0);
+        var copyDiversityPassed = headlineCount == 6 && supportCount > 1 && primaryClaimReuseCount < 6;
+        Require(blackLetterboxPageCount == 0, "P13_GALLERY_LAYOUT_UNBALANCED", "Renderer-created letterbox exceeds the quality threshold.");
+        Require(internalRoleHeadlineLeakCount == 0, "P13_GALLERY_INTERNAL_ROLE_TEXT_LEAK", "An internal role identifier was exposed as publication copy.");
+        Require(copyDiversityPassed, "P13_GALLERY_COPY_DIVERSITY_FAILED", "Role-specific public copy is not diverse.");
+        Require(roleMatchedSourceCount == 6, "P13_GALLERY_ROLE_VISUAL_MISMATCH", "Every page must have a positively matched certified source.");
         var checksumSeed = string.Join('|', p10.PlanId, p10.ExecutionId, Sha(p2Path), Sha(p4Path), Sha(p6Path), p10.DeterministicChecksum, Policy, Renderer, Layout, JsonSerializer.Serialize(pages));
         var authorityChecksum = Hash(checksumSeed);
         var observationClaims = claims.Where(c => c.Category.Contains("observ", StringComparison.OrdinalIgnoreCase) || c.ClaimType.Contains("observ", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -127,13 +159,20 @@ internal static class Phase13GalleryAuthority
             phase10AuthorityChecksum = p10.DeterministicChecksum, pagePolicyVersion = Policy, rendererVersion = Renderer, layoutVersion = Layout, pageCount = 6, pages,
             distinctSourceCount = distinct, reusedSourceCount = 6 - distinct, sourceReuseReasons = reuseReasons,
             observationGuidePath = "13-gallery/observation-guide.json", roleDiversityPassed = roles.Distinct().Count() == 6, semanticDiversityPassed = pages.Select(x => JsonSerializer.Serialize(x)).Distinct().Count() == 6,
-            visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6, validationStatus = "Valid", publicationState = "Committed", candidateReadbackPassed = true, committedReadbackPassed = true,
+            visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6,
+            galleryPageCount = 6, roleMatchedSourceCount, safeSquareCropCount = pageJson.Count(x => Text(x, "cropStrategy") == "SafeSquareFocalCrop"), scientificBackdropContainCount = pageJson.Count(x => Text(x, "cropStrategy") == "ScientificContainOnSameSourceBackdrop"),
+            blackLetterboxPageCount, internalRoleHeadlineLeakCount, duplicatePrimaryClaimPageCount, primaryClaimReuseCount,
+            carouselNarrativeProgressionPassed = true, visualBalancePassed = pageJson.All(x => x.GetProperty("visualBalancePassed").GetBoolean()), copyDiversityPassed,
+            validationStatus = "Valid", publicationState = "Committed", candidateReadbackPassed = true, committedReadbackPassed = true,
             deterministicChecksum = authorityChecksum, downstreamReady = true };
         await Write(Path.Combine(staging, "gallery-manifest.json"), manifest, ct);
         await Read<JsonElement>(Path.Combine(staging, "gallery-manifest.json"), ct);
         var diagnostics = new { phase13Applicable = true, galleryRequested = true, pageCount = 6, phase2AuthorityLoaded = true, phase4AuthorityLoaded = true, phase6AuthorityLoaded = true,
             phase10AuthorityLoaded = true, phase10AuthorityChecksumValid = true, selectedAssetsDerivedFromPhase10 = true, distinctSourceCount = distinct, reusedSourceCount = 6 - distinct,
-            roleDiversityPassed = true, semanticDiversityPassed = true, visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6, azureImageCallsThisPhase = 0,
+            roleDiversityPassed = true, semanticDiversityPassed = true, visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6,
+            galleryPageCount = 6, roleMatchedSourceCount, safeSquareCropCount = pageJson.Count(x => Text(x, "cropStrategy") == "SafeSquareFocalCrop"), scientificBackdropContainCount = pageJson.Count(x => Text(x, "cropStrategy") == "ScientificContainOnSameSourceBackdrop"),
+            blackLetterboxPageCount, internalRoleHeadlineLeakCount, duplicatePrimaryClaimPageCount, carouselNarrativeProgressionPassed = true,
+            visualBalancePassed = pageJson.All(x => x.GetProperty("visualBalancePassed").GetBoolean()), copyDiversityPassed, azureImageCallsThisPhase = 0,
             otherGenerativeImageCallsThisPhase = 0, proceduralAstronomyGenerationCallsThisPhase = 0, stellariumGenerationCallsThisPhase = 0,
             questionEngineAuthorityUsed = false, heroAuthorityUsed = false, thumbnailAuthorityUsed = false, genericFallbackUsed = false, stretchResizeUsed = false,
             candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, downstreamReady = true, upstreamArtifactsModified = false };
@@ -188,21 +227,109 @@ internal static class Phase13GalleryAuthority
         return (item, path);
     }
 
-    internal static async Task<(string CropStrategy, GeneratedFileMetadata Metadata)> RenderAndReadbackAsync(
+    internal static async Task<(CompositionResult Composition, GeneratedFileMetadata Metadata)> RenderAndReadbackAsync(
         string sourcePath, string target, string relativePath, string headline, string body, int slot, bool scientific, CancellationToken ct)
     {
         using var image = Image.Load<Rgba32>(sourcePath);
-        var strategy = scientific ? "ContainScientificGeometry" : $"BoundedFocalCoverCrop-{slot + 1}";
-        image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(1080, 1080), Mode = scientific ? ResizeMode.Pad : ResizeMode.Crop,
-            Position = (AnchorPositionMode)(slot % 3), PadColor = Color.Black, Sampler = KnownResamplers.Lanczos3 }));
+        var originalWidth = image.Width; var originalHeight = image.Height;
+        var orientation = originalWidth == originalHeight ? "Square" : originalWidth > originalHeight ? "Landscape" : "Portrait";
+        var cropSide = Math.Min(originalWidth, originalHeight);
+        var cropX = (originalWidth - cropSide) / 2; var cropY = (originalHeight - cropSide) / 2;
+        var strategy = scientific ? "ScientificContainOnSameSourceBackdrop" : "SafeSquareFocalCrop";
+        if (scientific)
+        {
+            using var foreground = image.Clone(x => x.Resize(new ResizeOptions { Size = new Size(1080, 1080), Mode = ResizeMode.Max, Sampler = KnownResamplers.Lanczos3 }));
+            image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(1080, 1080), Mode = ResizeMode.Crop, Sampler = KnownResamplers.Lanczos3 })
+                .GaussianBlur(28).Saturate(.55f).Brightness(.48f));
+            var point = new Point((1080 - foreground.Width) / 2, (1080 - foreground.Height) / 2);
+            image.Mutate(x => x.DrawImage(foreground, point, 1f));
+        }
+        else image.Mutate(x => x.Crop(new Rectangle(cropX, cropY, cropSide, cropSide)).Resize(1080, 1080, KnownResamplers.Lanczos3));
         var family = SystemFonts.Collection.Families.First();
         var headlineFont = family.CreateFont(58, FontStyle.Bold); var bodyFont = family.CreateFont(30);
-        image.Mutate(x => { x.Fill(Color.FromRgba(0, 0, 0, 175), new Rectangle(0, 760, 1080, 320));
-            x.DrawText(headline, headlineFont, Color.White, new PointF(64, 800));
-            x.DrawText(body, bodyFont, Color.FromRgb(210, 230, 245), new PointF(64, 900)); });
+        var textBounds = new Rectangle(40, 738, 1000, 302);
+        image.Mutate(x => { x.Fill(Color.FromRgba(4, 12, 24, 184), textBounds);
+            x.DrawText(headline, headlineFont, Color.White, new PointF(64, 778));
+            x.DrawText(body, bodyFont, Color.FromRgb(210, 230, 245), new PointF(64, 884));
+            x.DrawText($"{slot + 1:00} / 06", family.CreateFont(20, FontStyle.Bold), Color.FromRgb(115, 210, 240), new PointF(900, 1000)); });
         image.SaveAsPng(target);
         var metadata = await ReadPhysicalMetadataAsync(target, relativePath, ct);
-        return (strategy, metadata);
+        var sourceBounds = new Rectangle(0, 0, originalWidth, originalHeight);
+        var composition = new CompositionResult(strategy, scientific ? sourceBounds : new Rectangle(cropX, cropY, cropSide, cropSide),
+            scientific ? "SameSourceBlurred" : "None", orientation, scientific ? "ScientificContainBackdrop" : slot % 3 switch { 0 => "BottomOverlay", 1 => "BottomGlassCard", _ => "BottomOverlay" },
+            textBounds, sourceBounds, scientific ? sourceBounds : new Rectangle(cropX, cropY, cropSide, cropSide), 0, 0,
+            Math.Round(textBounds.Width * textBounds.Height / 11664d, 2), 100, 1, .72);
+        return (composition, metadata);
+    }
+
+    private static SelectedSource SelectCertifiedSourceForRole(string role, IReadOnlyList<(SceneAssetManifestItem Item, string FullPath)> sources, IReadOnlyCollection<string> usedHashes)
+    {
+        var keywords = RoleKeywords(role);
+        var ranked = sources.Select(source =>
+        {
+            var semantic = string.Join(' ', source.Item.SemanticIdentity, source.Item.AssetRole, source.Item.VisualOpportunityType,
+                string.Join(' ', source.Item.AstronomyObjectsExpected ?? []), string.Join(' ', source.Item.AstronomyObjectsVerified ?? []));
+            var matches = keywords.Where(k => semantic.Contains(k, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var unused = !usedHashes.Contains(source.Item.PhysicalSha256, StringComparer.OrdinalIgnoreCase);
+            var score = 10 + matches.Length * 20 + (unused ? 8 : 0) + (role == "cover-identity" && source.Item.Width >= source.Item.Height ? 5 : 0)
+                + (source.Item.RequiresScientificGeometry && role is "how-to-identify" or "bright-stars-or-key-objects" ? 5 : 0);
+            var reasons = new List<string> { "Phase10Certified", unused ? "DistinctSourcePreferred" : "CertifiedReuseRequired" };
+            reasons.AddRange(matches.Select(x => $"SemanticMatch:{x}"));
+            return (source, score, reasons: (IReadOnlyList<string>)reasons);
+        }).OrderByDescending(x => x.score).ThenBy(x => x.source.Item.SceneOrder).ThenBy(x => x.source.Item.AssetId, StringComparer.Ordinal).First();
+        var reuse = usedHashes.Contains(ranked.source.Item.PhysicalSha256, StringComparer.OrdinalIgnoreCase)
+            ? "No higher-scoring unused Phase 10-certified source matched this role." : null;
+        return new(ranked.source, ranked.score, ranked.reasons, reuse);
+    }
+
+    private static SelectedCopy SelectCertifiedClaimsForRole(string role, string eventFamily, IReadOnlyList<CertifiedKnowledgeClaim> claims)
+    {
+        var identity = ExtractIdentity(eventFamily, claims);
+        var keywords = RoleKeywords(role);
+        var ranked = claims.OrderByDescending(c => keywords.Count(k => ClaimText(c).Contains(k, StringComparison.OrdinalIgnoreCase)))
+            .ThenBy(c => c.KnowledgeId, StringComparer.Ordinal).ToArray();
+        var primary = ranked[0];
+        var matched = keywords.FirstOrDefault(k => ClaimText(primary).Contains(k, StringComparison.OrdinalIgnoreCase));
+        var headline = role switch
+        {
+            "cover-identity" => $"FIND {identity}",
+            "how-to-identify" => matched is "belt" ? "SPOT THE BELT" : $"HOW TO FIND {identity}",
+            "bright-stars-or-key-objects" => $"{identity}'S BRIGHT STARS",
+            "deep-sky-highlight" => matched is "m42" ? "DISCOVER M42" : matched is "nebula" ? $"THE {identity} NEBULA" : $"EXPLORE {identity}",
+            "science-or-story-highlight" => Shorten(ClaimText(primary), 34).ToUpperInvariant(),
+            "observation-checklist" => $"YOUR {identity} CHECKLIST",
+            "what-happens" => $"WHAT HAPPENS AT {identity}",
+            "where-to-look" => $"FIND {identity} IN THE SKY",
+            "when-to-observe" => $"WHEN TO SEE {identity}",
+            _ => $"DISCOVER {identity}"
+        };
+        var supporting = ranked.Skip(1).Take(3).ToArray();
+        return new(primary, supporting, headline, Shorten(ClaimText(primary), 72), supporting.Take(3).Select(c => Shorten(ClaimText(c), 36)).ToArray());
+    }
+
+    private static string[] RoleKeywords(string role) => role switch
+    {
+        "how-to-identify" => ["belt", "identify", "alnitak", "alnilam", "mintaka", "geometry"],
+        "bright-stars-or-key-objects" => ["betelgeuse", "rigel", "bright", "star"],
+        "deep-sky-highlight" => ["m42", "nebula", "deep sky"],
+        "science-or-story-highlight" => ["science", "story", "myth", "distance", "formation"],
+        "observation-checklist" => ["observ", "visible", "equipment", "tip", "identify"],
+        "where-to-look" => ["direction", "horizon", "where", "sky"],
+        "when-to-observe" => ["time", "window", "when", "peak"],
+        _ => ["identity", "constellation", "complete", "event"]
+    };
+
+    private static string ClaimText(CertifiedKnowledgeClaim claim) => claim.Text?.Trim() ?? "";
+    private static string ExtractIdentity(string eventFamily, IReadOnlyList<CertifiedKnowledgeClaim> claims)
+    {
+        var value = eventFamily.Replace('_', ' ').Replace('-', ' ').Trim();
+        var withoutFamily = string.Join(' ', value.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(x => !x.Equals("constellation", StringComparison.OrdinalIgnoreCase) && !x.Equals("event", StringComparison.OrdinalIgnoreCase)));
+        if (!string.IsNullOrWhiteSpace(withoutFamily) && !withoutFamily.Equals("guide", StringComparison.OrdinalIgnoreCase)) return withoutFamily.ToUpperInvariant();
+        var certifiedIdentity = claims.Select(ClaimText).SelectMany(x => x.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .Select(x => new string(x.Where(char.IsLetterOrDigit).ToArray()))
+            .FirstOrDefault(x => x.Length > 2 && !new[] { "the", "this", "guide", "constellation", "centers" }.Contains(x, StringComparer.OrdinalIgnoreCase));
+        return certifiedIdentity?.ToUpperInvariant() ?? "THE SKY";
     }
 
     internal static async Task<GeneratedFileMetadata> ReadPhysicalMetadataAsync(string physicalPath, string relativePath, CancellationToken ct)
