@@ -44,12 +44,21 @@ internal static class ResponsiveThumbnailAuthorityService
         string outputRoot, string planId, string eventId, string language, string eventType,
         IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, string copyEventIdentitySource,
         AzureOpenAIForImageOptions? providerOptions, IAICinematicImageGenerator? provider, CancellationToken ct)
+        => await PublishAsync(outputRoot, planId, eventId, language, eventType, primaryObjects, secondaryObjects,
+            copyEventIdentitySource, "", false, providerOptions, provider, ct);
+
+    internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(
+        string outputRoot, string planId, string eventId, string language, string eventType,
+        IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, string copyEventIdentitySource,
+        string shortTitle, bool verifiedEvent, AzureOpenAIForImageOptions? providerOptions,
+        IAICinematicImageGenerator? provider, CancellationToken ct)
     {
         Require(!string.IsNullOrWhiteSpace(eventType), "P12_COPY_AUTHORITY_MISSING",
             "Current event type is required for deterministic thumbnail copy.");
         // Candidate generation is purpose-specific again. This returns through the existing
         // transactional authority contract and never consults Phase 8, Phase 10, or Hero rasters.
-        return await MatureThumbnailCandidatePublisher.PublishAsync(outputRoot, planId, eventId, language, eventType, primaryObjects, providerOptions, provider, ct);
+        return await MatureThumbnailCandidatePublisher.PublishAsync(outputRoot, planId, eventId, language, eventType,
+            primaryObjects, secondaryObjects, shortTitle, verifiedEvent, providerOptions, provider, ct);
 #pragma warning disable CS0162
         var heroPath = Path.Combine(outputRoot, "11-hero", "hero-asset-manifest.json");
         var heroReportPath = Path.Combine(outputRoot, "11-hero", "phase11-publication-report.json");

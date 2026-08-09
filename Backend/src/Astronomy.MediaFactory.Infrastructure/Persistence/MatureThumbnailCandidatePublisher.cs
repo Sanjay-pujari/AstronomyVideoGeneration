@@ -21,6 +21,8 @@ internal static class MatureThumbnailCandidatePublisher
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private sealed record Profile(string Role, int Width, int Height, string ProviderSize);
     private sealed record ProviderResult(int Attempts, string Deployment, string RequestSize);
+    private sealed record SemanticAuthorityReference(string AuthorityArtifact, string JsonPointer,
+        string Checksum, string TransformationRule, string Value);
     internal sealed record ConstellationThumbnailFact(string Category, string Label, string SourceValue,
         string DisplayValue, string AuthoritySource, string AuthorityPath, bool Certified, string TransformationRule);
     internal sealed record ConstellationThumbnailContent(string Headline, ConstellationThumbnailFact? IdentificationCue,
@@ -31,9 +33,14 @@ internal static class MatureThumbnailCandidatePublisher
             .Concat(DeepSkyHighlights).Concat(BrightObjects).Concat(new[] { ObservationCue, ScienceHighlight })
             .OfType<ConstellationThumbnailFact>().Where(x => x.Certified).ToArray();
     }
+    internal sealed record ThumbnailContentPlan(string EventFamily, string Headline, string Hook,
+        string SupportingHighlight, IReadOnlyList<ConstellationThumbnailFact> Facts,
+        IReadOnlyList<string> AuthorityReferences, IReadOnlyList<string> TransformationRules,
+        decimal ContentQualityScore, bool ContentQualityPassed);
 
     internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(string outputRoot, string planId,
         string eventId, string language, string requestedEventType, IReadOnlyList<string> requestedPrimaryObjects,
+        IReadOnlyList<string> requestedSecondaryObjects, string shortTitle, bool verifiedEvent,
         AzureOpenAIForImageOptions? providerOptions, IAICinematicImageGenerator? provider, CancellationToken ct)
     {
         var authorityPath = Path.Combine(outputRoot, "02-intelligence", "production-event-intelligence.json");
@@ -50,13 +57,20 @@ internal static class MatureThumbnailCandidatePublisher
         var objects = authority.EventIdentity.PrimaryObjects.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
         Require(!string.IsNullOrWhiteSpace(family) && !string.IsNullOrWhiteSpace(eventType) && objects.Length > 0,
             "P12_SEMANTIC_AUTHORITY_INSUFFICIENT", "Event identity, family, and certified objects are required.");
+        var title = BuildTitle(family, objects);
+        var contentPlan = BuildThumbnailContentPlan(family, objects[0], requestedSecondaryObjects, shortTitle,
+            verifiedEvent, knowledge.Claims);
+        Require(contentPlan.ContentQualityPassed, "P12_THUMBNAIL_CONTENT_PLAN_INSUFFICIENT",
+            "A verified constellation with hook authority cannot produce headline-only content.");
+        var constellationContent = BuildConstellationContent(family, objects[0], requestedSecondaryObjects,
+            shortTitle, verifiedEvent, knowledge.Claims);
         var providerConfiguration = ValidateProviderConfiguration(providerOptions, provider);
         Require(providerConfiguration.IsValid, "P12_PROVIDER_NOT_CONFIGURED", providerConfiguration.Reason);
-        var title = BuildTitle(family, objects);
-        var constellationContent = BuildConstellationContent(family, objects[0], knowledge.Claims);
-        var references = knowledge.Claims.Where(IsCertified).Take(4).Select((x, i) => new {
-            authorityArtifact = "02-intelligence/certified-knowledge-context.json", jsonPointer = $"/claims/{Array.IndexOf(knowledge.Claims.ToArray(), x)}/text",
-            checksum = Sha(knowledgePath), transformationRule = "certified-family-selection", value = x.Text }).ToArray();
+        var references = contentPlan.Facts.Select(x => new SemanticAuthorityReference(x.AuthoritySource,
+            x.AuthorityPath.Contains('#') ? x.AuthorityPath[(x.AuthorityPath.IndexOf('#') + 1)..] : x.AuthorityPath,
+            x.AuthorityPath.StartsWith("02-intelligence/certified", StringComparison.Ordinal) ? Sha(knowledgePath) : Sha(authorityPath),
+            x.TransformationRule, x.SourceValue)).Prepend(new("ProductionEventIntelligence",
+                "/eventIdentity/primaryObjects/0", Sha(authorityPath), "verified-primary-object-find-headline", objects[0])).ToArray();
         var profiles = new[] { new Profile("Landscape", 1280, 720, "1792x1024"), new Profile("Square", 1080, 1080, "1024x1024"), new Profile("Portrait", 1080, 1920, "1024x1792") };
         var root = Path.Combine(outputRoot, "12-thumbnails");
         var tx = Guid.NewGuid().ToString("N"); var staging = root + ".staging-" + tx; var backup = root + ".backup-" + tx;
@@ -69,7 +83,7 @@ internal static class MatureThumbnailCandidatePublisher
                 var selectedFacts = SelectThumbnailFactsForAspect(family, profile.Role, constellationContent.CertifiedFacts,
                     new Rectangle(0, (int)(profile.Height * .60), profile.Width, (int)(profile.Height * .40)));
                 ValidateConstellationInformation(family, constellationContent.CertifiedFacts, selectedFacts);
-                var prompt = BuildPrompt(family, objects, profile.Role);
+                var prompt = BuildPrompt(family, objects, profile.Role, contentPlan);
                 var background = Path.Combine(staging, $".{profile.Role.ToLowerInvariant()}-azure-background.png");
                 var generated = await GenerateAzureBackgroundAsync(provider!, prompt, background, profile, ct);
                 var backgroundSha = Sha(background);
@@ -80,9 +94,10 @@ internal static class MatureThumbnailCandidatePublisher
                 variants.Add(new { variant = profile.Role, physicalPath = $"12-thumbnails/{file}", provider = "AzureOpenAIForImage",
                     providerDeployment = generated.Deployment, providerRequestSize = generated.RequestSize, providerAttemptCount = generated.Attempts,
                     compositionType = Composition(family), familyPolicyVersion = FamilyPolicy,
-                    promptSemanticInputs = objects.Prepend(family).ToArray(), promptAuthorityReferences = references,
+                    promptSemanticInputs = objects.Prepend(family).Concat(contentPlan.Facts.Select(x => x.SourceValue)).ToArray(), promptAuthorityReferences = references,
                     overlaySemanticInputs = selectedFacts.SelectMany(x => new[] { x.Category, x.SourceValue }).Prepend(title).ToArray(),
-                    overlayAuthorityReferences = selectedFacts.Select(x => new { x.AuthoritySource, x.AuthorityPath, x.TransformationRule }).ToArray(),
+                    overlayAuthorityReferences = selectedFacts.Select(x => new { x.AuthoritySource, x.AuthorityPath, x.TransformationRule })
+                        .Prepend(new { AuthoritySource = "ProductionEventIntelligence", AuthorityPath = "02-intelligence/production-event-intelligence.json#/eventIdentity/primaryObjects/0", TransformationRule = "verified-primary-object-find-headline" }).ToArray(),
                     headline = title, selectedFacts = selectedFacts.Select(x => new { category = x.Category, label = x.Label,
                         sourceValue = x.SourceValue, displayValue = x.DisplayValue, authorityPath = x.AuthorityPath, transformationRule = x.TransformationRule }).ToArray(),
                     selectedFactCount = selectedFacts.Count,
@@ -108,6 +123,11 @@ internal static class MatureThumbnailCandidatePublisher
             await Write(Path.Combine(staging, "phase12-authority-diagnostics.json"), new { phase8RasterUsed = false, phase11RasterUsed = false,
                 azureImageCallsThisPhase = 3, independentlyGeneratedAspectCount = 3, aiCompletePosterUsed = false,
                 factualTextRenderedDeterministically = true, noEmbeddedTextInstruction = true, providerConfigurationValidated = true,
+                semanticAuthorityFiles = new[] { new { physicalPath = authorityPath, fileExists = true, parseSuccess = true, dto = nameof(ProductionEventIntelligenceAuthority), relevantFactCount = 1, relevantObjectCount = authority.EventIdentity.PrimaryObjects.Count + authority.Intelligence.SecondaryObjects.Count },
+                    new { physicalPath = knowledgePath, fileExists = true, parseSuccess = true, dto = nameof(CertifiedKnowledgeContext), relevantFactCount = knowledge.Claims.Count(IsCertified), relevantObjectCount = 0 } },
+                contentPlanHeadline = contentPlan.Headline, contentPlanHook = contentPlan.Hook,
+                contentPlanSupportingHighlight = contentPlan.SupportingHighlight,
+                contentPlanAuthorityReferences = contentPlan.AuthorityReferences, contentQualityPassed = contentPlan.ContentQualityPassed,
                 providerOptionsBound = providerConfiguration.OptionsBound, providerEndpointConfigured = providerConfiguration.EndpointConfigured,
                 providerDeploymentConfigured = providerConfiguration.DeploymentConfigured, providerCredentialMode = providerConfiguration.CredentialMode,
                 providerClientResolved = providerConfiguration.ClientResolved, providerApiVersion = "2024-10-21", downstreamReady = true }, ct);
@@ -130,6 +150,11 @@ internal static class MatureThumbnailCandidatePublisher
     private static bool IsCertified(CertifiedKnowledgeClaim x) => x.Classification.Equals("Certified", StringComparison.OrdinalIgnoreCase) || x.ReviewStatus.Equals("Accepted", StringComparison.OrdinalIgnoreCase);
 
     internal static ConstellationThumbnailContent BuildConstellationContent(string family, string primaryObject, IReadOnlyList<CertifiedKnowledgeClaim> claims)
+        => BuildConstellationContent(family, primaryObject, [], "", false, claims);
+
+    internal static ConstellationThumbnailContent BuildConstellationContent(string family, string primaryObject,
+        IReadOnlyList<string> secondaryObjects, string shortTitle, bool verifiedEvent,
+        IReadOnlyList<CertifiedKnowledgeClaim> claims)
     {
         if (!family.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase))
         {
@@ -144,12 +169,42 @@ internal static class MatureThumbnailCandidatePublisher
             return hit.claim is null ? null : new(category, label, hit.claim.Text!, display(hit.claim.Text!),
                 "Phase2CertifiedKnowledge", $"02-intelligence/certified-knowledge-context.json#/claims/{hit.index}", true, $"{category.ToLowerInvariant()}-certified-claim-projection");
         }
-        var identification = Find("Identification", "LOOK FOR", s => ContainsAll(s, "belt") && (ContainsAll(s, "three") || ContainsAll(s, "3")), _ => "3 BELT STARS");
+        var identification = Find("Hook", "", s => ContainsAll(s, "belt") && (ContainsAll(s, "three") || ContainsAll(s, "3")), _ => "3 STARS SHOW THE WAY");
         var bright = Find("BrightObjects", "BRIGHT STARS", s => (ContainsAll(s, "bright") || ContainsAll(s, "major") || ContainsAll(s, "key star")) && NamedObjects(s).Count >= 2, s => string.Join(" • ", NamedObjects(s).Take(2)).ToUpperInvariant());
         var deep = Find("DeepSky", "DEEP SKY", s => ContainsAll(s, "deep sky") || ContainsAll(s, "nebula"), DeepSkyDisplay);
         var observation = Find("Observation", "OBSERVE", s => (ContainsAll(s, "view") || ContainsAll(s, "visible")) && !ContainsAll(s, "depend"), s => s.Trim().ToUpperInvariant());
         var science = Find("Science", "SCIENCE", s => ContainsAll(s, "star-form") || ContainsAll(s, "stellar nursery"), s => s.Trim().ToUpperInvariant());
+        if (identification is null && verifiedEvent && shortTitle.Contains("belt", StringComparison.OrdinalIgnoreCase))
+            identification = new("Hook", "", shortTitle, shortTitle.Contains("famous", StringComparison.OrdinalIgnoreCase)
+                ? "SPOT THE FAMOUS BELT" : "SPOT THE BELT", "VerifiedProductionPipelineRequest",
+                "production-pipeline-request.json#/shortTitle", true, "verified-short-title-belt-hook");
+        if (deep is null && verifiedEvent && shortTitle.Contains("nebula", StringComparison.OrdinalIgnoreCase))
+        {
+            var m42 = secondaryObjects.Any(x => x.Contains("M42", StringComparison.OrdinalIgnoreCase));
+            deep = new("DeepSky", "", shortTitle, m42 ? "M42" : "ORION NEBULA",
+                "VerifiedProductionPipelineRequest", "production-pipeline-request.json#/shortTitle", true,
+                m42 ? "verified-short-title-nebula-plus-object-alias" : "verified-short-title-nebula-highlight");
+        }
         return new($"FIND {primaryObject.ToUpperInvariant()}", identification, bright is null ? [] : [bright], deep is null ? [] : [deep], observation, science);
+    }
+
+    internal static ThumbnailContentPlan BuildThumbnailContentPlan(string family, string primaryObject,
+        IReadOnlyList<string> secondaryObjects, string shortTitle, bool verifiedEvent,
+        IReadOnlyList<CertifiedKnowledgeClaim> claims)
+    {
+        var content = BuildConstellationContent(family, primaryObject, secondaryObjects, shortTitle, verifiedEvent, claims);
+        var facts = content.CertifiedFacts;
+        var hook = facts.FirstOrDefault(x => x.Category is "Hook" or "Identification")?.DisplayValue ?? "";
+        var support = facts.FirstOrDefault(x => x.Category is not ("Hook" or "Identification"))?.DisplayValue ?? "";
+        var headlineAuthority = "02-intelligence/production-event-intelligence.json#/eventIdentity/primaryObjects/0";
+        var authorities = facts.Select(x => x.AuthorityPath).Prepend(headlineAuthority).Distinct().ToArray();
+        var rules = facts.Select(x => x.TransformationRule).Prepend("verified-primary-object-find-headline").Distinct().ToArray();
+        var needsHook = family.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase)
+            && (verifiedEvent && !string.IsNullOrWhiteSpace(shortTitle) || facts.Count > 0);
+        var passed = !string.IsNullOrWhiteSpace(content.Headline) && authorities.Length > 0 && (!needsHook || !string.IsNullOrWhiteSpace(hook));
+        var score = (string.IsNullOrWhiteSpace(content.Headline) ? 0 : .4m) + (string.IsNullOrWhiteSpace(hook) ? 0 : .4m)
+            + (string.IsNullOrWhiteSpace(support) ? 0 : .2m);
+        return new(family, content.Headline, hook, support, facts, authorities, rules, score, passed);
     }
 
     internal static IReadOnlyList<ConstellationThumbnailFact> SelectThumbnailFactsForAspect(string family, string aspect,
@@ -158,7 +213,7 @@ internal static class MatureThumbnailCandidatePublisher
         if (availableOverlayBounds.Width <= 0 || availableOverlayBounds.Height <= 0) return [];
         if (!family.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase)) return certifiedFacts.Take(1).ToArray();
         var capacity = aspect == "Landscape" ? 3 : aspect == "Portrait" && availableOverlayBounds.Height >= 500 ? 3 : 2;
-        var priority = new[] { "Identification", "DeepSky", "BrightObjects", "Observation", "Science" };
+        var priority = new[] { "Hook", "Identification", "DeepSky", "BrightObjects", "Observation", "Science" };
         return certifiedFacts.Where(x => x.Certified).OrderBy(x => Array.IndexOf(priority, x.Category)).ThenBy(x => x.DisplayValue, StringComparer.Ordinal).GroupBy(x => x.Category).Select(x => x.First()).Take(capacity).ToArray();
     }
 
@@ -166,13 +221,18 @@ internal static class MatureThumbnailCandidatePublisher
         IReadOnlyList<ConstellationThumbnailFact> selected)
     {
         if (family.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase) && available.Any(x => x.Certified) && selected.Count == 0)
-            throw new InvalidOperationException("P12_CONSTELLATION_INFORMATION_INSUFFICIENT: certified high-value facts exist but headline-only content was selected.");
+            throw new InvalidOperationException("P12_THUMBNAIL_CONTENT_PLAN_INSUFFICIENT: certified high-value facts exist but headline-only content was selected.");
     }
 
     internal static string BuildPrompt(string family, IReadOnlyList<string> objects, string aspect) =>
+        BuildPrompt(family, objects, aspect, null);
+
+    internal static string BuildPrompt(string family, IReadOnlyList<string> objects, string aspect, ThumbnailContentPlan? plan) =>
         $"Purpose-built {aspect} cinematic astronomy thumbnail background. Family: {family}. Certified objects only: {string.Join(", ", objects)}. " +
         (family.Contains("METEOR", StringComparison.OrdinalIgnoreCase) ? "Visible radiant burst point, multiple bright meteor streaks spreading outward, deep dark sky, high contrast horizon silhouette, title-safe negative space. " :
-         family.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase) ? "Cinematic recognition view with the certified constellation visually prominent and clean title-safe negative space. " :
+         family.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase) ? "Cinematic recognition view with the certified constellation visually prominent" +
+            (plan?.Hook.Contains("BELT", StringComparison.OrdinalIgnoreCase) == true ? "; make its Belt region prominent" : "") +
+            " and clean title-safe negative space. " :
          "Large recognizable astronomy subjects, dramatic authentic lighting, compact observation-poster negative space. ") +
         "NO embedded text. NO labels. NO numbers. NO watermark. Do not invent facts, objects, directions, dates, times, equipment, or safety guidance.";
 
