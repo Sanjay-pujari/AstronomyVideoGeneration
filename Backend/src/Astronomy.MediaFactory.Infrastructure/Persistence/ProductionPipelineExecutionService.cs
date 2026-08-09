@@ -12,6 +12,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.VisualIntelligence;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
 using Astronomy.MediaFactory.Rendering;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
@@ -93,7 +94,9 @@ public sealed partial class ProductionPipelineExecutionService(
     IPhase8AuthorityLoader? phase8AuthorityLoader = null,
     ILongSceneImagePublicationService? longSceneImagePublicationService = null,
     ISceneAssetCertificationService? sceneAssetCertificationService = null,
-    IResponsiveHeroAuthorityService? responsiveHeroAuthorityService = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IResponsiveHeroAuthorityService? responsiveHeroAuthorityService = null,
+    IOptions<AzureOpenAIForImageOptions>? azureImageOptions = null,
+    IAICinematicImageGenerator? azureImageGenerator = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     // The action delegate and the generic phase-result writer are deliberately separate.
     // Preserve the publication transaction selected by the Phase 3 action so the stable
@@ -3415,6 +3418,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 ? context.ProductionEventIntelligence.SecondaryObjects
                 : context.Request.SecondaryObjects,
             eventIdentitySource,
+            azureImageOptions?.Value,
+            azureImageGenerator,
             cancellationToken);
         phase12AuthorityResults[context.OutputRoot] = result;
         return result.OutputFiles;

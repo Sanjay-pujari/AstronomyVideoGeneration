@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -8,6 +10,64 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class ResponsiveThumbnailAuthorityServiceTests
 {
     private const string Orion = "4dfad265275d676ab8198b5068260bbd77dcd61fc1b9527d39af8bb2bc61251d";
+
+    [Fact]
+    public void Phase12UsesExistingAzureImageOptionsBinding()
+    {
+        var options = new AzureOpenAIForImageOptions { Endpoint = "https://images.example", ImageDeployment = "image-2", UseManagedIdentity = true };
+        var result = MatureThumbnailCandidatePublisher.ValidateProviderConfiguration(options, new ConfigurationOnlyImageProvider());
+        Assert.True(result.IsValid);
+        Assert.Equal("ManagedIdentity", result.CredentialMode);
+        Assert.Equal("AzureOpenAIForImage", AzureOpenAIForImageOptions.SectionName);
+    }
+
+    [Fact]
+    public void Phase12FailsWhenImageEndpointMissing()
+    {
+        var result = MatureThumbnailCandidatePublisher.ValidateProviderConfiguration(
+            new AzureOpenAIForImageOptions { ImageDeployment = "image-2", UseManagedIdentity = true }, new ConfigurationOnlyImageProvider());
+        Assert.False(result.IsValid);
+        Assert.Contains("Endpoint is missing", result.Reason);
+    }
+
+    [Fact]
+    public void Phase12FailsWhenImageDeploymentMissing()
+    {
+        var result = MatureThumbnailCandidatePublisher.ValidateProviderConfiguration(
+            new AzureOpenAIForImageOptions { Endpoint = "https://images.example", UseManagedIdentity = true }, new ConfigurationOnlyImageProvider());
+        Assert.False(result.IsValid);
+        Assert.Contains("ImageDeployment is missing", result.Reason);
+    }
+
+    [Fact]
+    public void Phase12ProviderConfigValidationMakesNoImageCall()
+    {
+        var provider = new ConfigurationOnlyImageProvider();
+        _ = MatureThumbnailCandidatePublisher.ValidateProviderConfiguration(
+            new AzureOpenAIForImageOptions { Endpoint = "https://images.example", ImageDeployment = "image-2", ApiKey = "do-not-report" }, provider);
+        Assert.Equal(0, provider.CallCount);
+    }
+
+    [Fact]
+    public void Phase12DoesNotLogProviderSecret()
+    {
+        const string secret = "never-emit-this-secret";
+        var result = MatureThumbnailCandidatePublisher.ValidateProviderConfiguration(
+            new AzureOpenAIForImageOptions { Endpoint = "https://images.example", ImageDeployment = "image-2", ApiKey = secret }, new ConfigurationOnlyImageProvider());
+        Assert.DoesNotContain(secret, result.ToString());
+    }
+
+    private sealed class ConfigurationOnlyImageProvider : IAICinematicImageGenerator
+    {
+        public int CallCount { get; private set; }
+        public bool IsConfigured => true;
+        public string DeploymentName => "image-2";
+        public Task<AICinematicProviderResult> GenerateAsync(AICinematicAssetRequest request, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            throw new InvalidOperationException("Configuration validation must not invoke the provider.");
+        }
+    }
 
     [Fact]
     public void Phase12AcceptsCertifiedPhase11PublishedChecksumContract() =>
