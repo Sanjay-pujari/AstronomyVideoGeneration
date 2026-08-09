@@ -40,6 +40,11 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     public async Task<AstroPulseGalleryResult> GenerateGalleryAsync(string outputDirectory, AstroPulseGalleryAspect aspect, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        // Phase 13's authority route is a deterministic projection over frozen semantic
+        // and Phase 10 visual authority. The former Azure implementation below is retained
+        // only as compatibility code and is deliberately unreachable from production.
+        return await Phase13GalleryAuthority.PublishAsync(outputDirectory, cancellationToken);
+#pragma warning disable CS0162
         Directory.CreateDirectory(outputDirectory);
         var diagnosticsDirectory = Path.Combine(outputDirectory, "diagnostics");
         var comparisonDirectory = Path.Combine(outputDirectory, "comparison");
@@ -120,6 +125,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         await File.WriteAllTextAsync(visualPromptPolicyReviewPath, JsonSerializer.Serialize(VisualPromptPolicyComposer.CreateReview(VisualPromptProduct.Gallery), JsonOptions), cancellationToken);
         await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new { phaseNo = 13, status = ResolvePhase13ValidationStatus(valid && File.Exists(observationGuidePath), validationWarnings), galleryVersion = "V3.5", guideVersion = "V2", dateAdded = true, timeAdded = true, galleryLocationRemoved = true, galleryBottomPaddingApplied = true, galleryTextCutDetected = false, sharedFooterApplied = true, educationalOverlayApplied = true, storySequencingApplied = true, oldAccurateSkyGuideReplaced = true, guideTitle = "How To Observe", familySpecificGuideApplied = true, galleryOutputPaths = imagePaths, observationGuideOutputPath = observationGuidePath, exactlySixGalleryPngsExist = imagePaths.Count == 6 && imagePaths.All(File.Exists), manifestExists = File.Exists(manifestPath), reviewExists = File.Exists(reviewPath), diagnosticsExists = File.Exists(diagnosticsPath), observationGuideExists = File.Exists(observationGuidePath), azureCallsCount = azureCalls, uniqueImageHashes = hashes.Count, galleryContext.EventName, galleryContext.EventFamily, galleryContext.EventSubtype, galleryContext.LocalizedEventTitle, galleryContext.TitleSource, galleryContext.MoonSubtypeVisualAttributes, galleryContext.HeroTitleResolverReused, galleryContext.GenericMoonFallbackUsed, validationParityChecklist = BuildValidationChecklist(galleryContext, topics, imagePaths, hashes, azureCalls, aspect), validationWarnings, validationErrors, observationDisplay.eventPeakUtc, observationDisplay.localPeakTime, observationDisplay.displayedObservationTime, observationDisplay.observationTimeSource, observationDisplay.eventFamilyRuleApplied, observationIntelligenceOutputPath = observationIntelligenceTargetPath, validationPassed = valid && File.Exists(observationGuidePath), phase12Executed = false, thumbnailRegenerationOccurred = false, galleryOverlayDiagnostics = new { galleryBottomTextCutDetected = false, gallerySafePaddingApplied = true, sharedFooterApplied = true, educationalBadgeApplied = true, bottomPaddingPx = Math.Clamp(aspect.Height * .10f, 84f, 128f), localizationDiagnostics } }, JsonOptions), cancellationToken);
         return new AstroPulseGalleryResult(outputDirectory, imagePaths, reviewPath, manifestPath, diagnosticsPath, validationPath);
+#pragma warning restore CS0162
     }
 
     private static string ResolveGalleryPageFileName(int pageNumber) => pageNumber switch

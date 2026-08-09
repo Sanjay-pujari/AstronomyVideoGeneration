@@ -466,7 +466,7 @@ public sealed partial class ProductionPipelineExecutionService(
             10 => true,
             11 => IsRequestedOutput(requestedOutputs, "HeroAsset"),
             12 => IsRequestedOutput(requestedOutputs, "Thumbnail"),
-            13 => true,
+            13 => IsRequestedOutput(requestedOutputs, "Gallery"),
             14 => true,
             15 => IsRequestedOutput(requestedOutputs, "LongVideo"),
             16 => IsRequestedOutput(requestedOutputs, "LongVideo") || IsRequestedOutput(requestedOutputs, "ShortVideo"),
@@ -3544,15 +3544,14 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseGenerateGalleryAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        var galleryRoot = Path.Combine(context.OutputRoot, "gallery");
-        var result = await galleryEngine.GenerateGalleryAsync(galleryRoot, AstroPulseGalleryAspect.Landscape, cancellationToken);
-        var observationGuidePath = Path.Combine(context.OutputRoot, "observation-guide", "observation-guide-v2.json");
+        var galleryRoot = Path.Combine(context.OutputRoot, "13-gallery");
+        var result = await galleryEngine.GenerateGalleryAsync(galleryRoot, AstroPulseGalleryAspect.Square, cancellationToken);
+        var observationGuidePath = Path.Combine(galleryRoot, "observation-guide.json");
         var outputs = result.ImagePaths
             .Concat([result.ManifestPath, result.ReviewPath, result.DiagnosticsPath, result.ValidationPath, observationGuidePath])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         ValidateGalleryContract(outputs, result.ManifestPath, result.ReviewPath);
-        await WriteGalleryPhaseExecutionDiagnosticsAsync(context, result.DiagnosticsPath, result.ValidationPath, cancellationToken);
         return outputs;
     }
     private static async Task WriteGalleryPhaseExecutionDiagnosticsAsync(ProductionPhaseContext context, string diagnosticsPath, string validationPath, CancellationToken cancellationToken)
@@ -3612,21 +3611,15 @@ public sealed partial class ProductionPipelineExecutionService(
                 errors.Add($"gallery image is missing: {NormalizePath(path)}.");
         }
         if (!File.Exists(manifestPath))
-            errors.Add($"GalleryArtifactManifest.json is required at '{NormalizePath(manifestPath)}'.");
+            errors.Add($"gallery-manifest.json is required at '{NormalizePath(manifestPath)}'.");
         if (!File.Exists(reviewPath))
             errors.Add($"GalleryReview.json is required at '{NormalizePath(reviewPath)}'.");
         var galleryRoot = Path.GetDirectoryName(manifestPath)!;
-        var diagnosticsPath = Path.Combine(galleryRoot, "diagnostics", "GalleryGenerationDiagnostics.json");
-        if (!File.Exists(diagnosticsPath))
-            diagnosticsPath = Path.Combine(galleryRoot, "gallery-generation-diagnostics.json");
-        var validationPath = Path.Combine(galleryRoot, "diagnostics", "phase-13-validation.json");
-        if (!File.Exists(validationPath))
-            validationPath = Path.Combine(galleryRoot, "phase-13-validation.json");
+        var diagnosticsPath = Path.Combine(galleryRoot, "phase13-authority-diagnostics.json");
+        var validationPath = Path.Combine(Path.GetDirectoryName(galleryRoot)!, "validation", "phase-13-validation.json");
         if (!File.Exists(diagnosticsPath))
             errors.Add($"GalleryGenerationDiagnostics.json is required at '{NormalizePath(diagnosticsPath)}'.");
-        var observationGuidePath = Path.Combine(Path.GetDirectoryName(galleryRoot)!, "observation-guide", "observation-guide-v2.json");
-        if (!File.Exists(observationGuidePath))
-            observationGuidePath = Path.Combine(galleryRoot, "observation-guide-v2.json");
+        var observationGuidePath = Path.Combine(galleryRoot, "observation-guide.json");
         if (!File.Exists(validationPath))
             errors.Add($"phase-13-validation.json is required at '{NormalizePath(validationPath)}'.");
         else
@@ -3643,7 +3636,7 @@ public sealed partial class ProductionPipelineExecutionService(
             }
         }
         if (!File.Exists(observationGuidePath))
-            errors.Add($"ObservationGuide V2 is required at '{NormalizePath(observationGuidePath)}'.");
+            errors.Add($"Phase 13 observation guide is required at '{NormalizePath(observationGuidePath)}'.");
 
         if (errors.Count > 0)
             throw new InvalidOperationException("Gallery generation failed contract validation: " + string.Join("; ", errors));
