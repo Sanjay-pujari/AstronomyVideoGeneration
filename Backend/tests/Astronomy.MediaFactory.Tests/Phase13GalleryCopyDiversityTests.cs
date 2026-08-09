@@ -54,6 +54,28 @@ public sealed class Phase13GalleryCopyDiversityTests
     [Fact] public void RoleSubstitutionCannotDuplicateExistingResolvedRole() => Assert.True(Result().RoleDiversityPassed);
     [Fact] public void RoleSubstitutionRecordsReason() => Assert.All(Plans(), p => Assert.Null(p.RoleSubstitutionReason));
 
+    [Theory]
+    [InlineData("Outcome03")]
+    [InlineData("OpeningHook")]
+    [InlineData("The final narration remains under review")]
+    [InlineData("Advance the certified workflow")]
+    public void GalleryRejectsInternalWorkflowCopy(string leakedCopy)
+    {
+        var plans = Plans();
+        plans[0] = plans[0] with { PrimaryContent = leakedCopy };
+        var error = Assert.Throws<InvalidOperationException>(() => Phase13GalleryAuthority.ValidatePublicCopy(plans));
+        Assert.StartsWith("P13_GALLERY_INTERNAL_COPY_LEAK", error.Message);
+    }
+
+    [Fact]
+    public void GalleryPublicCopyRequiresAuthorityReferences()
+    {
+        var plans = Plans();
+        plans[0] = plans[0] with { PrimaryContentAuthority = "" };
+        var error = Assert.Throws<InvalidOperationException>(() => Phase13GalleryAuthority.ValidatePublicCopy(plans));
+        Assert.StartsWith("P13_GALLERY_COPY_AUTHORITY_MISSING", error.Message);
+    }
+
     private static Phase13GalleryAuthority.GalleryRoleContentSelection Select(string role) =>
         Phase13GalleryAuthority.SelectCertifiedContentForGalleryRole("CONSTELLATION", role, Claims, ["Orion"], Objects, [], []);
     private static Phase13GalleryAuthority.GalleryRoleContentSelection[] Plans() => Roles.Select(Select).ToArray();
