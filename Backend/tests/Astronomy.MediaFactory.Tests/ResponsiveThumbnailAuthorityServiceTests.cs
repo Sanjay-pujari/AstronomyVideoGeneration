@@ -221,7 +221,7 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
 
         Assert.Equal("CONSTELLATION", poster.Badge.Value);
         Assert.Contains(poster.Facts, fact => fact.Key == "identification" && fact.Value == "3 BELT STARS" && fact.IsCertified);
-        Assert.Contains(poster.Facts, fact => fact.Key == "highlights");
+        Assert.Contains(poster.Facts, fact => fact.Key == "brightStars" && fact.Label == "BRIGHT STARS");
         Assert.Contains(poster.Facts, fact => fact.Key == "deepSky");
     }
 
@@ -259,6 +259,90 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
         [new("headline", 10, 10, 100, 30, 30), new("fact", 50, 20, 100, 30, 20)];
         Assert.True(ResponsiveThumbnailAuthorityService.HasOverlap(boxes));
     }
+
+    [Fact]
+    public void ConstellationIdentificationHasHighestPriority()
+    {
+        var selected = SelectOrion("Square");
+        Assert.Equal("identification", selected[0].Key);
+    }
+
+    [Theory]
+    [InlineData("Square")]
+    [InlineData("Portrait")]
+    public void DeepSkyPreferredForInformationDiversity(string profile)
+    {
+        var selected = SelectOrion(profile);
+        Assert.Equal("deepSky", selected[1].Key);
+    }
+
+    [Fact]
+    public void BrightStarsMergedIntoOneFact()
+    {
+        var selected = SelectOrion("Landscape");
+        var stars = Assert.Single(selected, x => x.FactCategory == ResponsiveThumbnailAuthorityService.FactCategory.BrightObjects);
+        Assert.Equal("BETELGEUSE • RIGEL", stars.Value);
+    }
+
+    [Fact]
+    public void DuplicateSemanticFactCategoriesAreAvoided() =>
+        Assert.Equal(SelectOrion("Landscape").Count, SelectOrion("Landscape").Select(x => x.FactCategory).Distinct().Count());
+
+    [Fact]
+    public void UncertifiedFactsAreNeverRendered()
+    {
+        var facts = OrionFacts().Append(new("invented", "BEST TIME", "9 PM", "none", false, 0,
+            ResponsiveThumbnailAuthorityService.FactCategory.Timing, 0, 0, 0, false, "9 PM", "9 PM", "Identity")).ToArray();
+        Assert.DoesNotContain(ResponsiveThumbnailAuthorityService.SelectPosterFacts("CONSTELLATION", "Landscape", facts, new(0, 0, 512, 720)), x => x.Key == "invented");
+    }
+
+    [Theory]
+    [InlineData("Landscape", 4)]
+    [InlineData("Square", 3)]
+    [InlineData("Portrait", 3)]
+    public void ProfileFactLimitsAreRespected(string profile, int limit) => Assert.True(SelectOrion(profile).Count <= limit);
+
+    [Fact]
+    public void LandscapeUsesThreeFactsWhenSpaceAllows() => Assert.Equal(3, SelectOrion("Landscape").Count);
+
+    [Fact]
+    public void LandscapeFactCategoriesAreDiverse() => Assert.Equal(3, SelectOrion("Landscape").Select(x => x.FactCategory).Distinct().Count());
+
+    [Fact]
+    public void SquareUsesAtLeastTwoFactsWhenCertifiedFactsAvailable() => Assert.True(SelectOrion("Square").Count >= 2);
+
+    [Fact]
+    public void PortraitPrefersDeepSkyAsSecondDiverseFact() => Assert.Equal("deepSky", SelectOrion("Portrait")[1].Key);
+
+    [Theory]
+    [InlineData("LandscapePanelDoesNotExceedConfiguredWidth", "profile.Width * .40")]
+    [InlineData("LandscapeUsesGradientTransition", "glass-to-cinematic fade")]
+    [InlineData("LandscapeNoTextOverlap", "P12_TEXT_LAYOUT_INVALID")]
+    [InlineData("LandscapeNoSubjectOcclusion", "SubjectOverlapDetected")]
+    [InlineData("SquareDoesNotDropAllButOneFactWithAvailableSpace", "P12_POSTER_FACT_SELECTION_SUBOPTIMAL")]
+    [InlineData("SquareUsesCompactPosterPanel", "profile.VisualEmphasis")]
+    [InlineData("SquareNoTextOverlap", "HasOverlap(bounds)")]
+    [InlineData("SquareNoDeadPosterArea", "UnusedPosterAreaPercent")]
+    [InlineData("PortraitSupportsThreeCompactFactsWhenSafe", "? 4 : 3")]
+    [InlineData("PortraitShrinksPanelWhenOnlyTwoFactsRender", "Role == \"Square\" ? .68 : .72")]
+    [InlineData("PortraitNoScientificGeometryOcclusion", "ScientificRegionOverlapDetected")]
+    [InlineData("PortraitNoTextOverlap", "HasOverlap(bounds)")]
+    public void PosterCompositionPolicyIsPresent(string acceptanceName, string policyText)
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "ResponsiveThumbnailAuthorityService.cs"));
+        Assert.False(string.IsNullOrWhiteSpace(acceptanceName));
+        Assert.Contains(policyText, source);
+    }
+
+    private static IReadOnlyList<ResponsiveThumbnailAuthorityService.PosterFact> SelectOrion(string profile) =>
+        ResponsiveThumbnailAuthorityService.SelectPosterFacts("CONSTELLATION", profile, OrionFacts(), new(0, 0, 512, 720));
+
+    private static ResponsiveThumbnailAuthorityService.PosterFact[] OrionFacts() =>
+    [
+        new("identification", "LOOK FOR", "3 BELT STARS", "authority", true, 1, ResponsiveThumbnailAuthorityService.FactCategory.Identification, 1, 1, 1, false, "3 BELT STARS", "3 BELT STARS", "Identity"),
+        new("brightStars", "BRIGHT STARS", "BETELGEUSE • RIGEL", "authority", true, 3, ResponsiveThumbnailAuthorityService.FactCategory.BrightObjects, 3, 2, 2, true, "Betelgeuse / Rigel", "BETELGEUSE • RIGEL", "Merge"),
+        new("deepSky", "DEEP SKY", "ORION NEBULA • M42", "authority", true, 2, ResponsiveThumbnailAuthorityService.FactCategory.DeepSky, 2, 2, 2, true, "Orion Nebula / M42", "ORION NEBULA • M42", "SlashToBullet")
+    ];
 
     [Fact]
     public void Phase12DoesNotRenderOnTopOfHeroComposedPng()
