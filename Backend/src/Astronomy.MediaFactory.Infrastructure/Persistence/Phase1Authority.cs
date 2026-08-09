@@ -161,7 +161,7 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
         // compatibility projection and must not be deleted or treated as semantic input.
         Add(12,Path.Combine(root,"12-thumbnails"),canDeleteOnOverwrite:false);
         Add(12,context.ExecutionContext.ThumbnailRoot,compatibility:true,canDeleteOnOverwrite:false);
-        Add(13,Path.Combine(root,"gallery"));
+        Add(13,Path.Combine(root,"13-gallery"),canDeleteOnOverwrite:false);
         Add(14,Path.Combine(root,"sync"));
         Add(15,context.ExecutionContext.TtsRoot);
         Add(16,Path.Combine(root,"duration-calibration"));

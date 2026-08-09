@@ -8,14 +8,14 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class AstroPulseGalleryServiceTests
 {
     [Fact]
-    public async Task GenerateGalleryAsync_RequiresConfiguredAzureImage2()
+    public async Task GenerateGalleryAsync_FailsClosedWithoutCertifiedSemanticAuthority()
     {
         var root = Path.Combine(Path.GetTempPath(), $"astropulse-gallery-{Guid.NewGuid():N}");
         var service = new AstroPulseGalleryService(Options.Create(new AzureOpenAIForImageOptions()));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.GenerateGalleryAsync(root, AstroPulseGalleryAspect.Landscape, CancellationToken.None));
 
-        Assert.Contains("Phase 13 Gallery V3 requires Azure Image2 configuration", ex.Message);
+        Assert.Contains("P13_SEMANTIC_AUTHORITY_MISSING", ex.Message);
     }
 
     [Fact]
