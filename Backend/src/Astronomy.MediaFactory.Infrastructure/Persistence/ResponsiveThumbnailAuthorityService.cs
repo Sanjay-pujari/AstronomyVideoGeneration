@@ -336,8 +336,8 @@ internal static class ResponsiveThumbnailAuthorityService
     {
         (_, FactCategory.Identification) => 0,
         ("LANDSCAPE", FactCategory.BrightObjects) => 1,
-        (_, FactCategory.DeepSky) => 1,
         ("LANDSCAPE", FactCategory.DeepSky) => 2,
+        (_, FactCategory.DeepSky) => 1,
         (_, FactCategory.BrightObjects) => 2,
         _ => 10
     };

@@ -285,6 +285,14 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
     }
 
     [Fact]
+    public void LandscapePrefersBrightObjectsBeforeDeepSky()
+    {
+        var selected = SelectOrion("Landscape");
+        Assert.Equal("brightStars", selected[1].Key);
+        Assert.Equal("deepSky", selected[2].Key);
+    }
+
+    [Fact]
     public void DuplicateSemanticFactCategoriesAreAvoided() =>
         Assert.Equal(SelectOrion("Landscape").Count, SelectOrion("Landscape").Select(x => x.FactCategory).Distinct().Count());
 
