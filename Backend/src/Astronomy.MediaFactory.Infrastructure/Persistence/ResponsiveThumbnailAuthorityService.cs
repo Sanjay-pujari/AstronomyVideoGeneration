@@ -380,7 +380,7 @@ internal static class ResponsiveThumbnailAuthorityService
             selected.Add(fact); cursor = (int)bottom;
         }
         foreach (var fact in poster.Facts.Where(f => !selected.Contains(f) && !reasons.ContainsKey(f.Key)))
-            reasons[fact.Key] = !f.IsCertified ? "Uncertified" : candidates.Any(c => c.Key == f.Key)
+            reasons[fact.Key] = !fact.IsCertified ? "Uncertified" : candidates.Any(c => c.Key == fact.Key)
                 ? "LowerPriorityThanSelectedFact" : "SemanticCategoryRedundant";
         var additionalFits = selected.Count < preferred && candidates.Any(f => !selected.Contains(f) && !reasons.ContainsKey(f.Key));
         var suboptimal = additionalFits;
