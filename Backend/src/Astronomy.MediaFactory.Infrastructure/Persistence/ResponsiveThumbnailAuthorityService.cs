@@ -82,9 +82,7 @@ internal static class ResponsiveThumbnailAuthorityService
         var primaryObject = primaryObjects.FirstOrDefault() ?? DeriveObject(title);
         var copy = BuildThumbnailCopy(eventFamily, primaryObjects, primaryObject, title);
         Require(copy.WordCount is > 0 and <= 5, "P12_COPY_BUDGET_EXCEEDED", "Thumbnail headline exceeds the approved five-word budget.");
-        Require(!ContainsForbiddenTemporalClaim(copy.Headline), "P12_UNCERTIFIED_COPY_CLAIM", "Thumbnail copy introduced an uncertified temporal claim.");
-        Require(!DuplicateCopyDetected(copy.Headline, title) && !DuplicateCopyDetected(copy.Headline, subtitle),
-            "P12_DUPLICATE_COPY", "Thumbnail copy duplicates Phase 11 editorial copy.");
+        var copyValidation = ValidateCopyDifferentiation(title, subtitle, copy.Headline, null, copy.Rule);
         var copyChecksum = Hash(string.Join('|', title, subtitle, language));
         var variants = hero.GetProperty("variants").EnumerateArray().ToDictionary(x => Text(x, "variant"), StringComparer.OrdinalIgnoreCase);
         var profiles = new[] { new Profile("Landscape", 1280, 720, 72, 52), new Profile("Square", 1080, 1080, 70, 64), new Profile("Portrait", 1080, 1920, 76, 76) };
@@ -148,6 +146,9 @@ internal static class ResponsiveThumbnailAuthorityService
             "Valid", "Committed", true, true, "", true);
         manifest = manifest with { DeterministicChecksum = AuthorityChecksum(manifest) };
         await Write(Path.Combine(staging, "thumbnail-asset-manifest.json"), manifest, ct);
+        var candidate = await Read<ThumbnailManifest>(Path.Combine(staging, "thumbnail-asset-manifest.json"), ct);
+        Require(candidate.DeterministicChecksum == AuthorityChecksum(candidate), "P12_CANDIDATE_READBACK_FAILED", "Candidate authority checksum failed.");
+        ValidateManifestCopy(candidate, title, subtitle, copy);
         var diagnostics = new { phase12Applicable = true, thumbnailRequested = true, phase11AuthorityLoaded = true, phase11AuthorityChecksum = heroChecksum,
             phase11ManifestDeterministicChecksum = heroChecksum, phase11PublicationManifestChecksum = publicationChecksum,
             phase11ValidationAuthorityChecksum = validationChecksum, phase11ChecksumsAgree = checksumsAgree,
@@ -157,8 +158,15 @@ internal static class ResponsiveThumbnailAuthorityService
             phase10Committed = true, phase10DownstreamReady = true, landscapeSourceHeroRole = "Landscape", squareSourceHeroRole = "Square", portraitSourceHeroRole = "Portrait",
             landscapeSourceChecksum = items[0].SourceHeroChecksum, squareSourceChecksum = items[1].SourceHeroChecksum, portraitSourceChecksum = items[2].SourceHeroChecksum,
             presentationMode = "DiscoveryThumbnail", heroPresentationMode = "EditorialHero", heroAndThumbnailPresentationDiffer = true,
-            duplicateCopyDetected = false, paragraphCopyRendered = false, thumbnailHeadline = copy.Headline, thumbnailHeadlineWordCount = copy.WordCount,
-            heroTitle = title, heroSubtitle = subtitle, copyTransformationRule = copy.Rule,
+            duplicateCopyDetected = copyValidation.DuplicateCopyDetected, paragraphCopyRendered = copyValidation.ParagraphCopyRendered,
+            thumbnailHeadline = copy.Headline, thumbnailSecondaryText = (string?)null, thumbnailHeadlineWordCount = copy.WordCount,
+            heroTitle = title, heroSubtitle = subtitle, normalizedHeroTitle = copyValidation.NormalizedHeroTitle,
+            normalizedHeroSubtitle = copyValidation.NormalizedHeroSubtitle, normalizedThumbnailHeadline = copyValidation.NormalizedThumbnailHeadline,
+            normalizedThumbnailSecondaryText = copyValidation.NormalizedThumbnailSecondaryText,
+            heroTitleReusedVerbatim = copyValidation.HeroTitleReusedVerbatim, heroSubtitleReusedVerbatim = copyValidation.HeroSubtitleReusedVerbatim,
+            sharedAuthorityTokens = copyValidation.SharedAuthorityTokens, sharedAuthorityTokensAllowed = true,
+            sourceCopy = title, thumbnailCopy = copy.Headline, copyTransformationRule = copy.Rule,
+            copyDifferentiationPassed = copyValidation.CopyDifferentiationPassed,
             landscapeVisualEmphasisPercent = 82, squareVisualEmphasisPercent = 80, portraitVisualEmphasisPercent = 84,
             copyAuthoritySource = manifest.CopyAuthoritySource, copyPolicyVersion = CopyPolicy, azureImageCallsThisPhase = 0, otherGenerativeImageCallsThisPhase = 0,
             proceduralAstronomyGenerationCallsThisPhase = 0, legacyQuestionEngineAuthorityUsed = false, legacyHeroAssetsAuthorityUsed = false,
@@ -170,6 +178,7 @@ internal static class ResponsiveThumbnailAuthorityService
         try { Directory.Move(staging, root); } catch { if (Directory.Exists(backup)) Directory.Move(backup, root); throw; }
         var committed = await Read<ThumbnailManifest>(Path.Combine(root, "thumbnail-asset-manifest.json"), ct);
         Require(committed.DeterministicChecksum == AuthorityChecksum(committed), "P12_COMMITTED_READBACK_FAILED", "Committed authority checksum failed.");
+        ValidateManifestCopy(committed, title, subtitle, copy);
         var report = new { transactionId = transaction, candidateCreated = true, candidateValidationPassed = true, candidateReadbackPassed = true,
             backupCreated = Directory.Exists(backup), publicationCommitted = true, committedReadbackPassed = true, manifestChecksum = committed.DeterministicChecksum,
             thumbnailVariantCount = 3, generatedVariantCount = 3, reusedVariantCount = 0, upstreamArtifactsModified = false, generatedAtUtc = DateTimeOffset.UtcNow };
@@ -202,6 +211,54 @@ internal static class ResponsiveThumbnailAuthorityService
         var a = NormalizeCopy(first);
         var b = NormalizeCopy(second);
         return a.Length > 0 && a == b;
+    }
+
+    /// <summary>
+    /// The single Phase 12 copy policy used before rendering and during both
+    /// candidate and committed authority readback. Shared authority vocabulary is
+    /// evidence of lineage, not duplication; only complete editorial reuse fails.
+    /// </summary>
+    internal static CopyDifferentiationDecision ValidateCopyDifferentiation(
+        string heroTitle, string heroSubtitle, string thumbnailHeadline, string? thumbnailSecondaryText,
+        string copyTransformationRule, bool temporalAuthoritySupported = false)
+    {
+        var normalizedHeroTitle = NormalizeCopy(heroTitle);
+        var normalizedHeroSubtitle = NormalizeCopy(heroSubtitle);
+        var normalizedHeadline = NormalizeCopy(thumbnailHeadline);
+        var normalizedSecondary = NormalizeCopy(thumbnailSecondaryText ?? "");
+        var thumbnailBlocks = new[] { normalizedHeadline, normalizedSecondary }.Where(x => x.Length > 0).ToArray();
+        var titleReused = ReproducesCompleteCopy(thumbnailBlocks, normalizedHeroTitle);
+        var subtitleReused = ReproducesCompleteCopy(thumbnailBlocks, normalizedHeroSubtitle);
+        var paragraphRendered = normalizedSecondary.Length > 0 && normalizedSecondary.Split(' ').Length >= 6;
+        var forbiddenTemporalClaim = !temporalAuthoritySupported
+            && thumbnailBlocks.Any(ContainsForbiddenTemporalClaim);
+        var verbatimRule = copyTransformationRule.Equals("VerbatimHeroReuse", StringComparison.OrdinalIgnoreCase);
+        var duplicate = titleReused || subtitleReused || paragraphRendered && subtitleReused || verbatimRule;
+        var heroTokens = normalizedHeroTitle.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Concat(normalizedHeroSubtitle.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var thumbnailTokens = thumbnailBlocks.SelectMany(x => x.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var shared = heroTokens.Intersect(thumbnailTokens, StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        var result = new CopyDifferentiationDecision(normalizedHeroTitle, normalizedHeroSubtitle, normalizedHeadline,
+            normalizedSecondary, titleReused, subtitleReused, paragraphRendered, duplicate, !duplicate && !forbiddenTemporalClaim,
+            forbiddenTemporalClaim, shared);
+        Require(!forbiddenTemporalClaim, "P12_UNCERTIFIED_COPY_CLAIM", "Thumbnail copy introduced an uncertified temporal claim.");
+        Require(!duplicate, "P12_DUPLICATE_COPY", "Thumbnail copy duplicates Phase 11 editorial copy.");
+        return result;
+    }
+
+    private static bool ReproducesCompleteCopy(IEnumerable<string> thumbnailBlocks, string heroCopy) =>
+        heroCopy.Length > 0 && thumbnailBlocks.Any(block =>
+            block == heroCopy || Regex.IsMatch(block, $@"(?:^|\s){Regex.Escape(heroCopy)}(?:\s|$)"));
+
+    private static void ValidateManifestCopy(ThumbnailManifest manifest, string heroTitle, string heroSubtitle, ThumbnailCopyDecision approvedCopy)
+    {
+        foreach (var variant in manifest.Variants)
+        {
+            Require(NormalizeCopy(variant.ThumbnailCopy) == NormalizeCopy(approvedCopy.Headline)
+                && variant.CopyTransformationRule.Equals(approvedCopy.Rule, StringComparison.Ordinal),
+                "P12_UNCERTIFIED_COPY_CLAIM", "Thumbnail copy does not match the approved deterministic transformation.");
+            ValidateCopyDifferentiation(heroTitle, heroSubtitle, variant.ThumbnailCopy, variant.SecondaryText, variant.CopyTransformationRule);
+        }
     }
     internal static ThumbnailCopyDecision BuildThumbnailCopy(string eventFamily, IReadOnlyList<string> objects, string primaryObject, string certifiedTitle)
     {
@@ -247,6 +304,10 @@ internal static class ResponsiveThumbnailAuthorityService
     private static void Require(bool condition, string code, string message) { if (!condition) throw new InvalidOperationException($"{code}: {message}"); }
 
     internal sealed record ThumbnailCopyDecision(string Headline, string Rule, int WordCount);
+    internal sealed record CopyDifferentiationDecision(string NormalizedHeroTitle, string NormalizedHeroSubtitle,
+        string NormalizedThumbnailHeadline, string NormalizedThumbnailSecondaryText, bool HeroTitleReusedVerbatim,
+        bool HeroSubtitleReusedVerbatim, bool ParagraphCopyRendered, bool DuplicateCopyDetected,
+        bool CopyDifferentiationPassed, bool ForbiddenTemporalClaimDetected, IReadOnlyList<string> SharedAuthorityTokens);
     private sealed record Profile(string Role, int Width, int Height, int FontSize, int Margin)
     {
         public double VisualEmphasis => Role == "Landscape" ? .82 : Role == "Square" ? .80 : .84;

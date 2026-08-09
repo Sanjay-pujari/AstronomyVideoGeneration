@@ -69,4 +69,84 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
     [Fact]
     public void HeadlineWordBudgetEnforcedForCertifiedConstellationCopy() =>
         Assert.InRange(ResponsiveThumbnailAuthorityService.BuildThumbnailCopy("CONSTELLATION", ["Ursa Major"], "Ursa Major", "Guide").WordCount, 2, 5);
+
+    [Fact]
+    public void FindOrionIsNotDuplicateOfOrionConstellationGuide()
+    {
+        var result = Validate("FIND ORION");
+
+        Assert.True(result.CopyDifferentiationPassed);
+        Assert.False(result.DuplicateCopyDetected);
+    }
+
+    [Fact]
+    public void ObjectNameOverlapIsAllowed() =>
+        Assert.Contains("orion", Validate("ORION").SharedAuthorityTokens);
+
+    [Fact]
+    public void CaseInsensitiveFullHeroTitleReuseIsRejected() =>
+        AssertDuplicate("ORION CONSTELLATION GUIDE");
+
+    [Fact]
+    public void WhitespaceNormalizedFullTitleReuseIsRejected() =>
+        AssertDuplicate("  Orion   constellation\tguide!  ");
+
+    [Fact]
+    public void FullHeroSubtitleReuseIsRejected() =>
+        AssertDuplicate("Orion: How to Find the Hunter Constellation");
+
+    [Fact]
+    public void ShortDeterministicCopyDerivedFromHeroIsAllowed()
+    {
+        foreach (var headline in new[] { "FIND ORION", "ORION", "SPOT ORION", "ORION CONSTELLATION" })
+            Assert.True(Validate(headline).CopyDifferentiationPassed);
+    }
+
+    [Fact]
+    public void ParagraphHeroCopyIsRejected()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => Validate("FIND ORION", "Orion: How to Find the Hunter Constellation"));
+
+        Assert.StartsWith("P12_DUPLICATE_COPY", exception.Message);
+    }
+
+    [Fact]
+    public void TonightIsRejectedForEvergreenConstellationWithoutTemporalAuthority()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => Validate("ORION TONIGHT"));
+
+        Assert.StartsWith("P12_UNCERTIFIED_COPY_CLAIM", exception.Message);
+    }
+
+    [Fact]
+    public void CandidateAndOuterValidationUseSameCopyPolicy()
+    {
+        var outer = Validate("FIND ORION");
+        var candidateReadback = Validate("FIND ORION");
+
+        Assert.Equal(outer.CopyDifferentiationPassed, candidateReadback.CopyDifferentiationPassed);
+        Assert.Equal(outer.DuplicateCopyDetected, candidateReadback.DuplicateCopyDetected);
+    }
+
+    [Fact]
+    public void CommittedAuthorityCannotFailDifferentDuplicateCopyRule()
+    {
+        var candidate = Validate("FIND ORION");
+        var committedReadback = Validate("FIND ORION");
+
+        Assert.True(candidate.CopyDifferentiationPassed);
+        Assert.Equal(candidate.CopyDifferentiationPassed, committedReadback.CopyDifferentiationPassed);
+        Assert.Equal(candidate.DuplicateCopyDetected, committedReadback.DuplicateCopyDetected);
+    }
+
+    private static ResponsiveThumbnailAuthorityService.CopyDifferentiationDecision Validate(
+        string headline, string? secondary = null) => ResponsiveThumbnailAuthorityService.ValidateCopyDifferentiation(
+            "Orion constellation guide", "Orion: How to Find the Hunter Constellation", headline, secondary,
+            "Constellation.FindCertifiedPrimaryObject");
+
+    private static void AssertDuplicate(string headline)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => Validate(headline));
+        Assert.StartsWith("P12_DUPLICATE_COPY", exception.Message);
+    }
 }
