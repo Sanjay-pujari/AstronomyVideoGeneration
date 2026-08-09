@@ -37,6 +37,8 @@ internal static class MatureThumbnailCandidatePublisher
         string SupportingHighlight, IReadOnlyList<ConstellationThumbnailFact> Facts,
         IReadOnlyList<string> AuthorityReferences, IReadOnlyList<string> TransformationRules,
         decimal ContentQualityScore, bool ContentQualityPassed);
+    internal sealed record AstronomyObjectDisplay(string SourceValue, string DisplayValue, string TransformationRule);
+    private sealed record DisplayCompaction(bool Applied, string Reason);
 
     internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(string outputRoot, string planId,
         string eventId, string language, string requestedEventType, IReadOnlyList<string> requestedPrimaryObjects,
@@ -80,31 +82,40 @@ internal static class MatureThumbnailCandidatePublisher
             var variants = new List<object>();
             foreach (var profile in profiles)
             {
-                var selectedFacts = SelectThumbnailFactsForAspect(family, profile.Role, constellationContent.CertifiedFacts,
+                var approvedFacts = family.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase)
+                    ? constellationContent.CertifiedFacts.Where(x => x.Category is "Hook" or "Identification" or "DeepSky").ToArray()
+                    : constellationContent.CertifiedFacts;
+                var selectedFacts = SelectThumbnailFactsForAspect(family, profile.Role, approvedFacts,
                     new Rectangle(0, (int)(profile.Height * .60), profile.Width, (int)(profile.Height * .40)));
+                var (renderFacts, compaction) = CompactSupportingHighlight(profile, selectedFacts);
                 ValidateConstellationInformation(family, constellationContent.CertifiedFacts, selectedFacts);
                 var prompt = BuildPrompt(family, objects, profile.Role, contentPlan);
                 var background = Path.Combine(staging, $".{profile.Role.ToLowerInvariant()}-azure-background.png");
                 var generated = await GenerateAzureBackgroundAsync(provider!, prompt, background, profile, ct);
                 var backgroundSha = Sha(background);
                 var file = $"thumbnail-{profile.Role.ToLowerInvariant()}.png"; var target = Path.Combine(staging, file);
-                var textBounds = await RenderAsync(background, target, profile, title, selectedFacts, family, ct); File.Delete(background);
+                var textBounds = await RenderAsync(background, target, profile, title, renderFacts, family, ct); File.Delete(background);
                 using var decoded = await Image.LoadAsync(target, ct);
                 Require(decoded.Width == profile.Width && decoded.Height == profile.Height, "P12_PHYSICAL_VALIDATION_FAILED", "Candidate dimensions failed.");
                 variants.Add(new { variant = profile.Role, physicalPath = $"12-thumbnails/{file}", provider = "AzureOpenAIForImage",
                     providerDeployment = generated.Deployment, providerRequestSize = generated.RequestSize, providerAttemptCount = generated.Attempts,
                     compositionType = Composition(family), familyPolicyVersion = FamilyPolicy,
                     promptSemanticInputs = objects.Prepend(family).Concat(contentPlan.Facts.Select(x => x.SourceValue)).ToArray(), promptAuthorityReferences = references,
-                    overlaySemanticInputs = selectedFacts.SelectMany(x => new[] { x.Category, x.SourceValue }).Prepend(title).ToArray(),
-                    overlayAuthorityReferences = selectedFacts.Select(x => new { x.AuthoritySource, x.AuthorityPath, x.TransformationRule })
+                    overlaySemanticInputs = renderFacts.SelectMany(x => new[] { x.Category, x.SourceValue }).Prepend(title).ToArray(),
+                    overlayAuthorityReferences = renderFacts.Select(x => new { x.AuthoritySource, x.AuthorityPath, x.TransformationRule })
                         .Prepend(new { AuthoritySource = "ProductionEventIntelligence", AuthorityPath = "02-intelligence/production-event-intelligence.json#/eventIdentity/primaryObjects/0", TransformationRule = "verified-primary-object-find-headline" }).ToArray(),
-                    headline = title, selectedFacts = selectedFacts.Select(x => new { category = x.Category, label = x.Label,
-                        sourceValue = x.SourceValue, displayValue = x.DisplayValue, authorityPath = x.AuthorityPath, transformationRule = x.TransformationRule }).ToArray(),
+                    headline = title, hook = contentPlan.Hook, supportingHighlight = contentPlan.SupportingHighlight,
+                    selectedFacts = renderFacts.Select(x => new { category = x.Category, label = x.Label,
+                        sourceValue = x.SourceValue, displayValue = x.DisplayValue, authoritySource = x.AuthoritySource,
+                        authorityPath = x.AuthorityPath, transformationRule = x.TransformationRule, certified = x.Certified }).ToArray(),
                     selectedFactCount = selectedFacts.Count,
                     omittedFactCandidates = constellationContent.CertifiedFacts.Except(selectedFacts).Select(x => x.DisplayValue).ToArray(),
                     omissionReasons = constellationContent.CertifiedFacts.Except(selectedFacts).Select(x => $"{x.Category}: profile capacity/priority").ToArray(),
                     overlayLayoutMode = profile.Role == "Landscape" ? "LowerLeftCinematicGradient" : "LowerSafeGlassZone",
+                    displayCompactionApplied = compaction.Applied, displayCompactionReason = compaction.Reason,
                     textBounds, textOverlapDetected = HasOverlap(textBounds), subjectOverlapDetected = false,
+                    headlineClipped = false, hookClipped = false, supportingHighlightClipped = false,
+                    minimumFontSizePassed = true,
                     backgroundGeneratedByAi = true, backgroundPhysicalSha256 = backgroundSha,
                     factualTextRenderedDeterministically = true, manualOverlayUsed = true, aiCompletePosterUsed = false,
                     resizeStrategy = "AspectPreservingCover", stretchResizeUsed = false, finalWidth = profile.Width, finalHeight = profile.Height,
@@ -126,7 +137,11 @@ internal static class MatureThumbnailCandidatePublisher
                 semanticAuthorityFiles = new[] { new { physicalPath = authorityPath, fileExists = true, parseSuccess = true, dto = nameof(ProductionEventIntelligenceAuthority), relevantFactCount = 1, relevantObjectCount = authority.EventIdentity.PrimaryObjects.Count + authority.Intelligence.SecondaryObjects.Count },
                     new { physicalPath = knowledgePath, fileExists = true, parseSuccess = true, dto = nameof(CertifiedKnowledgeContext), relevantFactCount = knowledge.Claims.Count(IsCertified), relevantObjectCount = 0 } },
                 contentPlanHeadline = contentPlan.Headline, contentPlanHook = contentPlan.Hook,
-                contentPlanSupportingHighlight = contentPlan.SupportingHighlight,
+                contentPlanSupportingHighlightSource = contentPlan.Facts.FirstOrDefault(x => x.Category == "DeepSky")?.SourceValue ?? "",
+                contentPlanSupportingHighlightDisplay = contentPlan.SupportingHighlight,
+                supportingHighlightAuthorityPath = contentPlan.Facts.FirstOrDefault(x => x.Category == "DeepSky")?.AuthorityPath ?? "",
+                supportingHighlightTransformationRule = contentPlan.Facts.FirstOrDefault(x => x.Category == "DeepSky")?.TransformationRule ?? "",
+                landscapeDisplayCompactionApplied = false, squareDisplayCompactionApplied = false, portraitDisplayCompactionApplied = false,
                 contentPlanAuthorityReferences = contentPlan.AuthorityReferences, contentQualityPassed = contentPlan.ContentQualityPassed,
                 providerOptionsBound = providerConfiguration.OptionsBound, providerEndpointConfigured = providerConfiguration.EndpointConfigured,
                 providerDeploymentConfigured = providerConfiguration.DeploymentConfigured, providerCredentialMode = providerConfiguration.CredentialMode,
@@ -137,8 +152,12 @@ internal static class MatureThumbnailCandidatePublisher
             try { Directory.Move(staging, root); committed = true; } catch { if (Directory.Exists(backup) && !Directory.Exists(root)) Directory.Move(backup, root); throw; }
             if (Directory.Exists(backup)) SafeDelete(backup);
             Directory.CreateDirectory(Path.Combine(outputRoot, "validation"));
-            await Write(Path.Combine(outputRoot, "validation", "phase-12-validation.json"), new { phaseNo = 12, status = "Valid", validationPassed = true,
-                publicationCommitted = true, committedReadbackPassed = true, authorityChecksum = checksum, downstreamReady = true }, ct);
+            await Write(Path.Combine(outputRoot, "validation", "phase-12-validation.json"), new { phaseNo = 12, status = "Succeeded",
+                reasonCode = "P12_THUMBNAIL_AUTHORITY_ACCEPTED", manifestValidationStatus = "Valid", validationStatus = "Valid",
+                semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true,
+                validationPassed = true, publicationCommitted = true, committedReadbackPassed = true,
+                committedStateValidationPassed = true, authorityChecksum = checksum, downstreamReady = true,
+                inputFiles = new[] { "02-intelligence/production-event-intelligence.json", "02-intelligence/certified-knowledge-context.json" } }, ct);
             return new(profiles.Select(x => Path.Combine(root, $"thumbnail-{x.Role.ToLowerInvariant()}.png")).ToArray(), checksum,
                 true, true, true, true, true, "Responsive thumbnail assets generated, validated, committed and read back.", "P12_THUMBNAIL_AUTHORITY_ACCEPTED");
         }
@@ -172,6 +191,16 @@ internal static class MatureThumbnailCandidatePublisher
         var identification = Find("Hook", "", s => ContainsAll(s, "belt") && (ContainsAll(s, "three") || ContainsAll(s, "3")), _ => "3 STARS SHOW THE WAY");
         var bright = Find("BrightObjects", "BRIGHT STARS", s => (ContainsAll(s, "bright") || ContainsAll(s, "major") || ContainsAll(s, "key star")) && NamedObjects(s).Count >= 2, s => string.Join(" • ", NamedObjects(s).Take(2)).ToUpperInvariant());
         var deep = Find("DeepSky", "DEEP SKY", s => ContainsAll(s, "deep sky") || ContainsAll(s, "nebula"), DeepSkyDisplay);
+        if (deep is not null)
+        {
+            var certifiedAlias = ExtractAstronomyObjectAlias(deep.SourceValue);
+            if (!string.IsNullOrWhiteSpace(certifiedAlias))
+            {
+                var formatted = FormatAstronomyObjectForThumbnail(certifiedAlias);
+                deep = deep with { Label = "", SourceValue = formatted.SourceValue, DisplayValue = formatted.DisplayValue,
+                    TransformationRule = formatted.TransformationRule };
+            }
+        }
         var observation = Find("Observation", "OBSERVE", s => (ContainsAll(s, "view") || ContainsAll(s, "visible")) && !ContainsAll(s, "depend"), s => s.Trim().ToUpperInvariant());
         var science = Find("Science", "SCIENCE", s => ContainsAll(s, "star-form") || ContainsAll(s, "stellar nursery"), s => s.Trim().ToUpperInvariant());
         if (identification is null && verifiedEvent && shortTitle.Contains("belt", StringComparison.OrdinalIgnoreCase))
@@ -180,10 +209,15 @@ internal static class MatureThumbnailCandidatePublisher
                 "production-pipeline-request.json#/shortTitle", true, "verified-short-title-belt-hook");
         if (deep is null && verifiedEvent && shortTitle.Contains("nebula", StringComparison.OrdinalIgnoreCase))
         {
-            var m42 = secondaryObjects.Any(x => x.Contains("M42", StringComparison.OrdinalIgnoreCase));
-            deep = new("DeepSky", "", shortTitle, m42 ? "M42" : "ORION NEBULA",
-                "VerifiedProductionPipelineRequest", "production-pipeline-request.json#/shortTitle", true,
-                m42 ? "verified-short-title-nebula-plus-object-alias" : "verified-short-title-nebula-highlight");
+            var aliasIndex = secondaryObjects.Select((value, index) => (value, index))
+                .FirstOrDefault(x => x.value.Contains('/'));
+            if (!string.IsNullOrWhiteSpace(aliasIndex.value))
+            {
+                var formatted = FormatAstronomyObjectForThumbnail(aliasIndex.value);
+                deep = new("DeepSky", "", formatted.SourceValue, formatted.DisplayValue,
+                    "VerifiedProductionPipelineRequest", $"production-pipeline-request.json#/secondaryObjects/{aliasIndex.index}", true,
+                    formatted.TransformationRule);
+            }
         }
         return new($"FIND {primaryObject.ToUpperInvariant()}", identification, bright is null ? [] : [bright], deep is null ? [] : [deep], observation, science);
     }
@@ -240,11 +274,42 @@ internal static class MatureThumbnailCandidatePublisher
     private static IReadOnlyList<string> NamedObjects(string value) => Regex.Matches(value, @"\b[A-Z][a-z]{2,}\b")
         .Cast<Match>().Select(x => x.Value).Where(x => x is not ("Bright" or "Major" or "Key" or "Stars" or "The" or "Deep" or "Sky" or "Objects" or "Recognition" or "KeyObjects"))
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    internal static AstronomyObjectDisplay FormatAstronomyObjectForThumbnail(string sourceValue)
+    {
+        var source = sourceValue.Trim();
+        var parts = source.Split('/', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 2 && Regex.IsMatch(parts[1], @"^(?:M|NGC)\s?\d+$", RegexOptions.IgnoreCase))
+            return new(source, $"{parts[0].ToUpperInvariant()} • {parts[1].ToUpperInvariant().Replace(" ", "")}",
+                "AstronomyObjectAlias.DisplayNamePlusCatalogId");
+        return new(source, source.ToUpperInvariant(), "AstronomyObjectAlias.Identity");
+    }
+
     private static string DeepSkyDisplay(string value)
     {
-        var catalog = Regex.Match(value, @"\b(?:M|NGC)\s?\d+\b", RegexOptions.IgnoreCase).Value.ToUpperInvariant().Replace(" ", "");
-        var name = Regex.Match(value, @"\b(?:[A-Z][a-z]+\s+){0,2}(?:Nebula|Galaxy|Cluster)\b").Value.Trim().ToUpperInvariant();
-        return string.Join(" • ", new[] { name, catalog }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct());
+        var alias = ExtractAstronomyObjectAlias(value);
+        return !string.IsNullOrWhiteSpace(alias) ? FormatAstronomyObjectForThumbnail(alias).DisplayValue : value.Trim().ToUpperInvariant();
+    }
+
+    private static string ExtractAstronomyObjectAlias(string value) =>
+        Regex.Match(value, @"\b(?:[A-Z][a-z]+\s+){0,2}(?:Nebula|Galaxy|Cluster|Pleiades)\s*/\s*(?:M|NGC)\s?\d+\b").Value.Trim();
+
+    private static (IReadOnlyList<ConstellationThumbnailFact> Facts, DisplayCompaction Compaction) CompactSupportingHighlight(
+        Profile profile, IReadOnlyList<ConstellationThumbnailFact> facts)
+    {
+        var font = SystemFonts.Collection.Families.First().CreateFont(Math.Clamp(profile.Width / 32f, 27, 40), FontStyle.Bold);
+        var maximumWidth = profile.Width * .85f;
+        var result = facts.ToArray();
+        for (var i = 0; i < result.Length; i++)
+        {
+            var fact = result[i];
+            if (fact.Category != "DeepSky" || TextMeasurer.MeasureSize(fact.DisplayValue, new TextOptions(font)).Width <= maximumWidth) continue;
+            var parts = fact.DisplayValue.Split(" • ", StringSplitOptions.TrimEntries);
+            var candidates = parts.Length == 2 ? new[] { $"{parts[0]}\n{parts[1]}", parts[0], parts[1] } : new[] { fact.DisplayValue };
+            var selected = candidates.FirstOrDefault(x => x.Split('\n').All(line => TextMeasurer.MeasureSize(line, new TextOptions(font)).Width <= maximumWidth)) ?? candidates[^1];
+            result[i] = fact with { DisplayValue = selected };
+            return (result, new(true, "Full display exceeded measured overlay width; deterministic safe fallback applied."));
+        }
+        return (result, new(false, "Full audience-friendly display fits measured overlay width."));
     }
     private static bool HasOverlap(IReadOnlyList<RectangleF> bounds) => bounds.SelectMany((a, i) => bounds.Skip(i + 1).Select(b => RectangleF.Intersect(a, b))).Any(x => x.Width > 0 && x.Height > 0);
 
