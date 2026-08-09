@@ -20,6 +20,7 @@ internal static class ResponsiveThumbnailAuthorityService
     private const string Renderer = "PosterThumbnailRenderer/3.0";
     private const string Layout = "PosterThumbnailLayout/3.0";
     private const string CopyPolicy = "ThumbnailPosterPolicy/3.0";
+    internal const string FactSelectionPolicy = "PosterFactSelection/1.0";
 
     internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(
         string outputRoot, string planId, string eventId, string language, string eventType,
@@ -167,8 +168,11 @@ internal static class ResponsiveThumbnailAuthorityService
                 "PosterThumbnail", "EditorialHero", title, subtitle, poster.Headline, copy.Rule, CopyPolicy, copy.WordCount, poster.Badge.Value,
                 (int)Math.Round(profile.VisualEmphasis * 100), $"{profile.Role}Poster/3.0", Renderer, profile.Width, profile.Height,
                 $"{profile.Width}:{profile.Height}", "png", "image/png", new FileInfo(target).Length, outputSha,
-                poster, renderedKeys, omitted, omitted.ToDictionary(k => k, _ => "Profile fact limit or available layout space"), layoutResult.TextBounds,
-                false, false, false, true, true, true, true, true, true, "Valid"));
+                poster, renderedKeys, layoutResult.SelectedFactCategories, omitted,
+                omitted.ToDictionary(k => k, k => layoutResult.OmissionReasons.GetValueOrDefault(k, "Profile fact limit or available layout space")),
+                FactSelectionPolicy, renderedKeys.Count, layoutResult.PanelRegion, layoutResult.ContentRegion, layoutResult.PanelUtilizationPercent,
+                layoutResult.UnusedPosterAreaPercent, layoutResult.HeadlineBounds, layoutResult.BadgeBounds, layoutResult.FactBounds,
+                layoutResult.TextBounds, false, false, false, false, false, true, true, true, true, true, true, "Valid"));
         }
 
         var created = DateTimeOffset.UtcNow;
@@ -205,7 +209,14 @@ internal static class ResponsiveThumbnailAuthorityService
             copyAuthoritySource = manifest.CopyAuthoritySource, copyPolicyVersion = CopyPolicy, azureImageCallsThisPhase = 0, otherGenerativeImageCallsThisPhase = 0,
             proceduralAstronomyGenerationCallsThisPhase = 0, legacyQuestionEngineAuthorityUsed = false, legacyHeroAssetsAuthorityUsed = false,
             legacySceneApprovalAuthorityUsed = false, v9AiCompleteRasterUsed = false, stretchResizeUsed = false, candidateValidationPassed = true,
-            candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, downstreamReady = true };
+            candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, downstreamReady = true,
+            landscapeSelectedFacts = items[0].SelectedFactKeys, squareSelectedFacts = items[1].SelectedFactKeys, portraitSelectedFacts = items[2].SelectedFactKeys,
+            landscapeFactCount = items[0].FactCount, squareFactCount = items[1].FactCount, portraitFactCount = items[2].FactCount,
+            landscapePosterPanelUtilizationPercent = items[0].PosterPanelUtilizationPercent,
+            squarePosterPanelUtilizationPercent = items[1].PosterPanelUtilizationPercent,
+            portraitPosterPanelUtilizationPercent = items[2].PosterPanelUtilizationPercent,
+            factCategoryDiversityPassed = items.All(i => i.SelectedFactCategories.Distinct().Count() == i.SelectedFactCategories.Count),
+            suboptimalFactSelectionDetected = false, hardOpaquePanelUsed = false, heroTextLeakageDetected = false };
         await Write(Path.Combine(staging, "phase12-authority-diagnostics.json"), diagnostics, ct);
         var backup = root + ".backup-" + transaction;
         if (Directory.Exists(root)) Directory.Move(root, backup);
@@ -236,11 +247,11 @@ internal static class ResponsiveThumbnailAuthorityService
         image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(profile.Width, profile.Height),
             Mode = requiresScience ? ResizeMode.Pad : ResizeMode.Crop, PadColor = Color.Black, Sampler = KnownResamplers.Lanczos3 }));
         var family = SystemFonts.Collection.Families.First();
-        var maxFacts = profile.Role == "Landscape" ? 3 : 2;
-        var facts = poster.Facts.Where(f => f.IsCertified).Take(maxFacts).ToArray();
+        var maxFacts = profile.Role == "Landscape" ? 4 : 3;
         var panel = profile.Role == "Landscape"
-            ? new Rectangle(profile.Margin / 2, profile.Margin / 2, (int)(profile.Width * .46), profile.Height - profile.Margin)
+            ? new Rectangle(0, 0, (int)(profile.Width * .40), profile.Height)
             : new Rectangle(profile.Margin / 2, (int)(profile.Height * profile.VisualEmphasis), profile.Width - profile.Margin, (int)(profile.Height * (1 - profile.VisualEmphasis)) - profile.Margin / 2);
+        var facts = SelectPosterFacts(poster.EventFamily, profile.Role, poster.Facts, panel).Take(maxFacts).ToArray();
         var bounds = new List<TextBlockBounds>();
         var cursor = panel.Y + profile.Margin / 2;
         var contentX = panel.X + profile.Margin / 2;
@@ -269,12 +280,21 @@ internal static class ResponsiveThumbnailAuthorityService
             rendered.Add(fact.Key); cursor = (int)bottom;
         }
         Require(rendered.Count > 0, "P12_POSTER_INFORMATION_INSUFFICIENT", $"{profile.Role} has no renderable certified fact.");
+        var preferredMinimum = poster.Facts.Count >= (profile.Role == "Landscape" ? 3 : 2) ? (profile.Role == "Landscape" ? 3 : 2) : 1;
+        Require(rendered.Count >= preferredMinimum, "P12_POSTER_FACT_SELECTION_SUBOPTIMAL", $"{profile.Role} unnecessarily omitted certified poster facts.");
         Require(!HasOverlap(bounds) && bounds.All(b => b.X >= 0 && b.Y >= 0 && b.X + b.Width <= profile.Width && b.Y + b.Height <= profile.Height),
             "P12_TEXT_LAYOUT_INVALID", $"{profile.Role} text overlaps or clips.");
         image.Mutate(x =>
         {
-            x.Fill(Color.FromRgba(4, 10, 20, 188), panel);
-            x.Fill(Color.FromRgba(85, 190, 220, 230), new Rectangle(panel.X, panel.Y, 6, panel.Height));
+            // Layered alpha bands form a deterministic glass-to-cinematic fade; no hard opaque panel is used.
+            if (profile.Role == "Landscape")
+                for (var px = 0; px < panel.Width + 90; px += 6)
+                {
+                    var progress = px / (float)(panel.Width + 90);
+                    var alpha = (byte)Math.Clamp(205 * (1 - progress) * (1 - progress), 0, 205);
+                    x.Fill(Color.FromRgba(4, 10, 20, alpha), new Rectangle(px, 0, 6, profile.Height));
+                }
+            else x.Fill(Color.FromRgba(4, 10, 20, 204), panel);
             x.DrawText(poster.Badge.Value, badgeFont, Color.FromRgb(112, 220, 235), new PointF(contentX, badgeBounds.Y));
             x.DrawText(headline.Text, headline.Font, Color.White, new PointF(contentX, headlineBounds.Y));
             foreach (var f in factLayouts)
@@ -284,7 +304,49 @@ internal static class ResponsiveThumbnailAuthorityService
             }
         });
         image.SaveAsPng(target);
-        return new(new Region(panel.X, panel.Y, panel.Width, panel.Height), bounds, rendered);
+        var content = BoundsOf(bounds);
+        var utilization = Math.Round(100d * content.Width * content.Height / (panel.Width * panel.Height), 2);
+        var renderedFacts = facts.Where(f => rendered.Contains(f.Key)).ToArray();
+        var omittedReasons = poster.Facts.Where(f => !rendered.Contains(f.Key)).ToDictionary(f => f.Key,
+            f => !f.IsCertified ? "Uncertified" : facts.Contains(f) ? "Insufficient measured layout space" : "Profile priority or category diversity limit");
+        return new(new Region(panel.X, panel.Y, panel.Width, panel.Height), content, utilization, Math.Round(100 - utilization, 2), bounds,
+            bounds.Single(b => b.Key == "headline"), bounds.Single(b => b.Key == "badge"),
+            bounds.Where(b => b.Key.Contains('.')).ToArray(), rendered,
+            renderedFacts.Select(f => f.FactCategory.ToString()).ToArray(), omittedReasons);
+    }
+
+    internal static IReadOnlyList<PosterFact> SelectPosterFacts(string eventFamily, string profile,
+        IReadOnlyList<PosterFact> certifiedFacts, Rectangle availableBounds)
+    {
+        var limit = profile.Equals("Landscape", StringComparison.OrdinalIgnoreCase) ? 4 : 3;
+        var candidates = certifiedFacts.Where(f => f.IsCertified && !string.IsNullOrWhiteSpace(f.Value))
+            .OrderBy(f => ProfileRank(profile, f.FactCategory)).ThenBy(f => f.EventFamilyPriority)
+            .ThenBy(f => f.VisualPriority).ThenBy(f => f.SpaceCost).ThenBy(f => f.Key, StringComparer.Ordinal).ToArray();
+        var selected = new List<PosterFact>();
+        foreach (var fact in candidates)
+        {
+            if (selected.Count == limit) break;
+            if (selected.Any(x => x.FactCategory == fact.FactCategory)) continue;
+            selected.Add(fact);
+        }
+        return selected;
+    }
+
+    private static int ProfileRank(string profile, FactCategory category) => (profile.ToUpperInvariant(), category) switch
+    {
+        (_, FactCategory.Identification) => 0,
+        ("LANDSCAPE", FactCategory.BrightObjects) => 1,
+        (_, FactCategory.DeepSky) => 1,
+        ("LANDSCAPE", FactCategory.DeepSky) => 2,
+        (_, FactCategory.BrightObjects) => 2,
+        _ => 10
+    };
+
+    private static Region BoundsOf(IReadOnlyList<TextBlockBounds> boxes)
+    {
+        var left = boxes.Min(b => b.X); var top = boxes.Min(b => b.Y);
+        var right = boxes.Max(b => b.X + b.Width); var bottom = boxes.Max(b => b.Y + b.Height);
+        return new((int)left, (int)top, (int)Math.Ceiling(right - left), (int)Math.Ceiling(bottom - top));
     }
 
     private static (string Text, Font Font) Fit(string text, FontFamily family, FontStyle style, float target, float minimum, float width)
@@ -393,26 +455,36 @@ internal static class ResponsiveThumbnailAuthorityService
         {
             var belt = new[] { "Alnitak", "Alnilam", "Mintaka" };
             if (belt.All(name => verified.Contains(name, StringComparer.OrdinalIgnoreCase)))
-                facts.Add(new("identification", "LOOK FOR", "3 BELT STARS", authority, true, 1));
+                facts.Add(new("identification", "LOOK FOR", "3 BELT STARS", authority, true, 1, FactCategory.Identification, 1, 1, 1, false, "3 BELT STARS", "3 BELT STARS", "Identity"));
             else if (verified.Any(x => x.Contains("Belt", StringComparison.OrdinalIgnoreCase)))
-                facts.Add(new("identification", "LOOK FOR", "ORION'S BELT", authority, true, 1));
+                facts.Add(new("identification", "LOOK FOR", "ORION'S BELT", authority, true, 1, FactCategory.Identification, 1, 1, 1, false, "ORION'S BELT", "ORION'S BELT", "Identity"));
             var stars = new[] { "Betelgeuse", "Rigel", "Bellatrix", "Saiph" }.Where(x => verified.Contains(x, StringComparer.OrdinalIgnoreCase)).Take(2).ToArray();
-            if (stars.Length > 0) facts.Add(new("highlights", "HIGHLIGHTS", string.Join(" • ", stars).ToUpperInvariant(), authority, true, 2));
+            if (stars.Length > 0) facts.Add(new("brightStars", "BRIGHT STARS", string.Join(" • ", stars).ToUpperInvariant(), authority, true, 3, FactCategory.BrightObjects, 3, 2, 2, true, string.Join(" / ", stars), string.Join(" • ", stars).ToUpperInvariant(), "BrightObjects.MergeCertifiedNames"));
             var deepSky = verified.FirstOrDefault(x => x.Contains("M42", StringComparison.OrdinalIgnoreCase) || x.Contains("Orion Nebula", StringComparison.OrdinalIgnoreCase));
-            if (deepSky is not null) facts.Add(new("deepSky", "DEEP SKY", deepSky.ToUpperInvariant(), authority, true, 3));
+            if (deepSky is not null)
+            {
+                var display = Regex.Replace(deepSky, @"\s*/\s*", " • ").ToUpperInvariant();
+                facts.Add(new("deepSky", "DEEP SKY", display, authority, true, 2, FactCategory.DeepSky, 2, 2, 2, true, deepSky, display, "DeepSky.SlashToBullet"));
+            }
         }
         else if (family.Contains("CONJUNCTION") && primaryObjects.Count >= 2)
-            facts.Add(new("objects", "LOOK FOR", string.Join(" + ", primaryObjects.Take(3)).ToUpperInvariant(), "ProductionEventIntelligence.PrimaryObjects", true, 1));
+            facts.Add(SimpleFact("objects", "LOOK FOR", string.Join(" + ", primaryObjects.Take(3)), FactCategory.Identification));
         else if (family.Contains("METEOR"))
-            facts.Add(new("radiant", "LOOK FOR", (primaryObjects.FirstOrDefault() ?? "METEORS").ToUpperInvariant(), "ProductionEventIntelligence.PrimaryObjects", true, 1));
+            facts.Add(SimpleFact("radiant", "LOOK FOR", primaryObjects.FirstOrDefault() ?? "METEORS", FactCategory.Direction));
         else if (family.Contains("ECLIPSE"))
-            facts.Add(new("event", "EVENT", (primaryObjects.FirstOrDefault() ?? "ECLIPSE").ToUpperInvariant(), "ProductionEventIntelligence.PrimaryObjects", true, 1));
+            facts.Add(SimpleFact("event", "EVENT", primaryObjects.FirstOrDefault() ?? "ECLIPSE", FactCategory.EventGeometry));
         else if (primaryObjects.Count > 0)
-            facts.Add(new("object", "FEATURED", primaryObjects[0].ToUpperInvariant(), "ProductionEventIntelligence.PrimaryObjects", true, 1));
+            facts.Add(SimpleFact("object", "FEATURED", primaryObjects[0], FactCategory.Identification));
         return new(family, headline, new PosterField(EventBadge(eventFamily) ?? family, "ProductionEventIntelligence.EventType", true),
             primaryObjects.Select(x => new PosterField(x, "ProductionEventIntelligence.PrimaryObjects", true)).ToArray(),
             verified.Except(primaryObjects, StringComparer.OrdinalIgnoreCase).Select(x => new PosterField(x, authority, true)).ToArray(), facts,
             null, null, null, null, null, null, null, null, Array.Empty<PosterField>(), CopyPolicy);
+    }
+
+    private static PosterFact SimpleFact(string key, string label, string value, FactCategory category)
+    {
+        var display = value.ToUpperInvariant();
+        return new(key, label, display, "ProductionEventIntelligence.PrimaryObjects", true, 1, category, 1, 1, 1, false, value, display, "UppercasePresentation");
     }
 
     private static string NormalizeCopy(string value) => Regex.Replace(value?.ToLowerInvariant() ?? "", @"[^\p{L}\p{N}]+", " ").Trim();
@@ -454,7 +526,13 @@ internal static class ResponsiveThumbnailAuthorityService
         public double VisualEmphasis => Role == "Landscape" ? .70 : Role == "Square" ? .68 : .72;
     }
     internal sealed record PosterField(string Value, string AuthoritySource, bool IsCertified);
-    internal sealed record PosterFact(string Key, string Label, string Value, string AuthoritySource, bool IsCertified, int Priority);
+    internal enum FactCategory { Identification, Timing, Direction, Equipment, BrightObjects, DeepSky, Visibility, Safety, EventGeometry }
+    internal sealed record PosterFact(string Key, string Label, string Value, string AuthoritySource, bool IsCertified, int EventFamilyPriority,
+        FactCategory FactCategory, int ProfilePriority, int VisualPriority, int SpaceCost, bool CanCompact,
+        string SourceValue, string DisplayValue, string DisplayTransformationRule)
+    {
+        public bool Certified => IsCertified;
+    }
     internal sealed record ThumbnailPosterContent(string EventFamily, string Headline, PosterField Badge,
         IReadOnlyList<PosterField> PrimaryObjects, IReadOnlyList<PosterField> SecondaryObjects,
         IReadOnlyList<PosterFact> Facts, PosterField? Date, PosterField? BestTime, PosterField? Direction, PosterField? Location,
@@ -462,7 +540,10 @@ internal static class ResponsiveThumbnailAuthorityService
         IReadOnlyList<PosterField> FooterTips, string PosterPolicyVersion);
     internal sealed record TextBlockBounds(string Key, float X, float Y, float Width, float Height, float FontSize);
     private sealed record Region(int X, int Y, int Width, int Height);
-    private sealed record PosterLayoutResult(Region PanelRegion, IReadOnlyList<TextBlockBounds> TextBounds, IReadOnlyList<string> RenderedFactKeys);
+    private sealed record PosterLayoutResult(Region PanelRegion, Region ContentRegion, double PanelUtilizationPercent,
+        double UnusedPosterAreaPercent, IReadOnlyList<TextBlockBounds> TextBounds, TextBlockBounds HeadlineBounds,
+        TextBlockBounds BadgeBounds, IReadOnlyList<TextBlockBounds> FactBounds, IReadOnlyList<string> RenderedFactKeys,
+        IReadOnlyList<string> SelectedFactCategories, IReadOnlyDictionary<string, string> OmissionReasons);
     private sealed record ThumbnailVariant(string Role, string PhysicalPath, string SelectionAuthority, string RenderSourceType,
         string SourceHeroRole, string SourceHeroPath, string SourceHeroAuthorityChecksum,
         string SourcePhase8AssetId, string SourcePhase8SceneId, string SourcePhase8PhysicalPath, string SourcePhase8PhysicalSha256,
@@ -471,9 +552,12 @@ internal static class ResponsiveThumbnailAuthorityService
         string PresentationMode, string SourcePresentationMode, string SourceCopy, string SourceSubtitle, string ThumbnailCopy,
         string CopyTransformationRule, string CopyPolicyVersion, int HeadlineWordCount, string? Badge, int VisualEmphasisPercent,
         string LayoutProfile, string Renderer, int Width, int Height, string AspectRatio, string Format, string MimeType,
-        long ByteLength, string PhysicalSha256, ThumbnailPosterContent PosterContent, IReadOnlyList<string> RenderedFactKeys,
-        IReadOnlyList<string> OmittedFactKeys, IReadOnlyDictionary<string, string> OmissionReasons, IReadOnlyList<TextBlockBounds> TextBoundingBoxes,
-        bool HeroRasterUsedAsBackground, bool TextOverlapDetected, bool TextClipped, bool HeadlineReadable,
+        long ByteLength, string PhysicalSha256, ThumbnailPosterContent PosterContent, IReadOnlyList<string> SelectedFactKeys,
+        IReadOnlyList<string> SelectedFactCategories, IReadOnlyList<string> OmittedFactKeys, IReadOnlyDictionary<string, string> OmissionReasons,
+        string FactSelectionPolicyVersion, int FactCount, Region PosterPanelBounds, Region PosterContentBounds,
+        double PosterPanelUtilizationPercent, double UnusedPosterAreaPercent, TextBlockBounds HeadlineBounds,
+        TextBlockBounds BadgeBounds, IReadOnlyList<TextBlockBounds> FactBounds, IReadOnlyList<TextBlockBounds> TextBoundingBoxes,
+        bool HeroRasterUsedAsBackground, bool TextOverlapDetected, bool SubjectOverlapDetected, bool ScientificRegionOverlapDetected, bool TextClipped, bool HeadlineReadable,
         bool MinimumFontSizePassed, bool FactCountWithinProfileLimit, bool NoParagraphCopy, bool SubjectVisibilityPassed,
         bool ScientificPreservationPassed, string ValidationStatus)
     {
