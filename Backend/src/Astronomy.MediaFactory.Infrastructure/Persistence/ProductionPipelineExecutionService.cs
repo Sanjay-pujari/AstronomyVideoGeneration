@@ -100,6 +100,9 @@ public sealed partial class ProductionPipelineExecutionService(
     // post-commit report records that transaction rather than manufacturing another id.
     private readonly ConcurrentDictionary<string, string> phase3PublicationTransactions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ResponsiveHeroResult> phase11AuthorityResults = new(StringComparer.OrdinalIgnoreCase);
+    // Phase 12's committed publisher result is the sole success authority. The
+    // generic phase writer must map it, not reconstruct semantic policy from disk.
+    private readonly ConcurrentDictionary<string, ResponsiveThumbnailPublicationResult> phase12AuthorityResults = new(StringComparer.OrdinalIgnoreCase);
     // The phase action has a legacy files-only return type. Retain the authoritative
     // Phase 9 result so the generic validation mapper can publish its commit evidence.
     private readonly ConcurrentDictionary<string, LongSceneImagePublicationResult> phase9PublicationResults = new(StringComparer.OrdinalIgnoreCase);
@@ -781,6 +784,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 : BuildPhase7RequiredOutputFailureReason(requiredOutputDiagnostics, missing);
             var inputFiles = phase11Authority?.InputFiles ?? phase10Certification?.InputFiles ?? (phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot));
             return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, inputFiles, outputs, warnings, missing, reason, missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics,
+                phaseExecutionBegan: true,
                 reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode ?? phase11Authority?.ReasonCode);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
@@ -789,7 +793,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 ? ReadPhase10TitleDiagnostics([Path.Combine(context.ExecutionContext.QuestionRoot!, "production-quality-validation-before-assembly.json")])
                 : null;
             var failedOutputs = phaseNo == 7 ? ExistingPhase7DiagnosticOutputs(context) : [];
-            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], failedOutputs, [], [ex.Message], ex.Message, true, cancellationToken, started, phase10TitleDiagnostics);
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed, [], failedOutputs, [], [ex.Message], ex.Message, true, cancellationToken, started, phase10TitleDiagnostics, phaseExecutionBegan: true);
         }
     }
 
@@ -3388,12 +3392,14 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         // Phase 12 is an artifact dependency, not a request dependency: Thumbnail alone
         // enters this route and consumes the already committed Phase 11 authority.
-        return await ResponsiveThumbnailAuthorityService.PublishAsync(
+        var result = await ResponsiveThumbnailAuthorityService.PublishAsync(
             context.OutputRoot,
             context.ExecutionContext.ContentGenerationPlanId?.ToString() ?? context.Request.PlanId.ToString(),
             context.EventId,
             context.Request.Language,
             cancellationToken);
+        phase12AuthorityResults[context.OutputRoot] = result;
+        return result.OutputFiles;
 
     }
 
@@ -15155,7 +15161,7 @@ public sealed partial class ProductionPipelineExecutionService(
         IReadOnlyList<string> InputFiles, IReadOnlyList<string> OutputFiles, IReadOnlyList<string> MissingFiles, IReadOnlyList<string> EmptyFiles,
         IReadOnlyList<string> InvalidFiles, string Phase2AuthorityPath, string? Phase2AuthorityChecksum, IReadOnlyList<string> Errors);
 
-    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, Phase10ValidationDiagnostics? phase10TitleDiagnostics = null, Phase1ExecutionOutcome? phase1Outcome = null, string? outputPath = null, string? reasonCodeOverride = null)
+    private async Task<ProductionPhaseResult> WritePhaseValidationAsync(ProductionPhaseContext context, int phaseNo, string phaseName, ProductionPhaseStatus status, IReadOnlyList<string> inputFiles, IReadOnlyList<string> outputFiles, IReadOnlyList<string> warnings, IReadOnlyList<string> errors, string reason, bool canRetry, CancellationToken cancellationToken, DateTimeOffset? startedUtc = null, Phase10ValidationDiagnostics? phase10TitleDiagnostics = null, Phase1ExecutionOutcome? phase1Outcome = null, string? outputPath = null, string? reasonCodeOverride = null, bool phaseExecutionBegan = false)
     {
         var started = startedUtc ?? DateTimeOffset.UtcNow;
         var finished = DateTimeOffset.UtcNow;
@@ -15222,6 +15228,8 @@ public sealed partial class ProductionPipelineExecutionService(
             && phase10CertificationResults.TryRemove(context.OutputRoot, out var phase10Result) ? phase10Result : null;
         var phase11Certification = phaseNo == 11 && IsSceneAssetsV3Enabled(context)
             && phase11AuthorityResults.TryRemove(context.OutputRoot, out var phase11Result) ? phase11Result : null;
+        var phase12Certification = phaseNo == 12
+            && phase12AuthorityResults.TryRemove(context.OutputRoot, out var phase12Result) ? phase12Result : null;
         if (phase3Certification is { Passed: false })
         {
             status = ProductionPhaseStatus.Failed;
@@ -15236,25 +15244,16 @@ public sealed partial class ProductionPipelineExecutionService(
             : null);
         if (phaseNo == 12)
         {
-            reasonCode = status == ProductionPhaseStatus.Succeeded
+            reasonCode = phase12Certification?.ReasonCode ?? (status == ProductionPhaseStatus.Succeeded
                 ? "P12_THUMBNAIL_AUTHORITY_ACCEPTED"
-                : Regex.Match(reason ?? string.Empty, @"^(P12_[A-Z0-9_]+):").Groups[1].Value is { Length: > 0 } code ? code : reasonCode;
-            if (status == ProductionPhaseStatus.Succeeded)
-                reason = "Responsive thumbnail assets generated, validated, committed and read back.";
+                : Regex.Match(reason ?? string.Empty, @"^(P12_[A-Z0-9_]+):").Groups[1].Value is { Length: > 0 } code ? code : reasonCode);
+            if (phase12Certification is not null)
+                reason = phase12Certification.Reason;
         }
-        var phase12ManifestPath = Path.Combine(context.OutputRoot, "12-thumbnails", "thumbnail-asset-manifest.json");
-        var phase12PublicationPath = Path.Combine(context.OutputRoot, "12-thumbnails", "phase12-publication-report.json");
-        using var phase12ManifestDocument = phaseNo == 12 && File.Exists(phase12ManifestPath) ? JsonDocument.Parse(File.ReadAllText(phase12ManifestPath)) : null;
-        using var phase12PublicationDocument = phaseNo == 12 && File.Exists(phase12PublicationPath) ? JsonDocument.Parse(File.ReadAllText(phase12PublicationPath)) : null;
-        var phase12Manifest = phase12ManifestDocument?.RootElement;
-        var phase12Publication = phase12PublicationDocument?.RootElement;
-        var phase12Accepted = status == ProductionPhaseStatus.Succeeded && phase12Manifest is not null && phase12Publication is not null
-            && GetJsonString(phase12Manifest, "validationStatus", "") == "Valid"
-            && GetJsonString(phase12Manifest, "publicationState", "") == "Committed"
-            && bool.TryParse(GetJsonString(phase12Manifest, "downstreamReady", "false"), out var p12Ready) && p12Ready
-            && bool.TryParse(GetJsonString(phase12Publication, "publicationCommitted", "false"), out var p12Committed) && p12Committed
-            && bool.TryParse(GetJsonString(phase12Publication, "committedReadbackPassed", "false"), out var p12Readback) && p12Readback;
-        var phase12Checksum = phase12Manifest is null ? null : GetJsonString(phase12Manifest, "deterministicChecksum", null!);
+        var phase12Accepted = status == ProductionPhaseStatus.Succeeded && phase12Certification is
+            { CandidateValidationPassed: true, CandidateReadbackPassed: true, PublicationCommitted: true,
+              CommittedReadbackPassed: true, DownstreamReady: true };
+        var phase12Checksum = phase12Certification?.AuthorityChecksum;
         var phase12Inputs = new[] { "11-hero/hero-asset-manifest.json", "11-hero/phase11-publication-report.json", "validation/phase-11-validation.json", "10-scene-validation/scene-asset-certification.json" }
             .Select(path => Path.Combine(context.OutputRoot, path)).ToArray();
         if (phaseNo == 12 && inputFiles.Count == 0) inputFiles = phase12Inputs;
@@ -15352,7 +15351,7 @@ public sealed partial class ProductionPipelineExecutionService(
             phase10SceneAssetsV3Validation = sceneAssetsV3Diagnostics?.Phase10SceneAssetsV3Validation,
             sceneAssetsHookDiagnostics = phaseNo is 8 or 9 or 10 ? ReadSceneAssetsHookDiagnostics(context, phaseNo) : null,
             preservedValidationFiles = BuildPreservedValidationFilesDiagnostics(context),
-            executedPhaseNumbers = status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo } : Array.Empty<int>(),
+            executedPhaseNumbers = phaseExecutionBegan || status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo } : Array.Empty<int>(),
             filesDeletedDueToOverwrite = context.DeletedFilesDueToOverwrite ?? Array.Empty<string>(),
             filesGeneratedThisRun = resultOutputFiles,
             inputFiles = phase3Certification?.InputFiles ?? inputFiles,
