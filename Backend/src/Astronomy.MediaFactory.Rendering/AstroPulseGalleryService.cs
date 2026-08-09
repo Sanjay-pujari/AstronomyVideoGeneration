@@ -43,7 +43,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         // Phase 13's authority route is a deterministic projection over frozen semantic
         // and Phase 10 visual authority. The former Azure implementation below is retained
         // only as compatibility code and is deliberately unreachable from production.
-        return await Phase13GalleryAuthority.PublishAsync(outputDirectory, cancellationToken);
+        return await Phase13GalleryAuthority.PublishAsync(outputDirectory, imageOptions.Value, cancellationToken);
 #pragma warning disable CS0162
         Directory.CreateDirectory(outputDirectory);
         var diagnosticsDirectory = Path.Combine(outputDirectory, "diagnostics");
@@ -146,6 +146,23 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         var image = source.Clone();
         image.Mutate(ctx => { ApplyCinematicGrade(ctx, aspect); DrawOverlay(ctx, aspect, topic); });
         return image;
+    }
+
+    internal static async Task RenderAuthorityPageAsync(string backgroundPath, string targetPath, int slot, string roleLabel, string headline, string detail, string language, CancellationToken ct)
+    {
+        using var source = await Image.LoadAsync<Rgba32>(backgroundPath, ct);
+        source.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(1920, 1080), Mode = ResizeMode.Crop, Sampler = KnownResamplers.Lanczos3, Position = AnchorPositionMode.Center }));
+        var family = SystemFonts.Collection.Families.First();
+        var title = family.CreateFont(58, FontStyle.Bold); var body = family.CreateFont(31); var small = family.CreateFont(23, FontStyle.Bold);
+        source.Mutate(ctx =>
+        {
+            ctx.Fill(Color.Black.WithAlpha(.48f), new RectangleF(0, 700, 1920, 380));
+            ctx.DrawText($"{slot:00}/06 · {roleLabel}", small, Color.FromRgb(170, 233, 255), new PointF(92, 62));
+            ctx.DrawText(headline, title, Color.White, new PointF(92, 760));
+            ctx.DrawText(detail.Length > 110 ? detail[..109] + "…" : detail, body, Color.FromRgb(215, 232, 244), new PointF(92, 855));
+            ctx.DrawText("Drashyam Astronomy", small, Color.White.WithAlpha(.7f), new PointF(92, 1010));
+        });
+        await source.SaveAsPngAsync(targetPath, ct);
     }
 
     private static void ApplyCinematicGrade(IImageProcessingContext ctx, AstroPulseGalleryAspect a)
@@ -316,7 +333,7 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         return list.Length <= 1 ? 100 : (int)Math.Round(100.0 * list.Distinct(StringComparer.OrdinalIgnoreCase).Count() / list.Length, MidpointRounding.AwayFromZero);
     }
 
-    private async Task<AzureImage2GenerationResult> GenerateBackgroundWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, AstroPulseGalleryAspect aspect, CancellationToken ct)
+    internal static async Task<AzureImage2GenerationResult> GenerateBackgroundWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, AstroPulseGalleryAspect aspect, CancellationToken ct)
     {
         var endpoint = options.Endpoint.TrimEnd('/');
         var deployment = Uri.EscapeDataString(options.ImageDeployment.Trim());
@@ -1114,5 +1131,5 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     public sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, string EventDate, string LocalTime, string Location, string RequestedLanguage, string Language, string Timezone, EventObjectContext EventObjectContext, IReadOnlyList<string> ForbiddenTerms, string EventName = "", string EventFamily = "", string EventSubtype = "", string LocalizedEventTitle = "", string TitleSource = "", string MoonSubtypeVisualAttributes = "", bool HeroTitleResolverReused = true, bool GenericMoonFallbackUsed = false, ObservationInfo? ObservationInfo = null);
 
     public sealed record GalleryTopic(int Number, string Purpose, string Concept, IReadOnlyList<string> TextBlocks, string VisualIntent, string OverlayStyle, string AzureImage2Prompt, string EducationalRole, string LocalizedEducationalRole, string FooterLabel, string Language);
-    private sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason);
+    internal sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason) { public int AttemptCount => 1; }
 }

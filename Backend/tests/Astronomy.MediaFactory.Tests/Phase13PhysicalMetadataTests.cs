@@ -21,7 +21,7 @@ public sealed class Phase13PhysicalMetadataTests
     public async Task GalleryPhysicalMetadataUsesDecodedDimensions()
     {
         var metadata = await CreateAndRead(1);
-        Assert.Equal((1080, 1080, "PNG", "image/png"), (metadata.Width, metadata.Height, metadata.Format, metadata.MimeType));
+        Assert.Equal((1920, 1080, "PNG", "image/png"), (metadata.Width, metadata.Height, metadata.Format, metadata.MimeType));
     }
 
     [Fact]
@@ -38,8 +38,8 @@ public sealed class Phase13PhysicalMetadataTests
     public void GalleryManifestUsesValidatedPhysicalMetadata()
     {
         var source = File.ReadAllText(SourcePath("src/Astronomy.MediaFactory.Rendering/Phase13GalleryAuthority.cs"));
-        Assert.Contains("generatedFileMetadata, headline", source);
-        Assert.Contains("outputPhysicalSha256 = generatedFileMetadata.PhysicalSha256", source);
+        Assert.Contains("physicalMetadata = metadata", source);
+        Assert.Contains("physicalSha256 = physical.PhysicalSha256", source);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public sealed class Phase13PhysicalMetadataTests
     private static async Task<Phase13GalleryAuthority.GeneratedFileMetadata> CreateAndRead(int slot)
     {
         var path = Temp($"gallery-{slot:00}.png");
-        using (var image = new Image<Rgba32>(1080, 1080)) await image.SaveAsPngAsync(path);
+        using (var image = new Image<Rgba32>(1920, 1080)) await image.SaveAsPngAsync(path);
         var metadata = await Phase13GalleryAuthority.ReadPhysicalMetadataAsync(path, $"13-gallery/gallery-{slot:00}.png", default);
         Assert.Equal(Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(path))).ToLowerInvariant(), metadata.PhysicalSha256);
         return metadata;

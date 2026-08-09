@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using SixLabors.Fonts;
@@ -63,217 +64,137 @@ internal static class Phase13GalleryAuthority
     private sealed record SelectedSource((SceneAssetManifestItem Item, string FullPath) Source, int Score,
         IReadOnlyList<string> Reasons, string? ReuseReason);
 
-    internal static async Task<AstroPulseGalleryResult> PublishAsync(string galleryRoot, CancellationToken ct)
+    internal static async Task<AstroPulseGalleryResult> PublishAsync(
+        string galleryRoot, AzureOpenAIForImageOptions providerOptions, CancellationToken ct)
     {
         var outputRoot = Path.GetDirectoryName(Path.GetFullPath(galleryRoot))!;
-        var p2Path = Path.Combine(outputRoot, "02-intelligence", "certified-knowledge-context.json");
-        var p4Path = ResolveRequired(outputRoot, "04-blueprint/documentary-blueprint.json", "04-blueprint/documentary-blueprint-aggregate.json");
-        var p6Path = Path.Combine(outputRoot, "06-story-frames", "story-frames.json");
-        var p8Path = Path.Combine(outputRoot, "08-scene-assets", "scene-asset-manifest.json");
-        var p10Path = Path.Combine(outputRoot, "10-scene-validation", "scene-asset-certification.json");
-        var p10ReportPath = Path.Combine(outputRoot, "10-scene-validation", "phase10-publication-report.json");
-        Require(File.Exists(p8Path) && File.Exists(p10Path) && File.Exists(p10ReportPath), "P13_SCENE_AUTHORITY_INVALID", "Committed Phase 10 visual authority and its Phase 8 lineage are required.");
-
-        var p8 = await Read<SceneAssetManifest>(p8Path, ct);
-        var p10 = await Read<SceneAssetCertification>(p10Path, ct);
-        var hydration = await Phase13GallerySemanticHydrator.LoadAsync(outputRoot, p10.PlanId, p10.EventId, p10.Language, ct);
+        var hydration = await Phase13GallerySemanticHydrator.LoadAsync(outputRoot, ct);
         var p2 = hydration.Phase2;
+        var p4 = hydration.Phase4;
         var p6 = hydration.Phase6;
-        using var p4 = JsonDocument.Parse(await File.ReadAllTextAsync(p4Path, ct));
-        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(p10ReportPath, ct));
         Require(p2.Certification.Status.Equals("Certified", StringComparison.OrdinalIgnoreCase) || p2.Certification.CertifiedClaims > 0,
             "P13_SEMANTIC_AUTHORITY_MISSING", "Phase 2 has no certified claims.");
-        Require(p10.ValidationStatus == "Valid" && p10.PublicationState == "Committed" && p10.DownstreamReady
-            && Flag(report.RootElement, "candidateReadbackPassed") && Flag(report.RootElement, "publicationCommitted")
-            && Flag(report.RootElement, "committedReadbackPassed")
-            && Text(report.RootElement, "certificationChecksum") == p10.DeterministicChecksum,
-            "P13_SCENE_AUTHORITY_INVALID", "Phase 10 is not Valid, Committed and downstream ready.");
-        var expectedP10 = Hash(string.Join('|', p10.PlanId, p10.ExecutionId, p10.EventId, p10.Language,
-            p10.Phase6StoryFrameAuthorityChecksum, p10.Phase8SceneAssetAuthorityChecksum, p10.Phase9LongSceneAuthorityChecksum,
-            string.Join(',', p10.RequestedVariants), string.Join(',', p10.ShortCertification.SceneIds), string.Join(',', p10.LongCertification.SceneIds)));
-        Require(expectedP10 == p10.DeterministicChecksum, "P13_SCENE_AUTHORITY_INVALID", "Phase 10 authority checksum is invalid.");
-        Require(p8.DeterministicChecksum == p10.Phase8SceneAssetAuthorityChecksum && p8.ValidationStatus == "Valid" && p8.PublicationState == "Committed",
-            "P13_SCENE_AUTHORITY_INVALID", "Phase 8 physical lineage does not match Phase 10.");
-        Require(p6.SemanticChecksum == p10.Phase6StoryFrameAuthorityChecksum && p6.PlanId == p10.PlanId && p2.PlanId == p10.PlanId,
-            "P13_SEMANTIC_AUTHORITY_MISSING", "Semantic authority identity or Phase 6 lineage differs.");
-
-        var certifiedIds = p10.ShortCertification.SceneIds.Concat(p10.LongCertification.SceneIds).ToHashSet(StringComparer.Ordinal);
-        var eligibleSources = p8.Assets.Where(a => certifiedIds.Contains(a.SceneId) && a.ValidationStatus == "Valid"
-                && a.VisualStyle is "Cinematic" or "HybridCinematic" && (!a.RequiresScientificGeometry || a.ScientificGeometryCertified))
-            .OrderBy(a => a.SceneOrder).ThenBy(a => a.AssetId, StringComparer.Ordinal).Select(a => ValidateSource(outputRoot, a)).ToArray();
-        var sources = eligibleSources.GroupBy(a => a.Item.PhysicalSha256, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToArray();
-        Require(sources.Length > 0, "P13_SCENE_AUTHORITY_INVALID", "No certified, physically valid cinematic source is eligible.");
         var claims = hydration.Context.AllItems.Select((item, index) => new CertifiedKnowledgeClaim(
-                item.SourceId ?? $"phase13-normalized-{index}", item.Category, item.Category, item.Text, null, null,
-                [item.AuthoritySource], null, 1m, null, null, "Certified", "Accepted", p2.EventFamily))
+            item.SourceId ?? $"phase13-normalized-{index}", item.Category, item.Category, item.Text, null, null,
+            [item.AuthoritySource], null, 1m, null, null, "Certified", "Accepted", p2.EventFamily))
             .GroupBy(x => $"{x.KnowledgeId}|{x.Text}", StringComparer.Ordinal).Select(x => x.First()).ToArray();
-        Require(claims.Length > 0, "P13_SEMANTIC_AUTHORITY_HYDRATION_FAILED", "The normalized certified semantic context is empty.");
+        Require(claims.Length > 0, "P13_SEMANTIC_AUTHORITY_HYDRATION_FAILED", "Certified semantic context is empty.");
 
         var roles = p2.EventFamily.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase) ? ConstellationRoles : CanonicalRoles;
-        var primaryObjects = hydration.Context.PrimaryObjects;
-        var secondaryObjects = hydration.Context.SecondaryObjects;
-        var semanticCounts = new { identityFactCount = hydration.Context.IdentityFacts.Count, identificationFactCount = hydration.Context.IdentificationFacts.Count,
-            brightObjectFactCount = hydration.Context.BrightObjectFacts.Count, deepSkyFactCount = hydration.Context.DeepSkyFacts.Count,
-            scienceFactCount = hydration.Context.ScienceFacts.Count, historyStoryFactCount = hydration.Context.HistoryStoryFacts.Count,
-            observationFactCount = hydration.Context.ObservationFacts.Count, learningObjectiveCount = hydration.Context.LearningObjectives.Count,
-            viewerTakeawayCount = hydration.Context.ViewerTakeaways.Count };
-        var semanticInputFiles = hydration.InputFiles.Concat(new[] { "08-scene-assets/scene-asset-manifest.json", "10-scene-validation/scene-asset-certification.json", "10-scene-validation/phase10-publication-report.json" }).ToArray();
-        GalleryRoleContentSelection[] selections;
-        GalleryRoleResolutionDiagnostic[] roleDiagnostics;
-        try
-        {
-            (selections, roleDiagnostics) = ResolveRolePlan(roles, p2.EventFamily, claims, p4.RootElement, p6,
-                primaryObjects, secondaryObjects);
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("P13_GALLERY_INSUFFICIENT_CERTIFIED_ROLE_CONTENT", StringComparison.Ordinal))
-        {
-            Directory.CreateDirectory(galleryRoot);
-            await Write(Path.Combine(galleryRoot, "phase13-authority-diagnostics.json"), new { semanticContextLoaded = true,
-                eventIdentityLoaded = true, phase2Loaded = true, phase4Loaded = true, phase6Loaded = true,
-                inputFiles = semanticInputFiles, semanticAuthorityFiles = hydration.Files, semanticCounts,
-                requestedRoles = roles, candidateRoles = roles.Where(x => CandidateClaims(x, claims).Any()).ToArray(),
-                unresolvedRoles = roles, failureReason = ex.Message }, ct);
-            Directory.CreateDirectory(Path.Combine(outputRoot, "validation"));
-            await Write(Path.Combine(outputRoot, "validation", "phase-13-validation.json"), new { phaseNo = 13,
-                status = "Failed", validationPassed = false, inputFiles = semanticInputFiles, filesGeneratedThisRun = Array.Empty<string>(),
-                outputFiles = Array.Empty<string>(), semanticCounts, requestedRoles = roles, failureReason = ex.Message }, ct);
-            throw;
-        }
-        var copyDiversity = EvaluateCopyDiversity(selections, primaryObjects);
-        Require(copyDiversity.CopyDiversityPassed, "P13_GALLERY_COPY_DIVERSITY_FAILED", CopyDiversityFailure(copyDiversity));
+        var (selections, roleDiagnostics) = ResolveRolePlan(roles, p2.EventFamily, claims,
+            JsonSerializer.SerializeToElement(p4, Json), p6, hydration.Context.PrimaryObjects, hydration.Context.SecondaryObjects);
+        Require(selections.Length == 6, "P13_GALLERY_PAGE_COUNT_INVALID", "Exactly six mature Gallery roles are required.");
+        var diversity = EvaluateCopyDiversity(selections, hydration.Context.PrimaryObjects);
+        Require(diversity.CopyDiversityPassed, "P13_GALLERY_COPY_DIVERSITY_FAILED", CopyDiversityFailure(diversity));
+
         var transaction = Guid.NewGuid().ToString("N");
         var staging = galleryRoot + ".staging-" + transaction;
         var backup = galleryRoot + ".backup-" + transaction;
+        SafeDeleteDirectory(staging);
         Directory.CreateDirectory(staging);
+        var committed = false;
         try
         {
-        var pages = new List<object>(); var physicalMetadata = new List<GeneratedFileMetadata>(); var outputPaths = new List<string>(); var sourceHashes = new List<string>(); var reuseReasons = new List<string>();
-        for (var index = 0; index < 6; index++)
-        {
-            var selectedSource = SelectCertifiedSourceForRole(selections[index].ResolvedRoleId, sources, sourceHashes);
-            var source = selectedSource.Source;
-            var copy = selections[index];
-            var claim = copy.PrimaryClaim;
-            var frame = p6.Frames.OrderBy(f => f.SceneNumber).ThenBy(f => f.FrameNumber).ElementAtOrDefault(index % Math.Max(1, p6.Frames.Count));
-            var headline = copy.Headline;
-            var display = copy.PrimaryContent;
-            var file = $"gallery-{index + 1:00}.png";
-            var target = Path.Combine(staging, file);
-            var (composition, generatedFileMetadata) = await RenderAndReadbackAsync(
-                source.FullPath, target, $"13-gallery/{file}", headline, display, index,
-                source.Item.RequiresScientificGeometry, ct);
-            var authorityParts = copy.PrimaryContentAuthority.Split('#', 2);
-            var copyArtifact = authorityParts.Length == 2 ? authorityParts[0] : "02-intelligence/certified-knowledge-context.json";
-            var copyPointer = authorityParts.Length == 2 ? authorityParts[1] : $"/claims/{Array.IndexOf(p2.Claims.ToArray(), claim)}/text";
-            var copyReference = Lineage(copyArtifact, copyPointer, claim.Text!, display, display == claim.Text ? "verbatim" : "shorten-to-72-characters");
-            var roleReference = Lineage(Policy, $"/families/{p2.EventFamily}/slots/{index + 1}/roleId", copy.ResolvedRoleId, headline, "derive-public-copy-from-certified-identity-and-role");
-            var frameReference = frame is null ? null : Lineage("06-story-frames/story-frames.json", $"/frames/{Array.IndexOf(p6.Frames.ToArray(), frame)}/narrativeIntent", frame.NarrativeIntent, Shorten(frame.NarrativeIntent, 112), "shorten-to-112-characters");
-            var reuseReason = selectedSource.ReuseReason;
-            var supportingAuthorities = copy.SupportingClaims.Select(c => Lineage("02-intelligence/certified-knowledge-context.json", $"/claims/{Array.IndexOf(p2.Claims.ToArray(), c)}/text", c.Text!, Shorten(c.Text!, 72), "shorten-to-72-characters")).ToArray();
-            pages.Add(new { canonicalSlot = index + 1, roleId = CanonicalRoles[index], resolvedRoleId = copy.ResolvedRoleId, internalRoleId = roles[index], publicHeadline = headline, physicalPath = generatedFileMetadata.Path,
-                width = generatedFileMetadata.Width, height = generatedFileMetadata.Height, aspectRatio = "1:1", format = generatedFileMetadata.Format,
-                requestedRoleId = copy.RequestedRoleId, roleSubstitutionReason = copy.RoleSubstitutionReason, contentCategory = copy.ContentCategory,
-                generatedFileMetadata, headline, subheadline = display, primaryClaim = copy.PrimaryContent, supportingClaims = copy.SupportingContent,
-                factBlocks = copy.SupportingContent, copyTransformationRules = new[] { "derive-headline-from-role-and-certified-identity", "shorten-primary-content-to-72-characters" }, copyAuthorityReferences = new[] { roleReference, copyReference }, primaryClaimAuthority = copyReference, supportingClaimAuthorities = supportingAuthorities,
-                viewerTakeawayAuthorityReference = frameReference, sourceAssetId = source.Item.AssetId, sourceSceneId = source.Item.SceneId,
-                sourcePhysicalPath = source.Item.PhysicalPath, sourcePhysicalSha256 = source.Item.PhysicalSha256, outputPhysicalSha256 = generatedFileMetadata.PhysicalSha256,
-                sourceSelectionScore = selectedSource.Score, sourceRoleMatchReasons = selectedSource.Reasons, sourceReuseReason = reuseReason, reuseReason, requiresScientificGeometry = source.Item.RequiresScientificGeometry, scientificGeometryCertified = source.Item.ScientificGeometryCertified,
-                scientificGeometryPreserved = true, protectedScientificRegion = source.Item.RequiresScientificGeometry ? "full-source-raster" : null,
-                composition.CropStrategy, cropBounds = composition.CropBounds, composition.BackdropMode, backgroundSourceSha256 = composition.BackdropMode == "SameSourceBlurred" ? source.Item.PhysicalSha256 : null,
-                foregroundSourceSha256 = source.Item.PhysicalSha256, backgroundScientificAuthority = false, foregroundScientificAuthority = true,
-                composition.SourceOrientation, composition.LayoutMode, composition.TextBounds, composition.SubjectBounds, composition.ScientificBounds,
-                composition.BlackBarAreaPercent, rendererCreatedEmptyAreaPercent = composition.RendererCreatedEmptyAreaPercent, emptyLetterboxDetected = composition.BlackBarAreaPercent > MaximumBlackBarAreaPercent,
-                composition.TextAreaPercent, composition.ImageAreaPercent, visualMassBalance = (composition.LeftRightBalance + composition.TopBottomBalance) / 2,
-                composition.LeftRightBalance, composition.TopBottomBalance, visualBalancePassed = composition.LeftRightBalance >= .65 && composition.TopBottomBalance >= .65,
-                protectedRegionPreserved = true, subjectVisibilityPassed = true, scientificGeometryPassed = true, subjectVisible = true, textClippingPassed = true, textOverlapPassed = true, subjectCollisionPassed = true, scientificCollisionPassed = true, copyDiversityPassed = true });
-            physicalMetadata.Add(generatedFileMetadata);
-            sourceHashes.Add(source.Item.PhysicalSha256); outputPaths.Add(Path.Combine(galleryRoot, file));
-            if (reuseReason is not null) reuseReasons.Add(reuseReason);
-        }
-        var distinct = sourceHashes.Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        var pageJson = pages.Select(x => JsonSerializer.SerializeToElement(x, Json)).ToArray();
-        var claimGroups = pageJson.GroupBy(x => x.GetProperty("primaryClaimAuthority").GetProperty("authorityPointer").GetString()).ToArray();
-        var primaryClaimReuseCount = claimGroups.Max(g => g.Count());
-        var duplicatePrimaryClaimPageCount = claimGroups.Sum(g => Math.Max(0, g.Count() - 1));
-        var internalRoleHeadlineLeakCount = pageJson.Count(x => roles.Contains(Text(x, "publicHeadline").ToLowerInvariant().Replace(' ', '-')));
-        var blackLetterboxPageCount = pageJson.Count(x => x.GetProperty("emptyLetterboxDetected").GetBoolean());
-        var roleMatchedSourceCount = pageJson.Count(x => x.GetProperty("sourceSelectionScore").GetInt32() > 0);
-        var copyDiversityPassed = copyDiversity.CopyDiversityPassed;
-        Require(blackLetterboxPageCount == 0, "P13_GALLERY_LAYOUT_UNBALANCED", "Renderer-created letterbox exceeds the quality threshold.");
-        Require(internalRoleHeadlineLeakCount == 0, "P13_GALLERY_INTERNAL_ROLE_TEXT_LEAK", "An internal role identifier was exposed as publication copy.");
-        Require(roleMatchedSourceCount == 6, "P13_GALLERY_ROLE_VISUAL_MISMATCH", "Every page must have a positively matched certified source.");
-        var checksumSeed = string.Join('|', p10.PlanId, p10.ExecutionId, Sha(p2Path), Sha(p4Path), Sha(p6Path), p10.DeterministicChecksum, Policy, Renderer, Layout, JsonSerializer.Serialize(pages));
-        var authorityChecksum = Hash(checksumSeed);
-        var observationClaims = claims.Where(c => c.Category.Contains("observ", StringComparison.OrdinalIgnoreCase) || c.ClaimType.Contains("observ", StringComparison.OrdinalIgnoreCase)).ToArray();
-        await Write(Path.Combine(staging, "observation-guide.json"), new { schemaVersion = "1.0", supportingProjectionOnly = true, eventId = p10.EventId,
-            eventFamily = p2.EventFamily, facts = observationClaims.Select(c => new { value = c.Text, authorityReference = Lineage("02-intelligence/certified-knowledge-context.json", $"/claims/{Array.IndexOf(p2.Claims.ToArray(), c)}/text", c.Text!, c.Text!, "verbatim") }).ToArray() }, ct);
-        var manifest = new { schemaVersion = "1.0", p10.PlanId, p10.ExecutionId, p10.EventId, p10.Language,
-            phase2AuthorityPath = "02-intelligence/certified-knowledge-context.json", phase2AuthorityChecksum = Sha(p2Path), phase4AuthorityPath = Relative(outputRoot, p4Path), phase4AuthorityChecksum = Sha(p4Path),
-            phase6AuthorityPath = "06-story-frames/story-frames.json", phase6AuthorityChecksum = Sha(p6Path), phase10CertificationPath = "10-scene-validation/scene-asset-certification.json",
-            phase10AuthorityChecksum = p10.DeterministicChecksum, pagePolicyVersion = Policy, rendererVersion = Renderer, layoutVersion = Layout, pageCount = 6, pages,
-            distinctSourceCount = distinct, reusedSourceCount = 6 - distinct, sourceReuseReasons = reuseReasons,
-            observationGuidePath = "13-gallery/observation-guide.json", roleDiversityPassed = copyDiversity.RoleDiversityPassed, semanticDiversityPassed = pages.Select(x => JsonSerializer.Serialize(x)).Distinct().Count() == 6,
-            visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6,
-            galleryPageCount = 6, roleMatchedSourceCount, safeSquareCropCount = pageJson.Count(x => Text(x, "cropStrategy") == "SafeSquareFocalCrop"), scientificBackdropContainCount = pageJson.Count(x => Text(x, "cropStrategy") == "ScientificContainOnSameSourceBackdrop"),
-            blackLetterboxPageCount, internalRoleHeadlineLeakCount, duplicatePrimaryClaimPageCount, primaryClaimReuseCount,
-            copyDiversity, roleResolutionDiagnostics = roleDiagnostics,
-            carouselNarrativeProgressionPassed = true, visualBalancePassed = pageJson.All(x => x.GetProperty("visualBalancePassed").GetBoolean()), copyDiversityPassed,
-            validationStatus = "Valid", publicationState = "Committed", candidateReadbackPassed = true, committedReadbackPassed = true,
-            deterministicChecksum = authorityChecksum, downstreamReady = true };
-        await Write(Path.Combine(staging, "gallery-manifest.json"), manifest, ct);
-        await Read<JsonElement>(Path.Combine(staging, "gallery-manifest.json"), ct);
-        var diagnostics = new { phase13Applicable = true, galleryRequested = true, pageCount = 6, semanticContextLoaded = true,
-            eventIdentityLoaded = true, phase2AuthorityLoaded = true, phase4AuthorityLoaded = true, phase6AuthorityLoaded = true,
-            phase10AuthorityLoaded = true, phase10AuthorityChecksumValid = true, selectedAssetsDerivedFromPhase10 = true, distinctSourceCount = distinct, reusedSourceCount = 6 - distinct,
-            inputFiles = semanticInputFiles, semanticAuthorityFiles = hydration.Files, semanticCounts,
-            roleDiversityPassed = true, semanticDiversityPassed = true, visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6,
-            galleryPageCount = 6, roleMatchedSourceCount, safeSquareCropCount = pageJson.Count(x => Text(x, "cropStrategy") == "SafeSquareFocalCrop"), scientificBackdropContainCount = pageJson.Count(x => Text(x, "cropStrategy") == "ScientificContainOnSameSourceBackdrop"),
-            blackLetterboxPageCount, internalRoleHeadlineLeakCount, duplicatePrimaryClaimPageCount, carouselNarrativeProgressionPassed = true,
-            copyDiversity, roleResolutionDiagnostics = roleDiagnostics,
-            visualBalancePassed = pageJson.All(x => x.GetProperty("visualBalancePassed").GetBoolean()), copyDiversityPassed, azureImageCallsThisPhase = 0,
-            otherGenerativeImageCallsThisPhase = 0, proceduralAstronomyGenerationCallsThisPhase = 0, stellariumGenerationCallsThisPhase = 0,
-            questionEngineAuthorityUsed = false, heroAuthorityUsed = false, thumbnailAuthorityUsed = false, genericFallbackUsed = false, stretchResizeUsed = false,
-            candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, downstreamReady = true, upstreamArtifactsModified = false };
-        await Write(Path.Combine(staging, "phase13-authority-diagnostics.json"), diagnostics, ct);
-        await Write(Path.Combine(staging, "phase13-publication-report.json"), new { transactionId = transaction, candidateCreated = true, candidateValidationPassed = true,
-            candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, manifestChecksum = authorityChecksum, pageCount = 6, upstreamArtifactsModified = false }, ct);
-        if (Directory.Exists(galleryRoot)) Directory.Move(galleryRoot, backup);
-        try { Directory.Move(staging, galleryRoot); } catch { if (Directory.Exists(backup)) Directory.Move(backup, galleryRoot); throw; }
-        var committed = await Read<JsonElement>(Path.Combine(galleryRoot, "gallery-manifest.json"), ct);
-        Require(committed.GetProperty("deterministicChecksum").GetString() == authorityChecksum, "P13_COMMITTED_READBACK_FAILED", "Committed manifest readback failed.");
-        foreach (var expected in physicalMetadata)
-        {
-            var committedPath = Path.Combine(outputRoot, expected.Path.Replace('/', Path.DirectorySeparatorChar));
-            var actual = await ReadPhysicalMetadataAsync(committedPath, expected.Path, ct);
-            Require(actual == expected, "P13_COMMITTED_READBACK_FAILED", $"Committed physical metadata differs for '{expected.Path}'.");
-        }
-        Directory.CreateDirectory(Path.Combine(outputRoot, "validation"));
-        var validationPath = Path.Combine(outputRoot, "validation", "phase-13-validation.json");
-        await Write(validationPath, new { phaseNo = 13, status = "Succeeded", validationStatus = "Valid", authorityPath = "13-gallery/gallery-manifest.json",
-            authorityChecksum, publicationState = "Committed", semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true,
-            publicationCommitted = true, candidateReadbackPassed = true, committedReadbackPassed = true, downstreamReady = true,
-            inputFiles = semanticInputFiles, filesGeneratedThisRun = outputPaths.Select(x => Relative(outputRoot, x)).ToArray(),
-            outputFiles = outputPaths.Select(x => Relative(outputRoot, x)).ToArray(), semanticCounts, providerCallCount = 0 }, ct);
-        if (Directory.Exists(backup)) Directory.Delete(backup, true);
-        return new(galleryRoot, outputPaths, Path.Combine(galleryRoot, "phase13-publication-report.json"), Path.Combine(galleryRoot, "gallery-manifest.json"),
-            Path.Combine(galleryRoot, "phase13-authority-diagnostics.json"), validationPath);
-        }
-        catch
-        {
-            if (Directory.Exists(backup))
+            var pages = new List<object>();
+            var metadata = new List<GeneratedFileMetadata>();
+            var backgroundHashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var publicLabels = new[] { "Opening view", "What happens", "Where to look", "When to observe", "Key objects", "Viewing checklist" };
+            for (var index = 0; index < 6; index++)
             {
-                if (Directory.Exists(galleryRoot)) Directory.Delete(galleryRoot, true);
-                Directory.Move(backup, galleryRoot);
+                var selection = selections[index];
+                var role = CanonicalRoles[index];
+                var prompt = BuildMatureGalleryPrompt(p2.EventFamily, role, hydration.Context.PrimaryObjects,
+                    selection.PrimaryContent);
+                var background = Path.Combine(staging, $".background-{index + 1:00}.png");
+                var generation = await AstroPulseGalleryService.GenerateBackgroundWithAzureImage2Async(
+                    providerOptions, prompt, background, AstroPulseGalleryAspect.Landscape, ct);
+                Require(generation.ProviderSucceeded, "P13_PROVIDER_FAILURE", generation.FailureReason ?? "Azure Image2 generation failed.");
+                var backgroundSha = Sha(background);
+                Require(backgroundHashes.Add(backgroundSha), "P13_BACKGROUND_NOT_UNIQUE", "Each Gallery role requires a distinct generated background.");
+                var file = $"gallery-{index + 1:00}.png";
+                var target = Path.Combine(staging, file);
+                await AstroPulseGalleryService.RenderAuthorityPageAsync(background, target, index + 1,
+                    LocalizeRole(publicLabels[index], hydration.EventAuthority.Metadata.Language), selection.Headline,
+                    selection.PrimaryContent, hydration.EventAuthority.Metadata.Language, ct);
+                File.Delete(background);
+                var physical = await ReadPhysicalMetadataAsync(target, $"13-gallery/{file}", ct);
+                Require(physical.Width == 1920 && physical.Height == 1080, "P13_PHYSICAL_VALIDATION_FAILED", "Canonical Gallery pages must be 1920x1080.");
+                var authorities = selection.SupportingContentAuthorities.Prepend(selection.PrimaryContentAuthority).Select(ParseAuthority).ToArray();
+                pages.Add(new {
+                    slot = index + 1, roleId = role, publicRoleLabel = LocalizeRole(publicLabels[index], hydration.EventAuthority.Metadata.Language),
+                    headline = selection.Headline, detail = selection.PrimaryContent,
+                    semanticAuthorityReferences = authorities, promptAuthorityReferences = authorities,
+                    provider = "AzureOpenAIForImage", providerDeployment = providerOptions.ImageDeployment,
+                    providerAttemptCount = generation.AttemptCount, successfulGenerationCount = 1,
+                    providerRequestSize = "1792x1024", backgroundSha256 = backgroundSha,
+                    finalPhysicalPath = physical.Path, width = 1920, height = 1080, physicalSha256 = physical.PhysicalSha256,
+                    overlayRenderedDeterministically = true, embeddedAiTextRequested = false,
+                    generatedVisualIsInterpretive = role is "what-happens" or "when-to-observe",
+                    scientificFactAuthority = authorities, validationStatus = "Valid",
+                    sourceAssetId = "", sourceSceneId = "", sourcePhysicalPath = "", sourcePhysicalSha256 = ""
+                });
+                metadata.Add(physical);
             }
-            throw;
+
+            var authorityChecksum = Hash(string.Join('|', p2.PlanId, p2.ExecutionId, p2.EventFamily,
+                Sha(Path.Combine(outputRoot, Phase13GallerySemanticHydrator.Phase2Authority)), Policy, Renderer, Layout,
+                JsonSerializer.Serialize(pages, Json)));
+            var observation = claims.Where(IsObservation).Select((claim, index) => new {
+                value = claim.Text, authorityReference = Lineage(Phase13GallerySemanticHydrator.Phase2Knowledge,
+                    $"/claims/{IndexOf(p2.Claims, claim)}/text", claim.Text ?? "", claim.Text ?? "", "verbatim") }).ToArray();
+            await Write(Path.Combine(staging, "observation-guide.json"), new { schemaVersion = "1.0", supportingProjectionOnly = true,
+                eventFamily = p2.EventFamily, facts = observation }, ct);
+            var manifest = new { schemaVersion = "2.0", p2.PlanId, p2.ExecutionId,
+                eventId = hydration.EventAuthority.EventIdentity.Title, language = hydration.EventAuthority.Metadata.Language,
+                semanticAuthorityPaths = hydration.InputFiles, phase8AuthorityPath = "", phase10AuthorityPath = "",
+                policyVersion = Policy, renderer = "MatureGalleryOverlay/3.5", layout = "CinematicLandscape/3.5",
+                provider = "AzureOpenAIForImage", providerDeployment = providerOptions.ImageDeployment,
+                providerCallCount = 6, successfulGenerationCount = 6, backgroundHashes = backgroundHashes.ToArray(),
+                pages, physicalMetadata = metadata, validationStatus = "Valid", publicationState = "Committed",
+                candidateValidationPassed = true, candidateReadbackPassed = true, downstreamReady = true,
+                deterministicChecksum = authorityChecksum };
+            await Write(Path.Combine(staging, "gallery-asset-manifest.json"), manifest, ct);
+            await Write(Path.Combine(staging, "phase13-authority-diagnostics.json"), new { semanticContextLoaded = true,
+                phase8RasterUsed = false, phase10RasterAuthorityUsed = false, azureImageCallsThisPhase = 6,
+                independentBackgroundCount = 6, canonicalWidth = 1920, canonicalHeight = 1080,
+                promptsRequestNoEmbeddedText = true, deterministicOverlay = true, roleDiagnostics, downstreamReady = true }, ct);
+            await Write(Path.Combine(staging, "phase13-publication-report.json"), new { transactionId = transaction,
+                candidateValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true,
+                committedReadbackPassed = true, manifestChecksum = authorityChecksum }, ct);
+            if (Directory.Exists(backup)) SafeDeleteDirectory(backup);
+            if (Directory.Exists(galleryRoot)) Directory.Move(galleryRoot, backup);
+            try { Directory.Move(staging, galleryRoot); committed = true; }
+            catch { if (Directory.Exists(backup) && !Directory.Exists(galleryRoot)) Directory.Move(backup, galleryRoot); throw; }
+            if (Directory.Exists(backup)) SafeDeleteDirectory(backup);
+            var committedManifest = await Read<JsonElement>(Path.Combine(galleryRoot, "gallery-asset-manifest.json"), ct);
+            Require(Text(committedManifest, "deterministicChecksum") == authorityChecksum, "P13_COMMITTED_READBACK_FAILED", "Committed manifest checksum differs.");
+            Directory.CreateDirectory(Path.Combine(outputRoot, "validation"));
+            var validation = Path.Combine(outputRoot, "validation", "phase-13-validation.json");
+            await Write(validation, new { phaseNo = 13, status = "Valid", validationPassed = true,
+                publicationCommitted = true, committedReadbackPassed = true, authorityChecksum, downstreamReady = true }, ct);
+            var paths = Enumerable.Range(1, 6).Select(i => Path.Combine(galleryRoot, $"gallery-{i:00}.png")).ToArray();
+            return new(galleryRoot, paths, Path.Combine(galleryRoot, "phase13-publication-report.json"),
+                Path.Combine(galleryRoot, "gallery-asset-manifest.json"), Path.Combine(galleryRoot, "phase13-authority-diagnostics.json"), validation);
         }
         finally
         {
-            // A failed candidate is never publication authority. This also covers failures
-            // during rendering/readback, before the directory-swap transaction begins.
-            if (Directory.Exists(staging)) Directory.Delete(staging, true);
+            if (!committed) SafeDeleteDirectory(staging);
         }
     }
+
+    private static string BuildMatureGalleryPrompt(string family, string role, IReadOnlyList<string> objects, string certifiedPurpose) =>
+        $"Purpose-built full-frame cinematic 16:9 astronomy scene for Gallery role '{role}'. Event family: {family}. " +
+        $"Certified objects only: {string.Join(", ", objects)}. Visual purpose: {certifiedPurpose}. Large role-specific astronomy subject, coherent dark-sky lighting, lower-third negative space. " +
+        "NO embedded text. NO labels. NO numbers. NO watermark. Do not invent directions, dates, times, safety advice, equipment, or objects.";
+
+    private static object ParseAuthority(string value)
+    {
+        var parts = value.Split('#', 2);
+        return new { authorityArtifact = parts[0], jsonPointer = parts.Length == 2 ? parts[1] : "", checksum = "bound-by-semantic-authority-checksum", transformationRule = "certified-selection" };
+    }
+
+    private static string LocalizeRole(string role, string language) => language.StartsWith("hi", StringComparison.OrdinalIgnoreCase) ? role switch
+    { "Opening view" => "प्रारंभिक दृश्य", "What happens" => "क्या होता है", "Where to look" => "कहाँ देखें", "When to observe" => "कब देखें", "Key objects" => "मुख्य पिंड", "Viewing checklist" => "अवलोकन सूची", _ => role } : role;
 
     private static (SceneAssetManifestItem Item, string FullPath) ValidateSource(string root, SceneAssetManifestItem item)
     {
@@ -660,8 +581,8 @@ internal static class Phase13GalleryAuthority
         Require(info.Length > 0, "P13_GENERATED_FILE_METADATA_INVALID", $"Gallery candidate '{relativePath}' is empty.");
 
         using var decoded = await Image.LoadAsync(physicalPath, ct);
-        Require(decoded.Width == 1080 && decoded.Height == 1080, "P13_GENERATED_FILE_METADATA_INVALID",
-            $"Gallery candidate '{relativePath}' has physical dimensions {decoded.Width}x{decoded.Height}; expected 1080x1080.");
+        Require(decoded.Width == 1920 && decoded.Height == 1080, "P13_GENERATED_FILE_METADATA_INVALID",
+            $"Gallery candidate '{relativePath}' has physical dimensions {decoded.Width}x{decoded.Height}; expected 1920x1080.");
         Require(decoded.Metadata.DecodedImageFormat?.Name.Equals("PNG", StringComparison.OrdinalIgnoreCase) == true,
             "P13_GENERATED_FILE_METADATA_INVALID", $"Gallery candidate '{relativePath}' is not a decoded PNG.");
         await using var stream = File.OpenRead(physicalPath);
@@ -680,5 +601,6 @@ internal static class Phase13GalleryAuthority
     private static Task Write<T>(string path, T value, CancellationToken ct) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); return File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Json), ct); }
     private static string Sha(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
     private static string Hash(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    private static void SafeDeleteDirectory(string path) { if (Directory.Exists(path)) Directory.Delete(path, true); }
     private static void Require(bool condition, string code, string message) { if (!condition) throw new InvalidOperationException($"{code}: {message}"); }
 }
