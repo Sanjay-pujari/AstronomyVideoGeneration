@@ -7,6 +7,17 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Phase13GallerySemanticAuthorityTests
 {
+    [Fact]
+    public void Phase13CoverIdentityResolvesFromVerifiedEventIdentity()
+    {
+        var result = Phase13GalleryAuthority.ResolveGallerySemanticAuthority("cover-identity", "CONSTELLATION",
+            [], EmptyPhase4(), EmptyPhase6(), ["Orion"]);
+
+        Assert.True(result.Certified);
+        Assert.Equal("VerifiedStructuredEventIdentity", result.ResolutionStrategy);
+        Assert.Contains("Orion", result.DisplayFacts.Single());
+    }
+
     [Fact] public void IdentificationCanResolveFromExplicitPhase2Fact() => AssertStrategy(
         [Claim("id", "Identification", "Recognize Orion by its three Belt stars.")], EmptyPhase4(), EmptyPhase6(), "ExplicitCertifiedPhase2IdentificationFact");
     [Fact] public void IdentificationCanResolveFromCertifiedObservationFact() => AssertStrategy(
