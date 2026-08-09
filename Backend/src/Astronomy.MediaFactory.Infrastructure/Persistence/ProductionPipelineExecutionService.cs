@@ -3418,6 +3418,8 @@ public sealed partial class ProductionPipelineExecutionService(
                 ? context.ProductionEventIntelligence.SecondaryObjects
                 : context.Request.SecondaryObjects,
             eventIdentitySource,
+            context.Request.ShortTitle,
+            string.Equals(context.Request.VerificationStatus, "Verified", StringComparison.OrdinalIgnoreCase),
             azureImageOptions?.Value,
             azureImageGenerator,
             cancellationToken);
@@ -15284,7 +15286,7 @@ public sealed partial class ProductionPipelineExecutionService(
             && GetJsonBool(p13, "manifestValidationPassed") && GetJsonBool(p13, "downstreamReady");
         var phase13Checksum = phase13Validation is JsonElement p13Checksum
             ? GetJsonString(p13Checksum, "authorityChecksum", string.Empty) : string.Empty;
-        var phase12Inputs = new[] { "11-hero/hero-asset-manifest.json", "11-hero/phase11-publication-report.json", "validation/phase-11-validation.json", "10-scene-validation/scene-asset-certification.json" }
+        var phase12Inputs = new[] { "02-intelligence/production-event-intelligence.json", "02-intelligence/certified-knowledge-context.json" }
             .Select(path => Path.Combine(context.OutputRoot, path)).ToArray();
         if (phaseNo == 12 && inputFiles.Count == 0) inputFiles = phase12Inputs;
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason)

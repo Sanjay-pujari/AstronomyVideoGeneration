@@ -21,14 +21,14 @@ public sealed class ConstellationThumbnailContentTests
     {
         var content = MatureThumbnailCandidatePublisher.BuildConstellationContent("CONSTELLATION", "Orion", OrionClaims);
         var error = Assert.Throws<InvalidOperationException>(() => MatureThumbnailCandidatePublisher.ValidateConstellationInformation("CONSTELLATION", content.CertifiedFacts, []));
-        Assert.Contains("P12_CONSTELLATION_INFORMATION_INSUFFICIENT", error.Message);
+        Assert.Contains("P12_THUMBNAIL_CONTENT_PLAN_INSUFFICIENT", error.Message);
     }
 
     [Fact] public void ConstellationThumbnailCanPassHeadlineOnlyWhenNoCertifiedFactsExist() =>
         MatureThumbnailCandidatePublisher.ValidateConstellationInformation("CONSTELLATION", [], []);
 
     [Fact] public void ConstellationLandscapePrefersThreeDiverseFacts() => Assert.Equal(
-        ["Identification", "DeepSky", "BrightObjects"], Select("Landscape", 1280, 288).Select(x => x.Category));
+        ["Hook", "DeepSky", "BrightObjects"], Select("Landscape", 1280, 288).Select(x => x.Category));
 
     [Fact] public void ConstellationSquarePrefersTwoFacts() => Assert.Equal(2, Select("Square", 1080, 432).Count);
 
@@ -73,6 +73,41 @@ public sealed class ConstellationThumbnailContentTests
         var second = MatureThumbnailCandidatePublisher.BuildConstellationContent("CONSTELLATION", "Orion", OrionClaims);
         Assert.Equal(first.CertifiedFacts.Select(x => (x.Category, x.DisplayValue, x.AuthorityPath)), second.CertifiedFacts.Select(x => (x.Category, x.DisplayValue, x.AuthorityPath)));
     }
+
+    [Fact] public void ConstellationPlannerConsumesVerifiedShortTitle()
+    {
+        var plan = OrionShortTitlePlan([]);
+        Assert.Equal("SPOT THE FAMOUS BELT", plan.Hook);
+        Assert.Equal("M42", plan.SupportingHighlight);
+    }
+
+    [Fact] public void ConstellationPlannerConsumesCertifiedKnowledgeContext()
+        => Assert.Contains(MatureThumbnailCandidatePublisher.BuildThumbnailContentPlan("CONSTELLATION", "Orion", [], "", false, OrionClaims).Facts,
+            x => x.AuthorityPath.StartsWith("02-intelligence/certified-knowledge-context.json", StringComparison.Ordinal));
+
+    [Fact] public void ConstellationPlannerDoesNotReturnHeadlineOnlyWhenHookAuthorityExists()
+        => Assert.True(OrionShortTitlePlan([]).ContentQualityPassed);
+
+    [Fact] public void ConstellationPlannerRecordsAuthorityReferences()
+        => Assert.NotEmpty(OrionShortTitlePlan([]).AuthorityReferences);
+
+    [Fact] public void ConstellationPlannerRecordsTransformationRules()
+        => Assert.Contains("verified-short-title-belt-hook", OrionShortTitlePlan([]).TransformationRules);
+
+    [Fact] public void BeltCopyRequiresCertifiedBeltAuthority()
+        => Assert.DoesNotContain("BELT", MatureThumbnailCandidatePublisher.BuildThumbnailContentPlan(
+            "CONSTELLATION", "Orion", ["Mintaka", "Alnilam", "Alnitak"], "", true, []).Hook);
+
+    [Fact] public void MissingTimingDoesNotProduceTonight()
+        => Assert.DoesNotContain("TONIGHT", OrionShortTitlePlan([]).Facts.Select(x => x.DisplayValue));
+
+    [Fact] public void MissingDirectionDoesNotProduceDirection()
+        => Assert.DoesNotContain(OrionShortTitlePlan([]).Facts, fact => new[] { "EAST", "WEST", "NORTH", "SOUTH" }
+            .Any(direction => fact.DisplayValue.Contains(direction, StringComparison.OrdinalIgnoreCase)));
+
+    private static MatureThumbnailCandidatePublisher.ThumbnailContentPlan OrionShortTitlePlan(IReadOnlyList<CertifiedKnowledgeClaim> claims) =>
+        MatureThumbnailCandidatePublisher.BuildThumbnailContentPlan("CONSTELLATION", "Orion", ["Betelgeuse", "Rigel", "Orion Nebula / M42"],
+            "Orion is a bright, easy-to-find constellation with famous Belt stars and the Orion Nebula.", true, claims);
 
     private static IReadOnlyList<MatureThumbnailCandidatePublisher.ConstellationThumbnailFact> Select(string aspect, int width, int height)
     {
