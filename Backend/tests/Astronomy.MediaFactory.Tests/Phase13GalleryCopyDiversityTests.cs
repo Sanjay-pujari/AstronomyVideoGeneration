@@ -151,6 +151,33 @@ public sealed class Phase13GalleryCopyDiversityTests
         Assert.StartsWith("P13_GALLERY_COPY_AUTHORITY_MISSING", error.Message);
     }
 
+    [Fact]
+    public void EditorialIntentIsVisualPlanningEligibleButNeverPublicationEligible()
+    {
+        var source = "Advance the certified HistoricalContext intent; final narration remains owned by Phase 7.";
+        var item = new Phase13GallerySemanticHydrator.GallerySemanticItem("Scene05", "HistoricalContext",
+            Phase13GallerySemanticHydrator.GallerySemanticUsage.EditorialIntent, Phase13GallerySemanticHydrator.Phase4Blueprint,
+            "/longVariant/blueprint/scenes/4/sceneObjective/learningGoal", source, null, "checksum", true,
+            "planning-only", "historical astronomy context");
+        Assert.False(item.IsPublicationEligible);
+        Assert.True(item.IsVisualPlanningEligible);
+        Assert.Null(item.ResolvedPublicValue);
+    }
+
+    [Fact]
+    public void SanitizedVisualPromptContainsConceptNotWorkflowSentence()
+    {
+        var context = new Phase13GalleryAuthority.GalleryVisualPromptContext("Orion constellation guide", ["Orion", "M42"],
+            ["Orion appears in historical sky traditions."], "historical astronomy context", "science-or-story-highlight",
+            "CONSTELLATION", "Full-frame astronomy composition");
+        var prompt = Phase13GalleryAuthority.BuildMatureGalleryPrompt(context);
+        Assert.Contains("historical astronomy context", prompt);
+        Assert.DoesNotContain("Advance the certified", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("final narration remains", prompt, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Outcome01", prompt, StringComparison.OrdinalIgnoreCase);
+        Phase13GalleryAuthority.ValidateAiPrompt(prompt);
+    }
+
     private static Phase13GalleryAuthority.GalleryRoleContentSelection Select(string role) =>
         Phase13GalleryAuthority.SelectCertifiedContentForGalleryRole("CONSTELLATION", role, Claims, ["Orion"], Objects, [], []);
     private static Phase13GalleryAuthority.GalleryRoleContentSelection[] Plans() => Roles.Select(Select).ToArray();

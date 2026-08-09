@@ -22,10 +22,8 @@ public sealed class Phase13GallerySemanticAuthorityTests
         [Claim("id", "Identification", "Recognize Orion by its three Belt stars.")], EmptyPhase4(), EmptyPhase6(), "ExplicitCertifiedPhase2IdentificationFact");
     [Fact] public void IdentificationCanResolveFromCertifiedObservationFact() => AssertStrategy(
         [Claim("obs", "Observation", "Look for Orion's three distinctive Belt stars.")], EmptyPhase4(), EmptyPhase6(), "CertifiedPhase2ObservationRecognitionFact");
-    [Fact] public void IdentificationCanResolveFromPhase6ViewerTakeaway() => AssertStrategy(
-        [], EmptyPhase4(), Phase6("Locate Orion by looking for three Belt stars."), "CertifiedPhase6RecognitionCue");
-    [Fact] public void IdentificationCanResolveFromPhase4LearningObjective() => AssertStrategy(
-        [], Json("""{"learningObjectives":["Recognize Orion from its three Belt stars."]}"""), EmptyPhase6(), "CertifiedPhase4RecognitionObjective");
+    [Fact] public void Phase6IntentIsNotPublicationAuthority() => Assert.False(Resolve([], EmptyPhase4(), Phase6("Locate Orion by looking for three Belt stars.")).Certified);
+    [Fact] public void Phase4LearningObjectiveIsNotPublicationAuthority() => Assert.False(Resolve([], Json("""{"learningObjectives":["Recognize Orion from its three Belt stars."]}"""), EmptyPhase6()).Certified);
 
     [Fact] public void ObjectNamesAloneDoNotProveIdentificationRelationship() => Assert.False(Resolve([], EmptyPhase4(), EmptyPhase6()).Certified);
     [Fact] public void BeltRelationshipRequiresExplicitCertifiedAuthority() => Assert.True(Resolve(

@@ -49,6 +49,11 @@ internal static class Phase13GalleryAuthority
         string SelectionReason);
 
     internal sealed record GalleryAuthorityReference(string Artifact, string Pointer, string Value, string AuthorityType);
+    internal sealed record GalleryPublicCopy(string PublicRoleLabel, string Headline, string Detail,
+        IReadOnlyList<string> Facts, IReadOnlyList<GalleryAuthorityReference> AuthorityReferences);
+    internal sealed record GalleryVisualPromptContext(string EventIdentity, IReadOnlyList<string> CertifiedObjects,
+        IReadOnlyList<string> SelectedPublicFactConcepts, string NormalizedVisualTreatment, string Role,
+        string EventFamily, string CompositionInstructions);
     internal sealed record ResolvedGallerySemanticAuthority(string RoleId, string SemanticCategory,
         IReadOnlyList<string> DisplayFacts, IReadOnlyList<GalleryAuthorityReference> AuthorityReferences,
         string ResolutionStrategy, decimal Confidence, bool Certified);
@@ -78,7 +83,7 @@ internal static class Phase13GalleryAuthority
         var p6 = hydration.Phase6;
         Require(p2.Certification.Status.Equals("Certified", StringComparison.OrdinalIgnoreCase) || p2.Certification.CertifiedClaims > 0,
             "P13_SEMANTIC_AUTHORITY_MISSING", "Phase 2 has no certified claims.");
-        var claims = hydration.Context.AllItems.Select((item, index) => new CertifiedKnowledgeClaim(
+        var claims = hydration.Context.AllItems.Where(item => item.IsPublicationEligible).Select((item, index) => new CertifiedKnowledgeClaim(
             $"{item.AuthoritySource}#{item.AuthorityPath}", item.Category, item.Category, item.Text, null, null,
             [item.AuthoritySource], null, 1m, null, null, "Certified", "Accepted", p2.EventFamily))
             .GroupBy(x => $"{x.KnowledgeId}|{x.Text}", StringComparer.Ordinal).Select(x => x.First()).ToArray();
@@ -110,8 +115,11 @@ internal static class Phase13GalleryAuthority
             {
                 var selection = selections[index];
                 var role = CanonicalRoles[index];
-                var prompt = BuildMatureGalleryPrompt(p2.EventFamily, role, hydration.Context.PrimaryObjects,
-                    selection.PrimaryContent);
+                var visualContext = new GalleryVisualPromptContext(hydration.EventAuthority.EventIdentity.Title,
+                    hydration.Context.PrimaryObjects.Concat(hydration.Context.SecondaryObjects).ToArray(),
+                    [selection.PrimaryContent], NormalizedTreatment(selection.ContentCategory), role, p2.EventFamily,
+                    "Large role-specific subject, coherent dark-sky lighting, lower-third negative space");
+                var prompt = BuildMatureGalleryPrompt(visualContext);
                 ValidateAiPrompt(prompt);
                 var background = Path.Combine(staging, $".background-{index + 1:00}.png");
                 var generation = await AstroPulseGalleryService.GenerateBackgroundWithAzureImage2Async(
@@ -174,7 +182,17 @@ internal static class Phase13GalleryAuthority
                 internalReferenceCount = hydration.Context.AllItems.Count(x => x.IsInternalIdentifier),
                 resolvedInternalReferenceCount = hydration.Context.AllItems.Count(x => x.IsInternalIdentifier && x.IsPublicationEligible),
                 unresolvedInternalReferenceCount = 0,
+                publicFactCount = hydration.Context.AllItems.Count(x => x.Usage == Phase13GallerySemanticHydrator.GallerySemanticUsage.PublicFact),
+                publicIdentityCount = hydration.Context.AllItems.Count(x => x.Usage == Phase13GallerySemanticHydrator.GallerySemanticUsage.PublicIdentity),
+                publicObservationCount = hydration.Context.AllItems.Count(x => x.Usage == Phase13GallerySemanticHydrator.GallerySemanticUsage.PublicObservation),
+                publicObjectIdentityCount = hydration.Context.AllItems.Count(x => x.Usage == Phase13GallerySemanticHydrator.GallerySemanticUsage.PublicObjectIdentity),
+                editorialIntentCount = hydration.Context.AllItems.Count(x => x.Usage == Phase13GallerySemanticHydrator.GallerySemanticUsage.EditorialIntent),
+                narrativeInstructionCount = hydration.Context.AllItems.Count(x => x.Usage == Phase13GallerySemanticHydrator.GallerySemanticUsage.NarrativeInstruction),
+                workflowInstructionCount = hydration.Context.AllItems.Count(x => x.Usage == Phase13GallerySemanticHydrator.GallerySemanticUsage.WorkflowInstruction),
+                diagnosticOnlyCount = hydration.Context.AllItems.Count(x => x.Usage == Phase13GallerySemanticHydrator.GallerySemanticUsage.DiagnosticOnly),
                 publicationEligibleSemanticCount = hydration.Context.AllItems.Count(x => x.IsPublicationEligible),
+                visualPlanningEligibleCount = hydration.Context.AllItems.Count(x => x.IsVisualPlanningEligible),
+                rejectedSemanticItems = hydration.Context.AllItems.Where(x => !x.IsPublicationEligible).Select(x => new { x.SemanticId, x.Usage, x.SourceArtifact, x.SourceJsonPointer, rejectionReason = "Usage is planning-only and not publication eligible." }),
                 sixRolePlanCreated = selections.Length == 6, sixRolePlanValidated = true,
                 phase8RasterUsed = false, phase9RasterUsed = false, phase10RasterUsed = false, heroRasterUsed = false, thumbnailRasterUsed = false,
                 azureImageCallsThisPhase = 6, independentlyGeneratedPageCount = 6, canonicalWidth = 1920, canonicalHeight = 1080,
@@ -229,10 +247,16 @@ internal static class Phase13GalleryAuthority
         }
     }
 
-    private static string BuildMatureGalleryPrompt(string family, string role, IReadOnlyList<string> objects, string certifiedPurpose) =>
-        $"Purpose-built full-frame cinematic 16:9 astronomy scene for Gallery role '{role}'. Event family: {family}. " +
-        $"Certified objects only: {string.Join(", ", objects)}. Visual purpose: {certifiedPurpose}. Large role-specific astronomy subject, coherent dark-sky lighting, lower-third negative space. " +
+    internal static string BuildMatureGalleryPrompt(GalleryVisualPromptContext context) =>
+        $"Purpose-built full-frame cinematic 16:9 astronomy scene for Gallery role '{context.Role}'. Event family: {context.EventFamily}. " +
+        $"Event identity: {context.EventIdentity}. Certified objects only: {string.Join(", ", context.CertifiedObjects)}. " +
+        $"Public fact concepts: {string.Join("; ", context.SelectedPublicFactConcepts)}. Visual treatment: {context.NormalizedVisualTreatment}. {context.CompositionInstructions}. " +
         "NO embedded text. NO labels. NO captions. NO numbers. NO watermark. NO UI typography. Do not invent directions, dates, times, safety advice, equipment, or objects.";
+
+    private static string NormalizedTreatment(string category) => category.Contains("histor", StringComparison.OrdinalIgnoreCase)
+        ? "historical astronomy context" : category.Contains("observ", StringComparison.OrdinalIgnoreCase)
+        ? "practical dark-sky observing composition" : category.Contains("deep", StringComparison.OrdinalIgnoreCase)
+        ? "deep-sky discovery composition" : "clear educational astronomy composition";
 
     internal static void ValidatePublicCopy(IReadOnlyList<GalleryRoleContentSelection> selections)
     {
@@ -361,16 +385,8 @@ internal static class Phase13GalleryAuthority
             .OrderBy(c => c.KnowledgeId, StringComparer.Ordinal).FirstOrDefault();
         if (observation is not null) return FromClaim(observation, "CertifiedPhase2ObservationRecognitionFact");
 
-        var p6Candidates = phase6.Frames.OrderBy(f => f.SceneNumber).ThenBy(f => f.FrameNumber)
-            .SelectMany((f, i) => new[] { (Pointer: $"/frames/{i}/narrativeIntent", Value: f.NarrativeIntent), (Pointer: $"/frames/{i}/visualIntent", Value: f.VisualIntent) })
-            .Where(x => IsRecognitionCue(x.Value)).ToArray();
-        if (p6Candidates.FirstOrDefault() is var p6Candidate && !string.IsNullOrWhiteSpace(p6Candidate.Value))
-            return FromText(p6Candidate.Value, "06-story-frames/story-frames.json", p6Candidate.Pointer, "CertifiedPhase6SceneSemantic", "CertifiedPhase6RecognitionCue");
-
-        var p4Candidates = FindSemanticValues(phase4, "", new[] { "learningobjective", "educationalbeat", "observationbeat", "scenepurpose" })
-            .Where(x => IsRecognitionCue(x.Value)).ToArray();
-        if (p4Candidates.FirstOrDefault() is var p4Candidate && !string.IsNullOrWhiteSpace(p4Candidate.Value))
-            return FromText(p4Candidate.Value, "04-blueprint/documentary-blueprint.json", p4Candidate.Pointer, "CertifiedPhase4BlueprintSemantic", "CertifiedPhase4RecognitionObjective");
+        // Phase 4 and Phase 6 are selection/presentation intent, never literal publication copy.
+        // Recognition copy must resolve to an explicitly publication-eligible Phase 2 fact.
 
         var relationship = phase2.Where(c => IsStructuredRelationship(c) && IsRecognitionCue(ClaimText(c)))
             .OrderBy(c => c.KnowledgeId, StringComparer.Ordinal).FirstOrDefault();
@@ -380,8 +396,6 @@ internal static class Phase13GalleryAuthority
         ResolvedGallerySemanticAuthority FromClaim(CertifiedKnowledgeClaim claim, string strategy) =>
             new(role, "Identification", [ClaimText(claim)],
                 [new("02-intelligence/certified-knowledge-context.json", $"/claims/{IndexOf(phase2, claim)}/text", ClaimText(claim), "CertifiedPhase2Claim")], strategy, claim.Confidence, true);
-        ResolvedGallerySemanticAuthority FromText(string value, string artifact, string pointer, string type, string strategy) =>
-            new(role, "Identification", [value], [new(artifact, pointer, value, type)], strategy, 1m, true);
     }
 
     internal static (GalleryRoleContentSelection[] Selections, GalleryRoleResolutionDiagnostic[] Diagnostics) ResolveRolePlan(
