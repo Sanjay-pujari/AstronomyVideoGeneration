@@ -20,7 +20,7 @@ internal static class ResponsiveThumbnailAuthorityService
     private const string Renderer = "PosterThumbnailRenderer/3.0";
     private const string Layout = "PosterThumbnailLayout/3.0";
     private const string CopyPolicy = "ThumbnailPosterPolicy/3.0";
-    internal const string FactSelectionPolicy = "PosterFactSelection/1.0";
+    internal const string FactSelectionPolicy = "PosterFactSelection/2.0";
 
     internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(
         string outputRoot, string planId, string eventId, string language, string eventType,
@@ -125,9 +125,16 @@ internal static class ResponsiveThumbnailAuthorityService
         var poster = BuildPosterContent(eventType, copy.Headline, resolvedPrimaryObjects, secondaryObjects, p8);
         Require(poster.Facts.Count > 0, "P12_POSTER_INFORMATION_INSUFFICIENT", "A poster requires a meaningful certified fact.");
         var root = Path.Combine(outputRoot, "12-thumbnails");
+        var orphanStagingRemovedCount = RemoveOrphanStagingDirectories(outputRoot);
         var transaction = Guid.NewGuid().ToString("N");
         var staging = root + ".staging-" + transaction;
+        var backup = root + ".backup-" + transaction;
+        var publicationCommitted = false;
+        var stagingCreated = false;
+        try
+        {
         Directory.CreateDirectory(staging);
+        stagingCreated = true;
         var items = new List<ThumbnailVariant>();
         foreach (var profile in profiles)
         {
@@ -172,7 +179,7 @@ internal static class ResponsiveThumbnailAuthorityService
                 omitted.ToDictionary(k => k, k => layoutResult.OmissionReasons.GetValueOrDefault(k, "Profile fact limit or available layout space")),
                 FactSelectionPolicy, renderedKeys.Count, layoutResult.PanelRegion, layoutResult.ContentRegion, layoutResult.PanelUtilizationPercent,
                 layoutResult.UnusedPosterAreaPercent, layoutResult.HeadlineBounds, layoutResult.BadgeBounds, layoutResult.FactBounds,
-                layoutResult.TextBounds, false, false, false, false, false, true, true, true, true, true, true, "Valid"));
+                layoutResult.TextBounds, layoutResult.FactSelectionDiagnostics, false, false, false, false, false, true, true, true, true, true, true, "Valid"));
         }
 
         var created = DateTimeOffset.UtcNow;
@@ -185,7 +192,8 @@ internal static class ResponsiveThumbnailAuthorityService
         var candidate = await Read<ThumbnailManifest>(Path.Combine(staging, "thumbnail-asset-manifest.json"), ct);
         Require(candidate.DeterministicChecksum == AuthorityChecksum(candidate), "P12_CANDIDATE_READBACK_FAILED", "Candidate authority checksum failed.");
         ValidateManifestCopy(candidate, title, subtitle, copy);
-        var diagnostics = new { phase12Applicable = true, thumbnailRequested = true, phase11AuthorityLoaded = true, phase11AuthorityChecksum = heroChecksum,
+        var diagnostics = new { phase12Applicable = true, thumbnailRequested = true, transactionId = transaction, stagingRoot = staging,
+            stagingCreated, stagingCleaned = true, orphanStagingRemovedCount, phase11AuthorityLoaded = true, phase11AuthorityChecksum = heroChecksum,
             phase11ManifestDeterministicChecksum = heroChecksum, phase11PublicationManifestChecksum = publicationChecksum,
             phase11ValidationAuthorityChecksum = validationChecksum, phase11ChecksumsAgree = checksumsAgree,
             phase11VariantPhysicalChecksumsPassed = true, phase11VariantDimensionsPassed = true, phase11AuthorityValidationPassed = true,
@@ -216,15 +224,17 @@ internal static class ResponsiveThumbnailAuthorityService
             squarePosterPanelUtilizationPercent = items[1].PosterPanelUtilizationPercent,
             portraitPosterPanelUtilizationPercent = items[2].PosterPanelUtilizationPercent,
             factCategoryDiversityPassed = items.All(i => i.SelectedFactCategories.Distinct().Count() == i.SelectedFactCategories.Count),
-            suboptimalFactSelectionDetected = false, hardOpaquePanelUsed = false, heroTextLeakageDetected = false };
+            profileFactSelection = items.Select(i => i.FactSelectionDiagnostics).ToArray(),
+            suboptimalFactSelectionDetected = items.Any(i => i.FactSelectionDiagnostics.SuboptimalFactSelectionDetected), hardOpaquePanelUsed = false, heroTextLeakageDetected = false };
         await Write(Path.Combine(staging, "phase12-authority-diagnostics.json"), diagnostics, ct);
-        var backup = root + ".backup-" + transaction;
         if (Directory.Exists(root)) Directory.Move(root, backup);
         try { Directory.Move(staging, root); } catch { if (Directory.Exists(backup)) Directory.Move(backup, root); throw; }
         var committed = await Read<ThumbnailManifest>(Path.Combine(root, "thumbnail-asset-manifest.json"), ct);
         Require(committed.DeterministicChecksum == AuthorityChecksum(committed), "P12_COMMITTED_READBACK_FAILED", "Committed authority checksum failed.");
         ValidateManifestCopy(committed, title, subtitle, copy);
-        var report = new { transactionId = transaction, candidateCreated = true, candidateValidationPassed = true, candidateReadbackPassed = true,
+        publicationCommitted = true;
+        var report = new { transactionId = transaction, stagingRoot = staging, stagingCreated, stagingCleaned = true, orphanStagingRemovedCount,
+            candidateCreated = true, candidateValidationPassed = true, candidateReadbackPassed = true,
             backupCreated = Directory.Exists(backup), publicationCommitted = true, committedReadbackPassed = true, manifestChecksum = committed.DeterministicChecksum,
             thumbnailVariantCount = 3, generatedVariantCount = 3, reusedVariantCount = 0, upstreamArtifactsModified = false, generatedAtUtc = DateTimeOffset.UtcNow };
         await Write(Path.Combine(root, "phase12-publication-report.json"), report, ct);
@@ -239,6 +249,17 @@ internal static class ResponsiveThumbnailAuthorityService
             committed.DeterministicChecksum, true, true, true, true, true,
             "Responsive thumbnail assets generated, validated, committed and read back.",
             "P12_THUMBNAIL_AUTHORITY_ACCEPTED");
+        }
+        finally
+        {
+            SafeDeleteDirectory(staging);
+            if (!publicationCommitted && Directory.Exists(backup))
+            {
+                SafeDeleteDirectory(root);
+                Directory.Move(backup, root);
+            }
+            else if (publicationCommitted) SafeDeleteDirectory(backup);
+        }
     }
 
     private static PosterLayoutResult Render(string source, string target, Profile profile, ThumbnailPosterContent poster, bool requiresScience)
@@ -247,41 +268,22 @@ internal static class ResponsiveThumbnailAuthorityService
         image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(profile.Width, profile.Height),
             Mode = requiresScience ? ResizeMode.Pad : ResizeMode.Crop, PadColor = Color.Black, Sampler = KnownResamplers.Lanczos3 }));
         var family = SystemFonts.Collection.Families.First();
-        var maxFacts = profile.Role == "Landscape" ? 4 : 3;
-        var panel = profile.Role == "Landscape"
+        var initialPanel = profile.Role == "Landscape"
             ? new Rectangle(0, 0, (int)(profile.Width * .40), profile.Height)
-            : new Rectangle(profile.Margin / 2, (int)(profile.Height * profile.VisualEmphasis), profile.Width - profile.Margin, (int)(profile.Height * (1 - profile.VisualEmphasis)) - profile.Margin / 2);
-        var facts = SelectPosterFacts(poster.EventFamily, profile.Role, poster.Facts, panel).Take(maxFacts).ToArray();
-        var bounds = new List<TextBlockBounds>();
-        var cursor = panel.Y + profile.Margin / 2;
+            : new Rectangle(profile.Margin / 2, (int)(profile.Height * profile.VisualEmphasis), profile.Width - profile.Margin,
+                (int)(profile.Height * (1 - profile.VisualEmphasis)) - profile.Margin / 2);
+        var selection = SelectPosterFactsForProfile(profile, poster, initialPanel, requiresScience, family);
+        var panel = selection.FinalPosterBounds;
+        var bounds = selection.TextBounds.ToList();
         var contentX = panel.X + profile.Margin / 2;
-        var contentWidth = panel.Width - profile.Margin;
-        var badgeFont = family.CreateFont(Math.Max(20, profile.FontSize / 3), FontStyle.Bold);
-        var badgeBounds = Measure(poster.Badge.Value, badgeFont, contentX, cursor);
-        bounds.Add(new("badge", badgeBounds.X, badgeBounds.Y, badgeBounds.Width, badgeBounds.Height, badgeFont.Size));
-        cursor += (int)badgeBounds.Height + 18;
-        var headline = Fit(poster.Headline, family, FontStyle.Bold, profile.FontSize, profile.FontSize * .62f, contentWidth);
-        var headlineBounds = Measure(headline.Text, headline.Font, contentX, cursor);
-        bounds.Add(new("headline", headlineBounds.X, headlineBounds.Y, headlineBounds.Width, headlineBounds.Height, headline.Font.Size));
-        cursor += (int)headlineBounds.Height + (profile.Role == "Portrait" ? 32 : 24);
-        var rendered = new List<string>();
-        var factLayouts = new List<(PosterFact Fact, Font Label, Font Value, RectangleF LabelBox, RectangleF ValueBox)>();
-        foreach (var fact in facts)
-        {
-            var labelFont = family.CreateFont(Math.Max(18, profile.FontSize * .27f), FontStyle.Bold);
-            var valueFit = Fit(fact.Value, family, FontStyle.Bold, profile.FontSize * .42f, Math.Max(22, profile.FontSize * .29f), contentWidth);
-            var lb = Measure(fact.Label, labelFont, contentX, cursor);
-            var vb = Measure(valueFit.Text, valueFit.Font, contentX, cursor + (int)lb.Height + 5);
-            var bottom = vb.Bottom + 16;
-            if (bottom > panel.Bottom - profile.Margin / 4) break;
-            factLayouts.Add((fact, labelFont, valueFit.Font, lb, vb));
-            bounds.Add(new($"{fact.Key}.label", lb.X, lb.Y, lb.Width, lb.Height, labelFont.Size));
-            bounds.Add(new($"{fact.Key}.value", vb.X, vb.Y, vb.Width, vb.Height, valueFit.Font.Size));
-            rendered.Add(fact.Key); cursor = (int)bottom;
-        }
-        Require(rendered.Count > 0, "P12_POSTER_INFORMATION_INSUFFICIENT", $"{profile.Role} has no renderable certified fact.");
-        var preferredMinimum = poster.Facts.Count >= (profile.Role == "Landscape" ? 3 : 2) ? (profile.Role == "Landscape" ? 3 : 2) : 1;
-        Require(rendered.Count >= preferredMinimum, "P12_POSTER_FACT_SELECTION_SUBOPTIMAL", $"{profile.Role} unnecessarily omitted certified poster facts.");
+        var badge = bounds.Single(b => b.Key == "badge");
+        var headline = selection.Headline;
+        var factLayouts = selection.FactLayouts;
+
+        Require(selection.SelectedFacts.Count >= selection.MinimumFactCount, "P12_POSTER_INFORMATION_INSUFFICIENT",
+            $"{profile.Role} has no renderable certified fact.");
+        Require(!selection.SuboptimalFactSelectionDetected, "P12_POSTER_FACT_SELECTION_SUBOPTIMAL",
+            $"{profile.Role} omitted a higher-priority certified fact that measured layout proves could fit safely.");
         Require(!HasOverlap(bounds) && bounds.All(b => b.X >= 0 && b.Y >= 0 && b.X + b.Width <= profile.Width && b.Y + b.Height <= profile.Height),
             "P12_TEXT_LAYOUT_INVALID", $"{profile.Role} text overlaps or clips.");
         image.Mutate(x =>
@@ -295,24 +297,101 @@ internal static class ResponsiveThumbnailAuthorityService
                     x.Fill(Color.FromRgba(4, 10, 20, alpha), new Rectangle(px, 0, 6, profile.Height));
                 }
             else x.Fill(Color.FromRgba(4, 10, 20, 204), panel);
-            x.DrawText(poster.Badge.Value, badgeFont, Color.FromRgb(112, 220, 235), new PointF(contentX, badgeBounds.Y));
-            x.DrawText(headline.Text, headline.Font, Color.White, new PointF(contentX, headlineBounds.Y));
+            x.DrawText(poster.Badge.Value, selection.BadgeFont, Color.FromRgb(112, 220, 235), new PointF(contentX, badge.Y));
+            x.DrawText(headline.Text, headline.Font, Color.White, new PointF(contentX, selection.HeadlineBounds.Y));
             foreach (var f in factLayouts)
             {
                 x.DrawText(f.Fact.Label, f.Label, Color.FromRgb(130, 205, 220), new PointF(contentX, f.LabelBox.Y));
-                x.DrawText(f.Fact.Value, f.Value, Color.White, new PointF(contentX, f.ValueBox.Y));
+                x.DrawText(f.DisplayValue, f.Value, Color.White, new PointF(contentX, f.ValueBox.Y));
             }
         });
         image.SaveAsPng(target);
         var content = BoundsOf(bounds);
         var utilization = Math.Round(100d * content.Width * content.Height / (panel.Width * panel.Height), 2);
-        var renderedFacts = facts.Where(f => rendered.Contains(f.Key)).ToArray();
-        var omittedReasons = poster.Facts.Where(f => !rendered.Contains(f.Key)).ToDictionary(f => f.Key,
-            f => !f.IsCertified ? "Uncertified" : facts.Contains(f) ? "Insufficient measured layout space" : "Profile priority or category diversity limit");
         return new(new Region(panel.X, panel.Y, panel.Width, panel.Height), content, utilization, Math.Round(100 - utilization, 2), bounds,
-            bounds.Single(b => b.Key == "headline"), bounds.Single(b => b.Key == "badge"),
-            bounds.Where(b => b.Key.Contains('.')).ToArray(), rendered,
-            renderedFacts.Select(f => f.FactCategory.ToString()).ToArray(), omittedReasons);
+            selection.HeadlineBounds, selection.BadgeBounds, bounds.Where(b => b.Key.Contains('.')).ToArray(),
+            selection.SelectedFacts.Select(f => f.Key).ToArray(), selection.SelectedFacts.Select(f => f.FactCategory.ToString()).ToArray(),
+            selection.OmissionReasons, selection.Diagnostics);
+    }
+
+    internal static PosterFactSelectionResult SelectPosterFactsForProfile(Profile profile, ThumbnailPosterContent poster,
+        Rectangle availableBounds, bool requiresScience, FontFamily? fontFamily = null)
+    {
+        var family = fontFamily ?? SystemFonts.Collection.Families.First();
+        var preferred = profile.Role == "Landscape" ? 3 : 2;
+        const int minimum = 1;
+        var candidates = SelectPosterFacts(poster.EventFamily, profile.Role, poster.Facts, availableBounds).ToArray();
+        var maxPanelFraction = profile.Role == "Square" ? .36 : 1 - profile.VisualEmphasis;
+        var panels = new List<Rectangle> { availableBounds };
+        if (profile.Role == "Square" && !requiresScience)
+            for (var fraction = .34; fraction <= maxPanelFraction + .001; fraction += .02)
+                panels.Add(new Rectangle(availableBounds.X, (int)(profile.Height * (1 - fraction)), availableBounds.Width,
+                    (int)(profile.Height * fraction) - profile.Margin / 2));
+
+        PosterFactSelectionResult? best = null;
+        foreach (var panel in panels)
+        {
+            var measured = MeasureFactSelection(profile, poster, candidates, panel, preferred, minimum, family, requiresScience,
+                panel != availableBounds);
+            if (best is null || measured.SelectedFacts.Count > best.SelectedFacts.Count) best = measured;
+            if (measured.SelectedFacts.Count >= Math.Min(preferred, candidates.Length)) return measured;
+        }
+        return best!;
+    }
+
+    private static PosterFactSelectionResult MeasureFactSelection(Profile profile, ThumbnailPosterContent poster,
+        IReadOnlyList<PosterFact> candidates, Rectangle panel, int preferred, int minimum, FontFamily family,
+        bool requiresScience, bool expanded)
+    {
+        var bounds = new List<TextBlockBounds>();
+        var layouts = new List<FactDrawingLayout>();
+        var selected = new List<PosterFact>();
+        var reasons = new Dictionary<string, string>();
+        var contentX = panel.X + profile.Margin / 2;
+        var contentWidth = panel.Width - profile.Margin;
+        var cursor = panel.Y + profile.Margin / 2;
+        var badgeFont = family.CreateFont(Math.Max(20, profile.FontSize / 3), FontStyle.Bold);
+        var badgeBox = Measure(poster.Badge.Value, badgeFont, contentX, cursor);
+        var badgeBounds = new TextBlockBounds("badge", badgeBox.X, badgeBox.Y, badgeBox.Width, badgeBox.Height, badgeFont.Size);
+        bounds.Add(badgeBounds); cursor += (int)badgeBox.Height + 18;
+        var headline = Fit(poster.Headline, family, FontStyle.Bold, profile.FontSize, profile.FontSize * .62f, contentWidth);
+        var headlineBox = Measure(headline.Text, headline.Font, contentX, cursor);
+        var headlineBounds = new TextBlockBounds("headline", headlineBox.X, headlineBox.Y, headlineBox.Width, headlineBox.Height, headline.Font.Size);
+        bounds.Add(headlineBounds); cursor += (int)headlineBox.Height + (profile.Role == "Portrait" ? 32 : 24);
+        var factsStart = cursor;
+        foreach (var fact in candidates)
+        {
+            if (selected.Count >= preferred) { reasons[fact.Key] = "ProfileFactLimit"; continue; }
+            var labelFont = family.CreateFont(Math.Max(18, profile.FontSize * .27f), FontStyle.Bold);
+            var minimumFont = Math.Max(22, profile.FontSize * .29f);
+            var valueFit = Fit(fact.Value, family, FontStyle.Bold, profile.FontSize * .42f, minimumFont, contentWidth);
+            var lb = Measure(fact.Label, labelFont, contentX, cursor);
+            var vb = Measure(valueFit.Text, valueFit.Font, contentX, cursor + (int)lb.Height + 5);
+            var bottom = vb.Bottom + 16;
+            if (bottom > panel.Bottom - profile.Margin / 4)
+            {
+                reasons[fact.Key] = requiresScience && !expanded ? "ProtectedRegionConflict" :
+                    valueFit.Font.Size <= minimumFont ? "MinimumFontSizeWouldFail" : "InsufficientVerticalSpace";
+                continue;
+            }
+            layouts.Add(new(fact, valueFit.Text, labelFont, valueFit.Font, lb, vb));
+            bounds.Add(new($"{fact.Key}.label", lb.X, lb.Y, lb.Width, lb.Height, labelFont.Size));
+            bounds.Add(new($"{fact.Key}.value", vb.X, vb.Y, vb.Width, vb.Height, valueFit.Font.Size));
+            selected.Add(fact); cursor = (int)bottom;
+        }
+        foreach (var fact in poster.Facts.Where(f => !selected.Contains(f) && !reasons.ContainsKey(f.Key)))
+            reasons[fact.Key] = !f.IsCertified ? "Uncertified" : candidates.Any(c => c.Key == f.Key)
+                ? "LowerPriorityThanSelectedFact" : "SemanticCategoryRedundant";
+        var additionalFits = selected.Count < preferred && candidates.Any(f => !selected.Contains(f) && !reasons.ContainsKey(f.Key));
+        var suboptimal = additionalFits;
+        var requiredHeight = Math.Max(0, cursor - factsStart);
+        var availableHeight = Math.Max(0, panel.Bottom - profile.Margin / 4 - factsStart);
+        var diagnostics = new FactSelectionDiagnostics(profile.Role, candidates.Count, preferred, minimum, selected.Count,
+            selected.Select(f => f.Key).ToArray(), poster.Facts.Where(f => !selected.Contains(f)).Select(f => f.Key).ToArray(), reasons,
+            new Region(panel.X, panel.Y, panel.Width, panel.Height), new Region(panel.X, panel.Y, panel.Width, panel.Height), expanded,
+            Math.Max(22, profile.FontSize * .29f), requiredHeight, availableHeight, additionalFits, suboptimal);
+        return new(selected, poster.Facts.Where(f => !selected.Contains(f)).ToArray(), reasons, bounds, layouts, badgeFont,
+            headline, headlineBounds, badgeBounds, panel, minimum, preferred, suboptimal, diagnostics);
     }
 
     internal static IReadOnlyList<PosterFact> SelectPosterFacts(string eventFamily, string profile,
@@ -516,12 +595,32 @@ internal static class ResponsiveThumbnailAuthorityService
     private static Task Write<T>(string path, T value, CancellationToken ct) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); return File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Json), ct); }
     private static void Require(bool condition, string code, string message) { if (!condition) throw new InvalidOperationException($"{code}: {message}"); }
 
+    internal static int RemoveOrphanStagingDirectories(string outputRoot)
+    {
+        if (!Directory.Exists(outputRoot)) return 0;
+        var root = Path.GetFullPath(outputRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var removed = 0;
+        foreach (var candidate in Directory.EnumerateDirectories(outputRoot, "12-thumbnails.staging-*", SearchOption.TopDirectoryOnly))
+        {
+            var full = Path.GetFullPath(candidate);
+            if (!full.StartsWith(root, StringComparison.Ordinal) || !Path.GetFileName(full).StartsWith("12-thumbnails.staging-", StringComparison.Ordinal)) continue;
+            SafeDeleteDirectory(full);
+            if (!Directory.Exists(full)) removed++;
+        }
+        return removed;
+    }
+
+    internal static void SafeDeleteDirectory(string path)
+    {
+        if (Directory.Exists(path)) Directory.Delete(path, true);
+    }
+
     internal sealed record ThumbnailCopyDecision(string Headline, string Rule, int WordCount);
     internal sealed record CopyDifferentiationDecision(string NormalizedHeroTitle, string NormalizedHeroSubtitle,
         string NormalizedThumbnailHeadline, string NormalizedThumbnailSecondaryText, bool HeroTitleReusedVerbatim,
         bool HeroSubtitleReusedVerbatim, bool ParagraphCopyRendered, bool DuplicateCopyDetected,
         bool CopyDifferentiationPassed, bool ForbiddenTemporalClaimDetected, IReadOnlyList<string> SharedAuthorityTokens);
-    private sealed record Profile(string Role, int Width, int Height, int FontSize, int Margin)
+    internal sealed record Profile(string Role, int Width, int Height, int FontSize, int Margin)
     {
         public double VisualEmphasis => Role == "Landscape" ? .70 : Role == "Square" ? .68 : .72;
     }
@@ -539,11 +638,24 @@ internal static class ResponsiveThumbnailAuthorityService
         PosterField? Equipment, PosterField? ObservationMode, PosterField? Separation, PosterField? Subheadline,
         IReadOnlyList<PosterField> FooterTips, string PosterPolicyVersion);
     internal sealed record TextBlockBounds(string Key, float X, float Y, float Width, float Height, float FontSize);
-    private sealed record Region(int X, int Y, int Width, int Height);
+    internal sealed record Region(int X, int Y, int Width, int Height);
+    internal sealed record FactSelectionDiagnostics(string Profile, int CandidateFactCount, int PreferredFactCount,
+        int MinimumFactCount, int SelectedFactCount, IReadOnlyList<string> SelectedFactKeys, IReadOnlyList<string> OmittedFactKeys,
+        IReadOnlyDictionary<string, string> OmissionReasons, Region AvailablePosterBounds, Region FinalPosterBounds,
+        bool PanelExpansionApplied, float MinimumFontSize, float MeasuredRequiredHeight, float MeasuredAvailableHeight,
+        bool AdditionalFactCouldFitSafely, bool SuboptimalFactSelectionDetected);
+    internal sealed record FactDrawingLayout(PosterFact Fact, string DisplayValue, Font Label, Font Value,
+        RectangleF LabelBox, RectangleF ValueBox);
+    internal sealed record PosterFactSelectionResult(IReadOnlyList<PosterFact> SelectedFacts, IReadOnlyList<PosterFact> OmittedFacts,
+        IReadOnlyDictionary<string, string> OmissionReasons, IReadOnlyList<TextBlockBounds> TextBounds,
+        IReadOnlyList<FactDrawingLayout> FactLayouts, Font BadgeFont, (string Text, Font Font) Headline,
+        TextBlockBounds HeadlineBounds, TextBlockBounds BadgeBounds, Rectangle FinalPosterBounds, int MinimumFactCount,
+        int PreferredFactCount, bool SuboptimalFactSelectionDetected, FactSelectionDiagnostics Diagnostics);
     private sealed record PosterLayoutResult(Region PanelRegion, Region ContentRegion, double PanelUtilizationPercent,
         double UnusedPosterAreaPercent, IReadOnlyList<TextBlockBounds> TextBounds, TextBlockBounds HeadlineBounds,
         TextBlockBounds BadgeBounds, IReadOnlyList<TextBlockBounds> FactBounds, IReadOnlyList<string> RenderedFactKeys,
-        IReadOnlyList<string> SelectedFactCategories, IReadOnlyDictionary<string, string> OmissionReasons);
+        IReadOnlyList<string> SelectedFactCategories, IReadOnlyDictionary<string, string> OmissionReasons,
+        FactSelectionDiagnostics FactSelectionDiagnostics);
     private sealed record ThumbnailVariant(string Role, string PhysicalPath, string SelectionAuthority, string RenderSourceType,
         string SourceHeroRole, string SourceHeroPath, string SourceHeroAuthorityChecksum,
         string SourcePhase8AssetId, string SourcePhase8SceneId, string SourcePhase8PhysicalPath, string SourcePhase8PhysicalSha256,
@@ -557,6 +669,7 @@ internal static class ResponsiveThumbnailAuthorityService
         string FactSelectionPolicyVersion, int FactCount, Region PosterPanelBounds, Region PosterContentBounds,
         double PosterPanelUtilizationPercent, double UnusedPosterAreaPercent, TextBlockBounds HeadlineBounds,
         TextBlockBounds BadgeBounds, IReadOnlyList<TextBlockBounds> FactBounds, IReadOnlyList<TextBlockBounds> TextBoundingBoxes,
+        FactSelectionDiagnostics FactSelectionDiagnostics,
         bool HeroRasterUsedAsBackground, bool TextOverlapDetected, bool SubjectOverlapDetected, bool ScientificRegionOverlapDetected, bool TextClipped, bool HeadlineReadable,
         bool MinimumFontSizePassed, bool FactCountWithinProfileLimit, bool NoParagraphCopy, bool SubjectVisibilityPassed,
         bool ScientificPreservationPassed, string ValidationStatus)
