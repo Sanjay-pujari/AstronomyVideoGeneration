@@ -3545,7 +3545,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseGenerateGalleryAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var galleryRoot = Path.Combine(context.OutputRoot, "13-gallery");
-        var result = await galleryEngine.GenerateGalleryAsync(galleryRoot, AstroPulseGalleryAspect.Square, cancellationToken);
+        var result = await galleryEngine.GenerateGalleryAsync(galleryRoot, AstroPulseGalleryAspect.Landscape, cancellationToken);
         var observationGuidePath = Path.Combine(galleryRoot, "observation-guide.json");
         var outputs = result.ImagePaths
             .Concat([result.ManifestPath, result.ReviewPath, result.DiagnosticsPath, result.ValidationPath, observationGuidePath])

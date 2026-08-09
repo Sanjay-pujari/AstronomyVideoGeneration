@@ -41,6 +41,18 @@ internal static class Phase13GallerySemanticHydrator
     private sealed record KnowledgeSelectionProjection(string PlanId, string EventId, string Language,
         IReadOnlyList<string> UniqueKnowledgeReferences);
 
+    internal static async Task<HydrationResult> LoadAsync(string outputRoot, CancellationToken ct)
+    {
+        var authorityPath = Path.Combine(outputRoot, Phase2Authority.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(authorityPath)) throw new InvalidOperationException("P13_SEMANTIC_AUTHORITY_HYDRATION_FAILED: verified ProductionEventIntelligence is missing.");
+        var authority = JsonSerializer.Deserialize<ProductionEventIntelligenceAuthority>(await File.ReadAllTextAsync(authorityPath, ct), new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            ?? throw new InvalidOperationException("P13_SEMANTIC_AUTHORITY_HYDRATION_FAILED: verified ProductionEventIntelligence is invalid.");
+        var phase4Path = Path.Combine(outputRoot, Phase4Blueprint.Replace('/', Path.DirectorySeparatorChar));
+        var phase4 = JsonSerializer.Deserialize<DocumentaryBlueprintAggregate>(await File.ReadAllTextAsync(phase4Path, ct), new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            ?? throw new InvalidOperationException("P13_SEMANTIC_AUTHORITY_HYDRATION_FAILED: Phase 4 authority is invalid.");
+        return await LoadAsync(outputRoot, authority.Metadata.PlanId, phase4.EventId, authority.Metadata.Language, ct);
+    }
+
     internal static async Task<HydrationResult> LoadAsync(string outputRoot, string expectedPlanId,
         string expectedEventId, string expectedLanguage, CancellationToken ct)
     {

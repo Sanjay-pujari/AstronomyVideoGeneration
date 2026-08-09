@@ -39,6 +39,10 @@ internal static class ResponsiveThumbnailAuthorityService
     {
         Require(!string.IsNullOrWhiteSpace(eventType), "P12_COPY_AUTHORITY_MISSING",
             "Current event type is required for deterministic thumbnail copy.");
+        // Candidate generation is purpose-specific again. This returns through the existing
+        // transactional authority contract and never consults Phase 8, Phase 10, or Hero rasters.
+        return await MatureThumbnailCandidatePublisher.PublishAsync(outputRoot, planId, eventId, language, eventType, primaryObjects, ct);
+#pragma warning disable CS0162
         var heroPath = Path.Combine(outputRoot, "11-hero", "hero-asset-manifest.json");
         var heroReportPath = Path.Combine(outputRoot, "11-hero", "phase11-publication-report.json");
         var heroValidationPath = Path.Combine(outputRoot, "validation", "phase-11-validation.json");
