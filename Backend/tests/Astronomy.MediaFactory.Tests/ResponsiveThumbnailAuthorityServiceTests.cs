@@ -212,6 +212,79 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
         Assert.Contains("phaseExecutionBegan || status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo }", source);
     }
 
+
+    [Fact]
+    public void PosterIncludesIdentificationOrHighlightFact()
+    {
+        using var manifest = System.Text.Json.JsonDocument.Parse("""{"assets":[{"astronomyObjectsVerified":["Alnitak","Alnilam","Mintaka","Betelgeuse","Rigel","Orion Nebula / M42"]}]}""");
+        var poster = ResponsiveThumbnailAuthorityService.BuildPosterContent("CONSTELLATION", "FIND ORION", ["Orion"], [], manifest.RootElement);
+
+        Assert.Equal("CONSTELLATION", poster.Badge.Value);
+        Assert.Contains(poster.Facts, fact => fact.Key == "identification" && fact.Value == "3 BELT STARS" && fact.IsCertified);
+        Assert.Contains(poster.Facts, fact => fact.Key == "highlights");
+        Assert.Contains(poster.Facts, fact => fact.Key == "deepSky");
+    }
+
+    [Fact]
+    public void PosterDoesNotInventDirectionOrBestTime()
+    {
+        using var manifest = System.Text.Json.JsonDocument.Parse("""{"assets":[{"astronomyObjectsVerified":["Betelgeuse"]}]}""");
+        var poster = ResponsiveThumbnailAuthorityService.BuildPosterContent("CONSTELLATION", "FIND ORION", ["Orion"], [], manifest.RootElement);
+
+        Assert.DoesNotContain(poster.Facts, fact => fact.Key is "direction" or "bestTime" or "date");
+        Assert.DoesNotContain("WEST", string.Join(' ', poster.Facts.Select(f => f.Value)));
+    }
+
+    [Fact]
+    public void ThreeBeltStarsRequiresAllThreeCertifiedStars()
+    {
+        using var manifest = System.Text.Json.JsonDocument.Parse("""{"assets":[{"astronomyObjectsVerified":["Alnitak","Alnilam"]}]}""");
+        var poster = ResponsiveThumbnailAuthorityService.BuildPosterContent("CONSTELLATION", "FIND ORION", ["Orion"], [], manifest.RootElement);
+
+        Assert.DoesNotContain(poster.Facts, fact => fact.Value == "3 BELT STARS");
+    }
+
+    [Fact]
+    public void FactsDoNotOverlapEachOther()
+    {
+        ResponsiveThumbnailAuthorityService.TextBlockBounds[] boxes =
+        [new("headline", 10, 10, 100, 30, 30), new("fact", 10, 60, 100, 30, 20)];
+        Assert.False(ResponsiveThumbnailAuthorityService.HasOverlap(boxes));
+    }
+
+    [Fact]
+    public void OverlappingPosterTextIsRejectedByCollisionEngine()
+    {
+        ResponsiveThumbnailAuthorityService.TextBlockBounds[] boxes =
+        [new("headline", 10, 10, 100, 30, 30), new("fact", 50, 20, 100, 30, 20)];
+        Assert.True(ResponsiveThumbnailAuthorityService.HasOverlap(boxes));
+    }
+
+    [Fact]
+    public void Phase12DoesNotRenderOnTopOfHeroComposedPng()
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "ResponsiveThumbnailAuthorityService.cs"));
+        Assert.Contains("Render(cleanPath", source);
+        Assert.DoesNotContain("Render(sourcePath", source);
+    }
+
+    [Fact]
+    public void SelectedPhase8PhysicalShaMustMatchPhase11Lineage()
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "ResponsiveThumbnailAuthorityService.cs"));
+        Assert.Contains("sourcePhase8PhysicalSha256", source);
+        Assert.Contains("P12_SOURCE_CHECKSUM_MISMATCH", source);
+    }
+
+    [Fact]
+    public void Phase12UsesPhase11SelectedPhase8CleanRaster()
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "ResponsiveThumbnailAuthorityService.cs"));
+        Assert.Contains("sourcePhase8PhysicalPath", source);
+        Assert.Contains("P12_CLEAN_SOURCE_REQUIRED", source);
+        Assert.Contains("heroRasterUsedAsBackground = false", source);
+    }
+
     private static ResponsiveThumbnailPublicationResult AcceptedPublication() => new(
         ["thumbnail-landscape.png", "thumbnail-square.png", "thumbnail-portrait.png"], Orion,
         true, true, true, true, true,

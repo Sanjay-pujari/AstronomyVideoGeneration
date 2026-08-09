@@ -11,25 +11,30 @@ using SixLabors.ImageSharp.Processing;
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
 /// <summary>
-/// Phase 12 presentation authority. This renderer can only decorate the matching,
-/// committed Phase 11 responsive raster; it has no provider or scene-selection path.
+/// Phase 12 poster authority. Phase 11 exclusively selects each visual; Phase 12 resolves
+/// that selection back to its certified, clean Phase 8 raster and adds deterministic copy.
 /// </summary>
 internal static class ResponsiveThumbnailAuthorityService
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private const string Renderer = "DeterministicResponsiveThumbnailRenderer/2.0";
-    private const string Layout = "DiscoveryThumbnailLayout/2.0";
-    private const string CopyPolicy = "ThumbnailCopyPolicy/2.0";
+    private const string Renderer = "PosterThumbnailRenderer/3.0";
+    private const string Layout = "PosterThumbnailLayout/3.0";
+    private const string CopyPolicy = "ThumbnailPosterPolicy/3.0";
 
     internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(
         string outputRoot, string planId, string eventId, string language, string eventType,
         IReadOnlyList<string> primaryObjects, CancellationToken ct) =>
         await PublishAsync(outputRoot, planId, eventId, language, eventType, primaryObjects,
-            "ProductionExecutionContext", ct);
+            Array.Empty<string>(), "ProductionExecutionContext", ct);
+
+    internal static Task<ResponsiveThumbnailPublicationResult> PublishAsync(
+        string outputRoot, string planId, string eventId, string language, string eventType,
+        IReadOnlyList<string> primaryObjects, string copyEventIdentitySource, CancellationToken ct) =>
+        PublishAsync(outputRoot, planId, eventId, language, eventType, primaryObjects, Array.Empty<string>(), copyEventIdentitySource, ct);
 
     internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(
         string outputRoot, string planId, string eventId, string language, string eventType,
-        IReadOnlyList<string> primaryObjects, string copyEventIdentitySource, CancellationToken ct)
+        IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, string copyEventIdentitySource, CancellationToken ct)
     {
         Require(!string.IsNullOrWhiteSpace(eventType), "P12_COPY_AUTHORITY_MISSING",
             "Current event type is required for deterministic thumbnail copy.");
@@ -98,7 +103,7 @@ internal static class ResponsiveThumbnailAuthorityService
         var copyChecksum = Hash(string.Join('|', title, subtitle, language, eventType,
             string.Join(',', resolvedPrimaryObjects)));
         var variants = hero.GetProperty("variants").EnumerateArray().ToDictionary(x => Text(x, "variant"), StringComparer.OrdinalIgnoreCase);
-        var profiles = new[] { new Profile("Landscape", 1280, 720, 72, 52), new Profile("Square", 1080, 1080, 70, 64), new Profile("Portrait", 1080, 1920, 76, 76) };
+        var profiles = new[] { new Profile("Landscape", 1280, 720, 74, 52), new Profile("Square", 1080, 1080, 72, 58), new Profile("Portrait", 1080, 1920, 82, 68) };
         Require(profiles.All(x => variants.ContainsKey(x.Role)), "P12_HERO_AUTHORITY_INVALID", "All three responsive Hero roles are required.");
 
         // The semantic checksum is certified by the three committed Phase 11 surfaces above.
@@ -116,6 +121,8 @@ internal static class ResponsiveThumbnailAuthorityService
             Require(image.Width == expected.Item1 && image.Height == expected.Item2, "P12_HERO_AUTHORITY_INVALID", $"{profile.Role} Hero profile dimensions are invalid.");
         }
 
+        var poster = BuildPosterContent(eventType, copy.Headline, resolvedPrimaryObjects, secondaryObjects, p8);
+        Require(poster.Facts.Count > 0, "P12_POSTER_INFORMATION_INSUFFICIENT", "A poster requires a meaningful certified fact.");
         var root = Path.Combine(outputRoot, "12-thumbnails");
         var transaction = Guid.NewGuid().ToString("N");
         var staging = root + ".staging-" + transaction;
@@ -123,33 +130,45 @@ internal static class ResponsiveThumbnailAuthorityService
         var items = new List<ThumbnailVariant>();
         foreach (var profile in profiles)
         {
-            var source = variants[profile.Role];
-            var style = Text(source, "sourceVisualStyle");
-            Require(style is "Cinematic" or "HybridCinematic", "P12_FORBIDDEN_AUTHORITY_PATH", $"{profile.Role} Hero style is not cinematic.");
-            var sourceRelative = Text(source, "physicalPath");
-            var sourcePath = Path.GetFullPath(Path.Combine(outputRoot, sourceRelative));
-            Require(File.Exists(sourcePath), "P12_SOURCE_IMAGE_MISSING", $"{profile.Role} Hero raster is missing.");
-            var sourceSha = Sha(sourcePath);
-            Require(sourceSha.Equals(Text(source, "physicalSha256"), StringComparison.OrdinalIgnoreCase), "P12_SOURCE_CHECKSUM_MISMATCH", $"{profile.Role} Hero checksum failed.");
+            var selection = variants[profile.Role];
+            var assetId = Text(selection, "sourcePhase8AssetId");
+            var phase8Asset = p8.GetProperty("assets").EnumerateArray().SingleOrDefault(a => Text(a, "assetId") == assetId);
+            Require(phase8Asset.ValueKind == JsonValueKind.Object, "P12_SOURCE_LINEAGE_MISMATCH", $"{profile.Role} selected Phase 8 asset is absent from its manifest.");
+            var style = Text(selection, "sourceVisualStyle");
+            Require(style is "Cinematic" or "HybridCinematic", "P12_FORBIDDEN_AUTHORITY_PATH", $"{profile.Role} selected visual is not cinematic.");
+            Require(Text(phase8Asset, "visualStyle") == style, "P12_SOURCE_LINEAGE_MISMATCH", $"{profile.Role} visual style lineage differs.");
+            var semantic = Text(selection, "sourcePhase8SemanticIdentity");
+            Require(Text(phase8Asset, "semanticIdentity") == semantic, "P12_SOURCE_LINEAGE_MISMATCH", $"{profile.Role} semantic identity lineage differs.");
+            var cleanRelative = Text(selection, "sourcePhase8PhysicalPath");
+            Require(!string.IsNullOrWhiteSpace(cleanRelative) && !cleanRelative.Contains("11-hero", StringComparison.OrdinalIgnoreCase),
+                "P12_CLEAN_SOURCE_REQUIRED", $"{profile.Role} clean Phase 8 lineage is missing.");
+            Require(Text(phase8Asset, "physicalPath") == cleanRelative, "P12_SOURCE_LINEAGE_MISMATCH", $"{profile.Role} physical path lineage differs.");
+            var cleanPath = Path.GetFullPath(Path.Combine(outputRoot, cleanRelative));
+            Require(File.Exists(cleanPath), "P12_SOURCE_IMAGE_MISSING", $"{profile.Role} clean Phase 8 raster is missing.");
+            var cleanSha = Sha(cleanPath);
+            Require(cleanSha.Equals(Text(selection, "sourcePhase8PhysicalSha256"), StringComparison.OrdinalIgnoreCase)
+                && cleanSha.Equals(Text(phase8Asset, "physicalSha256"), StringComparison.OrdinalIgnoreCase),
+                "P12_SOURCE_CHECKSUM_MISMATCH", $"{profile.Role} selected Phase 8 physical checksum failed.");
             var fileName = $"thumbnail-{profile.Role.ToLowerInvariant()}.png";
             var target = Path.Combine(staging, fileName);
-            var headline = copy.Headline;
-            Render(sourcePath, target, profile, headline);
+            var layoutResult = Render(cleanPath, target, profile, poster, requiresScience: Flag(selection, "requiresScientificGeometry"));
             using var decoded = await Image.LoadAsync(target, ct);
             Require(decoded.Width == profile.Width && decoded.Height == profile.Height, "P12_PHYSICAL_VALIDATION_FAILED", $"{profile.Role} physical dimensions failed.");
-            var outputSha = Sha(target);
-            Require(outputSha != sourceSha, "P12_RENDER_FAILED", $"{profile.Role} did not add presentation value.");
-            var requiresScience = Flag(source, "requiresScientificGeometry");
-            Require(!requiresScience || (Flag(source, "scientificGeometryCertified") && Flag(source, "scientificGeometryPreserved") && Flag(source, "scientificRegionPassed")),
+            var requiresScience = Flag(selection, "requiresScientificGeometry");
+            Require(!requiresScience || (Flag(selection, "scientificGeometryCertified") && Flag(selection, "scientificGeometryPreserved") && Flag(selection, "scientificRegionPassed")),
                 "P12_SCIENTIFIC_REGION_NOT_PRESERVED", $"{profile.Role} scientific preservation cannot be proven.");
-            items.Add(new(profile.Role, $"12-thumbnails/{fileName}", profile.Role, sourceRelative, sourceSha,
-                Text(source, "sourcePhase8AssetId"), Text(source, "sourcePhase8SceneId"), Text(source, "sourcePhase8SemanticIdentity"), style,
-                requiresScience, Flag(source, "scientificGeometryCertified"), true, source.GetProperty("width").GetInt32(), source.GetProperty("height").GetInt32(),
-                "NoCrop", profile.Role == "Landscape" ? "AspectPreservingLanczosResize" : "IdentityScale", new Region(0, 0, profile.Width, (int)(profile.Height * profile.VisualEmphasis)),
-                new Region(0, 0, profile.Width, (int)(profile.Height * profile.VisualEmphasis)), new Region(profile.Margin, (int)(profile.Height * profile.VisualEmphasis), profile.Width - 2 * profile.Margin, (int)(profile.Height * (1 - profile.VisualEmphasis))),
-                "DiscoveryThumbnail", "EditorialHero", title, subtitle, headline, copy.Rule, CopyPolicy, copy.WordCount, null, false, false, false,
-                (int)Math.Round(profile.VisualEmphasis * 100), null, $"{profile.Role}Discovery/2.0", Renderer, profile.Width, profile.Height,
-                $"{profile.Width}:{profile.Height}", "png", "image/png", new FileInfo(target).Length, outputSha, true, false, true, true, true, "Valid"));
+            var outputSha = Sha(target);
+            var renderedKeys = layoutResult.RenderedFactKeys;
+            var omitted = poster.Facts.Where(f => !renderedKeys.Contains(f.Key)).Select(f => f.Key).ToArray();
+            items.Add(new ThumbnailVariant(profile.Role, $"12-thumbnails/{fileName}", "Phase11HeroManifest", "Phase8CertifiedCleanRaster",
+                profile.Role, Text(selection, "physicalPath"), heroChecksum, assetId, Text(selection, "sourcePhase8SceneId"), cleanRelative, cleanSha,
+                semantic, style, requiresScience, Flag(selection, "scientificGeometryCertified"), true,
+                "AspectPreservingCoverOrScientificContain", new Region(0, 0, profile.Width, (int)(profile.Height * profile.VisualEmphasis)), layoutResult.PanelRegion,
+                "PosterThumbnail", "EditorialHero", title, subtitle, poster.Headline, copy.Rule, CopyPolicy, copy.WordCount, poster.Badge.Value,
+                (int)Math.Round(profile.VisualEmphasis * 100), $"{profile.Role}Poster/3.0", Renderer, profile.Width, profile.Height,
+                $"{profile.Width}:{profile.Height}", "png", "image/png", new FileInfo(target).Length, outputSha,
+                poster, renderedKeys, omitted, omitted.ToDictionary(k => k, _ => "Profile fact limit or available layout space"), layoutResult.TextBounds,
+                false, false, false, true, true, true, true, true, true, "Valid"));
         }
 
         var created = DateTimeOffset.UtcNow;
@@ -181,7 +200,8 @@ internal static class ResponsiveThumbnailAuthorityService
             sourceCopy = title, thumbnailCopy = copy.Headline, copyTransformationRule = copy.Rule,
             copyDifferentiationPassed = copyValidation.CopyDifferentiationPassed,
             eventType, primaryObjects = resolvedPrimaryObjects, copyEventIdentitySource,
-            landscapeVisualEmphasisPercent = 82, squareVisualEmphasisPercent = 80, portraitVisualEmphasisPercent = 84,
+            landscapeVisualEmphasisPercent = 70, squareVisualEmphasisPercent = 68, portraitVisualEmphasisPercent = 72,
+            heroRasterUsedAsBackground = false, cleanPhase8RasterUsed = true, textOverlapDetected = false, textClipped = false, factOverlapDetected = false,
             copyAuthoritySource = manifest.CopyAuthoritySource, copyPolicyVersion = CopyPolicy, azureImageCallsThisPhase = 0, otherGenerativeImageCallsThisPhase = 0,
             proceduralAstronomyGenerationCallsThisPhase = 0, legacyQuestionEngineAuthorityUsed = false, legacyHeroAssetsAuthorityUsed = false,
             legacySceneApprovalAuthorityUsed = false, v9AiCompleteRasterUsed = false, stretchResizeUsed = false, candidateValidationPassed = true,
@@ -210,19 +230,86 @@ internal static class ResponsiveThumbnailAuthorityService
             "P12_THUMBNAIL_AUTHORITY_ACCEPTED");
     }
 
-    private static void Render(string source, string target, Profile profile, string headline)
+    private static PosterLayoutResult Render(string source, string target, Profile profile, ThumbnailPosterContent poster, bool requiresScience)
     {
         using var image = Image.Load<Rgba32>(source);
-        image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(profile.Width, profile.Height), Mode = ResizeMode.Max, Sampler = KnownResamplers.Lanczos3 }));
-        Require(image.Width == profile.Width && image.Height == profile.Height, "P12_RENDER_FAILED", "Aspect-preserving resize did not fill the target.");
+        image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(profile.Width, profile.Height),
+            Mode = requiresScience ? ResizeMode.Pad : ResizeMode.Crop, PadColor = Color.Black, Sampler = KnownResamplers.Lanczos3 }));
         var family = SystemFonts.Collection.Families.First();
-        var font = family.CreateFont(profile.FontSize, FontStyle.Bold);
-        var y = (float)(profile.Height * (profile.VisualEmphasis + .035));
-        var display = profile.Role == "Landscape" ? headline : headline.Replace(' ', '\n');
-        image.Mutate(x => { x.Fill(Color.FromRgba(0, 0, 0, 210), new Rectangle(0, (int)(profile.Height * profile.VisualEmphasis), profile.Width, profile.Height));
-            x.DrawText(display, font, Color.White, new PointF(profile.Margin, y)); });
+        var maxFacts = profile.Role == "Landscape" ? 3 : 2;
+        var facts = poster.Facts.Where(f => f.IsCertified).Take(maxFacts).ToArray();
+        var panel = profile.Role == "Landscape"
+            ? new Rectangle(profile.Margin / 2, profile.Margin / 2, (int)(profile.Width * .46), profile.Height - profile.Margin)
+            : new Rectangle(profile.Margin / 2, (int)(profile.Height * profile.VisualEmphasis), profile.Width - profile.Margin, (int)(profile.Height * (1 - profile.VisualEmphasis)) - profile.Margin / 2);
+        var bounds = new List<TextBlockBounds>();
+        var cursor = panel.Y + profile.Margin / 2;
+        var contentX = panel.X + profile.Margin / 2;
+        var contentWidth = panel.Width - profile.Margin;
+        var badgeFont = family.CreateFont(Math.Max(20, profile.FontSize / 3), FontStyle.Bold);
+        var badgeBounds = Measure(poster.Badge.Value, badgeFont, contentX, cursor);
+        bounds.Add(new("badge", badgeBounds.X, badgeBounds.Y, badgeBounds.Width, badgeBounds.Height, badgeFont.Size));
+        cursor += (int)badgeBounds.Height + 18;
+        var headline = Fit(poster.Headline, family, FontStyle.Bold, profile.FontSize, profile.FontSize * .62f, contentWidth);
+        var headlineBounds = Measure(headline.Text, headline.Font, contentX, cursor);
+        bounds.Add(new("headline", headlineBounds.X, headlineBounds.Y, headlineBounds.Width, headlineBounds.Height, headline.Font.Size));
+        cursor += (int)headlineBounds.Height + (profile.Role == "Portrait" ? 32 : 24);
+        var rendered = new List<string>();
+        var factLayouts = new List<(PosterFact Fact, Font Label, Font Value, RectangleF LabelBox, RectangleF ValueBox)>();
+        foreach (var fact in facts)
+        {
+            var labelFont = family.CreateFont(Math.Max(18, profile.FontSize * .27f), FontStyle.Bold);
+            var valueFit = Fit(fact.Value, family, FontStyle.Bold, profile.FontSize * .42f, Math.Max(22, profile.FontSize * .29f), contentWidth);
+            var lb = Measure(fact.Label, labelFont, contentX, cursor);
+            var vb = Measure(valueFit.Text, valueFit.Font, contentX, cursor + (int)lb.Height + 5);
+            var bottom = vb.Bottom + 16;
+            if (bottom > panel.Bottom - profile.Margin / 4) break;
+            factLayouts.Add((fact, labelFont, valueFit.Font, lb, vb));
+            bounds.Add(new($"{fact.Key}.label", lb.X, lb.Y, lb.Width, lb.Height, labelFont.Size));
+            bounds.Add(new($"{fact.Key}.value", vb.X, vb.Y, vb.Width, vb.Height, valueFit.Font.Size));
+            rendered.Add(fact.Key); cursor = (int)bottom;
+        }
+        Require(rendered.Count > 0, "P12_POSTER_INFORMATION_INSUFFICIENT", $"{profile.Role} has no renderable certified fact.");
+        Require(!HasOverlap(bounds) && bounds.All(b => b.X >= 0 && b.Y >= 0 && b.X + b.Width <= profile.Width && b.Y + b.Height <= profile.Height),
+            "P12_TEXT_LAYOUT_INVALID", $"{profile.Role} text overlaps or clips.");
+        image.Mutate(x =>
+        {
+            x.Fill(Color.FromRgba(4, 10, 20, 188), panel);
+            x.Fill(Color.FromRgba(85, 190, 220, 230), new Rectangle(panel.X, panel.Y, 6, panel.Height));
+            x.DrawText(poster.Badge.Value, badgeFont, Color.FromRgb(112, 220, 235), new PointF(contentX, badgeBounds.Y));
+            x.DrawText(headline.Text, headline.Font, Color.White, new PointF(contentX, headlineBounds.Y));
+            foreach (var f in factLayouts)
+            {
+                x.DrawText(f.Fact.Label, f.Label, Color.FromRgb(130, 205, 220), new PointF(contentX, f.LabelBox.Y));
+                x.DrawText(f.Fact.Value, f.Value, Color.White, new PointF(contentX, f.ValueBox.Y));
+            }
+        });
         image.SaveAsPng(target);
+        return new(panel, bounds, rendered);
     }
+
+    private static (string Text, Font Font) Fit(string text, FontFamily family, FontStyle style, float target, float minimum, float width)
+    {
+        for (var size = target; size >= minimum; size -= 2)
+        {
+            var font = family.CreateFont(size, style);
+            if (TextMeasurer.MeasureBounds(text, new TextOptions(font)).Width <= width) return (text, font);
+        }
+        var min = family.CreateFont(minimum, style);
+        var words = text.Split(' '); var lines = new List<string>(); var line = "";
+        foreach (var word in words) { var candidate = line.Length == 0 ? word : line + " " + word;
+            if (TextMeasurer.MeasureBounds(candidate, new TextOptions(min)).Width <= width) line = candidate;
+            else { if (line.Length > 0) lines.Add(line); line = word; } }
+        if (line.Length > 0) lines.Add(line);
+        return (string.Join('\n', lines), min);
+    }
+    private static RectangleF Measure(string text, Font font, float x, float y)
+    {
+        var b = TextMeasurer.MeasureBounds(text, new TextOptions(font));
+        return new RectangleF(x, y, Math.Max(1, b.Width), Math.Max(font.Size, b.Height));
+    }
+    internal static bool HasOverlap(IReadOnlyList<TextBlockBounds> boxes) => boxes.Select((a, i) => (a, i))
+        .Any(left => boxes.Skip(left.i + 1).Any(right => left.a.X < right.X + right.Width && left.a.X + left.a.Width > right.X
+            && left.a.Y < right.Y + right.Height && left.a.Y + left.a.Height > right.Y));
 
     internal static bool DuplicateCopyDetected(string first, string second)
     {
@@ -292,6 +379,42 @@ internal static class ResponsiveThumbnailAuthorityService
         headline = string.Join(' ', headline.Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
         return new(headline, rule, headline.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
     }
+    internal static ThumbnailPosterContent BuildPosterContent(string eventFamily, string headline,
+        IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects, JsonElement phase8Manifest)
+    {
+        var family = Regex.Replace(eventFamily ?? "", "[^A-Za-z]", "").ToUpperInvariant();
+        var verified = phase8Manifest.TryGetProperty("assets", out var assets)
+            ? assets.EnumerateArray().SelectMany(a => StringArray(a, "astronomyObjectsVerified"))
+                .Concat(primaryObjects).Concat(secondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            : primaryObjects.Concat(secondaryObjects).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var facts = new List<PosterFact>();
+        var authority = "Phase8SceneAssetManifest.AstronomyObjectsVerified";
+        if (family == "CONSTELLATION")
+        {
+            var belt = new[] { "Alnitak", "Alnilam", "Mintaka" };
+            if (belt.All(name => verified.Contains(name, StringComparer.OrdinalIgnoreCase)))
+                facts.Add(new("identification", "LOOK FOR", "3 BELT STARS", authority, true, 1));
+            else if (verified.Any(x => x.Contains("Belt", StringComparison.OrdinalIgnoreCase)))
+                facts.Add(new("identification", "LOOK FOR", "ORION'S BELT", authority, true, 1));
+            var stars = new[] { "Betelgeuse", "Rigel", "Bellatrix", "Saiph" }.Where(x => verified.Contains(x, StringComparer.OrdinalIgnoreCase)).Take(2).ToArray();
+            if (stars.Length > 0) facts.Add(new("highlights", "HIGHLIGHTS", string.Join(" • ", stars).ToUpperInvariant(), authority, true, 2));
+            var deepSky = verified.FirstOrDefault(x => x.Contains("M42", StringComparison.OrdinalIgnoreCase) || x.Contains("Orion Nebula", StringComparison.OrdinalIgnoreCase));
+            if (deepSky is not null) facts.Add(new("deepSky", "DEEP SKY", deepSky.ToUpperInvariant(), authority, true, 3));
+        }
+        else if (family.Contains("CONJUNCTION") && primaryObjects.Count >= 2)
+            facts.Add(new("objects", "LOOK FOR", string.Join(" + ", primaryObjects.Take(3)).ToUpperInvariant(), "ProductionEventIntelligence.PrimaryObjects", true, 1));
+        else if (family.Contains("METEOR"))
+            facts.Add(new("radiant", "LOOK FOR", (primaryObjects.FirstOrDefault() ?? "METEORS").ToUpperInvariant(), "ProductionEventIntelligence.PrimaryObjects", true, 1));
+        else if (family.Contains("ECLIPSE"))
+            facts.Add(new("event", "EVENT", (primaryObjects.FirstOrDefault() ?? "ECLIPSE").ToUpperInvariant(), "ProductionEventIntelligence.PrimaryObjects", true, 1));
+        else if (primaryObjects.Count > 0)
+            facts.Add(new("object", "FEATURED", primaryObjects[0].ToUpperInvariant(), "ProductionEventIntelligence.PrimaryObjects", true, 1));
+        return new(family, headline, new PosterField(EventBadge(eventFamily) ?? family, "ProductionEventIntelligence.EventType", true),
+            primaryObjects.Select(x => new PosterField(x, "ProductionEventIntelligence.PrimaryObjects", true)).ToArray(),
+            verified.Except(primaryObjects, StringComparer.OrdinalIgnoreCase).Select(x => new PosterField(x, authority, true)).ToArray(), facts,
+            null, null, null, null, null, null, null, null, Array.Empty<PosterField>(), CopyPolicy);
+    }
+
     private static string NormalizeCopy(string value) => Regex.Replace(value?.ToLowerInvariant() ?? "", @"[^\p{L}\p{N}]+", " ").Trim();
     private static bool ContainsForbiddenTemporalClaim(string value) => Regex.IsMatch(NormalizeCopy(value), @"\b(tonight|now|this week|visible now)\b");
     private static string CleanIdentity(string value) => Regex.Replace(value ?? "", @"[^\p{L}\p{N}\- ]", "").Trim();
@@ -328,17 +451,36 @@ internal static class ResponsiveThumbnailAuthorityService
         bool CopyDifferentiationPassed, bool ForbiddenTemporalClaimDetected, IReadOnlyList<string> SharedAuthorityTokens);
     private sealed record Profile(string Role, int Width, int Height, int FontSize, int Margin)
     {
-        public double VisualEmphasis => Role == "Landscape" ? .82 : Role == "Square" ? .80 : .84;
+        public double VisualEmphasis => Role == "Landscape" ? .70 : Role == "Square" ? .68 : .72;
     }
+    internal sealed record PosterField(string Value, string AuthoritySource, bool IsCertified);
+    internal sealed record PosterFact(string Key, string Label, string Value, string AuthoritySource, bool IsCertified, int Priority);
+    internal sealed record ThumbnailPosterContent(string EventFamily, string Headline, PosterField Badge,
+        IReadOnlyList<PosterField> PrimaryObjects, IReadOnlyList<PosterField> SecondaryObjects,
+        IReadOnlyList<PosterFact> Facts, PosterField? Date, PosterField? BestTime, PosterField? Direction, PosterField? Location,
+        PosterField? Equipment, PosterField? ObservationMode, PosterField? Separation, PosterField? Subheadline,
+        IReadOnlyList<PosterField> FooterTips, string PosterPolicyVersion);
+    internal sealed record TextBlockBounds(string Key, float X, float Y, float Width, float Height, float FontSize);
     private sealed record Region(int X, int Y, int Width, int Height);
-    private sealed record ThumbnailVariant(string Role, string PhysicalPath, string SourceHeroRole, string SourceHeroPath, string SourceHeroChecksum,
-        string SourcePhase8AssetId, string SourcePhase8SceneId, string SourceSemanticIdentity, string SourceVisualStyle, bool RequiresScientificGeometry,
-        bool ScientificGeometryCertified, bool ScientificGeometryPreserved, int SourceWidth, int SourceHeight, string CropStrategy, string ResizeStrategy,
-        Region ProtectedScientificRegion, Region ProtectedSubjectRegion, Region TextSafeRegion, string PresentationMode, string SourcePresentationMode,
-        string SourceCopy, string SourceSubtitle, string ThumbnailCopy, string CopyTransformationRule, string CopyPolicyVersion, int HeadlineWordCount,
-        string? Badge, bool HeroCopyReusedVerbatim, bool DuplicateCopyDetected, bool ParagraphCopyRendered, int VisualEmphasisPercent, string? SecondaryText,
-        string LayoutProfile, string Renderer, int Width, int Height, string AspectRatio, string Format, string MimeType, long ByteLength, string PhysicalSha256,
-        bool TextSafeAreaPassed, bool OverflowDetected, bool SubjectVisibilityPassed, bool ScientificPreservationPassed, bool ForbiddenTextPassed, string ValidationStatus);
+    private sealed record PosterLayoutResult(Region PanelRegion, IReadOnlyList<TextBlockBounds> TextBounds, IReadOnlyList<string> RenderedFactKeys);
+    private sealed record ThumbnailVariant(string Role, string PhysicalPath, string SelectionAuthority, string RenderSourceType,
+        string SourceHeroRole, string SourceHeroPath, string SourceHeroAuthorityChecksum,
+        string SourcePhase8AssetId, string SourcePhase8SceneId, string SourcePhase8PhysicalPath, string SourcePhase8PhysicalSha256,
+        string SourceSemanticIdentity, string SourceVisualStyle, bool RequiresScientificGeometry, bool ScientificGeometryCertified,
+        bool ScientificGeometryPreserved, string ResizeStrategy, Region ProtectedSubjectRegion, Region TextSafeRegion,
+        string PresentationMode, string SourcePresentationMode, string SourceCopy, string SourceSubtitle, string ThumbnailCopy,
+        string CopyTransformationRule, string CopyPolicyVersion, int HeadlineWordCount, string? Badge, int VisualEmphasisPercent,
+        string LayoutProfile, string Renderer, int Width, int Height, string AspectRatio, string Format, string MimeType,
+        long ByteLength, string PhysicalSha256, ThumbnailPosterContent PosterContent, IReadOnlyList<string> RenderedFactKeys,
+        IReadOnlyList<string> OmittedFactKeys, IReadOnlyDictionary<string, string> OmissionReasons, IReadOnlyList<TextBlockBounds> TextBoundingBoxes,
+        bool HeroRasterUsedAsBackground, bool TextOverlapDetected, bool TextClipped, bool HeadlineReadable,
+        bool MinimumFontSizePassed, bool FactCountWithinProfileLimit, bool NoParagraphCopy, bool SubjectVisibilityPassed,
+        bool ScientificPreservationPassed, string ValidationStatus)
+    {
+        public string SourceHeroChecksum => SourceHeroAuthorityChecksum;
+        public string? SecondaryText => null;
+    }
+
     private sealed record ThumbnailManifest(string SchemaVersion, string PlanId, string ExecutionId, string EventId, string Language, DateTimeOffset CreatedUtc,
         string Phase11HeroManifestPath, string Phase11AuthorityChecksum, string Phase10CertificationPath, string Phase10CertificationChecksum,
         string CopyAuthoritySource, string CopyAuthorityChecksum, string CopyPolicyVersion, string RendererVersion, string LayoutVersion, string ProviderPolicy,

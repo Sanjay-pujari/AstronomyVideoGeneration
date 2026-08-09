@@ -3411,6 +3411,9 @@ public sealed partial class ProductionPipelineExecutionService(
             context.Request.Language,
             eventType,
             primaryObjects,
+            context.ProductionEventIntelligence.SecondaryObjects.Count > 0
+                ? context.ProductionEventIntelligence.SecondaryObjects
+                : context.Request.SecondaryObjects,
             eventIdentitySource,
             cancellationToken);
         phase12AuthorityResults[context.OutputRoot] = result;
