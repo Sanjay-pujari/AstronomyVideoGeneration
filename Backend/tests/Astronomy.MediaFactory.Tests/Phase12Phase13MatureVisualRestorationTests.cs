@@ -45,7 +45,7 @@ public sealed class Phase12Phase13MatureVisualRestorationTests
     {
         var authority = Source("Astronomy.MediaFactory.Rendering", "Phase13GalleryAuthority.cs");
         var renderer = Source("Astronomy.MediaFactory.Rendering", "AstroPulseGalleryService.cs");
-        Assert.Contains("NO embedded text. NO labels. NO numbers. NO watermark", authority);
+        Assert.Contains("NO embedded text. NO labels. NO captions. NO numbers. NO watermark. NO UI typography", authority);
         Assert.Contains("embeddedAiTextRequested = false", authority);
         Assert.Contains("Drashyam Astronomy", renderer);
         Assert.Contains("{slot:00}/06", renderer);
@@ -58,8 +58,8 @@ public sealed class Phase12Phase13MatureVisualRestorationTests
             .Split("private static (SceneAssetManifestItem", StringSplitOptions.None)[0];
         Assert.DoesNotContain("08-scene-assets", active);
         Assert.DoesNotContain("10-scene-validation", active);
-        Assert.Contains("phase8AuthorityPath = \"\"", active);
-        Assert.Contains("phase10AuthorityPath = \"\"", active);
+        Assert.Contains("phase8RasterUsed = false", active);
+        Assert.Contains("phase10RasterUsed = false", active);
     }
 
     private static string Source(params string[] parts)
