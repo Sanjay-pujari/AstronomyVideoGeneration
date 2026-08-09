@@ -284,7 +284,7 @@ internal static class ResponsiveThumbnailAuthorityService
             }
         });
         image.SaveAsPng(target);
-        return new(panel, bounds, rendered);
+        return new(new Region(panel.X, panel.Y, panel.Width, panel.Height), bounds, rendered);
     }
 
     private static (string Text, Font Font) Fit(string text, FontFamily family, FontStyle style, float target, float minimum, float width)
