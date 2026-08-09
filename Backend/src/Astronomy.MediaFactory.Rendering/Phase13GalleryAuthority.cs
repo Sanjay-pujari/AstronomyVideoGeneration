@@ -21,6 +21,16 @@ internal static class Phase13GalleryAuthority
     private static readonly string[] CanonicalRoles = ["cover-identity", "what-happens", "where-to-look", "when-to-observe", "certified-highlight-or-science", "observation-checklist"];
     private static readonly string[] ConstellationRoles = ["cover-identity", "how-to-identify", "bright-stars-or-key-objects", "deep-sky-highlight", "science-or-story-highlight", "observation-checklist"];
 
+    internal sealed record GeneratedFileMetadata(
+        string Path,
+        string FileName,
+        int Width,
+        int Height,
+        string Format,
+        string MimeType,
+        long ByteLength,
+        string PhysicalSha256);
+
     internal static async Task<AstroPulseGalleryResult> PublishAsync(string galleryRoot, CancellationToken ct)
     {
         var outputRoot = Path.GetDirectoryName(Path.GetFullPath(galleryRoot))!;
@@ -73,7 +83,9 @@ internal static class Phase13GalleryAuthority
         var staging = galleryRoot + ".staging-" + transaction;
         var backup = galleryRoot + ".backup-" + transaction;
         Directory.CreateDirectory(staging);
-        var pages = new List<object>(); var outputPaths = new List<string>(); var sourceHashes = new List<string>(); var reuseReasons = new List<string>();
+        try
+        {
+        var pages = new List<object>(); var physicalMetadata = new List<GeneratedFileMetadata>(); var outputPaths = new List<string>(); var sourceHashes = new List<string>(); var reuseReasons = new List<string>();
         for (var index = 0; index < 6; index++)
         {
             var source = sources[index % sources.Length];
@@ -83,21 +95,23 @@ internal static class Phase13GalleryAuthority
             var display = Shorten(claim.Text!, 48);
             var file = $"gallery-{index + 1:00}.png";
             var target = Path.Combine(staging, file);
-            var crop = Render(source.FullPath, target, headline, display, index, source.Item.RequiresScientificGeometry);
-            using (var decoded = await Image.LoadAsync(target, ct))
-                Require(decoded.Width == 1080 && decoded.Height == 1080, "P13_PHYSICAL_VALIDATION_FAILED", $"{file} failed physical dimension readback.");
+            var (crop, generatedFileMetadata) = await RenderAndReadbackAsync(
+                source.FullPath, target, $"13-gallery/{file}", headline, display, index,
+                source.Item.RequiresScientificGeometry, ct);
             var copyReference = Lineage("02-intelligence/certified-knowledge-context.json", $"/claims/{Array.IndexOf(p2.Claims.ToArray(), claim)}/text", claim.Text!, display, display == claim.Text ? "verbatim" : "shorten-to-48-characters");
             var roleReference = Lineage("GalleryPagePolicy/1.0", $"/families/{p2.EventFamily}/slots/{index + 1}/roleId", roles[index], headline, "normalize-case-and-hyphens");
             var frameReference = frame is null ? null : Lineage("06-story-frames/story-frames.json", $"/frames/{Array.IndexOf(p6.Frames.ToArray(), frame)}/narrativeIntent", frame.NarrativeIntent, Shorten(frame.NarrativeIntent, 112), "shorten-to-112-characters");
             var reused = sourceHashes.Contains(source.Item.PhysicalSha256, StringComparer.OrdinalIgnoreCase);
             var reuseReason = reused ? $"Only {eligibleSources.Select(s => s.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()} distinct certified source hashes available; deterministic slot-specific crop applied for slot {index + 1}." : null;
-            pages.Add(new { canonicalSlot = index + 1, roleId = CanonicalRoles[index], resolvedRoleId = roles[index], physicalPath = $"13-gallery/{file}", width = 1080, height = 1080,
-                aspectRatio = "1:1", format = "PNG", headline, subheadline = display, factBlocks = new[] { display }, copyAuthorityReferences = new[] { roleReference, copyReference },
+            pages.Add(new { canonicalSlot = index + 1, roleId = CanonicalRoles[index], resolvedRoleId = roles[index], physicalPath = generatedFileMetadata.Path,
+                width = generatedFileMetadata.Width, height = generatedFileMetadata.Height, aspectRatio = "1:1", format = generatedFileMetadata.Format,
+                generatedFileMetadata, headline, subheadline = display, factBlocks = new[] { display }, copyAuthorityReferences = new[] { roleReference, copyReference },
                 viewerTakeawayAuthorityReference = frameReference, sourceAssetId = source.Item.AssetId, sourceSceneId = source.Item.SceneId,
-                sourcePhysicalPath = source.Item.PhysicalPath, sourcePhysicalSha256 = source.Item.PhysicalSha256, outputPhysicalSha256 = Sha(target),
+                sourcePhysicalPath = source.Item.PhysicalPath, sourcePhysicalSha256 = source.Item.PhysicalSha256, outputPhysicalSha256 = generatedFileMetadata.PhysicalSha256,
                 reuseReason, requiresScientificGeometry = source.Item.RequiresScientificGeometry, scientificGeometryCertified = source.Item.ScientificGeometryCertified,
                 scientificGeometryPreserved = true, protectedScientificRegion = source.Item.RequiresScientificGeometry ? "full-source-raster" : null,
                 cropStrategy = crop, subjectVisible = true, textClippingPassed = true, textOverlapPassed = true, subjectCollisionPassed = true, scientificCollisionPassed = true });
+            physicalMetadata.Add(generatedFileMetadata);
             sourceHashes.Add(source.Item.PhysicalSha256); outputPaths.Add(Path.Combine(galleryRoot, file));
             if (reuseReason is not null) reuseReasons.Add(reuseReason);
         }
@@ -130,6 +144,12 @@ internal static class Phase13GalleryAuthority
         try { Directory.Move(staging, galleryRoot); } catch { if (Directory.Exists(backup)) Directory.Move(backup, galleryRoot); throw; }
         var committed = await Read<JsonElement>(Path.Combine(galleryRoot, "gallery-manifest.json"), ct);
         Require(committed.GetProperty("deterministicChecksum").GetString() == authorityChecksum, "P13_COMMITTED_READBACK_FAILED", "Committed manifest readback failed.");
+        foreach (var expected in physicalMetadata)
+        {
+            var committedPath = Path.Combine(outputRoot, expected.Path.Replace('/', Path.DirectorySeparatorChar));
+            var actual = await ReadPhysicalMetadataAsync(committedPath, expected.Path, ct);
+            Require(actual == expected, "P13_COMMITTED_READBACK_FAILED", $"Committed physical metadata differs for '{expected.Path}'.");
+        }
         Directory.CreateDirectory(Path.Combine(outputRoot, "validation"));
         var validationPath = Path.Combine(outputRoot, "validation", "phase-13-validation.json");
         await Write(validationPath, new { phaseNo = 13, status = "Succeeded", validationStatus = "Valid", authorityPath = "13-gallery/gallery-manifest.json",
@@ -138,6 +158,22 @@ internal static class Phase13GalleryAuthority
         if (Directory.Exists(backup)) Directory.Delete(backup, true);
         return new(galleryRoot, outputPaths, Path.Combine(galleryRoot, "phase13-publication-report.json"), Path.Combine(galleryRoot, "gallery-manifest.json"),
             Path.Combine(galleryRoot, "phase13-authority-diagnostics.json"), validationPath);
+        }
+        catch
+        {
+            if (Directory.Exists(backup))
+            {
+                if (Directory.Exists(galleryRoot)) Directory.Delete(galleryRoot, true);
+                Directory.Move(backup, galleryRoot);
+            }
+            throw;
+        }
+        finally
+        {
+            // A failed candidate is never publication authority. This also covers failures
+            // during rendering/readback, before the directory-swap transaction begins.
+            if (Directory.Exists(staging)) Directory.Delete(staging, true);
+        }
     }
 
     private static (SceneAssetManifestItem Item, string FullPath) ValidateSource(string root, SceneAssetManifestItem item)
@@ -152,7 +188,8 @@ internal static class Phase13GalleryAuthority
         return (item, path);
     }
 
-    private static string Render(string sourcePath, string target, string headline, string body, int slot, bool scientific)
+    internal static async Task<(string CropStrategy, GeneratedFileMetadata Metadata)> RenderAndReadbackAsync(
+        string sourcePath, string target, string relativePath, string headline, string body, int slot, bool scientific, CancellationToken ct)
     {
         using var image = Image.Load<Rgba32>(sourcePath);
         var strategy = scientific ? "ContainScientificGeometry" : $"BoundedFocalCoverCrop-{slot + 1}";
@@ -163,7 +200,25 @@ internal static class Phase13GalleryAuthority
         image.Mutate(x => { x.Fill(Color.FromRgba(0, 0, 0, 175), new Rectangle(0, 760, 1080, 320));
             x.DrawText(headline, headlineFont, Color.White, new PointF(64, 800));
             x.DrawText(body, bodyFont, Color.FromRgb(210, 230, 245), new PointF(64, 900)); });
-        image.SaveAsPng(target); return strategy;
+        image.SaveAsPng(target);
+        var metadata = await ReadPhysicalMetadataAsync(target, relativePath, ct);
+        return (strategy, metadata);
+    }
+
+    internal static async Task<GeneratedFileMetadata> ReadPhysicalMetadataAsync(string physicalPath, string relativePath, CancellationToken ct)
+    {
+        Require(File.Exists(physicalPath), "P13_GENERATED_FILE_METADATA_INVALID", $"Gallery candidate '{relativePath}' does not exist.");
+        var info = new FileInfo(physicalPath);
+        Require(info.Length > 0, "P13_GENERATED_FILE_METADATA_INVALID", $"Gallery candidate '{relativePath}' is empty.");
+
+        using var decoded = await Image.LoadAsync(physicalPath, ct);
+        Require(decoded.Width == 1080 && decoded.Height == 1080, "P13_GENERATED_FILE_METADATA_INVALID",
+            $"Gallery candidate '{relativePath}' has physical dimensions {decoded.Width}x{decoded.Height}; expected 1080x1080.");
+        Require(decoded.Metadata.DecodedImageFormat?.Name.Equals("PNG", StringComparison.OrdinalIgnoreCase) == true,
+            "P13_GENERATED_FILE_METADATA_INVALID", $"Gallery candidate '{relativePath}' is not a decoded PNG.");
+        await using var stream = File.OpenRead(physicalPath);
+        var sha = Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant();
+        return new(relativePath.Replace('\\', '/'), info.Name, decoded.Width, decoded.Height, "PNG", "image/png", info.Length, sha);
     }
 
     private static object Lineage(string artifact, string pointer, string source, string display, string rule) => new { authorityArtifact = artifact, authorityPointer = pointer, sourceValue = source, displayValue = display, transformationRule = rule };
