@@ -43,6 +43,15 @@ internal static class Phase13GalleryAuthority
         string HeadlineAuthority, string PrimaryContentAuthority, IReadOnlyList<string> SupportingContentAuthorities,
         string SelectionReason);
 
+    internal sealed record GalleryAuthorityReference(string Artifact, string Pointer, string Value, string AuthorityType);
+    internal sealed record ResolvedGallerySemanticAuthority(string RoleId, string SemanticCategory,
+        IReadOnlyList<string> DisplayFacts, IReadOnlyList<GalleryAuthorityReference> AuthorityReferences,
+        string ResolutionStrategy, decimal Confidence, bool Certified);
+    internal sealed record GalleryRoleResolutionDiagnostic(string RequestedRoleId, string RequiredSemanticCategory,
+        int CandidateAuthorityCount, IReadOnlyList<GalleryAuthorityReference> CandidateAuthorities,
+        GalleryAuthorityReference? SelectedAuthority, string ResolutionStrategy, bool RoleSubstitutionApplied,
+        string? ResolvedRoleId, string? FailureReason);
+
     internal sealed record GalleryCopyDuplicateGroup(string NormalizedValue, IReadOnlyList<int> PageSlots);
     internal sealed record GalleryCopyDiversityResult(int DistinctHeadlineCount, int DistinctPrimaryContentCount,
         IReadOnlyList<GalleryCopyDuplicateGroup> DuplicateHeadlineGroups,
@@ -103,8 +112,8 @@ internal static class Phase13GalleryAuthority
         var roles = p2.EventFamily.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase) ? ConstellationRoles : CanonicalRoles;
         var primaryObjects = FindStringArray(p4.RootElement, "primaryObjects");
         var secondaryObjects = FindStringArray(p4.RootElement, "secondaryObjects");
-        var selections = roles.Select(role => SelectCertifiedContentForGalleryRole(p2.EventFamily, role, claims,
-            primaryObjects, secondaryObjects, [], [])).ToArray();
+        var (selections, roleDiagnostics) = ResolveRolePlan(roles, p2.EventFamily, claims, p4.RootElement, p6,
+            primaryObjects, secondaryObjects);
         var copyDiversity = EvaluateCopyDiversity(selections, primaryObjects);
         Require(copyDiversity.CopyDiversityPassed, "P13_GALLERY_COPY_DIVERSITY_FAILED", CopyDiversityFailure(copyDiversity));
         var transaction = Guid.NewGuid().ToString("N");
@@ -128,8 +137,11 @@ internal static class Phase13GalleryAuthority
             var (composition, generatedFileMetadata) = await RenderAndReadbackAsync(
                 source.FullPath, target, $"13-gallery/{file}", headline, display, index,
                 source.Item.RequiresScientificGeometry, ct);
-            var copyReference = Lineage("02-intelligence/certified-knowledge-context.json", $"/claims/{Array.IndexOf(p2.Claims.ToArray(), claim)}/text", claim.Text!, display, display == claim.Text ? "verbatim" : "shorten-to-48-characters");
-            var roleReference = Lineage(Policy, $"/families/{p2.EventFamily}/slots/{index + 1}/roleId", roles[index], headline, "derive-public-copy-from-certified-identity-and-role");
+            var authorityParts = copy.PrimaryContentAuthority.Split('#', 2);
+            var copyArtifact = authorityParts.Length == 2 ? authorityParts[0] : "02-intelligence/certified-knowledge-context.json";
+            var copyPointer = authorityParts.Length == 2 ? authorityParts[1] : $"/claims/{Array.IndexOf(p2.Claims.ToArray(), claim)}/text";
+            var copyReference = Lineage(copyArtifact, copyPointer, claim.Text!, display, display == claim.Text ? "verbatim" : "shorten-to-72-characters");
+            var roleReference = Lineage(Policy, $"/families/{p2.EventFamily}/slots/{index + 1}/roleId", copy.ResolvedRoleId, headline, "derive-public-copy-from-certified-identity-and-role");
             var frameReference = frame is null ? null : Lineage("06-story-frames/story-frames.json", $"/frames/{Array.IndexOf(p6.Frames.ToArray(), frame)}/narrativeIntent", frame.NarrativeIntent, Shorten(frame.NarrativeIntent, 112), "shorten-to-112-characters");
             var reuseReason = selectedSource.ReuseReason;
             var supportingAuthorities = copy.SupportingClaims.Select(c => Lineage("02-intelligence/certified-knowledge-context.json", $"/claims/{Array.IndexOf(p2.Claims.ToArray(), c)}/text", c.Text!, Shorten(c.Text!, 72), "shorten-to-72-characters")).ToArray();
@@ -179,7 +191,7 @@ internal static class Phase13GalleryAuthority
             visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6,
             galleryPageCount = 6, roleMatchedSourceCount, safeSquareCropCount = pageJson.Count(x => Text(x, "cropStrategy") == "SafeSquareFocalCrop"), scientificBackdropContainCount = pageJson.Count(x => Text(x, "cropStrategy") == "ScientificContainOnSameSourceBackdrop"),
             blackLetterboxPageCount, internalRoleHeadlineLeakCount, duplicatePrimaryClaimPageCount, primaryClaimReuseCount,
-            copyDiversity,
+            copyDiversity, roleResolutionDiagnostics = roleDiagnostics,
             carouselNarrativeProgressionPassed = true, visualBalancePassed = pageJson.All(x => x.GetProperty("visualBalancePassed").GetBoolean()), copyDiversityPassed,
             validationStatus = "Valid", publicationState = "Committed", candidateReadbackPassed = true, committedReadbackPassed = true,
             deterministicChecksum = authorityChecksum, downstreamReady = true };
@@ -190,7 +202,7 @@ internal static class Phase13GalleryAuthority
             roleDiversityPassed = true, semanticDiversityPassed = true, visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6,
             galleryPageCount = 6, roleMatchedSourceCount, safeSquareCropCount = pageJson.Count(x => Text(x, "cropStrategy") == "SafeSquareFocalCrop"), scientificBackdropContainCount = pageJson.Count(x => Text(x, "cropStrategy") == "ScientificContainOnSameSourceBackdrop"),
             blackLetterboxPageCount, internalRoleHeadlineLeakCount, duplicatePrimaryClaimPageCount, carouselNarrativeProgressionPassed = true,
-            copyDiversity,
+            copyDiversity, roleResolutionDiagnostics = roleDiagnostics,
             visualBalancePassed = pageJson.All(x => x.GetProperty("visualBalancePassed").GetBoolean()), copyDiversityPassed, azureImageCallsThisPhase = 0,
             otherGenerativeImageCallsThisPhase = 0, proceduralAstronomyGenerationCallsThisPhase = 0, stellariumGenerationCallsThisPhase = 0,
             questionEngineAuthorityUsed = false, heroAuthorityUsed = false, thumbnailAuthorityUsed = false, genericFallbackUsed = false, stretchResizeUsed = false,
@@ -301,6 +313,103 @@ internal static class Phase13GalleryAuthority
         return new(ranked.source, ranked.score, ranked.reasons, reuse);
     }
 
+    internal static ResolvedGallerySemanticAuthority ResolveGallerySemanticAuthority(string role, string eventFamily,
+        IReadOnlyList<CertifiedKnowledgeClaim> phase2, JsonElement phase4, StoryFramesAuthority phase6,
+        IReadOnlyList<string> eventIdentity)
+    {
+        phase2 = phase2.Where(IsCertifiedClaim).ToArray();
+        if (role != "how-to-identify")
+        {
+            var ordinary = CandidateClaims(role, phase2).FirstOrDefault();
+            return ordinary is null
+                ? new(role, RoleCategory(role), [], [], "NoCertifiedSemanticAuthority", 0, false)
+                : new(role, RoleCategory(role), [ClaimText(ordinary)],
+                    [new("02-intelligence/certified-knowledge-context.json", $"/claims/{IndexOf(phase2, ordinary)}/text", ClaimText(ordinary), "CertifiedPhase2Claim")],
+                    "CertifiedPhase2SemanticClaim", ordinary.Confidence, true);
+        }
+
+        // Recognition is deliberately semantic and evidence based. Object names in event identity are never candidates.
+        var explicitFact = phase2.Where(IsExplicitIdentificationClaim).OrderBy(c => c.KnowledgeId, StringComparer.Ordinal).FirstOrDefault();
+        if (explicitFact is not null) return FromClaim(explicitFact, "ExplicitCertifiedPhase2IdentificationFact");
+        var observation = phase2.Where(c => IsObservation(c) && IsRecognitionCue(ClaimText(c)))
+            .OrderBy(c => c.KnowledgeId, StringComparer.Ordinal).FirstOrDefault();
+        if (observation is not null) return FromClaim(observation, "CertifiedPhase2ObservationRecognitionFact");
+
+        var p6Candidates = phase6.Frames.OrderBy(f => f.SceneNumber).ThenBy(f => f.FrameNumber)
+            .SelectMany((f, i) => new[] { (Pointer: $"/frames/{i}/narrativeIntent", Value: f.NarrativeIntent), (Pointer: $"/frames/{i}/visualIntent", Value: f.VisualIntent) })
+            .Where(x => IsRecognitionCue(x.Value)).ToArray();
+        if (p6Candidates.FirstOrDefault() is var p6Candidate && !string.IsNullOrWhiteSpace(p6Candidate.Value))
+            return FromText(p6Candidate.Value, "06-story-frames/story-frames.json", p6Candidate.Pointer, "CertifiedPhase6SceneSemantic", "CertifiedPhase6RecognitionCue");
+
+        var p4Candidates = FindSemanticValues(phase4, "", new[] { "learningobjective", "educationalbeat", "observationbeat", "scenepurpose" })
+            .Where(x => IsRecognitionCue(x.Value)).ToArray();
+        if (p4Candidates.FirstOrDefault() is var p4Candidate && !string.IsNullOrWhiteSpace(p4Candidate.Value))
+            return FromText(p4Candidate.Value, "04-blueprint/documentary-blueprint.json", p4Candidate.Pointer, "CertifiedPhase4BlueprintSemantic", "CertifiedPhase4RecognitionObjective");
+
+        var relationship = phase2.Where(c => IsStructuredRelationship(c) && IsRecognitionCue(ClaimText(c)))
+            .OrderBy(c => c.KnowledgeId, StringComparer.Ordinal).FirstOrDefault();
+        return relationship is not null ? FromClaim(relationship, "CertifiedPhase2StructuredIdentificationRelationship")
+            : new(role, "Identification", [], [], "NoCertifiedIdentificationAuthority", 0, false);
+
+        ResolvedGallerySemanticAuthority FromClaim(CertifiedKnowledgeClaim claim, string strategy) =>
+            new(role, "Identification", [ClaimText(claim)],
+                [new("02-intelligence/certified-knowledge-context.json", $"/claims/{IndexOf(phase2, claim)}/text", ClaimText(claim), "CertifiedPhase2Claim")], strategy, claim.Confidence, true);
+        ResolvedGallerySemanticAuthority FromText(string value, string artifact, string pointer, string type, string strategy) =>
+            new(role, "Identification", [value], [new(artifact, pointer, value, type)], strategy, 1m, true);
+    }
+
+    internal static (GalleryRoleContentSelection[] Selections, GalleryRoleResolutionDiagnostic[] Diagnostics) ResolveRolePlan(
+        IReadOnlyList<string> requestedRoles, string eventFamily, IReadOnlyList<CertifiedKnowledgeClaim> claims,
+        JsonElement phase4, StoryFramesAuthority phase6, IReadOnlyList<string> primaryObjects, IReadOnlyList<string> secondaryObjects)
+    {
+        var selections = new List<GalleryRoleContentSelection>();
+        var diagnostics = new List<GalleryRoleResolutionDiagnostic>();
+        var substitutes = new[] { "key-object-highlight", "history-highlight", "science-fact", "object-profile", "deep-sky-secondary" };
+        foreach (var requested in requestedRoles)
+        {
+            var authority = ResolveGallerySemanticAuthority(requested, eventFamily, claims, phase4, phase6, primaryObjects.Concat(secondaryObjects).ToArray());
+            var resolved = requested;
+            var reason = (string?)null;
+            if (!authority.Certified)
+            {
+                resolved = substitutes.FirstOrDefault(candidate => selections.All(x => x.ResolvedRoleId != candidate)
+                    && CandidateClaims(candidate, claims).Any(c => selections.All(x => x.PrimaryClaim.KnowledgeId != c.KnowledgeId))) ?? "";
+                reason = string.IsNullOrEmpty(resolved) ? null : "No certified identification authority available.";
+            }
+            GalleryRoleContentSelection? selection = null;
+            if (!string.IsNullOrEmpty(resolved))
+            {
+                var available = claims.Where(c => selections.All(x => x.PrimaryClaim.KnowledgeId != c.KnowledgeId)).ToArray();
+                if (resolved == requested && requested == "how-to-identify" && authority.Certified)
+                {
+                    var reference = authority.AuthorityReferences[0];
+                    var sourceClaim = available.FirstOrDefault(c => ClaimText(c) == authority.DisplayFacts[0])
+                        ?? new CertifiedKnowledgeClaim("phase-semantic-identification", "Identification", reference.AuthorityType,
+                            authority.DisplayFacts[0], null, null, [reference.Artifact], null, authority.Confidence, null, null, "Certified", "Accepted", eventFamily);
+                    selection = SelectCertifiedContentForGalleryRole(eventFamily, resolved, [sourceClaim], primaryObjects, secondaryObjects, [], [])
+                        with { PrimaryContentAuthority = $"{reference.Artifact}#{reference.Pointer}", SelectionReason = authority.ResolutionStrategy };
+                }
+                else try { selection = SelectCertifiedContentForGalleryRole(eventFamily, resolved, available, primaryObjects, secondaryObjects, [], []); }
+                catch (InvalidOperationException) { }
+            }
+            if (selection is not null)
+            {
+                selection = selection with { RequestedRoleId = requested, RoleSubstitutionReason = reason };
+                selections.Add(selection);
+            }
+            var substitutedReference = reason is not null && selection is not null
+                ? new GalleryAuthorityReference("02-intelligence/certified-knowledge-context.json", $"/claims/{IndexOf(claims, selection.PrimaryClaim)}/text", ClaimText(selection.PrimaryClaim), "CertifiedPhase2SubstituteClaim")
+                : null;
+            diagnostics.Add(new(requested, RoleCategory(requested), authority.AuthorityReferences.Count,
+                authority.AuthorityReferences, substitutedReference ?? authority.AuthorityReferences.FirstOrDefault(),
+                reason is not null ? "DeterministicCertifiedRoleSubstitution" : authority.ResolutionStrategy,
+                reason is not null, selection?.ResolvedRoleId, selection is null ? "No certified authority or distinct certified substitute was available." : null));
+        }
+        Require(selections.Count == 6 && selections.Select(x => x.ResolvedRoleId).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 6,
+            "P13_GALLERY_INSUFFICIENT_CERTIFIED_ROLE_CONTENT", $"Resolved {selections.Count} of 6 roles; unsupported roles: {string.Join(", ", diagnostics.Where(x => x.FailureReason is not null).Select(x => x.RequestedRoleId))}; available substitute roles: {string.Join(", ", substitutes.Where(x => CandidateClaims(x, claims).Any()))}.");
+        return (selections.ToArray(), diagnostics.ToArray());
+    }
+
     internal static GalleryRoleContentSelection SelectCertifiedContentForGalleryRole(string eventFamily, string role,
         IReadOnlyList<CertifiedKnowledgeClaim> claims, IReadOnlyList<string> primaryObjects,
         IReadOnlyList<string> secondaryObjects, IReadOnlyList<string> learningObjectives,
@@ -308,7 +417,11 @@ internal static class Phase13GalleryAuthority
     {
         var identity = ExtractIdentity(eventFamily, claims);
         var keywords = RoleKeywords(role);
-        var ranked = claims.Select(c => (Claim: c, Score: SemanticScore(c, keywords)))
+        var eligibleClaims = role == "how-to-identify"
+            ? claims.Where(c => IsExplicitIdentificationClaim(c) || (IsObservation(c) && IsRecognitionCue(ClaimText(c)))
+                || (IsStructuredRelationship(c) && IsRecognitionCue(ClaimText(c))))
+            : claims;
+        var ranked = eligibleClaims.Select(c => (Claim: c, Score: SemanticScore(c, keywords)))
             .OrderByDescending(x => x.Score)
             .ThenBy(x => x.Claim.KnowledgeId, StringComparer.Ordinal).ToArray();
         var selected = ranked.FirstOrDefault(x => x.Score > 0);
@@ -330,6 +443,11 @@ internal static class Phase13GalleryAuthority
             "bright-stars-or-key-objects" => $"{identity}'S BRIGHT STARS",
             "deep-sky-highlight" => matched is "m42" ? "DISCOVER M42" : matched is "nebula" ? $"THE {identity} NEBULA" : $"DEEP SKY NEAR {identity}",
             "science-or-story-highlight" => $"WHY {identity} STANDS OUT",
+            "key-object-highlight" => $"MEET A KEY {identity} OBJECT",
+            "object-profile" => $"INSIDE {identity}'S OBJECTS",
+            "history-highlight" => $"{identity} THROUGH HISTORY",
+            "science-fact" => $"THE SCIENCE OF {identity}",
+            "deep-sky-secondary" => $"MORE DEEP SKY NEAR {identity}",
             "observation-checklist" => $"YOUR {identity} CHECKLIST",
             "what-happens" => $"WHAT HAPPENS AT {identity}",
             "where-to-look" => $"FIND {identity} IN THE SKY",
@@ -375,11 +493,69 @@ internal static class Phase13GalleryAuthority
         return keywords.Sum(k => metadata.Contains(k, StringComparison.OrdinalIgnoreCase) ? 30 : ClaimText(claim).Contains(k, StringComparison.OrdinalIgnoreCase) ? 10 : 0);
     }
 
+    private static IReadOnlyList<CertifiedKnowledgeClaim> CandidateClaims(string role, IReadOnlyList<CertifiedKnowledgeClaim> claims) =>
+        claims.Where(IsCertifiedClaim).Select(c => (Claim: c, Score: SemanticScore(c, RoleKeywords(role))))
+            .Where(x => x.Score > 0).OrderByDescending(x => x.Score).ThenBy(x => x.Claim.KnowledgeId, StringComparer.Ordinal)
+            .Select(x => x.Claim).ToArray();
+
+    private static bool IsCertifiedClaim(CertifiedKnowledgeClaim claim) =>
+        claim.ReviewStatus.Equals("Accepted", StringComparison.OrdinalIgnoreCase)
+        || claim.Classification.Equals("Certified", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsObservation(CertifiedKnowledgeClaim claim) =>
+        claim.Category.Contains("observ", StringComparison.OrdinalIgnoreCase) || claim.ClaimType.Contains("observ", StringComparison.OrdinalIgnoreCase);
+    private static bool IsExplicitIdentificationClaim(CertifiedKnowledgeClaim claim) =>
+        (claim.Category.Contains("identif", StringComparison.OrdinalIgnoreCase) || claim.Category.Contains("recogn", StringComparison.OrdinalIgnoreCase)
+         || claim.ClaimType.Contains("identif", StringComparison.OrdinalIgnoreCase) || claim.ClaimType.Contains("recogn", StringComparison.OrdinalIgnoreCase))
+        && IsRecognitionCue(ClaimText(claim));
+    private static bool IsStructuredRelationship(CertifiedKnowledgeClaim claim) =>
+        claim.StructuredValue is not null && (claim.Category.Contains("relationship", StringComparison.OrdinalIgnoreCase)
+            || claim.ClaimType.Contains("relationship", StringComparison.OrdinalIgnoreCase));
+    private static bool IsRecognitionCue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var recognition = new[] { "identify", "recognize", "locate", "look for", "find ", "spot ", "distinctive", "recognition cue" };
+        var relationship = value.Contains("belt", StringComparison.OrdinalIgnoreCase)
+            && (value.Contains("star", StringComparison.OrdinalIgnoreCase) || value.Contains("alnitak", StringComparison.OrdinalIgnoreCase)
+                || value.Contains("alnilam", StringComparison.OrdinalIgnoreCase) || value.Contains("mintaka", StringComparison.OrdinalIgnoreCase));
+        return recognition.Any(x => value.Contains(x, StringComparison.OrdinalIgnoreCase)) || relationship;
+    }
+    private static int IndexOf(IReadOnlyList<CertifiedKnowledgeClaim> claims, CertifiedKnowledgeClaim claim)
+    {
+        for (var i = 0; i < claims.Count; i++) if (ReferenceEquals(claims[i], claim) || claims[i].KnowledgeId == claim.KnowledgeId) return i;
+        return -1;
+    }
+    private static IEnumerable<(string Pointer, string Value)> FindSemanticValues(JsonElement element, string pointer, IReadOnlyList<string> allowedNames)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                var next = $"{pointer}/{property.Name}";
+                var normalized = NormalizeCopy(property.Name).Replace(" ", "");
+                if (allowedNames.Any(x => normalized.Contains(x, StringComparison.OrdinalIgnoreCase)))
+                {
+                    if (property.Value.ValueKind == JsonValueKind.String) yield return (next, property.Value.GetString() ?? "");
+                    if (property.Value.ValueKind == JsonValueKind.Array)
+                        foreach (var item in property.Value.EnumerateArray().Select((value, index) => (value, index)))
+                            if (item.value.ValueKind == JsonValueKind.String) yield return ($"{next}/{item.index}", item.value.GetString() ?? "");
+                }
+                foreach (var nested in FindSemanticValues(property.Value, next, allowedNames)) yield return nested;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            var index = 0; foreach (var item in element.EnumerateArray()) { foreach (var nested in FindSemanticValues(item, $"{pointer}/{index}", allowedNames)) yield return nested; index++; }
+        }
+    }
+
     private static string RoleCategory(string role) => role switch
     {
         "cover-identity" => "Identity", "how-to-identify" => "Identification",
         "bright-stars-or-key-objects" => "BrightObjects", "deep-sky-highlight" => "DeepSky",
         "science-or-story-highlight" => "ScienceOrStory", "observation-checklist" => "Observation",
+        "key-object-highlight" => "BrightObjects", "object-profile" => "Objects", "deep-sky-secondary" => "DeepSky",
+        "history-highlight" => "History", "science-fact" => "Science",
         "where-to-look" => "Direction", "when-to-observe" => "Timing", _ => "Identity"
     };
 
@@ -416,6 +592,11 @@ internal static class Phase13GalleryAuthority
         "bright-stars-or-key-objects" => ["betelgeuse", "rigel", "bright", "star"],
         "deep-sky-highlight" => ["m42", "nebula", "deep sky"],
         "science-or-story-highlight" => ["science", "scientific", "story", "history", "culture", "myth", "interesting", "distance", "formation"],
+        "key-object-highlight" => ["bright", "star", "object", "betelgeuse", "rigel"],
+        "object-profile" => ["object", "star", "nebula", "planet"],
+        "deep-sky-secondary" => ["deep sky", "nebula", "cluster", "galaxy", "m42"],
+        "history-highlight" => ["history", "historical", "culture", "tradition", "myth"],
+        "science-fact" => ["science", "scientific", "distance", "formation", "fact"],
         "observation-checklist" => ["observ", "visible", "equipment", "tip", "identify"],
         "where-to-look" => ["direction", "horizon", "where", "sky"],
         "when-to-observe" => ["time", "window", "when", "peak"],
