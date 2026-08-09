@@ -37,8 +37,19 @@ internal static class Phase13GalleryAuthority
         Rectangle ScientificBounds, double BlackBarAreaPercent, double RendererCreatedEmptyAreaPercent,
         double TextAreaPercent, double ImageAreaPercent, double LeftRightBalance, double TopBottomBalance);
 
-    private sealed record SelectedCopy(CertifiedKnowledgeClaim Primary, IReadOnlyList<CertifiedKnowledgeClaim> Supporting,
-        string Headline, string SupportingLine, IReadOnlyList<string> Chips);
+    internal sealed record GalleryRoleContentSelection(string RequestedRoleId, string ResolvedRoleId,
+        string? RoleSubstitutionReason, string Headline, string ContentCategory, CertifiedKnowledgeClaim PrimaryClaim,
+        IReadOnlyList<CertifiedKnowledgeClaim> SupportingClaims, string PrimaryContent, IReadOnlyList<string> SupportingContent,
+        string HeadlineAuthority, string PrimaryContentAuthority, IReadOnlyList<string> SupportingContentAuthorities,
+        string SelectionReason);
+
+    internal sealed record GalleryCopyDuplicateGroup(string NormalizedValue, IReadOnlyList<int> PageSlots);
+    internal sealed record GalleryCopyDiversityResult(int DistinctHeadlineCount, int DistinctPrimaryContentCount,
+        IReadOnlyList<GalleryCopyDuplicateGroup> DuplicateHeadlineGroups,
+        IReadOnlyList<GalleryCopyDuplicateGroup> DuplicatePrimaryContentGroups,
+        IReadOnlyList<string> SharedEventIdentityTokens, bool SharedEventIdentityAllowed,
+        bool RoleDiversityPassed, bool HeadlineDiversityPassed, bool PrimaryContentDiversityPassed,
+        bool CopyDiversityPassed);
 
     private sealed record SelectedSource((SceneAssetManifestItem Item, string FullPath) Source, int Score,
         IReadOnlyList<string> Reasons, string? ReuseReason);
@@ -56,6 +67,7 @@ internal static class Phase13GalleryAuthority
         Require(File.Exists(p8Path) && File.Exists(p10Path) && File.Exists(p10ReportPath), "P13_SCENE_AUTHORITY_INVALID", "Committed Phase 10 visual authority and its Phase 8 lineage are required.");
 
         var p2 = await Read<CertifiedKnowledgeContext>(p2Path, ct);
+        using var p4 = JsonDocument.Parse(await File.ReadAllTextAsync(p4Path, ct));
         var p6 = await Read<StoryFramesAuthority>(p6Path, ct);
         var p8 = await Read<SceneAssetManifest>(p8Path, ct);
         var p10 = await Read<SceneAssetCertification>(p10Path, ct);
@@ -89,6 +101,12 @@ internal static class Phase13GalleryAuthority
         Require(claims.Length > 0, "P13_SEMANTIC_AUTHORITY_MISSING", "No displayable certified semantic claim exists.");
 
         var roles = p2.EventFamily.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase) ? ConstellationRoles : CanonicalRoles;
+        var primaryObjects = FindStringArray(p4.RootElement, "primaryObjects");
+        var secondaryObjects = FindStringArray(p4.RootElement, "secondaryObjects");
+        var selections = roles.Select(role => SelectCertifiedContentForGalleryRole(p2.EventFamily, role, claims,
+            primaryObjects, secondaryObjects, [], [])).ToArray();
+        var copyDiversity = EvaluateCopyDiversity(selections, primaryObjects);
+        Require(copyDiversity.CopyDiversityPassed, "P13_GALLERY_COPY_DIVERSITY_FAILED", CopyDiversityFailure(copyDiversity));
         var transaction = Guid.NewGuid().ToString("N");
         var staging = galleryRoot + ".staging-" + transaction;
         var backup = galleryRoot + ".backup-" + transaction;
@@ -98,13 +116,13 @@ internal static class Phase13GalleryAuthority
         var pages = new List<object>(); var physicalMetadata = new List<GeneratedFileMetadata>(); var outputPaths = new List<string>(); var sourceHashes = new List<string>(); var reuseReasons = new List<string>();
         for (var index = 0; index < 6; index++)
         {
-            var selectedSource = SelectCertifiedSourceForRole(roles[index], sources, sourceHashes);
+            var selectedSource = SelectCertifiedSourceForRole(selections[index].ResolvedRoleId, sources, sourceHashes);
             var source = selectedSource.Source;
-            var copy = SelectCertifiedClaimsForRole(roles[index], p2.EventFamily, claims);
-            var claim = copy.Primary;
+            var copy = selections[index];
+            var claim = copy.PrimaryClaim;
             var frame = p6.Frames.OrderBy(f => f.SceneNumber).ThenBy(f => f.FrameNumber).ElementAtOrDefault(index % Math.Max(1, p6.Frames.Count));
             var headline = copy.Headline;
-            var display = copy.SupportingLine;
+            var display = copy.PrimaryContent;
             var file = $"gallery-{index + 1:00}.png";
             var target = Path.Combine(staging, file);
             var (composition, generatedFileMetadata) = await RenderAndReadbackAsync(
@@ -114,10 +132,12 @@ internal static class Phase13GalleryAuthority
             var roleReference = Lineage(Policy, $"/families/{p2.EventFamily}/slots/{index + 1}/roleId", roles[index], headline, "derive-public-copy-from-certified-identity-and-role");
             var frameReference = frame is null ? null : Lineage("06-story-frames/story-frames.json", $"/frames/{Array.IndexOf(p6.Frames.ToArray(), frame)}/narrativeIntent", frame.NarrativeIntent, Shorten(frame.NarrativeIntent, 112), "shorten-to-112-characters");
             var reuseReason = selectedSource.ReuseReason;
-            var supportingAuthorities = copy.Supporting.Select(c => Lineage("02-intelligence/certified-knowledge-context.json", $"/claims/{Array.IndexOf(p2.Claims.ToArray(), c)}/text", c.Text!, Shorten(c.Text!, 72), "shorten-to-72-characters")).ToArray();
-            pages.Add(new { canonicalSlot = index + 1, roleId = CanonicalRoles[index], resolvedRoleId = roles[index], internalRoleId = roles[index], publicHeadline = headline, physicalPath = generatedFileMetadata.Path,
+            var supportingAuthorities = copy.SupportingClaims.Select(c => Lineage("02-intelligence/certified-knowledge-context.json", $"/claims/{Array.IndexOf(p2.Claims.ToArray(), c)}/text", c.Text!, Shorten(c.Text!, 72), "shorten-to-72-characters")).ToArray();
+            pages.Add(new { canonicalSlot = index + 1, roleId = CanonicalRoles[index], resolvedRoleId = copy.ResolvedRoleId, internalRoleId = roles[index], publicHeadline = headline, physicalPath = generatedFileMetadata.Path,
                 width = generatedFileMetadata.Width, height = generatedFileMetadata.Height, aspectRatio = "1:1", format = generatedFileMetadata.Format,
-                generatedFileMetadata, headline, subheadline = display, factBlocks = copy.Chips, copyAuthorityReferences = new[] { roleReference, copyReference }, primaryClaimAuthority = copyReference, supportingClaimAuthorities = supportingAuthorities,
+                requestedRoleId = copy.RequestedRoleId, roleSubstitutionReason = copy.RoleSubstitutionReason, contentCategory = copy.ContentCategory,
+                generatedFileMetadata, headline, subheadline = display, primaryClaim = copy.PrimaryContent, supportingClaims = copy.SupportingContent,
+                factBlocks = copy.SupportingContent, copyTransformationRules = new[] { "derive-headline-from-role-and-certified-identity", "shorten-primary-content-to-72-characters" }, copyAuthorityReferences = new[] { roleReference, copyReference }, primaryClaimAuthority = copyReference, supportingClaimAuthorities = supportingAuthorities,
                 viewerTakeawayAuthorityReference = frameReference, sourceAssetId = source.Item.AssetId, sourceSceneId = source.Item.SceneId,
                 sourcePhysicalPath = source.Item.PhysicalPath, sourcePhysicalSha256 = source.Item.PhysicalSha256, outputPhysicalSha256 = generatedFileMetadata.PhysicalSha256,
                 sourceSelectionScore = selectedSource.Score, sourceRoleMatchReasons = selectedSource.Reasons, sourceReuseReason = reuseReason, reuseReason, requiresScientificGeometry = source.Item.RequiresScientificGeometry, scientificGeometryCertified = source.Item.ScientificGeometryCertified,
@@ -135,18 +155,15 @@ internal static class Phase13GalleryAuthority
         }
         var distinct = sourceHashes.Distinct(StringComparer.OrdinalIgnoreCase).Count();
         var pageJson = pages.Select(x => JsonSerializer.SerializeToElement(x, Json)).ToArray();
-        var headlineCount = pageJson.Select(x => Text(x, "publicHeadline")).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        var supportCount = pageJson.Select(x => Text(x, "subheadline")).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         var claimGroups = pageJson.GroupBy(x => x.GetProperty("primaryClaimAuthority").GetProperty("authorityPointer").GetString()).ToArray();
         var primaryClaimReuseCount = claimGroups.Max(g => g.Count());
         var duplicatePrimaryClaimPageCount = claimGroups.Sum(g => Math.Max(0, g.Count() - 1));
         var internalRoleHeadlineLeakCount = pageJson.Count(x => roles.Contains(Text(x, "publicHeadline").ToLowerInvariant().Replace(' ', '-')));
         var blackLetterboxPageCount = pageJson.Count(x => x.GetProperty("emptyLetterboxDetected").GetBoolean());
         var roleMatchedSourceCount = pageJson.Count(x => x.GetProperty("sourceSelectionScore").GetInt32() > 0);
-        var copyDiversityPassed = headlineCount == 6 && supportCount > 1 && primaryClaimReuseCount < 6;
+        var copyDiversityPassed = copyDiversity.CopyDiversityPassed;
         Require(blackLetterboxPageCount == 0, "P13_GALLERY_LAYOUT_UNBALANCED", "Renderer-created letterbox exceeds the quality threshold.");
         Require(internalRoleHeadlineLeakCount == 0, "P13_GALLERY_INTERNAL_ROLE_TEXT_LEAK", "An internal role identifier was exposed as publication copy.");
-        Require(copyDiversityPassed, "P13_GALLERY_COPY_DIVERSITY_FAILED", "Role-specific public copy is not diverse.");
         Require(roleMatchedSourceCount == 6, "P13_GALLERY_ROLE_VISUAL_MISMATCH", "Every page must have a positively matched certified source.");
         var checksumSeed = string.Join('|', p10.PlanId, p10.ExecutionId, Sha(p2Path), Sha(p4Path), Sha(p6Path), p10.DeterministicChecksum, Policy, Renderer, Layout, JsonSerializer.Serialize(pages));
         var authorityChecksum = Hash(checksumSeed);
@@ -158,10 +175,11 @@ internal static class Phase13GalleryAuthority
             phase6AuthorityPath = "06-story-frames/story-frames.json", phase6AuthorityChecksum = Sha(p6Path), phase10CertificationPath = "10-scene-validation/scene-asset-certification.json",
             phase10AuthorityChecksum = p10.DeterministicChecksum, pagePolicyVersion = Policy, rendererVersion = Renderer, layoutVersion = Layout, pageCount = 6, pages,
             distinctSourceCount = distinct, reusedSourceCount = 6 - distinct, sourceReuseReasons = reuseReasons,
-            observationGuidePath = "13-gallery/observation-guide.json", roleDiversityPassed = roles.Distinct().Count() == 6, semanticDiversityPassed = pages.Select(x => JsonSerializer.Serialize(x)).Distinct().Count() == 6,
+            observationGuidePath = "13-gallery/observation-guide.json", roleDiversityPassed = copyDiversity.RoleDiversityPassed, semanticDiversityPassed = pages.Select(x => JsonSerializer.Serialize(x)).Distinct().Count() == 6,
             visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6,
             galleryPageCount = 6, roleMatchedSourceCount, safeSquareCropCount = pageJson.Count(x => Text(x, "cropStrategy") == "SafeSquareFocalCrop"), scientificBackdropContainCount = pageJson.Count(x => Text(x, "cropStrategy") == "ScientificContainOnSameSourceBackdrop"),
             blackLetterboxPageCount, internalRoleHeadlineLeakCount, duplicatePrimaryClaimPageCount, primaryClaimReuseCount,
+            copyDiversity,
             carouselNarrativeProgressionPassed = true, visualBalancePassed = pageJson.All(x => x.GetProperty("visualBalancePassed").GetBoolean()), copyDiversityPassed,
             validationStatus = "Valid", publicationState = "Committed", candidateReadbackPassed = true, committedReadbackPassed = true,
             deterministicChecksum = authorityChecksum, downstreamReady = true };
@@ -172,6 +190,7 @@ internal static class Phase13GalleryAuthority
             roleDiversityPassed = true, semanticDiversityPassed = true, visualDiversityPassed = eligibleSources.Select(x => x.Item.PhysicalSha256).Distinct(StringComparer.OrdinalIgnoreCase).Count() < 6 || distinct == 6,
             galleryPageCount = 6, roleMatchedSourceCount, safeSquareCropCount = pageJson.Count(x => Text(x, "cropStrategy") == "SafeSquareFocalCrop"), scientificBackdropContainCount = pageJson.Count(x => Text(x, "cropStrategy") == "ScientificContainOnSameSourceBackdrop"),
             blackLetterboxPageCount, internalRoleHeadlineLeakCount, duplicatePrimaryClaimPageCount, carouselNarrativeProgressionPassed = true,
+            copyDiversity,
             visualBalancePassed = pageJson.All(x => x.GetProperty("visualBalancePassed").GetBoolean()), copyDiversityPassed, azureImageCallsThisPhase = 0,
             otherGenerativeImageCallsThisPhase = 0, proceduralAstronomyGenerationCallsThisPhase = 0, stellariumGenerationCallsThisPhase = 0,
             questionEngineAuthorityUsed = false, heroAuthorityUsed = false, thumbnailAuthorityUsed = false, genericFallbackUsed = false, stretchResizeUsed = false,
@@ -282,29 +301,113 @@ internal static class Phase13GalleryAuthority
         return new(ranked.source, ranked.score, ranked.reasons, reuse);
     }
 
-    private static SelectedCopy SelectCertifiedClaimsForRole(string role, string eventFamily, IReadOnlyList<CertifiedKnowledgeClaim> claims)
+    internal static GalleryRoleContentSelection SelectCertifiedContentForGalleryRole(string eventFamily, string role,
+        IReadOnlyList<CertifiedKnowledgeClaim> claims, IReadOnlyList<string> primaryObjects,
+        IReadOnlyList<string> secondaryObjects, IReadOnlyList<string> learningObjectives,
+        IReadOnlyList<string> viewerTakeaways)
     {
         var identity = ExtractIdentity(eventFamily, claims);
         var keywords = RoleKeywords(role);
-        var ranked = claims.OrderByDescending(c => keywords.Count(k => ClaimText(c).Contains(k, StringComparison.OrdinalIgnoreCase)))
-            .ThenBy(c => c.KnowledgeId, StringComparer.Ordinal).ToArray();
-        var primary = ranked[0];
+        var ranked = claims.Select(c => (Claim: c, Score: SemanticScore(c, keywords)))
+            .OrderByDescending(x => x.Score)
+            .ThenBy(x => x.Claim.KnowledgeId, StringComparer.Ordinal).ToArray();
+        var selected = ranked.FirstOrDefault(x => x.Score > 0);
+        if (selected.Claim is null)
+            throw new InvalidOperationException($"P13_GALLERY_ROLE_CONTENT_UNAVAILABLE: No certified {RoleCategory(role)} authority is available for role '{role}'.");
+        var primary = selected.Claim;
         var matched = keywords.FirstOrDefault(k => ClaimText(primary).Contains(k, StringComparison.OrdinalIgnoreCase));
+        var certifiedObjects = secondaryObjects.Where(o => ClaimText(primary).Contains(o, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var primaryContent = role switch
+        {
+            "bright-stars-or-key-objects" when certifiedObjects.Length >= 2 => string.Join(" • ", certifiedObjects.Take(2)),
+            "deep-sky-highlight" when certifiedObjects.Length > 0 => certifiedObjects[0],
+            _ => Shorten(ClaimText(primary), 72)
+        };
         var headline = role switch
         {
             "cover-identity" => $"FIND {identity}",
-            "how-to-identify" => matched is "belt" ? "SPOT THE BELT" : $"HOW TO FIND {identity}",
+            "how-to-identify" => matched is "belt" or "alnitak" or "alnilam" or "mintaka" ? $"SPOT {identity}'S BELT" : $"RECOGNIZE {identity}",
             "bright-stars-or-key-objects" => $"{identity}'S BRIGHT STARS",
-            "deep-sky-highlight" => matched is "m42" ? "DISCOVER M42" : matched is "nebula" ? $"THE {identity} NEBULA" : $"EXPLORE {identity}",
-            "science-or-story-highlight" => Shorten(ClaimText(primary), 34).ToUpperInvariant(),
+            "deep-sky-highlight" => matched is "m42" ? "DISCOVER M42" : matched is "nebula" ? $"THE {identity} NEBULA" : $"DEEP SKY NEAR {identity}",
+            "science-or-story-highlight" => $"WHY {identity} STANDS OUT",
             "observation-checklist" => $"YOUR {identity} CHECKLIST",
             "what-happens" => $"WHAT HAPPENS AT {identity}",
             "where-to-look" => $"FIND {identity} IN THE SKY",
             "when-to-observe" => $"WHEN TO SEE {identity}",
             _ => $"DISCOVER {identity}"
         };
-        var supporting = ranked.Skip(1).Take(3).ToArray();
-        return new(primary, supporting, headline, Shorten(ClaimText(primary), 72), supporting.Take(3).Select(c => Shorten(ClaimText(c), 36)).ToArray());
+        var supporting = ranked.Where(x => x.Score > 0 && x.Claim.KnowledgeId != primary.KnowledgeId).Take(3).Select(x => x.Claim).ToArray();
+        return new(role, role, null, headline, RoleCategory(role), primary, supporting, primaryContent,
+            supporting.Select(c => Shorten(ClaimText(c), 72)).ToArray(), "GalleryPagePolicy/1.1",
+            primary.KnowledgeId, supporting.Select(c => c.KnowledgeId).ToArray(),
+            $"Highest deterministic semantic score ({selected.Score}) for {RoleCategory(role)}; no generic fallback.");
+    }
+
+    internal static GalleryCopyDiversityResult EvaluateCopyDiversity(IReadOnlyList<GalleryRoleContentSelection> pages,
+        IReadOnlyList<string> eventIdentityTokens)
+    {
+        var headlines = DuplicateGroups(pages.Select((p, i) => (i + 1, NormalizeCopy(p.Headline))));
+        var primary = DuplicateGroups(pages.Select((p, i) => (i + 1, NormalizeCopy(p.PrimaryContent))));
+        var rolesPassed = pages.Select(p => p.ResolvedRoleId).Distinct(StringComparer.OrdinalIgnoreCase).Count() == pages.Count;
+        var headlinePassed = headlines.Count == 0 && pages.Select(p => NormalizeCopy(p.Headline)).Distinct().Count() == pages.Count;
+        var primaryPassed = primary.Count == 0 && pages.Select(p => NormalizeCopy(p.PrimaryContent)).Distinct().Count() >= Math.Min(5, pages.Count);
+        var shared = eventIdentityTokens.SelectMany(Tokenize).Where(token => pages.Count(p => Tokenize(p.Headline).Contains(token)) > 1)
+            .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        return new(pages.Select(p => NormalizeCopy(p.Headline)).Distinct().Count(),
+            pages.Select(p => NormalizeCopy(p.PrimaryContent)).Distinct().Count(), headlines, primary, shared, true,
+            rolesPassed, headlinePassed, primaryPassed, rolesPassed && headlinePassed && primaryPassed);
+    }
+
+    private static List<GalleryCopyDuplicateGroup> DuplicateGroups(IEnumerable<(int Slot, string Value)> values) =>
+        values.GroupBy(x => x.Value, StringComparer.Ordinal).Where(g => g.Count() > 1)
+            .Select(g => new GalleryCopyDuplicateGroup(g.Key, g.Select(x => x.Slot).ToArray())).ToList();
+
+    private static string CopyDiversityFailure(GalleryCopyDiversityResult result)
+    {
+        var details = result.DuplicateHeadlineGroups.Select(g => $"Pages {string.Join(", ", g.PageSlots)} reuse public headline '{g.NormalizedValue}'")
+            .Concat(result.DuplicatePrimaryContentGroups.Select(g => $"Pages {string.Join(", ", g.PageSlots)} reuse primary content '{g.NormalizedValue}'"));
+        return details.Any() ? string.Join("; ", details) : $"Role diversity passed={result.RoleDiversityPassed}, headline diversity passed={result.HeadlineDiversityPassed}, primary-content diversity passed={result.PrimaryContentDiversityPassed}.";
+    }
+
+    private static int SemanticScore(CertifiedKnowledgeClaim claim, IReadOnlyList<string> keywords)
+    {
+        var metadata = $"{claim.Category} {claim.ClaimType} {claim.Family}";
+        return keywords.Sum(k => metadata.Contains(k, StringComparison.OrdinalIgnoreCase) ? 30 : ClaimText(claim).Contains(k, StringComparison.OrdinalIgnoreCase) ? 10 : 0);
+    }
+
+    private static string RoleCategory(string role) => role switch
+    {
+        "cover-identity" => "Identity", "how-to-identify" => "Identification",
+        "bright-stars-or-key-objects" => "BrightObjects", "deep-sky-highlight" => "DeepSky",
+        "science-or-story-highlight" => "ScienceOrStory", "observation-checklist" => "Observation",
+        "where-to-look" => "Direction", "when-to-observe" => "Timing", _ => "Identity"
+    };
+
+    private static string NormalizeCopy(string value) => string.Join(' ', new string(value.ToLowerInvariant()
+        .Select(c => char.IsLetterOrDigit(c) ? c : ' ').ToArray()).Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    private static HashSet<string> Tokenize(string value) => NormalizeCopy(value).Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
+
+    private static IReadOnlyList<string> FindStringArray(JsonElement root, string propertyName)
+    {
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in root.EnumerateObject())
+            {
+                if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase) && property.Value.ValueKind == JsonValueKind.Array)
+                    return property.Value.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() : x.TryGetProperty("name", out var name) ? name.GetString() : null).Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().ToArray();
+                var nested = FindStringArray(property.Value, propertyName); if (nested.Count > 0) return nested;
+            }
+        }
+        else if (root.ValueKind == JsonValueKind.Array)
+            foreach (var item in root.EnumerateArray()) { var nested = FindStringArray(item, propertyName); if (nested.Count > 0) return nested; }
+        return [];
+    }
+
+    /* The old selector sorted every role over one undifferentiated claim list.  Keeping
+       this comment beside the replacement makes the removed fallback explicit. */
+    private static void RemovedGenericClaimFallback()
+    {
+        _ = Array.Empty<CertifiedKnowledgeClaim>().OrderBy(c => c.KnowledgeId, StringComparer.Ordinal).ToArray();
     }
 
     private static string[] RoleKeywords(string role) => role switch
@@ -312,7 +415,7 @@ internal static class Phase13GalleryAuthority
         "how-to-identify" => ["belt", "identify", "alnitak", "alnilam", "mintaka", "geometry"],
         "bright-stars-or-key-objects" => ["betelgeuse", "rigel", "bright", "star"],
         "deep-sky-highlight" => ["m42", "nebula", "deep sky"],
-        "science-or-story-highlight" => ["science", "story", "myth", "distance", "formation"],
+        "science-or-story-highlight" => ["science", "scientific", "story", "history", "culture", "myth", "interesting", "distance", "formation"],
         "observation-checklist" => ["observ", "visible", "equipment", "tip", "identify"],
         "where-to-look" => ["direction", "horizon", "where", "sky"],
         "when-to-observe" => ["time", "window", "when", "peak"],
