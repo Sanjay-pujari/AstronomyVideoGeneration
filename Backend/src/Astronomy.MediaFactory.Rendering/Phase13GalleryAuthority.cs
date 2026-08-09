@@ -256,7 +256,7 @@ internal static class Phase13GalleryAuthority
         var metadata = await ReadPhysicalMetadataAsync(target, relativePath, ct);
         var sourceBounds = new Rectangle(0, 0, originalWidth, originalHeight);
         var composition = new CompositionResult(strategy, scientific ? sourceBounds : new Rectangle(cropX, cropY, cropSide, cropSide),
-            scientific ? "SameSourceBlurred" : "None", orientation, scientific ? "ScientificContainBackdrop" : slot % 3 switch { 0 => "BottomOverlay", 1 => "BottomGlassCard", _ => "BottomOverlay" },
+            scientific ? "SameSourceBlurred" : "None", orientation, scientific ? "ScientificContainBackdrop" : (slot % 3) switch { 0 => "BottomOverlay", 1 => "BottomGlassCard", _ => "BottomOverlay" },
             textBounds, sourceBounds, scientific ? sourceBounds : new Rectangle(cropX, cropY, cropSide, cropSide), 0, 0,
             Math.Round(textBounds.Width * textBounds.Height / 11664d, 2), 100, 1, .72);
         return (composition, metadata);
