@@ -15195,7 +15195,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var phase12ThumbnailDiagnostics = phaseNo == 12 && phase12ThumbnailAuthorityDiagnostics is null
             ? BuildPhase12ThumbnailDiagnostics(context)
             : null;
-        var phase13GalleryGuideDiagnostics = phaseNo == 13
+        var phase13GalleryGuideDiagnostics = phaseNo == 13 && status == ProductionPhaseStatus.Succeeded
             ? BuildPhase13GalleryGuideDiagnostics(context)
             : null;
         var phase13ShortNarrationDiagnostics = (Phase13ShortNarrationDiagnostics?)null;
@@ -15262,25 +15262,38 @@ public sealed partial class ProductionPipelineExecutionService(
             if (phase12Certification is not null)
                 reason = phase12Certification.Reason;
         }
+        if (phaseNo == 13)
+        {
+            reasonCode = ResolvePhase13ReasonCode(status, reason);
+        }
         var phase12Accepted = status == ProductionPhaseStatus.Succeeded && phase12Certification is
             { CandidateValidationPassed: true, CandidateReadbackPassed: true, PublicationCommitted: true,
               CommittedReadbackPassed: true, DownstreamReady: true };
         var phase12Checksum = phase12Certification?.AuthorityChecksum;
+        var phase13ValidationPath = Path.Combine(context.OutputRoot, "validation", "phase-13-validation.json");
+        JsonElement? phase13Validation = phaseNo == 13 && status == ProductionPhaseStatus.Succeeded && File.Exists(phase13ValidationPath)
+            ? JsonDocument.Parse(File.ReadAllText(phase13ValidationPath)).RootElement.Clone()
+            : null;
+        var phase13Accepted = phase13Validation is JsonElement p13
+            && GetJsonBool(p13, "publicationCommitted") && GetJsonBool(p13, "committedReadbackPassed")
+            && GetJsonBool(p13, "manifestValidationPassed") && GetJsonBool(p13, "downstreamReady");
+        var phase13Checksum = phase13Validation is JsonElement p13Checksum
+            ? GetJsonString(p13Checksum, "authorityChecksum", string.Empty) : string.Empty;
         var phase12Inputs = new[] { "11-hero/hero-asset-manifest.json", "11-hero/phase11-publication-report.json", "validation/phase-11-validation.json", "10-scene-validation/scene-asset-certification.json" }
             .Select(path => Path.Combine(context.OutputRoot, path)).ToArray();
         if (phaseNo == 12 && inputFiles.Count == 0) inputFiles = phase12Inputs;
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason)
         {
             ReasonCode = reasonCode,
-            PublicationCommitted = phaseNo == 12 ? phase12Accepted : phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? false),
-            CommittedStateValidationPassed = phaseNo == 12 ? phase12Accepted : phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed ?? false),
-            AuthorityChecksum = phaseNo == 12 ? phase12Checksum : phase11Certification?.ManifestChecksum,
-            ManifestValidationStatus = phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ManifestValidationStatus,
-            ValidationStatus = phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus,
-            SemanticValidationPassed = phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed,
-            ChecksumValidationPassed = phaseNo == 12 ? phase12Accepted : phase11Certification?.ChecksumValidationPassed,
-            ManifestValidationPassed = phaseNo == 12 ? phase12Accepted : phase11Certification?.ManifestValidationPassed,
-            DownstreamReady = phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady,
+            PublicationCommitted = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? false),
+            CommittedStateValidationPassed = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed ?? false),
+            AuthorityChecksum = phaseNo == 13 ? phase13Checksum : phaseNo == 12 ? phase12Checksum : phase11Certification?.ManifestChecksum,
+            ManifestValidationStatus = phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ManifestValidationStatus,
+            ValidationStatus = phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus,
+            SemanticValidationPassed = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed,
+            ChecksumValidationPassed = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ChecksumValidationPassed,
+            ManifestValidationPassed = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ManifestValidationPassed,
+            DownstreamReady = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady,
             Phase11HeroDiagnostics = phase11Certification?.HeroAuthorityDiagnostics
         };
         if (phaseNo == 14 && File.Exists(validationPath))
@@ -15580,6 +15593,13 @@ public sealed partial class ProductionPipelineExecutionService(
         if (phaseNo == 12)
             await RefreshPhase12ValidationPersistenceDiagnosticsAsync(result.ValidationReportPath, cancellationToken);
         return result;
+    }
+
+    internal static string ResolvePhase13ReasonCode(ProductionPhaseStatus status, string? reason)
+    {
+        if (status == ProductionPhaseStatus.Succeeded) return "P13_GALLERY_AUTHORITY_ACCEPTED";
+        var match = Regex.Match(reason ?? string.Empty, @"^(P13_[A-Z0-9_]+):");
+        return match.Success ? match.Groups[1].Value : "P13_GALLERY_EXECUTION_FAILED";
     }
 
     internal static bool ShouldExposePhase12AuthorityDiagnostics(
@@ -16957,21 +16977,15 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private static Phase13GalleryGuideDiagnostics BuildPhase13GalleryGuideDiagnostics(ProductionPhaseContext context)
     {
-        var galleryRoot = Path.Combine(context.OutputRoot, "gallery");
-        var galleryOutputPaths = new[] { "page01-hook.png", "page02-recognition.png", "page03-explanation.png", "page04-observation.png", "page05-memory.png", "page06-checklist.png" }
-            .Select(fileName => NormalizePath(Path.Combine(galleryRoot, fileName)))
-            .ToArray();
-        var legacyGalleryOutputPaths = Enumerable.Range(1, 6).Select(i => NormalizePath(Path.Combine(galleryRoot, $"gallery-{i:00}.png"))).ToArray();
-        if (galleryOutputPaths.Any(path => !File.Exists(path)) && legacyGalleryOutputPaths.All(File.Exists))
-            galleryOutputPaths = legacyGalleryOutputPaths;
-        var guidePath = NormalizePath(Path.Combine(context.OutputRoot, "observation-guide", "observation-guide-v2.json"));
-        var legacyGuidePath = NormalizePath(Path.Combine(galleryRoot, "observation-guide-v2.json"));
+        var galleryRoot = Path.Combine(context.OutputRoot, "13-gallery");
+        var galleryOutputPaths = Enumerable.Range(1, 6)
+            .Select(i => NormalizePath(Path.Combine(galleryRoot, $"gallery-{i:00}.png"))).ToArray();
+        var guidePath = NormalizePath(Path.Combine(galleryRoot, "observation-guide.json"));
         if (galleryOutputPaths.Any(path => !File.Exists(path)))
-            throw new InvalidOperationException("Gallery V3 validation failed: generated file metadata is missing for one or more gallery images.");
-        var resolvedGuidePath = File.Exists(guidePath) ? guidePath : legacyGuidePath;
-        if (!File.Exists(resolvedGuidePath))
+            throw new InvalidOperationException("P13_GENERATED_FILE_METADATA_INVALID: generated physical file metadata is missing for one or more gallery images.");
+        if (!File.Exists(guidePath))
             throw new InvalidOperationException($"ObservationGuide V2 validation failed: generated guide metadata is missing at '{guidePath}'.");
-        return new Phase13GalleryGuideDiagnostics("V3.5", "V2", galleryOutputPaths, resolvedGuidePath, true, true, true, true, false, true, true, "How To Observe", true);
+        return new Phase13GalleryGuideDiagnostics("V3.5", "V2", galleryOutputPaths, guidePath, true, true, true, true, false, true, true, "How To Observe", true);
     }
 
     private sealed record Phase11HeroDiagnostics(string HeroVersion, string HeroOutputPath, IReadOnlyList<string> GeneratedVariantPaths, IReadOnlyDictionary<string, bool> GeneratedVariantFileExists, IReadOnlyDictionary<string, long> GeneratedVariantFileSizes, string CanonicalHeroFinalPath, bool CanonicalHeroFinalExists, long CanonicalHeroFinalFileSize, bool CanonicalCopyApplied, IReadOnlyList<string> MissingCanonicalHeroFiles, bool DateAdded, bool TimeAdded, bool HeroTitleSubtitleOverlap, bool HeroTitleClipped, bool HeroSubtitleClipped, bool HeroLocationRemoved, bool HeroEventCodeRemoved, bool HeroBottomInfoBarVisible, bool HeroDateVisible, bool HeroTimeVisible, bool HeroTitleMetadataOverlap, bool HeroTextSafeAreaPassed, int VisualAreaPercent, int MetadataAreaPercent, string HeroContract, string ValidatorContract, string RendererContract, string ValidationProfileUsed, IReadOnlyList<string> RenderedBlocks, IReadOnlyList<string> ForbiddenBlocks, bool ContractMismatch, string FailureBranchName);
