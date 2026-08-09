@@ -155,7 +155,8 @@ public sealed class AzureOpenAICinematicImageGenerator : IAICinematicImageGenera
     }
 
     private static IReadOnlyList<string> SelectPreferredSizes(AICinematicAssetRequest request) =>
-        request.TargetHeight > request.TargetWidth ? PreferredPortraitSizes : PreferredLandscapeSizes;
+        request.TargetHeight == request.TargetWidth ? ["1024x1024"]
+            : request.TargetHeight > request.TargetWidth ? PreferredPortraitSizes : PreferredLandscapeSizes;
 
     private IReadOnlyList<string> GetConfigurationWarnings()
     {

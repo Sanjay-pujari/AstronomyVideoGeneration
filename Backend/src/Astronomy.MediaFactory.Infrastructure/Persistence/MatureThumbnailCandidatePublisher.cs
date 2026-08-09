@@ -1,9 +1,9 @@
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core.WeeklySkyForecast.AICinematicAssets;
 using SixLabors.Fonts;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Drawing.Processing;
@@ -22,7 +22,8 @@ internal static class MatureThumbnailCandidatePublisher
     private sealed record ProviderResult(int Attempts, string Deployment, string RequestSize);
 
     internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(string outputRoot, string planId,
-        string eventId, string language, string requestedEventType, IReadOnlyList<string> requestedPrimaryObjects, CancellationToken ct)
+        string eventId, string language, string requestedEventType, IReadOnlyList<string> requestedPrimaryObjects,
+        AzureOpenAIForImageOptions? providerOptions, IAICinematicImageGenerator? provider, CancellationToken ct)
     {
         var authorityPath = Path.Combine(outputRoot, "02-intelligence", "production-event-intelligence.json");
         var knowledgePath = Path.Combine(outputRoot, "02-intelligence", "certified-knowledge-context.json");
@@ -38,6 +39,8 @@ internal static class MatureThumbnailCandidatePublisher
         var objects = authority.EventIdentity.PrimaryObjects.Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
         Require(!string.IsNullOrWhiteSpace(family) && !string.IsNullOrWhiteSpace(eventType) && objects.Length > 0,
             "P12_SEMANTIC_AUTHORITY_INSUFFICIENT", "Event identity, family, and certified objects are required.");
+        var providerConfiguration = ValidateProviderConfiguration(providerOptions, provider);
+        Require(providerConfiguration.IsValid, "P12_PROVIDER_NOT_CONFIGURED", providerConfiguration.Reason);
         var title = BuildTitle(family, objects);
         var detail = BuildCertifiedDetail(family, knowledge.Claims);
         var references = knowledge.Claims.Where(IsCertified).Take(4).Select((x, i) => new {
@@ -54,7 +57,7 @@ internal static class MatureThumbnailCandidatePublisher
             {
                 var prompt = BuildPrompt(family, objects, profile.Role);
                 var background = Path.Combine(staging, $".{profile.Role.ToLowerInvariant()}-azure-background.png");
-                var generated = await GenerateAzureBackgroundAsync(prompt, background, profile.ProviderSize, ct);
+                var generated = await GenerateAzureBackgroundAsync(provider!, prompt, background, profile, ct);
                 var backgroundSha = Sha(background);
                 var file = $"thumbnail-{profile.Role.ToLowerInvariant()}.png"; var target = Path.Combine(staging, file);
                 await RenderAsync(background, target, profile, title, detail, family, ct); File.Delete(background);
@@ -81,7 +84,10 @@ internal static class MatureThumbnailCandidatePublisher
             await Write(Path.Combine(staging, "thumbnail-asset-manifest.json"), manifest, ct);
             await Write(Path.Combine(staging, "phase12-authority-diagnostics.json"), new { phase8RasterUsed = false, phase11RasterUsed = false,
                 azureImageCallsThisPhase = 3, independentlyGeneratedAspectCount = 3, aiCompletePosterUsed = false,
-                factualTextRenderedDeterministically = true, noEmbeddedTextInstruction = true, downstreamReady = true }, ct);
+                factualTextRenderedDeterministically = true, noEmbeddedTextInstruction = true, providerConfigurationValidated = true,
+                providerOptionsBound = providerConfiguration.OptionsBound, providerEndpointConfigured = providerConfiguration.EndpointConfigured,
+                providerDeploymentConfigured = providerConfiguration.DeploymentConfigured, providerCredentialMode = providerConfiguration.CredentialMode,
+                providerClientResolved = providerConfiguration.ClientResolved, providerApiVersion = "2024-10-21", downstreamReady = true }, ct);
             await Write(Path.Combine(staging, "phase12-publication-report.json"), new { transactionId = tx, candidateValidationPassed = true,
                 candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, manifestChecksum = checksum }, ct);
             if (Directory.Exists(backup)) SafeDelete(backup); if (Directory.Exists(root)) Directory.Move(root, backup);
@@ -116,23 +122,31 @@ internal static class MatureThumbnailCandidatePublisher
         await image.SaveAsPngAsync(target, ct);
     }
 
-    private static async Task<ProviderResult> GenerateAzureBackgroundAsync(string prompt, string target, string size, CancellationToken ct)
+    internal static ProviderConfiguration ValidateProviderConfiguration(AzureOpenAIForImageOptions? options, IAICinematicImageGenerator? provider)
     {
-        var endpoint = Environment.GetEnvironmentVariable("AzureOpenAIForImage__Endpoint")?.TrimEnd('/') ?? "";
-        var deployment = Environment.GetEnvironmentVariable("AzureOpenAIForImage__ImageDeployment") ?? "";
-        var key = Environment.GetEnvironmentVariable("AzureOpenAIForImage__ApiKey") ?? "";
-        Require(endpoint.Length > 0 && deployment.Length > 0 && key.Length > 0, "P12_PROVIDER_NOT_CONFIGURED", "Azure Image2 configuration is required; fallback is forbidden.");
-        var uri = $"{endpoint}/openai/deployments/{Uri.EscapeDataString(deployment)}/images/generations?api-version=2024-10-21";
-        for (var attempt = 1; attempt <= 2; attempt++)
-        {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(90));
-            using var request = new HttpRequestMessage(HttpMethod.Post, uri) { Content = JsonContent.Create(new { prompt, n = 1, size }) }; request.Headers.Add("api-key", key); request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            using var client = new HttpClient(); using var response = await client.SendAsync(request, timeout.Token); var payload = await response.Content.ReadAsStringAsync(timeout.Token);
-            if (response.IsSuccessStatusCode) { using var doc = JsonDocument.Parse(payload); var item = doc.RootElement.GetProperty("data")[0]; byte[] bytes; if (item.TryGetProperty("b64_json", out var b64)) bytes = Convert.FromBase64String(b64.GetString()!); else bytes = await client.GetByteArrayAsync(item.GetProperty("url").GetString()!, timeout.Token); await File.WriteAllBytesAsync(target, bytes, ct); return new(attempt, deployment, size); }
-            var transient = (int)response.StatusCode is 408 or 429 or >= 500; if (!transient || attempt == 2) throw new InvalidOperationException($"P12_PROVIDER_FAILURE: Azure Image2 returned {(int)response.StatusCode}; no visual fallback is permitted.");
-        }
-        throw new InvalidOperationException("P12_PROVIDER_FAILURE: Azure Image2 failed.");
+        var endpoint = !string.IsNullOrWhiteSpace(options?.Endpoint); var deployment = !string.IsNullOrWhiteSpace(options?.ImageDeployment);
+        var credential = options?.UseManagedIdentity == true || !string.IsNullOrWhiteSpace(options?.ApiKey);
+        var reason = !endpoint ? "AzureOpenAIForImage:Endpoint is missing."
+            : !deployment ? "AzureOpenAIForImage:ImageDeployment is missing."
+            : !credential ? "AzureOpenAIForImage credential is missing; configure managed identity or ApiKey."
+            : provider is null ? "Azure Image2 provider client registration is missing."
+            : provider.IsConfigured ? "Configured" : "Azure Image2 provider client rejected the bound configuration.";
+        return new(options is not null, endpoint, deployment, options?.UseManagedIdentity == true ? "ManagedIdentity" : !string.IsNullOrWhiteSpace(options?.ApiKey) ? "ApiKey" : "Missing",
+            provider is not null, endpoint && deployment && credential && provider?.IsConfigured == true, reason);
     }
+
+    private static async Task<ProviderResult> GenerateAzureBackgroundAsync(IAICinematicImageGenerator provider, string prompt, string target, Profile profile, CancellationToken ct)
+    {
+        var result = await provider.GenerateAsync(new AICinematicAssetRequest($"phase12-{profile.Role}", "phase12", "ThumbnailBackground", "Phase12",
+            profile.Role, "ThumbnailBackground", "Cinematic", "Authority", "MatureThumbnail", prompt,
+            "text, labels, numbers, watermarks, logos, UI", profile.Width, profile.Height, target), ct);
+        Require(result.ProviderConfigured && string.Equals(result.GenerationStatus, "Generated", StringComparison.OrdinalIgnoreCase) && File.Exists(target),
+            "P12_PROVIDER_FAILURE", $"Azure Image2 failed for {profile.Role}; no visual fallback is permitted.");
+        return new(1, provider.DeploymentName, profile.ProviderSize);
+    }
+
+    internal sealed record ProviderConfiguration(bool OptionsBound, bool EndpointConfigured, bool DeploymentConfigured,
+        string CredentialMode, bool ClientResolved, bool IsValid, string Reason);
     private static async Task<T> Read<T>(string path, CancellationToken ct) => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, ct), Json) ?? throw new InvalidOperationException($"Invalid authority: {path}");
     private static Task Write<T>(string path, T value, CancellationToken ct) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); return File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Json), ct); }
     private static string Sha(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
