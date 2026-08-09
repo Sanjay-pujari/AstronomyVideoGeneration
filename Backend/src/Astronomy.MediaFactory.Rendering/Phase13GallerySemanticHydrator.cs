@@ -10,6 +10,11 @@ namespace Astronomy.MediaFactory.Rendering;
 /// <summary>Adapts frozen upstream contracts into Phase 13 semantics without changing their authority.</summary>
 internal static class Phase13GallerySemanticHydrator
 {
+    internal enum GallerySemanticUsage
+    {
+        PublicFact, PublicIdentity, PublicObservation, PublicObjectIdentity,
+        EditorialIntent, NarrativeInstruction, WorkflowInstruction, InternalReference, DiagnosticOnly
+    }
     private static readonly Regex EditorialReferencePattern = new(
         @"^(?:Outcome|Objective|Scene|Beat|Knowledge|Frame)\d+$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -19,29 +24,37 @@ internal static class Phase13GallerySemanticHydrator
     internal const string Phase4Knowledge = "04-blueprint/knowledge-selection.json";
     internal const string Phase6Authority = "06-story-frames/story-frames.json";
 
-    internal sealed record SemanticItem(string SemanticId, string DisplayText, string SemanticCategory,
-        string AuthoritySource, string AuthorityPath, bool IsInternalIdentifier,
-        bool IsPublicationEligible, bool Certified)
+    internal sealed record GallerySemanticItem(string SemanticId, string SemanticCategory,
+        GallerySemanticUsage Usage, string SourceArtifact, string SourceJsonPointer, string SourceValue,
+        string? ResolvedPublicValue, string AuthorityChecksum, bool Certified, string TransformationRule,
+        string? NormalizedVisualTreatment = null)
     {
-        // Compatibility names used by the Phase 13 claim adapter.
-        internal string Text => DisplayText;
+        internal bool IsPublicationEligible => Usage is GallerySemanticUsage.PublicFact or GallerySemanticUsage.PublicIdentity
+            or GallerySemanticUsage.PublicObservation or GallerySemanticUsage.PublicObjectIdentity;
+        internal bool IsVisualPlanningEligible => Usage is not GallerySemanticUsage.InternalReference
+            and not GallerySemanticUsage.DiagnosticOnly && (!string.IsNullOrWhiteSpace(ResolvedPublicValue)
+                || !string.IsNullOrWhiteSpace(NormalizedVisualTreatment));
+        internal bool IsInternalIdentifier => Usage == GallerySemanticUsage.InternalReference;
+        internal string Text => ResolvedPublicValue ?? SourceValue;
         internal string Category => SemanticCategory;
         internal string? SourceId => SemanticId;
+        internal string AuthoritySource => SourceArtifact;
+        internal string AuthorityPath => SourceJsonPointer;
     }
     internal sealed record ResolvedGalleryEditorialReference(string ReferenceId, string ReferenceType,
         string? ResolvedText, string? ResolvedSemanticCategory, string SourceArtifact,
         string SourceJsonPointer, string SourceChecksum, bool Certified, string ResolutionStatus);
     internal sealed record GalleryCertifiedSemanticContext(string EventType, IReadOnlyList<string> PrimaryObjects,
-        IReadOnlyList<string> SecondaryObjects, IReadOnlyList<SemanticItem> IdentityFacts,
-        IReadOnlyList<SemanticItem> IdentificationFacts, IReadOnlyList<SemanticItem> BrightObjectFacts,
-        IReadOnlyList<SemanticItem> DeepSkyFacts, IReadOnlyList<SemanticItem> ScienceFacts,
-        IReadOnlyList<SemanticItem> HistoryStoryFacts, IReadOnlyList<SemanticItem> ObservationFacts,
-        IReadOnlyList<SemanticItem> LearningObjectives, IReadOnlyList<SemanticItem> ViewerTakeaways)
+        IReadOnlyList<string> SecondaryObjects, IReadOnlyList<GallerySemanticItem> IdentityFacts,
+        IReadOnlyList<GallerySemanticItem> IdentificationFacts, IReadOnlyList<GallerySemanticItem> BrightObjectFacts,
+        IReadOnlyList<GallerySemanticItem> DeepSkyFacts, IReadOnlyList<GallerySemanticItem> ScienceFacts,
+        IReadOnlyList<GallerySemanticItem> HistoryStoryFacts, IReadOnlyList<GallerySemanticItem> ObservationFacts,
+        IReadOnlyList<GallerySemanticItem> LearningObjectives, IReadOnlyList<GallerySemanticItem> ViewerTakeaways)
     {
         internal int SemanticItemCount => IdentityFacts.Count + IdentificationFacts.Count + BrightObjectFacts.Count
             + DeepSkyFacts.Count + ScienceFacts.Count + HistoryStoryFacts.Count + ObservationFacts.Count
             + LearningObjectives.Count + ViewerTakeaways.Count;
-        internal IEnumerable<SemanticItem> AllItems => IdentityFacts.Concat(IdentificationFacts)
+        internal IEnumerable<GallerySemanticItem> AllItems => IdentityFacts.Concat(IdentificationFacts)
             .Concat(BrightObjectFacts).Concat(DeepSkyFacts).Concat(ScienceFacts).Concat(HistoryStoryFacts)
             .Concat(ObservationFacts).Concat(LearningObjectives).Concat(ViewerTakeaways);
     }
@@ -115,51 +128,68 @@ internal static class Phase13GallerySemanticHydrator
     internal static GalleryCertifiedSemanticContext Normalize(ProductionEventIntelligenceAuthority eventAuthority,
         CertifiedKnowledgeContext p2, DocumentaryBlueprintAggregate p4, StoryFramesAuthority p6)
     {
-        var buckets = Enumerable.Range(0, 9).Select(_ => new List<SemanticItem>()).ToArray();
-        void Add(int bucket, string? text, string source, string pointer, string? id = null)
+        var buckets = Enumerable.Range(0, 9).Select(_ => new List<GallerySemanticItem>()).ToArray();
+        void Add(int bucket, string? text, string source, string pointer, GallerySemanticUsage usage,
+            string? id = null, string? visualTreatment = null)
         {
             if (string.IsNullOrWhiteSpace(text)) return;
             var candidate = text.Trim();
-            var internalId = IsInternalReference(candidate);
-            if (internalId)
+            if (IsInternalReference(candidate))
             {
                 var resolved = ResolveGalleryEditorialReference(candidate, p4, p6, p2, source, pointer);
                 RequireResolvedEditorialReference(resolved, source, pointer);
-                buckets[bucket].Add(new(candidate, resolved.ResolvedText, resolved.ResolvedSemanticCategory ?? Category(bucket),
-                    resolved.SourceArtifact, resolved.SourceJsonPointer, true, true, resolved.Certified));
+                buckets[bucket].Add(Item(candidate, resolved.ResolvedSemanticCategory ?? Category(bucket),
+                    GallerySemanticUsage.InternalReference, resolved.SourceArtifact, resolved.SourceJsonPointer,
+                    candidate, null, resolved.Certified, "reference-resolution-only", visualTreatment));
                 return;
             }
-            buckets[bucket].Add(new(id ?? candidate, candidate, Category(bucket), source, pointer, false, true, true));
+            var publishable = usage is GallerySemanticUsage.PublicFact or GallerySemanticUsage.PublicIdentity
+                or GallerySemanticUsage.PublicObservation or GallerySemanticUsage.PublicObjectIdentity;
+            buckets[bucket].Add(Item(id ?? candidate, Category(bucket), usage, source, pointer, candidate,
+                publishable ? candidate : null, true, publishable ? "verbatim-certified-authority" : "planning-only", visualTreatment));
         }
+        static GallerySemanticItem Item(string id, string category, GallerySemanticUsage usage, string artifact,
+            string pointer, string source, string? resolved, bool certified, string rule, string? visual) =>
+            new(id, category, usage, artifact, pointer, source, resolved,
+                Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant(), certified, rule, visual);
 
         var identity = eventAuthority.EventIdentity;
         foreach (var (value, index) in identity.PrimaryObjects.Select((x, i) => (x, i)))
-            Add(0, $"{value} is the primary {identity.EventType} object.", Phase2Authority, $"/eventIdentity/primaryObjects/{index}", value);
+            Add(0, $"{value} is the primary {identity.EventType} object.", Phase2Authority,
+                $"/eventIdentity/primaryObjects/{index}", GallerySemanticUsage.PublicObjectIdentity, value);
         foreach (var (claim, index) in p2.Claims.Select((claim, index) => (claim, index)).Where(entry =>
                      entry.claim.ReviewStatus.Equals("Accepted", StringComparison.OrdinalIgnoreCase) || entry.claim.Classification.Equals("Certified", StringComparison.OrdinalIgnoreCase)))
         {
-            var category = $"{claim.Category} {claim.ClaimType}";
-            var bucket = Bucket(category, claim.Text);
-            Add(bucket, claim.Text, Phase2Knowledge, $"/claims/{index}/text", claim.KnowledgeId);
+            var bucket = Bucket($"{claim.Category} {claim.ClaimType}", claim.Text);
+            Add(bucket, claim.Text, Phase2Knowledge, $"/claims/{index}/text",
+                bucket == 0 ? GallerySemanticUsage.PublicIdentity : bucket == 6 ? GallerySemanticUsage.PublicObservation : GallerySemanticUsage.PublicFact,
+                claim.KnowledgeId);
         }
-        var scenes = p4.LongBlueprint.Scenes;
-        foreach (var (scene, index) in scenes.Select((x, i) => (x, i)))
+        foreach (var (scene, index) in p4.LongBlueprint.Scenes.Select((x, i) => (x, i)))
         {
-            Add(7, scene.SceneObjective.LearningGoal, Phase4Blueprint, $"/longVariant/blueprint/scenes/{index}/sceneObjective/learningGoal", scene.SceneId);
-            Add(8, scene.EditorialOutcome.ViewerTakeaway, Phase4Blueprint, $"/longVariant/blueprint/scenes/{index}/editorialOutcome/viewerTakeaway", scene.SceneId);
+            var treatment = NormalizeVisualTreatment(scene.SceneRole.ToString());
+            Add(7, scene.SceneObjective.LearningGoal, Phase4Blueprint, $"/longVariant/blueprint/scenes/{index}/sceneObjective/learningGoal", GallerySemanticUsage.EditorialIntent, scene.SceneId, treatment);
+            Add(8, scene.EditorialOutcome.ViewerTakeaway, Phase4Blueprint, $"/longVariant/blueprint/scenes/{index}/editorialOutcome/viewerTakeaway", GallerySemanticUsage.EditorialIntent, scene.SceneId, treatment);
             Add(Bucket(scene.SceneRole.ToString(), scene.EditorialOutcome.NarrativeContribution), scene.EditorialOutcome.NarrativeContribution,
-                Phase4Blueprint, $"/longVariant/blueprint/scenes/{index}/editorialOutcome/narrativeContribution", scene.SceneId);
+                Phase4Blueprint, $"/longVariant/blueprint/scenes/{index}/editorialOutcome/narrativeContribution", GallerySemanticUsage.NarrativeInstruction, scene.SceneId, treatment);
         }
         foreach (var (frame, index) in p6.Frames.Select((x, i) => (x, i)))
         {
-            Add(Bucket(frame.SceneRole, frame.NarrativeIntent), frame.NarrativeIntent, Phase6Authority, $"/frames/{index}/narrativeIntent", frame.FrameId);
-            Add(Bucket(frame.FrameRole, frame.VisualIntent), frame.VisualIntent, Phase6Authority, $"/frames/{index}/visualIntent", frame.FrameId);
+            Add(Bucket(frame.SceneRole, frame.NarrativeIntent), frame.NarrativeIntent, Phase6Authority,
+                $"/frames/{index}/narrativeIntent", GallerySemanticUsage.NarrativeInstruction, frame.FrameId, NormalizeVisualTreatment(frame.SceneRole));
+            Add(Bucket(frame.FrameRole, frame.VisualIntent), frame.VisualIntent, Phase6Authority,
+                $"/frames/{index}/visualIntent", GallerySemanticUsage.EditorialIntent, frame.FrameId, NormalizeVisualTreatment(frame.FrameRole));
             foreach (var (note, noteIndex) in frame.ProductionNotes.Select((x, i) => (x, i)))
-                Add(Bucket(frame.FrameRole, note), note, Phase6Authority, $"/frames/{index}/productionNotes/{noteIndex}", frame.FrameId);
+                Add(Bucket(frame.FrameRole, note), note, Phase6Authority, $"/frames/{index}/productionNotes/{noteIndex}", GallerySemanticUsage.WorkflowInstruction, frame.FrameId);
         }
         return new(identity.EventType, identity.PrimaryObjects, eventAuthority.Intelligence.SecondaryObjects,
             buckets[0], buckets[1], buckets[2], buckets[3], buckets[4], buckets[5], buckets[6], buckets[7], buckets[8]);
     }
+
+    internal static string NormalizeVisualTreatment(string value) => value.Contains("histor", StringComparison.OrdinalIgnoreCase)
+        ? "historical astronomy context" : value.Contains("cultur", StringComparison.OrdinalIgnoreCase)
+        ? "cultural astronomy context" : value.Contains("recogn", StringComparison.OrdinalIgnoreCase)
+        ? "clear constellation recognition composition" : "role-appropriate astronomy composition";
 
     internal static bool IsInternalReference(string value) => EditorialReferencePattern.IsMatch(value.Trim());
 
