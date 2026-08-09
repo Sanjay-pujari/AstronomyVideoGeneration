@@ -21,7 +21,7 @@ internal static class ResponsiveThumbnailAuthorityService
     private const string Layout = "DiscoveryThumbnailLayout/2.0";
     private const string CopyPolicy = "ThumbnailCopyPolicy/2.0";
 
-    internal static async Task<IReadOnlyList<string>> PublishAsync(
+    internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(
         string outputRoot, string planId, string eventId, string language, CancellationToken ct)
     {
         var heroPath = Path.Combine(outputRoot, "11-hero", "hero-asset-manifest.json");
@@ -189,7 +189,11 @@ internal static class ResponsiveThumbnailAuthorityService
             committedStateValidationPassed = true, candidateReadbackPassed = true, committedReadbackPassed = true, downstreamReady = true,
             reason = "Responsive thumbnail assets generated, validated, committed and read back.", providerCallCount = 0 }, ct);
         if (Directory.Exists(backup)) Directory.Delete(backup, true);
-        return Directory.EnumerateFiles(root).Append(Path.Combine(outputRoot, "validation", "phase-12-validation.json")).ToArray();
+        return new ResponsiveThumbnailPublicationResult(
+            Directory.EnumerateFiles(root).Append(Path.Combine(outputRoot, "validation", "phase-12-validation.json")).ToArray(),
+            committed.DeterministicChecksum, true, true, true, true, true,
+            "Responsive thumbnail assets generated, validated, committed and read back.",
+            "P12_THUMBNAIL_AUTHORITY_ACCEPTED");
     }
 
     private static void Render(string source, string target, Profile profile, string headline)
@@ -327,3 +331,14 @@ internal static class ResponsiveThumbnailAuthorityService
         int ProviderCallCount, IReadOnlyList<ThumbnailVariant> Variants, string ValidationStatus, string PublicationState, bool CandidateReadbackPassed,
         bool CommittedReadbackPassed, string DeterministicChecksum, bool DownstreamReady);
 }
+
+internal sealed record ResponsiveThumbnailPublicationResult(
+    IReadOnlyList<string> OutputFiles,
+    string AuthorityChecksum,
+    bool CandidateValidationPassed,
+    bool CandidateReadbackPassed,
+    bool PublicationCommitted,
+    bool CommittedReadbackPassed,
+    bool DownstreamReady,
+    string Reason,
+    string ReasonCode);

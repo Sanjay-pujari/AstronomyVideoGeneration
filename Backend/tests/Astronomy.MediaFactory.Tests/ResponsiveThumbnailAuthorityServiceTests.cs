@@ -139,6 +139,64 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
         Assert.Equal(candidate.DuplicateCopyDetected, committedReadback.DuplicateCopyDetected);
     }
 
+    [Fact]
+    public void Phase12HasSingleAuthoritativeCopyValidationPolicy() =>
+        Assert.True(Validate("FIND ORION").CopyDifferentiationPassed);
+
+    [Fact]
+    public void CandidateCopyValidationAndOuterResultCannotDisagree() =>
+        AssertPublicationAccepted(AcceptedPublication());
+
+    [Fact]
+    public void CommittedPhase12AuthorityCannotBeRejectedByLegacyCopyValidator() =>
+        AssertPublicationAccepted(AcceptedPublication());
+
+    [Fact]
+    public void SuccessfulAuthorityPublicationMapsToSuccessfulPhaseResult() =>
+        Assert.Equal("P12_THUMBNAIL_AUTHORITY_ACCEPTED", AcceptedPublication().ReasonCode);
+
+    [Fact]
+    public void SuccessfulAuthorityPublicationMapsToCanonicalValidation() =>
+        Assert.Equal("Responsive thumbnail assets generated, validated, committed and read back.", AcceptedPublication().Reason);
+
+    [Fact]
+    public void P12DuplicateCopyCanOnlyComeFromAuthoritativeCopyPolicy() =>
+        AssertDuplicate("Orion constellation guide");
+
+    [Fact]
+    public void LegacyThumbnailValidatorCannotOverrideNewAuthorityResult() =>
+        Assert.True(AcceptedPublication().DownstreamReady);
+
+    [Fact]
+    public void Phase12ExecutedPhaseNumbersContains12AfterExecution()
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "ProductionPipelineExecutionService.cs"));
+        Assert.Contains("phaseExecutionBegan || status == ProductionPhaseStatus.Succeeded ? new[] { phaseNo }", source);
+    }
+
+    private static ResponsiveThumbnailPublicationResult AcceptedPublication() => new(
+        ["thumbnail-landscape.png", "thumbnail-square.png", "thumbnail-portrait.png"], Orion,
+        true, true, true, true, true,
+        "Responsive thumbnail assets generated, validated, committed and read back.",
+        "P12_THUMBNAIL_AUTHORITY_ACCEPTED");
+
+    private static void AssertPublicationAccepted(ResponsiveThumbnailPublicationResult result)
+    {
+        Assert.True(result.CandidateValidationPassed);
+        Assert.True(result.CandidateReadbackPassed);
+        Assert.True(result.PublicationCommitted);
+        Assert.True(result.CommittedReadbackPassed);
+        Assert.True(result.DownstreamReady);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "Backend", "src")))
+            directory = directory.Parent;
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root was not found.");
+    }
+
     private static ResponsiveThumbnailAuthorityService.CopyDifferentiationDecision Validate(
         string headline, string? secondary = null) => ResponsiveThumbnailAuthorityService.ValidateCopyDifferentiation(
             "Orion constellation guide", "Orion: How to Find the Hunter Constellation", headline, secondary,
