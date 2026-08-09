@@ -322,6 +322,98 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
     [Fact]
     public void PortraitPrefersDeepSkyAsSecondDiverseFact() => Assert.Equal("deepSky", SelectOrion("Portrait")[1].Key);
 
+    [Fact]
+    public void SquarePrefersTwoFactsWhenBothFitSafely()
+    {
+        var result = MeasureOrion("Square", new(29, 691, 1022, 360));
+        Assert.Equal(["identification", "deepSky"], result.SelectedFacts.Select(f => f.Key));
+        Assert.False(result.Diagnostics.AdditionalFactCouldFitSafely);
+    }
+
+    [Fact]
+    public void SquareAllowsOneFactWhenSecondCannotFitMinimumTypography()
+    {
+        var result = MeasureOrion("Square", new(29, 780, 1022, 270), requiresScience: true);
+        Assert.InRange(result.SelectedFacts.Count, 1, 1);
+        Assert.Contains(result.OmissionReasons.Values, reason => reason is "MinimumFontSizeWouldFail" or "ProtectedRegionConflict");
+    }
+
+    [Fact]
+    public void SuboptimalFactSelectionFailsOnlyWhenAdditionalFactCanFitSafely() =>
+        Assert.False(MeasureOrion("Square", new(29, 780, 1022, 270), true).SuboptimalFactSelectionDetected);
+
+    [Fact]
+    public void FactSelectionAndValidatorUseSameLayoutMeasurement()
+    {
+        var result = MeasureOrion("Square", new(29, 691, 1022, 360));
+        Assert.Equal(result.Diagnostics.SuboptimalFactSelectionDetected, result.SuboptimalFactSelectionDetected);
+        Assert.Equal(result.SelectedFacts.Count, result.Diagnostics.SelectedFactCount);
+    }
+
+    [Fact]
+    public void PanelMayExpandWithinProfileMaximumBeforeDroppingFact()
+    {
+        var result = MeasureOrion("Square", new(29, 820, 1022, 220));
+        Assert.True(result.Diagnostics.PanelExpansionApplied);
+        Assert.Equal(2, result.SelectedFacts.Count);
+        Assert.True(result.FinalPosterBounds.Height <= 389);
+    }
+
+    [Fact]
+    public void LongFactCanCompactBeforeOmission()
+    {
+        var result = MeasureOrion("Square", new(29, 691, 300, 360));
+        Assert.Contains(result.FactLayouts, layout => layout.Fact.CanCompact && layout.DisplayValue.Contains('\n'));
+    }
+
+    [Fact]
+    public void ScientificRegionPreventsUnsafeAdditionalFact()
+    {
+        var result = MeasureOrion("Square", new(29, 780, 1022, 270), requiresScience: true);
+        Assert.False(result.Diagnostics.PanelExpansionApplied);
+        Assert.Contains("ProtectedRegionConflict", result.OmissionReasons.Values);
+    }
+
+    [Fact]
+    public void StaleOrphanPhase12StagingIsRemovedBeforeNewRun()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var stale = Path.Combine(root, "12-thumbnails.staging-old");
+        var committed = Path.Combine(root, "12-thumbnails");
+        Directory.CreateDirectory(stale); Directory.CreateDirectory(committed);
+        try
+        {
+            Assert.Equal(1, ResponsiveThumbnailAuthorityService.RemoveOrphanStagingDirectories(root));
+            Assert.False(Directory.Exists(stale));
+            Assert.True(Directory.Exists(committed));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Phase12StagingCleanupCannotDeleteUpstreamRoots()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var upstream = Path.Combine(root, "11-hero");
+        Directory.CreateDirectory(upstream);
+        try { Assert.Equal(0, ResponsiveThumbnailAuthorityService.RemoveOrphanStagingDirectories(root)); Assert.True(Directory.Exists(upstream)); }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData("FailedPhase12DeletesStagingDirectory")]
+    [InlineData("SuccessfulPhase12DeletesStagingDirectory")]
+    [InlineData("FailedCandidatePreservesPreviousCommittedAuthority")]
+    [InlineData("StagingDirectoryIsNeverReportedAsAuthoritativeOutput")]
+    public void TransactionalStagingPolicyIsPresent(string scenario)
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Backend", "src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "ResponsiveThumbnailAuthorityService.cs"));
+        Assert.False(string.IsNullOrEmpty(scenario));
+        Assert.Contains("finally", source);
+        Assert.Contains("SafeDeleteDirectory(staging)", source);
+        Assert.Contains("Directory.Move(backup, root)", source);
+    }
+
     [Theory]
     [InlineData("LandscapePanelDoesNotExceedConfiguredWidth", "profile.Width * .40")]
     [InlineData("LandscapeUsesGradientTransition", "glass-to-cinematic fade")]
@@ -331,7 +423,7 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
     [InlineData("SquareUsesCompactPosterPanel", "profile.VisualEmphasis")]
     [InlineData("SquareNoTextOverlap", "HasOverlap(bounds)")]
     [InlineData("SquareNoDeadPosterArea", "UnusedPosterAreaPercent")]
-    [InlineData("PortraitSupportsThreeCompactFactsWhenSafe", "? 4 : 3")]
+    [InlineData("PortraitSupportsTwoCompactFactsWhenSafe", "profile.Role == \"Landscape\" ? 3 : 2")]
     [InlineData("PortraitShrinksPanelWhenOnlyTwoFactsRender", "Role == \"Square\" ? .68 : .72")]
     [InlineData("PortraitNoScientificGeometryOcclusion", "ScientificRegionOverlapDetected")]
     [InlineData("PortraitNoTextOverlap", "HasOverlap(bounds)")]
@@ -344,6 +436,15 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
 
     private static IReadOnlyList<ResponsiveThumbnailAuthorityService.PosterFact> SelectOrion(string profile) =>
         ResponsiveThumbnailAuthorityService.SelectPosterFacts("CONSTELLATION", profile, OrionFacts(), new(0, 0, 512, 720));
+
+    private static ResponsiveThumbnailAuthorityService.PosterFactSelectionResult MeasureOrion(
+        string profile, SixLabors.ImageSharp.Rectangle bounds, bool requiresScience = false)
+    {
+        var p = new ResponsiveThumbnailAuthorityService.Profile(profile, 1080, 1080, 72, 58);
+        var poster = new ResponsiveThumbnailAuthorityService.ThumbnailPosterContent("CONSTELLATION", "FIND ORION",
+            new("CONSTELLATION", "authority", true), [], [], OrionFacts(), null, null, null, null, null, null, null, null, [], "policy");
+        return ResponsiveThumbnailAuthorityService.SelectPosterFactsForProfile(p, poster, bounds, requiresScience);
+    }
 
     private static ResponsiveThumbnailAuthorityService.PosterFact[] OrionFacts() =>
     [
