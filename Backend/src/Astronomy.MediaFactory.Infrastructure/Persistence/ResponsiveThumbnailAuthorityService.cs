@@ -22,8 +22,17 @@ internal static class ResponsiveThumbnailAuthorityService
     private const string CopyPolicy = "ThumbnailCopyPolicy/2.0";
 
     internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(
-        string outputRoot, string planId, string eventId, string language, CancellationToken ct)
+        string outputRoot, string planId, string eventId, string language, string eventType,
+        IReadOnlyList<string> primaryObjects, CancellationToken ct) =>
+        await PublishAsync(outputRoot, planId, eventId, language, eventType, primaryObjects,
+            "ProductionExecutionContext", ct);
+
+    internal static async Task<ResponsiveThumbnailPublicationResult> PublishAsync(
+        string outputRoot, string planId, string eventId, string language, string eventType,
+        IReadOnlyList<string> primaryObjects, string copyEventIdentitySource, CancellationToken ct)
     {
+        Require(!string.IsNullOrWhiteSpace(eventType), "P12_COPY_AUTHORITY_MISSING",
+            "Current event type is required for deterministic thumbnail copy.");
         var heroPath = Path.Combine(outputRoot, "11-hero", "hero-asset-manifest.json");
         var heroReportPath = Path.Combine(outputRoot, "11-hero", "phase11-publication-report.json");
         var heroValidationPath = Path.Combine(outputRoot, "validation", "phase-11-validation.json");
@@ -77,13 +86,17 @@ internal static class ResponsiveThumbnailAuthorityService
         var title = Text(hero, "title");
         Require(!string.IsNullOrWhiteSpace(title), "P12_COPY_AUTHORITY_MISSING", "Phase 11 accepted title is missing.");
         var subtitle = Text(hero, "subtitle");
-        var eventFamily = Text(p10, "eventType");
-        var primaryObjects = StringArray(p10, "primaryObjects");
-        var primaryObject = primaryObjects.FirstOrDefault() ?? DeriveObject(title);
-        var copy = BuildThumbnailCopy(eventFamily, primaryObjects, primaryObject, title);
+        var resolvedPrimaryObjects = (primaryObjects ?? Array.Empty<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var primaryObject = resolvedPrimaryObjects.FirstOrDefault() ?? DeriveObject(title);
+        var copy = BuildThumbnailCopy(eventType, resolvedPrimaryObjects, primaryObject, title);
         Require(copy.WordCount is > 0 and <= 5, "P12_COPY_BUDGET_EXCEEDED", "Thumbnail headline exceeds the approved five-word budget.");
         var copyValidation = ValidateCopyDifferentiation(title, subtitle, copy.Headline, null, copy.Rule);
-        var copyChecksum = Hash(string.Join('|', title, subtitle, language));
+        var copyChecksum = Hash(string.Join('|', title, subtitle, language, eventType,
+            string.Join(',', resolvedPrimaryObjects)));
         var variants = hero.GetProperty("variants").EnumerateArray().ToDictionary(x => Text(x, "variant"), StringComparer.OrdinalIgnoreCase);
         var profiles = new[] { new Profile("Landscape", 1280, 720, 72, 52), new Profile("Square", 1080, 1080, 70, 64), new Profile("Portrait", 1080, 1920, 76, 76) };
         Require(profiles.All(x => variants.ContainsKey(x.Role)), "P12_HERO_AUTHORITY_INVALID", "All three responsive Hero roles are required.");
@@ -142,7 +155,7 @@ internal static class ResponsiveThumbnailAuthorityService
         var created = DateTimeOffset.UtcNow;
         var manifest = new ThumbnailManifest("1.0", planId, Text(hero, "executionId"), eventId, language, created,
             "11-hero/hero-asset-manifest.json", heroChecksum, "10-scene-validation/scene-asset-certification.json", Text(p10, "deterministicChecksum"),
-            "Phase11HeroManifest.TitleSubtitle", copyChecksum, CopyPolicy, Renderer, Layout, "NoGenerativeImageProvider", 0, items,
+            "Phase11HeroManifest.TitleSubtitle+ProductionExecutionContext.EventIdentity", copyChecksum, CopyPolicy, Renderer, Layout, "NoGenerativeImageProvider", 0, items,
             "Valid", "Committed", true, true, "", true);
         manifest = manifest with { DeterministicChecksum = AuthorityChecksum(manifest) };
         await Write(Path.Combine(staging, "thumbnail-asset-manifest.json"), manifest, ct);
@@ -167,6 +180,7 @@ internal static class ResponsiveThumbnailAuthorityService
             sharedAuthorityTokens = copyValidation.SharedAuthorityTokens, sharedAuthorityTokensAllowed = true,
             sourceCopy = title, thumbnailCopy = copy.Headline, copyTransformationRule = copy.Rule,
             copyDifferentiationPassed = copyValidation.CopyDifferentiationPassed,
+            eventType, primaryObjects = resolvedPrimaryObjects, copyEventIdentitySource,
             landscapeVisualEmphasisPercent = 82, squareVisualEmphasisPercent = 80, portraitVisualEmphasisPercent = 84,
             copyAuthoritySource = manifest.CopyAuthoritySource, copyPolicyVersion = CopyPolicy, azureImageCallsThisPhase = 0, otherGenerativeImageCallsThisPhase = 0,
             proceduralAstronomyGenerationCallsThisPhase = 0, legacyQuestionEngineAuthorityUsed = false, legacyHeroAssetsAuthorityUsed = false,

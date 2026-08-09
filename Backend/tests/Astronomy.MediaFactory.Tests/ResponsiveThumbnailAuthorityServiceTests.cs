@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 
 namespace Astronomy.MediaFactory.Tests;
@@ -55,6 +56,28 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
         Assert.Equal("FIND ORION", copy.Headline);
         Assert.Equal("Constellation.FindCertifiedPrimaryObject", copy.Rule);
         Assert.Equal(2, copy.WordCount);
+    }
+
+    [Fact]
+    public void Phase12UsesExecutionEventIdentityInsteadOfPhase10ForCopyPolicy()
+    {
+        Assert.Null(typeof(SceneAssetCertification).GetProperty("EventType"));
+        Assert.Null(typeof(SceneAssetCertification).GetProperty("PrimaryObjects"));
+
+        var copy = ResponsiveThumbnailAuthorityService.BuildThumbnailCopy(
+            "CONSTELLATION", ["Orion"], "Orion", "Orion constellation guide");
+
+        Assert.Equal("FIND ORION", copy.Headline);
+        Assert.NotEqual("ORION CONSTELLATION GUIDE", copy.Headline);
+    }
+
+    [Fact]
+    public async Task MissingEventTypeFailsWithP12CopyAuthorityMissing()
+    {
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ResponsiveThumbnailAuthorityService.PublishAsync(Path.GetTempPath(), "plan", "event", "en", "", [], CancellationToken.None));
+
+        Assert.StartsWith("P12_COPY_AUTHORITY_MISSING", exception.Message);
     }
 
     [Fact]
@@ -166,6 +189,21 @@ public sealed class ResponsiveThumbnailAuthorityServiceTests
     [Fact]
     public void LegacyThumbnailValidatorCannotOverrideNewAuthorityResult() =>
         Assert.True(AcceptedPublication().DownstreamReady);
+
+    [Fact]
+    public void FailedPhase12DoesNotExposePreviousSuccessfulAuthorityDiagnostics() =>
+        Assert.False(ProductionPipelineExecutionService.ShouldExposePhase12AuthorityDiagnostics(
+            12, ProductionPhaseStatus.Failed, false, true));
+
+    [Fact]
+    public void PreviousAuthorityDoesNotBecomeCurrentExecutionEvidence() =>
+        Assert.False(ProductionPipelineExecutionService.ShouldExposePhase12AuthorityDiagnostics(
+            12, ProductionPhaseStatus.Succeeded, false, true));
+
+    [Fact]
+    public void SuccessfulPhase12LoadsCurrentAuthorityDiagnostics() =>
+        Assert.True(ProductionPipelineExecutionService.ShouldExposePhase12AuthorityDiagnostics(
+            12, ProductionPhaseStatus.Succeeded, true, true));
 
     [Fact]
     public void Phase12ExecutedPhaseNumbersContains12AfterExecution()
