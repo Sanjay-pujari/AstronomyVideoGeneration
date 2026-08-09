@@ -1,5 +1,7 @@
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
+using Astronomy.MediaFactory.Tests.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -67,6 +69,79 @@ public sealed class Phase13GalleryCopyDiversityTests
         Assert.StartsWith("P13_GALLERY_INTERNAL_COPY_LEAK", error.Message);
     }
 
+    [Fact] public void GalleryRejectsOutcomeTokenInHeadline() => RejectField(p => p with { Headline = "Outcome01" });
+    [Fact] public void GalleryRejectsOutcomeTokenInDetail() => RejectField(p => p with { PrimaryContent = "Outcome01" });
+    [Fact] public void GalleryRejectsOutcomeTokenInFacts() => RejectField(p => p with { SupportingContent = ["Outcome01"] });
+
+    [Fact]
+    public void GalleryRejectsOutcomeTokenInPrompt()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            Phase13GalleryAuthority.ValidateAiPrompt("Create a view illustrating Outcome01."));
+        Assert.StartsWith("P13_GALLERY_INTERNAL_COPY_LEAK", error.Message);
+    }
+
+    [Fact]
+    public void GalleryAllowsOutcomeTokenOnlyInAuthorityMetadata()
+    {
+        var plans = Plans();
+        plans[0] = plans[0] with { PrimaryContentAuthority = "authority.json#/outcomes/Outcome01" };
+        Phase13GalleryAuthority.ValidatePublicCopy(plans);
+    }
+
+    [Theory]
+    [InlineData("Outcome01")]
+    [InlineData("Objective01")]
+    [InlineData("Scene01")]
+    [InlineData("Beat01")]
+    [InlineData("Knowledge01")]
+    [InlineData("Frame01")]
+    public void CanonicalEditorialIdsAreReferencesNotPublicationText(string value) =>
+        Assert.True(Phase13GallerySemanticHydrator.IsInternalReference(value));
+
+    [Fact]
+    public void GalleryRejectsUnresolvedOutcomeReferenceWithoutPublishingIt()
+    {
+        Assert.True(Phase13GallerySemanticHydrator.IsInternalReference("Outcome99"));
+        var plans = Plans();
+        plans[0] = plans[0] with { PrimaryContent = "Outcome99" };
+        Assert.StartsWith("P13_GALLERY_INTERNAL_COPY_LEAK",
+            Assert.Throws<InvalidOperationException>(() => Phase13GalleryAuthority.ValidatePublicCopy(plans)).Message);
+    }
+
+    [Fact]
+    public void OutcomeReferenceResolvesToViewerFacingTakeawayBeforeCopyOrPromptPlanning()
+    {
+        var source = OrionDocumentaryBlueprintFixture.Scene();
+        var scene = new DocumentarySceneBlueprint(source.SceneId, source.SceneNumber, source.Title,
+            source.NarrativeStage, source.SceneRole, source.ViewerQuestion, source.SceneObjective,
+            new EditorialOutcome("Identify Orion by its three Belt stars.", "Outcome01", true, true, true, false, false),
+            source.EditorialPriority, source.KnowledgeReferences, source.VisualOpportunities,
+            source.Transition, source.EstimatedDurationSeconds);
+
+        var resolved = Phase13GallerySemanticHydrator.ResolveEditorialOutcomeReference("Outcome01", [scene]);
+
+        Assert.Equal("Resolved", resolved.ResolutionStatus);
+        Assert.Equal("editorialOutcomeId", resolved.ReferenceType);
+        Assert.Equal("Identify Orion by its three Belt stars.", resolved.ResolvedText);
+        Assert.DoesNotContain("Outcome01", resolved.ResolvedText);
+        Phase13GalleryAuthority.ValidateAiPrompt($"Visual purpose: {resolved.ResolvedText}");
+        Assert.Equal("Outcome01", resolved.ReferenceId); // lineage metadata deliberately retains the pointer id
+    }
+
+    [Fact]
+    public void Outcome99FailsClosedInTypedResolver()
+    {
+        var resolved = Phase13GallerySemanticHydrator.ResolveEditorialOutcomeReference("Outcome99", []);
+        Assert.Equal("Unresolved", resolved.ResolutionStatus);
+        Assert.False(resolved.Certified);
+        Assert.Null(resolved.ResolvedText);
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            Phase13GallerySemanticHydrator.RequireResolvedEditorialReference(resolved,
+                Phase13GallerySemanticHydrator.Phase4Blueprint, "/longVariant/blueprint/scenes/0/editorialOutcome/narrativeContribution"));
+        Assert.StartsWith("P13_GALLERY_EDITORIAL_REFERENCE_UNRESOLVED", error.Message);
+    }
+
     [Fact]
     public void GalleryPublicCopyRequiresAuthorityReferences()
     {
@@ -83,4 +158,13 @@ public sealed class Phase13GalleryCopyDiversityTests
         Phase13GalleryAuthority.EvaluateCopyDiversity(Plans(), ["Orion"]);
     private static CertifiedKnowledgeClaim Claim(string id, string category, string text) =>
         new(id, category, category, text, null, null, ["certified-source"], null, 1m, null, null, "Certified", "Accepted", "CONSTELLATION");
+
+    private static void RejectField(Func<Phase13GalleryAuthority.GalleryRoleContentSelection,
+        Phase13GalleryAuthority.GalleryRoleContentSelection> mutate)
+    {
+        var plans = Plans();
+        plans[0] = mutate(plans[0]);
+        Assert.StartsWith("P13_GALLERY_INTERNAL_COPY_LEAK",
+            Assert.Throws<InvalidOperationException>(() => Phase13GalleryAuthority.ValidatePublicCopy(plans)).Message);
+    }
 }

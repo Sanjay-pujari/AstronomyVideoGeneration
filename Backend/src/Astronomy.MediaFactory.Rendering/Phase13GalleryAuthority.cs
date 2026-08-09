@@ -24,7 +24,7 @@ internal static class Phase13GalleryAuthority
     private static readonly string[] CanonicalRoles = ["cover-identity", "what-happens", "where-to-look", "when-to-observe", "certified-highlight-or-science", "observation-checklist"];
     private static readonly string[] ConstellationRoles = ["cover-identity", "how-to-identify", "bright-stars-or-key-objects", "deep-sky-highlight", "science-or-story-highlight", "observation-checklist"];
     private static readonly Regex InternalCopyPattern = new(
-        @"\bOutcome\d+\b|\bOpeningHook\b|\bHistoricalContext\b|\bScientificExplanation\b|\bViewerTakeaway\b|final narration remains|advance the certified",
+        @"\b(?:Outcome|Objective|Scene|Beat|Knowledge|Frame)\d+\b|\bOpeningHook\b|\bHistoricalContext\b|\bScientificExplanation\b|\bViewerTakeaway\b|final narration remains|advance the certified",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     internal sealed record GeneratedFileMetadata(
@@ -112,6 +112,7 @@ internal static class Phase13GalleryAuthority
                 var role = CanonicalRoles[index];
                 var prompt = BuildMatureGalleryPrompt(p2.EventFamily, role, hydration.Context.PrimaryObjects,
                     selection.PrimaryContent);
+                ValidateAiPrompt(prompt);
                 var background = Path.Combine(staging, $".background-{index + 1:00}.png");
                 var generation = await AstroPulseGalleryService.GenerateBackgroundWithAzureImage2Async(
                     providerOptions, prompt, background, AstroPulseGalleryAspect.Landscape, ct);
@@ -169,6 +170,12 @@ internal static class Phase13GalleryAuthority
                 deterministicChecksum = authorityChecksum };
             await Write(Path.Combine(staging, "gallery-manifest.json"), manifest, ct);
             await Write(Path.Combine(staging, "phase13-authority-diagnostics.json"), new { semanticContextLoaded = true,
+                semanticAuthorityLoaded = true, inputFiles = hydration.InputFiles,
+                internalReferenceCount = hydration.Context.AllItems.Count(x => x.IsInternalIdentifier),
+                resolvedInternalReferenceCount = hydration.Context.AllItems.Count(x => x.IsInternalIdentifier && x.IsPublicationEligible),
+                unresolvedInternalReferenceCount = 0,
+                publicationEligibleSemanticCount = hydration.Context.AllItems.Count(x => x.IsPublicationEligible),
+                sixRolePlanCreated = selections.Length == 6, sixRolePlanValidated = true,
                 phase8RasterUsed = false, phase9RasterUsed = false, phase10RasterUsed = false, heroRasterUsed = false, thumbnailRasterUsed = false,
                 azureImageCallsThisPhase = 6, independentlyGeneratedPageCount = 6, canonicalWidth = 1920, canonicalHeight = 1080,
                 promptsRequestNoEmbeddedText = true, deterministicOverlay = true, internalCopyLeakDetected = false,
@@ -206,6 +213,7 @@ internal static class Phase13GalleryAuthority
             var validation = Path.Combine(outputRoot, "validation", "phase-13-validation.json");
             await Write(validation, new { phaseNo = 13, status = "Valid", validationPassed = true,
                 publicationCommitted = true, committedReadbackPassed = true, authorityChecksum,
+                inputFiles = hydration.InputFiles,
                 pageCount = 6, azureImageCallsThisPhase = 6, independentlyGeneratedPageCount = 6,
                 fullFrame16x9Passed = true, letterboxDetected = false, pillarboxDetected = false,
                 internalCopyLeakDetected = false, copyDiversityPassed = true, visualRoleDiversityPassed = true,
@@ -233,6 +241,13 @@ internal static class Phase13GalleryAuthority
         Require(leaked is null, "P13_GALLERY_INTERNAL_COPY_LEAK", $"Public Gallery copy contains internal editorial language: '{leaked}'.");
         Require(selections.All(page => !string.IsNullOrWhiteSpace(page.PrimaryContentAuthority)),
             "P13_GALLERY_COPY_AUTHORITY_MISSING", "Every public Gallery page requires copy authority lineage.");
+    }
+
+    internal static void ValidateAiPrompt(string prompt)
+    {
+        var leaked = InternalCopyPattern.Match(prompt);
+        Require(!leaked.Success, "P13_GALLERY_INTERNAL_COPY_LEAK",
+            $"Gallery AI prompt contains internal editorial language: '{leaked.Value}'.");
     }
 
     private static object[] BuildCopyAuthorityReferences(GalleryRoleContentSelection selection)

@@ -1,4 +1,7 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
@@ -7,14 +10,27 @@ namespace Astronomy.MediaFactory.Rendering;
 /// <summary>Adapts frozen upstream contracts into Phase 13 semantics without changing their authority.</summary>
 internal static class Phase13GallerySemanticHydrator
 {
+    private static readonly Regex EditorialReferencePattern = new(
+        @"^(?:Outcome|Objective|Scene|Beat|Knowledge|Frame)\d+$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
     internal const string Phase2Authority = "02-intelligence/production-event-intelligence.json";
     internal const string Phase2Knowledge = "02-intelligence/certified-knowledge-context.json";
     internal const string Phase4Blueprint = "04-blueprint/documentary-blueprint.json";
     internal const string Phase4Knowledge = "04-blueprint/knowledge-selection.json";
     internal const string Phase6Authority = "06-story-frames/story-frames.json";
 
-    internal sealed record SemanticItem(string Text, string Category, string AuthoritySource,
-        string AuthorityPath, bool Certified, string? SourceId);
+    internal sealed record SemanticItem(string SemanticId, string DisplayText, string SemanticCategory,
+        string AuthoritySource, string AuthorityPath, bool IsInternalIdentifier,
+        bool IsPublicationEligible, bool Certified)
+    {
+        // Compatibility names used by the Phase 13 claim adapter.
+        internal string Text => DisplayText;
+        internal string Category => SemanticCategory;
+        internal string? SourceId => SemanticId;
+    }
+    internal sealed record ResolvedGalleryEditorialReference(string ReferenceId, string ReferenceType,
+        string? ResolvedText, string? ResolvedSemanticCategory, string SourceArtifact,
+        string SourceJsonPointer, string SourceChecksum, bool Certified, string ResolutionStatus);
     internal sealed record GalleryCertifiedSemanticContext(string EventType, IReadOnlyList<string> PrimaryObjects,
         IReadOnlyList<string> SecondaryObjects, IReadOnlyList<SemanticItem> IdentityFacts,
         IReadOnlyList<SemanticItem> IdentificationFacts, IReadOnlyList<SemanticItem> BrightObjectFacts,
@@ -101,7 +117,20 @@ internal static class Phase13GallerySemanticHydrator
     {
         var buckets = Enumerable.Range(0, 9).Select(_ => new List<SemanticItem>()).ToArray();
         void Add(int bucket, string? text, string source, string pointer, string? id = null)
-        { if (!string.IsNullOrWhiteSpace(text)) buckets[bucket].Add(new(text.Trim(), Category(bucket), source, pointer, true, id)); }
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+            var candidate = text.Trim();
+            var internalId = IsInternalReference(candidate);
+            if (internalId)
+            {
+                var resolved = ResolveGalleryEditorialReference(candidate, p4, p6, p2, source, pointer);
+                RequireResolvedEditorialReference(resolved, source, pointer);
+                buckets[bucket].Add(new(candidate, resolved.ResolvedText, resolved.ResolvedSemanticCategory ?? Category(bucket),
+                    resolved.SourceArtifact, resolved.SourceJsonPointer, true, true, resolved.Certified));
+                return;
+            }
+            buckets[bucket].Add(new(id ?? candidate, candidate, Category(bucket), source, pointer, false, true, true));
+        }
 
         var identity = eventAuthority.EventIdentity;
         foreach (var (value, index) in identity.PrimaryObjects.Select((x, i) => (x, i)))
@@ -130,6 +159,78 @@ internal static class Phase13GallerySemanticHydrator
         }
         return new(identity.EventType, identity.PrimaryObjects, eventAuthority.Intelligence.SecondaryObjects,
             buckets[0], buckets[1], buckets[2], buckets[3], buckets[4], buckets[5], buckets[6], buckets[7], buckets[8]);
+    }
+
+    internal static bool IsInternalReference(string value) => EditorialReferencePattern.IsMatch(value.Trim());
+
+    internal static void RequireResolvedEditorialReference(ResolvedGalleryEditorialReference resolved,
+        string sourceArtifact, string sourcePath)
+    {
+        if (resolved.ResolutionStatus == "Resolved" && !string.IsNullOrWhiteSpace(resolved.ResolvedText)) return;
+        throw new InvalidOperationException($"P13_GALLERY_EDITORIAL_REFERENCE_UNRESOLVED: referenceId={resolved.ReferenceId}; referenceType={resolved.ReferenceType}; sourceArtifact={sourceArtifact}; sourcePath={sourcePath}");
+    }
+
+    /// <summary>Dereferences only relationships declared by the frozen Phase 2/4/6 contracts.</summary>
+    internal static ResolvedGalleryEditorialReference ResolveGalleryEditorialReference(string referenceId,
+        DocumentaryBlueprintAggregate p4, StoryFramesAuthority p6, CertifiedKnowledgeContext knowledge,
+        string sourceArtifact = Phase4Blueprint, string sourcePath = "")
+    {
+        static string Checksum(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+        ResolvedGalleryEditorialReference Resolved(string type, string text, string artifact, string pointer, string category) =>
+            new(referenceId, type, text, category, artifact, pointer, Checksum(text), true, "Resolved");
+
+        var variants = new[] { p4.LongVariant, p4.ShortVariant };
+        foreach (var variant in variants)
+        {
+            var variantName = variant == p4.LongVariant ? "longVariant" : "shortVariant";
+            var editorialOutcome = ResolveEditorialOutcomeReference(referenceId, variant.Blueprint.Scenes, variantName);
+            if (editorialOutcome.ResolutionStatus == "Resolved") return editorialOutcome;
+            for (var i = 0; i < variant.Blueprint.Scenes.Count; i++)
+            {
+                var scene = variant.Blueprint.Scenes[i];
+                var trace = variant.SceneTraceability.FirstOrDefault(x => x.SceneId == scene.SceneId);
+                if (trace?.LearningObjectiveId.Equals(referenceId, StringComparison.Ordinal) == true)
+                    return Resolved("learningObjectiveId", scene.SceneObjective.LearningGoal, Phase4Blueprint,
+                        $"/{variantName}/blueprint/scenes/{i}/sceneObjective/learningGoal", "LearningObjective");
+                if (scene.SceneId.Equals(referenceId, StringComparison.Ordinal))
+                    return Resolved("sceneId", scene.SceneObjective.Summary, Phase4Blueprint,
+                        $"/{variantName}/blueprint/scenes/{i}/sceneObjective/summary", "SceneObjective");
+            }
+        }
+        var claim = knowledge.Claims.Select((value, index) => (value, index))
+            .FirstOrDefault(x => x.value.KnowledgeId.Equals(referenceId, StringComparison.Ordinal));
+        if (claim.value is not null && !string.IsNullOrWhiteSpace(claim.value.Text) &&
+            (claim.value.Classification.Equals("Certified", StringComparison.OrdinalIgnoreCase) || claim.value.ReviewStatus.Equals("Accepted", StringComparison.OrdinalIgnoreCase)))
+            return Resolved("knowledgeSelectionId", claim.value.Text!, Phase2Knowledge, $"/claims/{claim.index}/text", claim.value.Category);
+
+        var frame = p6.Frames.Select((value, index) => (value, index))
+            .FirstOrDefault(x => x.value.FrameId.Equals(referenceId, StringComparison.Ordinal));
+        if (frame.value is not null)
+            return Resolved("storyFrameReference", frame.value.NarrativeIntent, Phase6Authority,
+                $"/frames/{frame.index}/narrativeIntent", "StoryFrame");
+
+        var type = referenceId.StartsWith("Outcome", StringComparison.OrdinalIgnoreCase) ? "editorialOutcomeId"
+            : referenceId.StartsWith("Objective", StringComparison.OrdinalIgnoreCase) ? "learningObjectiveId"
+            : referenceId.StartsWith("Knowledge", StringComparison.OrdinalIgnoreCase) ? "knowledgeSelectionId"
+            : referenceId.StartsWith("Frame", StringComparison.OrdinalIgnoreCase) ? "storyFrameReference"
+            : referenceId.StartsWith("Scene", StringComparison.OrdinalIgnoreCase) ? "sceneId" : "internalEditorialId";
+        return new(referenceId, type, null, null, sourceArtifact, sourcePath, "", false, "Unresolved");
+    }
+
+    internal static ResolvedGalleryEditorialReference ResolveEditorialOutcomeReference(
+        string referenceId, IReadOnlyList<DocumentarySceneBlueprint> scenes, string variant = "longVariant")
+    {
+        for (var i = 0; i < scenes.Count; i++)
+        {
+            var outcome = scenes[i].EditorialOutcome;
+            if (!outcome.NarrativeContribution.Equals(referenceId, StringComparison.Ordinal)) continue;
+            var text = outcome.ViewerTakeaway;
+            var checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+            return new(referenceId, "editorialOutcomeId", text, "ViewerTakeaway", Phase4Blueprint,
+                $"/{variant}/blueprint/scenes/{i}/editorialOutcome/viewerTakeaway", checksum, true, "Resolved");
+        }
+        return new(referenceId, "editorialOutcomeId", null, null, Phase4Blueprint,
+            $"/{variant}/blueprint/scenes", "", false, "Unresolved");
     }
 
     private static int Bucket(string metadata, string? text)
