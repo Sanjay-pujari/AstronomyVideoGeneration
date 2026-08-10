@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -22,6 +23,7 @@ internal static class Phase17MotionAuthorityPublisher
         bool overwrite, CancellationToken ct)
     {
         language = string.IsNullOrWhiteSpace(language) ? "en" : language.Trim().ToLowerInvariant();
+        SweepStaleTransactions(root);
         var p16Root = Path.Combine(root, "16-duration-calibration", language);
         var timelinePath = Path.Combine(p16Root, "calibrated-scene-timeline.json");
         var p16ManifestPath = Path.Combine(p16Root, "phase16-manifest.json");
@@ -159,6 +161,32 @@ internal static class Phase17MotionAuthorityPublisher
         {
             CleanupTransactionDirectory(Path.GetDirectoryName(stage)!);
             CleanupTransactionDirectory(Path.GetDirectoryName(backup)!);
+        }
+    }
+
+    /// <summary>
+    /// Removes abandoned transaction directories only when they are demonstrably empty. This is
+    /// deliberately run before authority discovery so the reuse path receives the same housekeeping
+    /// as publication without touching a committed language directory.
+    /// </summary>
+    internal static void SweepStaleTransactions(string root)
+    {
+        var motionRoot = Path.Combine(root, "17-motion");
+        foreach (var transactionParentName in new[] { ".staging", ".backup" })
+        {
+            var transactionParent = Path.Combine(motionRoot, transactionParentName);
+            if (!Directory.Exists(transactionParent)) continue;
+
+            foreach (var transactionDirectory in Directory.EnumerateDirectories(transactionParent))
+            {
+                if (!Directory.EnumerateFileSystemEntries(transactionDirectory).Any())
+                    Directory.Delete(transactionDirectory);
+                else
+                    Trace.TraceWarning("Phase 17 retained non-empty stale transaction directory: {0}", transactionDirectory);
+            }
+
+            if (!Directory.EnumerateFileSystemEntries(transactionParent).Any())
+                Directory.Delete(transactionParent);
         }
     }
 

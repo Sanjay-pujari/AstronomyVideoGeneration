@@ -3275,6 +3275,25 @@ Second display cue.
         Assert.Contains(targets, x => x.IsCompatibility && x.RelativePath == "thumbnails" && !x.CanDeleteOnOverwrite);
     }
 
+    [Fact]
+    public void Phase17CleanupCatalogReportsCanonicalLanguageRoot()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]) with { StartPhaseNo = 17, EndPhaseNo = 17 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 17, 17);
+
+        Assert.Contains(targets, x => x.IsAuthority && x.RelativePath == "17-motion/en" && !x.CanDeleteOnOverwrite);
+    }
+
+    [Fact]
+    public void Phase17CleanupCatalogDoesNotTreatLegacyMotionAsCanonicalAuthority()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]) with { StartPhaseNo = 17, EndPhaseNo = 17 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 17, 17);
+
+        Assert.DoesNotContain(targets, x => x.IsAuthority && x.RelativePath == "motion");
+        Assert.Contains(targets, x => x.IsCompatibility && x.RelativePath == "motion" && !x.CanDeleteOnOverwrite);
+    }
+
     [Theory]
     [InlineData(11, "11-hero")]
     [InlineData(10, "10-scene-validation")]

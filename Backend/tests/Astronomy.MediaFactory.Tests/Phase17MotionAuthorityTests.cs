@@ -5,6 +5,68 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Phase17MotionAuthorityTests
 {
+    [Fact]
+    public void Phase17HousekeepingRemovesOnlyEmptyTransactionsAndParents()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var canonicalEnglish = Path.Combine(root, "17-motion", "en");
+        var canonicalHindi = Path.Combine(root, "17-motion", "hi");
+        var nonEmpty = Path.Combine(root, "17-motion", ".staging", "unknown-guid");
+        Directory.CreateDirectory(canonicalEnglish);
+        Directory.CreateDirectory(canonicalHindi);
+        File.WriteAllText(Path.Combine(canonicalEnglish, "authority.json"), "unchanged");
+        File.WriteAllText(Path.Combine(canonicalHindi, "authority.json"), "preserved");
+        Directory.CreateDirectory(Path.Combine(root, "17-motion", ".staging", "old-guid"));
+        Directory.CreateDirectory(Path.Combine(root, "17-motion", ".backup", "old-guid"));
+        Directory.CreateDirectory(nonEmpty);
+        File.WriteAllText(Path.Combine(nonEmpty, "recovery.json"), "retain");
+
+        try
+        {
+            Phase17MotionAuthorityPublisher.SweepStaleTransactions(root);
+
+            Assert.False(Directory.Exists(Path.Combine(root, "17-motion", ".staging", "old-guid")));
+            Assert.True(Directory.Exists(nonEmpty));
+            Assert.False(Directory.Exists(Path.Combine(root, "17-motion", ".backup")));
+            Assert.Equal("unchanged", File.ReadAllText(Path.Combine(canonicalEnglish, "authority.json")));
+            Assert.Equal("preserved", File.ReadAllText(Path.Combine(canonicalHindi, "authority.json")));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Phase17HousekeepingDoesNotInvalidateValidReuse()
+    {
+        var source = PublisherSource();
+        var sweep = source.IndexOf("SweepStaleTransactions(root)", StringComparison.Ordinal);
+        var reuseDecision = source.IndexOf("if (File.Exists(existingPlan))", StringComparison.Ordinal);
+        Assert.True(sweep >= 0 && sweep < reuseDecision);
+        Assert.Contains("false, true, false", source);
+    }
+
+    [Fact]
+    public void Phase17ReuseSweepRemovesEmptyTransactionParents()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "17-motion", ".staging", "old-guid"));
+        Directory.CreateDirectory(Path.Combine(root, "17-motion", ".backup", "old-guid"));
+
+        try
+        {
+            Phase17MotionAuthorityPublisher.SweepStaleTransactions(root);
+
+            Assert.False(Directory.Exists(Path.Combine(root, "17-motion", ".staging")));
+            Assert.False(Directory.Exists(Path.Combine(root, "17-motion", ".backup")));
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
     private static string PublisherSource() => File.ReadAllText(Path.Combine(RepositoryRoot(),
         "src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "Phase17MotionAuthorityPublisher.cs"));
 
