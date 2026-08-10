@@ -329,6 +329,37 @@ public sealed class Phase18VideoAssemblyAuthorityTests
         Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(p15, p16, p17, ["p15", "p16", "p17"]);
     }
 
+    [Fact]
+    public async Task Phase18ProcessFailurePrioritizesStderrTailAndPreservesContext()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var banner = new string('B', 7_000);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.Run("/bin/sh", ["-c", $"printf '%s\\n' '{banner}' >&2; echo 'ACTUAL ERROR AT END' >&2; exit 1"],
+                new MediaProcessContext("SceneRender", "Short", 3, "sau-003", "scene-003"), Path.GetTempPath(), CancellationToken.None));
+
+        Assert.Contains("ACTUAL ERROR AT END", error.Message);
+        Assert.DoesNotContain(banner[..2_000], error.Message);
+        Assert.Equal("SceneRender", error.Data["renderOperation"]);
+        Assert.Equal("Short", error.Data["renderFormat"]);
+        Assert.Equal(3, error.Data["renderSequence"]);
+        Assert.Equal("sau-003", error.Data["renderSceneAudioUnitId"]);
+        Assert.Contains("ACTUAL ERROR AT END", Assert.IsType<string>(error.Data["ffmpegStderrTail"]));
+    }
+
+    [Fact]
+    public async Task Phase18SuccessfulProcessCapturesSafeArgumentListAndOutput()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var result = await Phase18VideoAssemblyAuthorityPublisher.Run("/bin/sh", ["-c", "printf success"],
+            new MediaProcessContext("SceneRender", "Long", 1, "sau-001", "scene-001"), Path.GetTempPath(), CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("success", result.StdOut);
+        Assert.Equal(["-c", "printf success"], result.Arguments);
+        Assert.True(result.DurationMs >= 0);
+    }
+
     private static Phase18SceneLineageRow Row(string? audioHash, long durationMs = 0, long endMs = 0,
         long actualAudioDurationMs = 0) =>
         new("unit", "scene", "Short", 1, "en", audioHash, durationMs, 0, endMs, actualAudioDurationMs);

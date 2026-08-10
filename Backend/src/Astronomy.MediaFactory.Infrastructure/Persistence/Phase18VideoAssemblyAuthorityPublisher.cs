@@ -23,6 +23,22 @@ internal sealed record Phase15TimelineEntry(string SceneAudioUnitId, string Scen
 internal sealed record Phase18MediaTools(string FFmpegExecutable, string FFprobeExecutable,
     string FFmpegVersion, string FFprobeVersion, string FFmpegResolutionSource, string FFprobeResolutionSource);
 
+internal sealed record MediaProcessContext(string Operation, string? Format = null, int? Sequence = null,
+    string? SceneAudioUnitId = null, string? SceneId = null);
+
+internal sealed record MediaProcessResult(string Operation, string Executable, IReadOnlyList<string> Arguments,
+    int ExitCode, string StdOut, string StdErr, string StdErrHead, string StdErrTail, long DurationMs);
+
+internal sealed class Phase18RenderDiagnostics
+{
+    internal int RenderCallsThisPhase { get; set; }
+    internal int SuccessfulSceneRenderCount { get; set; }
+    internal int FailedSceneRenderCount { get; set; }
+    internal int ConcatCallsThisPhase { get; set; }
+    internal int SubtitleBurnCallsThisPhase { get; set; }
+    internal int ProbeCallsThisPhase { get; set; }
+}
+
 /// <summary>One portable resolution boundary for both native executables used by Phase 18.</summary>
 internal static class Phase18MediaToolchainResolver
 {
@@ -119,7 +135,8 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     internal static async Task<Phase18PublicationResult> ExecuteAsync(string root, string language,
         bool overwrite, string? configuredFfmpeg, string? configuredFfprobe, CancellationToken ct)
     {
-        try { return await ExecuteCoreAsync(root, language, overwrite, configuredFfmpeg, configuredFfprobe, ct); }
+        var diagnostics = new Phase18RenderDiagnostics();
+        try { return await ExecuteCoreAsync(root, language, overwrite, configuredFfmpeg, configuredFfprobe, diagnostics, ct); }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) when (ex is Phase18AuthorityValidationException or Win32Exception or IOException or InvalidOperationException)
         {
@@ -129,16 +146,19 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             var reason = authority?.Reason ?? ex.Message;
             var result = FailedResult(inputs, code, reason);
             await Write(Path.Combine(root, "validation", "phase-18-validation.json"), FailureValidation(result,
-                ffmpegResolved: ex.Data["ffmpegResolved"] as bool? ?? false, ffprobeResolved: false,
+                ffmpegResolved: ex.Data["ffmpegResolved"] as bool? ?? false,
+                ffprobeResolved: ex.Data["ffprobeResolved"] as bool? ?? false,
                 ffmpegVersion: ex.Data["ffmpegVersion"] as string,
+                ffprobeVersion: ex.Data["ffprobeVersion"] as string,
                 resolutionSource: ex.Data["ffmpegResolutionSource"] as string,
-                renderCalls: 0, probeCalls: 0), ct);
+                diagnostics, ex), ct);
             return result;
         }
     }
 
     private static async Task<Phase18PublicationResult> ExecuteCoreAsync(string root, string language,
-        bool overwrite, string? configuredFfmpeg, string? configuredFfprobe, CancellationToken ct)
+        bool overwrite, string? configuredFfmpeg, string? configuredFfprobe, Phase18RenderDiagnostics diagnostics,
+        CancellationToken ct)
     {
         language = string.IsNullOrWhiteSpace(language) ? "en" : language.Trim().ToLowerInvariant();
         var p15 = AuthorityFiles(root, "15-tts", language, "phase15");
@@ -205,7 +225,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         {
             Directory.CreateDirectory(stage);
             for (var f = 0; f < requested.Length; f++)
-                evidence.Add(await RenderFormat(root, stage, language, requested[f], motion[f], calibrated, audio, srts[f], tools, ct));
+                evidence.Add(await RenderFormat(root, stage, language, requested[f], motion[f], calibrated, audio, srts[f], tools, diagnostics, ct));
             var authorityChecksum = Hash(JsonSerializer.Serialize(new { identity, outputs = evidence }, Json));
             var manifest = new Phase18Manifest(Schema, language, requested, p15Checksum, p16Checksum, p17Checksum,
                 RenderPolicy, VideoPolicy.Version, AudioPolicy.Version, SubtitlePolicy.Version, toolchain, evidence,
@@ -237,6 +257,13 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             await ProjectCompatibility(root, language, evidence, finalRoot, ct);
             return result;
         }
+        catch (Exception ex)
+        {
+            ex.Data["ffmpegResolved"] = true; ex.Data["ffprobeResolved"] = true;
+            ex.Data["ffmpegVersion"] = tools.FFmpegVersion; ex.Data["ffprobeVersion"] = tools.FFprobeVersion;
+            ex.Data["ffmpegResolutionSource"] = tools.FFmpegResolutionSource;
+            throw;
+        }
         finally
         {
             Cleanup(Path.GetDirectoryName(stage)!); Cleanup(Path.GetDirectoryName(backup)!);
@@ -245,8 +272,10 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
 
     private static async Task<Phase18MediaEvidence> RenderFormat(string root, string stage, string language,
         string format, Phase17MotionPlan plan, IReadOnlyDictionary<string, Phase16CalibratedScene> calibrated,
-        IReadOnlyDictionary<string, Phase15TimelineEntry> audio, string srt, Phase18MediaTools tools, CancellationToken ct)
+        IReadOnlyDictionary<string, Phase15TimelineEntry> audio, string srt, Phase18MediaTools tools,
+        Phase18RenderDiagnostics diagnostics, CancellationToken ct)
     {
+        Log("PHASE18_FORMAT_RENDER_START", new { Format = format });
         var requestedFormat = ParseProductionFormat(format);
         var sequences = plan.Entries.Select(x => x.Sequence).ToArray();
         if (ParseProductionFormat(plan.Format) != requestedFormat || plan.Entries.Count != plan.SceneCount ||
@@ -283,28 +312,49 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             var clip = Path.Combine(clips, $"{entry.Sequence:000}.mp4");
             var seconds = (entry.DurationMs / 1000d).ToString("0.###", CultureInfo.InvariantCulture);
             var (w, h) = format == "Short" ? (VideoPolicy.ShortWidth, VideoPolicy.ShortHeight) : (VideoPolicy.LongWidth, VideoPolicy.LongHeight);
-            await Run(tools.FFmpegExecutable, ["-y", "-loop", "1", "-framerate", "30", "-i", image, "-i", speechPath,
+            Directory.CreateDirectory(clips);
+            Log("PHASE18_SCENE_RENDER_START", new { Format = format, entry.Sequence, entry.SceneAudioUnitId,
+                entry.SceneId, VisualAssetPath = image, AudioRelativePath = speech.AudioRelativePath,
+                GovernedDurationMs = entry.DurationMs, TargetWidth = w, TargetHeight = h });
+            diagnostics.RenderCallsThisPhase++;
+            var sceneContext = new MediaProcessContext("SceneRender", format, entry.Sequence, entry.SceneAudioUnitId, entry.SceneId);
+            MediaProcessResult sceneResult;
+            try { sceneResult = await Run(tools.FFmpegExecutable, ["-y", "-loop", "1", "-framerate", "30", "-i", image, "-i", speechPath,
                 "-filter_complex", $"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps=30,format=yuv420p[v];[1:a]apad=whole_dur={seconds},aresample=48000,aformat=channel_layouts=stereo[a]",
                 "-map", "[v]", "-map", "[a]", "-t", seconds, "-c:v", "libx264", "-preset", VideoPolicy.Preset,
-                "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", VideoPolicy.PixelFormat, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", clip], ct);
+                "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", VideoPolicy.PixelFormat, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", clip], sceneContext, clips, ct); }
+            catch { diagnostics.FailedSceneRenderCount++; throw; }
+            diagnostics.SuccessfulSceneRenderCount++;
+            var clipDuration = await ProbeDuration(tools.FFprobeExecutable, clip,
+                new MediaProcessContext("FinalProbe", format, entry.Sequence, entry.SceneAudioUnitId, entry.SceneId), diagnostics, ct);
+            Log("PHASE18_SCENE_RENDER_SUCCESS", new { OutputPath = clip, ByteLength = new FileInfo(clip).Length,
+                PhysicalDurationMs = clipDuration, ElapsedMs = sceneResult.DurationMs });
         }
+        Log("PHASE18_FORMAT_SCENES_COMPLETE", new { Format = format });
         ValidateSrt(srt);
         var sidecar = Path.Combine(dir, "final.srt"); File.Copy(srt, sidecar, true);
         var concat = Path.Combine(clips, "concat.txt");
         await File.WriteAllLinesAsync(concat, plan.Entries.Select(x => $"file '{x.Sequence:000}.mp4'"), new UTF8Encoding(false), ct);
         var unburned = Path.Combine(clips, "unsubtitled.mp4");
-        await Run(tools.FFmpegExecutable, ["-y", "-f", "concat", "-safe", "0", "-i", concat, "-c", "copy", unburned], ct);
+        Log("PHASE18_FORMAT_CONCAT_START", new { Format = format, ConcatPath = concat }); diagnostics.ConcatCallsThisPhase++;
+        await Run(tools.FFmpegExecutable, ["-y", "-f", "concat", "-safe", "0", "-i", concat, "-c", "copy", unburned],
+            new MediaProcessContext("Concat", format), clips, ct);
+        Log("PHASE18_FORMAT_CONCAT_COMPLETE", new { Format = format, OutputPath = unburned });
         var final = Path.Combine(dir, "final.mp4");
         var burn = language == "en";
-        if (burn) await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", $"subtitles={EscapeFilter(sidecar)}", "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final], ct);
+        if (burn) { Log("PHASE18_SUBTITLE_BURN_START", new { Format = format, SidecarPath = sidecar }); diagnostics.SubtitleBurnCallsThisPhase++;
+            await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", $"subtitles={EscapeFilter(sidecar)}", "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final],
+                new MediaProcessContext("SubtitleBurn", format), dir, ct);
+            Log("PHASE18_SUBTITLE_BURN_COMPLETE", new { Format = format, OutputPath = final }); }
         else File.Copy(unburned, final, true);
-        var physical = await ProbeDuration(tools.FFprobeExecutable, final, ct);
+        var physical = await ProbeDuration(tools.FFprobeExecutable, final, new MediaProcessContext("FinalProbe", format), diagnostics, ct);
         if (Math.Abs(physical - governed) > ProbeToleranceMs) Fail(Phase18ReasonCodes.VideoValidationFailed, $"{format} duration differs by {Math.Abs(physical-governed)}ms.");
         var relativeVideo = $"{format.ToLowerInvariant()}/final.mp4"; var relativeSrt = $"{format.ToLowerInvariant()}/final.srt";
         var result = new Phase18MediaEvidence(format, relativeVideo, relativeSrt, governed, physical,
             format == "Short" ? VideoPolicy.ShortWidth : VideoPolicy.LongWidth, format == "Short" ? VideoPolicy.ShortHeight : VideoPolicy.LongHeight,
             "h264", "yuv420p", "aac", 48000, 2, await HashFile(final, ct), new FileInfo(final).Length,
             await HashFile(sidecar, ct), new FileInfo(sidecar).Length, sourceHashes);
+        Log("PHASE18_FORMAT_VALIDATION_COMPLETE", new { Format = format, PhysicalDurationMs = physical });
         Directory.Delete(clips, true);
         var intermediateRoot = Path.GetDirectoryName(clips)!;
         if (!Directory.EnumerateFileSystemEntries(intermediateRoot).Any()) Directory.Delete(intermediateRoot);
@@ -480,26 +530,67 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             loadedAuthorityArtifacts);
 
     private static string Value<T>(T value) => value is null ? "<absent>" : $"'{value}'";
-    private static async Task Run(string file, IReadOnlyList<string> args, CancellationToken ct)
+    private const int DiagnosticChars = 6000;
+
+    internal static async Task<MediaProcessResult> Run(string file, IReadOnlyList<string> args,
+        MediaProcessContext context, string workingDirectory, CancellationToken ct)
     {
         if (!CanonicalArgumentsAreSafe(args)) Fail(Phase18ReasonCodes.RenderFailed, "Speech-trimming FFmpeg arguments are prohibited.");
-        var psi = new ProcessStartInfo(file) { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
+        Directory.CreateDirectory(workingDirectory);
+        var psi = new ProcessStartInfo(file) { RedirectStandardError = true, RedirectStandardOutput = true,
+            UseShellExecute = false, WorkingDirectory = workingDirectory };
         foreach (var arg in args) psi.ArgumentList.Add(arg);
+        var stopwatch = Stopwatch.StartNew();
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Cannot start FFmpeg.");
-        var errorTask = process.StandardError.ReadToEndAsync(ct); await process.WaitForExitAsync(ct);
-        var error = await errorTask;
-        if (process.ExitCode != 0) Fail(Phase18ReasonCodes.RenderFailed, error[..Math.Min(2000, error.Length)]);
+        var errorTask = process.StandardError.ReadToEndAsync(ct);
+        var outputTask = process.StandardOutput.ReadToEndAsync(ct);
+        await process.WaitForExitAsync(ct);
+        var error = await errorTask; var output = await outputTask; stopwatch.Stop();
+        var result = new MediaProcessResult(context.Operation, file, args.ToArray(), process.ExitCode, output, error,
+            Head(error), Tail(error), stopwatch.ElapsedMilliseconds);
+        if (process.ExitCode != 0)
+        {
+            var usefulTail = CompactTail(result.StdErrTail);
+            var exception = new InvalidOperationException($"{Phase18ReasonCodes.RenderFailed}: {context.Operation} " +
+                $"{context.Format ?? "<none>"}/{context.Sequence?.ToString(CultureInfo.InvariantCulture) ?? "<none>"} " +
+                $"{context.SceneAudioUnitId ?? "<none>"} failed; FFmpeg exit code {process.ExitCode}: {usefulTail}");
+            exception.Data["renderOperation"] = context.Operation;
+            exception.Data["renderFormat"] = context.Format;
+            exception.Data["renderSequence"] = context.Sequence;
+            exception.Data["renderSceneAudioUnitId"] = context.SceneAudioUnitId;
+            exception.Data["renderSceneId"] = context.SceneId;
+            exception.Data["ffmpegExitCode"] = process.ExitCode;
+            exception.Data["ffmpegStderrHead"] = result.StdErrHead;
+            exception.Data["ffmpegStderrTail"] = result.StdErrTail;
+            exception.Data["mediaExecutable"] = file;
+            exception.Data["mediaArguments"] = args.ToArray();
+            exception.Data["mediaWorkingDirectory"] = workingDirectory;
+            throw exception;
+        }
+        return result;
     }
 
-    private static async Task<long> ProbeDuration(string ffprobe, string path, CancellationToken ct)
+    private static async Task<long> ProbeDuration(string ffprobe, string path, MediaProcessContext context,
+        Phase18RenderDiagnostics diagnostics, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo(ffprobe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        foreach (var x in new[] { "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path }) psi.ArgumentList.Add(x);
-        using var p = Process.Start(psi)!; var output = await p.StandardOutput.ReadToEndAsync(ct); await p.WaitForExitAsync(ct);
-        if (!double.TryParse(output.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var sec) || p.ExitCode != 0)
-            Fail(Phase18ReasonCodes.VideoValidationFailed, "ffprobe failed.");
+        diagnostics.ProbeCallsThisPhase++;
+        var result = await Run(ffprobe, ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path],
+            context, Path.GetDirectoryName(path)!, ct);
+        if (!double.TryParse(result.StdOut.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var sec))
+            Fail(Phase18ReasonCodes.VideoValidationFailed, $"ffprobe returned an invalid duration for {path}.");
         return (long)Math.Round(sec * 1000, MidpointRounding.AwayFromZero);
     }
+
+    internal static string Head(string value) => value.Length <= DiagnosticChars ? value : value[..DiagnosticChars];
+    internal static string Tail(string value) => value.Length <= DiagnosticChars ? value : value[^DiagnosticChars..];
+    private static string CompactTail(string value)
+    {
+        var lines = value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var tail = string.Join(" | ", lines.TakeLast(12));
+        return tail.Length <= 2000 ? tail : tail[^2000..];
+    }
+    private static void Log(string eventName, object details) =>
+        Console.WriteLine(JsonSerializer.Serialize(new { Event = eventName, Details = details }, Json));
 
     private static async Task<bool> OutputsValid(string root, IEnumerable<Phase18MediaEvidence> outputs, CancellationToken ct)
     { foreach (var x in outputs) { var v = Path.Combine(root, x.VideoRelativePath); var s = Path.Combine(root, x.SubtitleRelativePath); if (!File.Exists(v) || !File.Exists(s) || await HashFile(v, ct) != x.VideoSha256 || await HashFile(s, ct) != x.SubtitleSha256) return false; } return true; }
@@ -602,11 +693,23 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         new(inputs, [], code, reason, false, false, false, false, false, false, false, false,
             "", "", "", "", "Invalid", "Invalid", false, false, false, false);
     private static object FailureValidation(Phase18PublicationResult x, bool ffmpegResolved, bool ffprobeResolved,
-        string? ffmpegVersion, string? resolutionSource, int renderCalls, int probeCalls) => new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2",
+        string? ffmpegVersion, string? ffprobeVersion, string? resolutionSource,
+        Phase18RenderDiagnostics diagnostics, Exception error) => new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2",
             status = "Failed", x.ReasonCode, x.Reason, inputFiles = x.InputFiles, outputFiles = Array.Empty<string>(),
-            x.PublicationCommitted, x.DownstreamReady, ffmpegResolved, ffprobeResolved,
-            ffmpegVersion, ffprobeVersion = (string?)null, toolchainResolutionSource = resolutionSource,
-            renderCallsThisPhase = renderCalls, probeCallsThisPhase = probeCalls };
+            x.Generated, x.Reused, x.Regenerated, x.CandidateValidationPassed, x.CandidateReadbackPassed,
+            x.PublicationCommitted, x.CommittedReadbackPassed, x.CommittedStateValidationPassed,
+            x.ManifestValidationStatus, x.ValidationStatus, x.SemanticValidationPassed,
+            x.ChecksumValidationPassed, x.ManifestValidationPassed, x.DownstreamReady, ffmpegResolved, ffprobeResolved,
+            ffmpegVersion, ffprobeVersion, toolchainResolutionSource = resolutionSource,
+            renderOperation = error.Data["renderOperation"], renderFormat = error.Data["renderFormat"],
+            renderSequence = error.Data["renderSequence"], renderSceneAudioUnitId = error.Data["renderSceneAudioUnitId"],
+            renderSceneId = error.Data["renderSceneId"], ffmpegExitCode = error.Data["ffmpegExitCode"],
+            ffmpegStderrTail = error.Data["ffmpegStderrTail"], ffmpegStderrHead = error.Data["ffmpegStderrHead"],
+            mediaExecutable = error.Data["mediaExecutable"], mediaArguments = error.Data["mediaArguments"],
+            mediaWorkingDirectory = error.Data["mediaWorkingDirectory"],
+            diagnostics.RenderCallsThisPhase, diagnostics.SuccessfulSceneRenderCount,
+            diagnostics.FailedSceneRenderCount, diagnostics.ConcatCallsThisPhase,
+            diagnostics.SubtitleBurnCallsThisPhase, diagnostics.ProbeCallsThisPhase };
     private static async Task<T> Read<T>(string path, CancellationToken ct) => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, ct), Json) ?? throw new InvalidDataException(path);
     private static Task<JsonDocument> ReadDocument(string path, CancellationToken ct) => Task.Run(() => JsonDocument.Parse(File.ReadAllText(path)), ct);
     private static Task Write(string path, object value, CancellationToken ct) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); return File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Json), new UTF8Encoding(false), ct); }
