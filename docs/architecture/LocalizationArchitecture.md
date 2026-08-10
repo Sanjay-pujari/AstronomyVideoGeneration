@@ -55,3 +55,11 @@ Make contracts more declarative, improve diagnostics browsing, expand automated 
 - [Roadmap](../Roadmap.md)
 - [Folder structure](../FolderStructure.md)
 - [AstronomyV3RC2 release notes](../releases/AstronomyV3RC2.md)
+# Governed final subtitles
+
+Phase 16 is the final subtitle text and timing authority. Phase 18 always copies each requested
+`final.srt` byte-for-byte as a sidecar and uses that same file for any burn-in derivative. English
+is initially certified for burn-in plus sidecar. Hindi follows the identical authority flow but is
+sidecar-only until the deployed FFmpeg/libass stack and an available, legally deployed
+Devanagari-capable font pass shaping and Unicode-rendering certification; font files are not
+published as Phase 18 artifacts.

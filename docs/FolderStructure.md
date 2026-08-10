@@ -366,3 +366,11 @@ and `narration/subtitles/{language}/*.srt` are post-commit compatibility project
 
 The historical `sync/`, `narration/`, `narration-v31/`, and `timing/` paths are
 compatibility projections, not canonical Phase 14 authority.
+# Governed final video authority
+
+`18-video-assembly/{language}` is the canonical Phase 18 ownership root. Each requested `short/`
+or `long/` directory contains only `final.mp4` and the exact-byte Phase 16 `final.srt`; the language
+root contains `phase18-manifest.json`, `phase18-authority-diagnostics.json`, and
+`phase18-publication-report.json`. Render clips, concat lists, and unburned media exist only under
+`18-video-assembly/.staging/<transaction>/<language>` and are removed after success or failure.
+The shared `validation/phase-18-validation.json` records the committed authority result.

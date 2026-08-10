@@ -55,3 +55,10 @@ Make contracts more declarative, improve diagnostics browsing, expand automated 
 - [Roadmap](../Roadmap.md)
 - [Folder structure](../FolderStructure.md)
 - [AstronomyV3RC2 release notes](../releases/AstronomyV3RC2.md)
+# Phase 18 physical media validation
+
+Phase 18 validates frozen Phase 15/16/17 publication state and checksum lineage before staging.
+Candidate and committed readback both hash the MP4/SRT files and probe governed duration. At 30
+fps the timing budget is one frame (33.333 ms) plus narrow container rounding; narration duration
+never replaces the calibrated visual duration. Publication is atomic for the requested format set,
+and only a committed, readback-valid authority is downstream-ready for Phase 19.
