@@ -61,6 +61,40 @@ internal static class Phase17MotionAuthorityPublisher
             p10Report.RootElement, p10Diagnostics.RootElement);
         var visualChecksum = Hash($"{p8.DeterministicChecksum}\n{p9.DeterministicChecksum}\n{p10.DeterministicChecksum}");
 
+        var finalRoot = Path.Combine(root, "17-motion", language);
+        var validationRoot = Path.Combine(root, "validation");
+        var validationPath = Path.Combine(validationRoot, "phase-17-validation.json");
+        var existingPlanPath = Path.Combine(finalRoot, "short", "motion-plan.json");
+        var existingLongPath = Path.Combine(finalRoot, "long", "motion-plan.json");
+        var existingManifestPath = Path.Combine(finalRoot, "phase17-manifest.json");
+        var existingReportPath = Path.Combine(finalRoot, "phase17-publication-report.json");
+        var previousAuthorityExisted = Directory.Exists(finalRoot);
+        var reuseEligibleBeforeOverwrite = false;
+        Phase17MotionPlan? existingShortPlan = null;
+        if (File.Exists(existingPlanPath) && File.Exists(existingLongPath) &&
+            File.Exists(existingManifestPath) && File.Exists(existingReportPath))
+        {
+            existingShortPlan = await Read<Phase17MotionPlan>(existingPlanPath, ct);
+            var existingLongPlan = await Read<Phase17MotionPlan>(existingLongPath, ct);
+            reuseEligibleBeforeOverwrite = ExistingRequestIdentityMatches(existingShortPlan, p16Checksum, visualChecksum) &&
+                ExistingRequestIdentityMatches(existingLongPlan, p16Checksum, visualChecksum) &&
+                existingLongPlan.AuthorityChecksum == existingShortPlan.AuthorityChecksum &&
+                await IsAcceptedPublication(existingManifestPath, existingReportPath,
+                    existingShortPlan.AuthorityChecksum, ct);
+        }
+
+        // An explicit overwrite is an execution command, not an identity hint. It must reach the
+        // candidate builder and transactional replacement even when deterministic output is equal.
+        if (ShouldReuseExistingAuthority(overwrite, reuseEligibleBeforeOverwrite))
+        {
+            var reused = Result(inputs, Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories)
+                .Append(validationPath).ToArray(), false, true, false, p16Checksum, visualChecksum,
+                existingShortPlan!.AuthorityChecksum);
+            Directory.CreateDirectory(validationRoot);
+            await WriteValidation(validationPath, reused, ct);
+            return reused;
+        }
+
         var shortScenes = ReadScenes(timelineDoc.RootElement, "short");
         var longScenes = ReadScenes(timelineDoc.RootElement, "long");
         if (shortScenes.Concat(longScenes).Any(x => !x.Language.Equals(language, StringComparison.OrdinalIgnoreCase)))
@@ -99,32 +133,10 @@ internal static class Phase17MotionAuthorityPublisher
         var longPlan = new Phase17MotionPlan(Schema, language, "Long", longEntries.Count, MotionPolicy,
             SafetyPolicy, p16Checksum, visualChecksum, longEntries, authorityChecksum);
 
-        var finalRoot = Path.Combine(root, "17-motion", language);
-        var validationRoot = Path.Combine(root, "validation");
-        var validationPath = Path.Combine(validationRoot, "phase-17-validation.json");
-        var existingPlan = Path.Combine(finalRoot, "short", "motion-plan.json");
-        if (File.Exists(existingPlan))
-        {
-            var existing = await Read<Phase17MotionPlan>(existingPlan, ct);
-            var existingLongPath = Path.Combine(finalRoot, "long", "motion-plan.json");
-            var existingManifestPath = Path.Combine(finalRoot, "phase17-manifest.json");
-            var existingReportPath = Path.Combine(finalRoot, "phase17-publication-report.json");
-            if (existing.AuthorityChecksum == authorityChecksum && File.Exists(existingLongPath) &&
-                File.Exists(existingManifestPath) && File.Exists(existingReportPath) &&
-                (await Read<Phase17MotionPlan>(existingLongPath, ct)).AuthorityChecksum == authorityChecksum &&
-                await IsAcceptedPublication(existingManifestPath, existingReportPath, authorityChecksum, ct))
-            {
-                var reused = Result(inputs, Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories)
-                    .Append(validationPath).ToArray(), false, true, false, p16Checksum, visualChecksum, authorityChecksum);
-                Directory.CreateDirectory(validationRoot);
-                await WriteValidation(validationPath, reused, ct);
-                return reused;
-            }
-        }
         var transactionId = Guid.NewGuid().ToString("N"); // Filesystem transaction identity is never semantic authority input.
         var stage = Path.Combine(root, "17-motion", ".staging", transactionId, language);
         var backup = Path.Combine(root, "17-motion", ".backup", transactionId, language);
-        var replacingExistingAuthority = Directory.Exists(finalRoot);
+        var replacingExistingAuthority = previousAuthorityExisted;
         try
         {
             Directory.CreateDirectory(Path.Combine(stage, "short")); Directory.CreateDirectory(Path.Combine(stage, "long"));
@@ -142,6 +154,10 @@ internal static class Phase17MotionAuthorityPublisher
                 audioFilesOpened = 0, srtFilesRead = 0, sourcePhase16AuthorityChecksum = p16Checksum,
                 sourceVisualAuthorityChecksum = visualChecksum, candidateValidationPassed = true,
                 candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true,
+                overwriteExistingRequested = overwrite, overwriteExistingResolved = overwrite,
+                reuseEligibleBeforeOverwrite, reuseSuppressedByOverwrite = overwrite && reuseEligibleBeforeOverwrite,
+                previousAuthorityExisted, candidateGenerated = true, replacedExistingAuthority = replacingExistingAuthority,
+                transactionId,
                 authorityChecksum, downstreamReady = true, canonicalOwnedRoots = new[] { $"17-motion/{language}" },
                 compatibilityProjectionPaths = new[] { "motion/motion-plan.json" } }, ct);
             await Write(Path.Combine(stage, "phase17-publication-report.json"), Publication(authorityChecksum), ct);
@@ -163,6 +179,13 @@ internal static class Phase17MotionAuthorityPublisher
             CleanupTransactionDirectory(Path.GetDirectoryName(backup)!);
         }
     }
+
+    internal static bool ShouldReuseExistingAuthority(bool overwriteExisting, bool existingAuthorityValidAndMatching) =>
+        !overwriteExisting && existingAuthorityValidAndMatching;
+
+    private static bool ExistingRequestIdentityMatches(Phase17MotionPlan plan, string p16Checksum, string visualChecksum) =>
+        plan.SchemaVersion == Schema && plan.MotionPolicyVersion == MotionPolicy && plan.SafetyPolicyVersion == SafetyPolicy &&
+        plan.SourcePhase16AuthorityChecksum == p16Checksum && plan.SourceVisualAuthorityChecksum == visualChecksum;
 
     /// <summary>
     /// Removes abandoned transaction directories only when they are demonstrably empty. This is
