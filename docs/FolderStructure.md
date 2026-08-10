@@ -359,5 +359,10 @@ synthesis and physical audio. Governed production is SceneLevel; LegacyCueLevel
 is compatibility-only and cannot be selected by the RC2 Phase 15 route. Phase 16
 owns calibrated duration and final English and Hindi SRT timing.
 
+Phase 14 is subtitle-segmentation authority, Phase 15 is physical TTS-duration
+authority, and Phase 16 is final timed-SRT authority. Canonical Phase 16 files
+live below `16-duration-calibration/{language}/`; `timing/scene-duration-plan.json`
+and `narration/subtitles/{language}/*.srt` are post-commit compatibility projections.
+
 The historical `sync/`, `narration/`, `narration-v31/`, and `timing/` paths are
 compatibility projections, not canonical Phase 14 authority.
