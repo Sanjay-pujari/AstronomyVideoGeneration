@@ -46,3 +46,13 @@ public sealed record Phase14PublicationResult(IReadOnlyList<string> LoadedAuthor
     bool PublicationCommitted, bool CommittedStateValidationPassed, string AuthorityChecksum,
     string ManifestValidationStatus, string ValidationStatus, bool SemanticValidationPassed,
     bool ChecksumValidationPassed, bool ManifestValidationPassed, bool DownstreamReady);
+
+
+/// <summary>The single committed Phase 15 result projected to validation and the API.</summary>
+public sealed record Phase15PublicationResult(IReadOnlyList<string> LoadedAuthorityArtifacts,
+    IReadOnlyList<string> OutputFiles, string ReasonCode, string Reason, bool Generated, bool Reused,
+    bool Regenerated, bool CandidateValidationPassed, bool CandidateReadbackPassed,
+    bool PublicationCommitted, bool CommittedReadbackPassed, bool CommittedStateValidationPassed,
+    string SourcePhase14AuthorityChecksum, string AuthorityChecksum, string ManifestValidationStatus,
+    string ValidationStatus, bool SemanticValidationPassed, bool ChecksumValidationPassed,
+    bool ManifestValidationPassed, bool DownstreamReady);
