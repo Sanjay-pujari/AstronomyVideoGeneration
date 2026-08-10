@@ -7,6 +7,36 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Phase18VideoAssemblyAuthorityTests
 {
     [Fact]
+    public void Phase18ConfiguredToolchainResolvesFullExecutablePath()
+    {
+        var executable = Environment.ProcessPath!;
+        var resolved = Phase18MediaToolchainResolver.Resolve(executable, "P18_UNUSED_TOOL", "ffmpeg");
+
+        Assert.Equal(Path.GetFullPath(executable), resolved.Path);
+        Assert.Equal("Configuration", resolved.Source);
+    }
+
+    [Fact]
+    public void Phase18PathToolchainResolvesWithoutConfiguredPath()
+    {
+        var executable = OperatingSystem.IsWindows() ? "cmd.exe" : "sh";
+        var resolved = Phase18MediaToolchainResolver.Resolve(null, "P18_UNUSED_TOOL", executable);
+
+        Assert.True(Path.IsPathRooted(resolved.Path));
+        Assert.Equal("PATH", resolved.Source);
+    }
+
+    [Fact]
+    public void Phase18MissingToolchainDoesNotEscapeRawWin32Exception()
+    {
+        var exception = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18MediaToolchainResolver.Resolve(null, "P18_UNUSED_TOOL", $"missing-phase18-{Guid.NewGuid():N}"));
+
+        Assert.Equal(Phase18ReasonCodes.MediaToolchainUnavailable, exception.ReasonCode);
+        Assert.Contains("could not be resolved or started", exception.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Phase18NeverUsesShortestToTerminateVideo()
     {
         Assert.False(Phase18VideoAssemblyAuthorityPublisher.CanonicalArgumentsAreSafe(["-shortest"]));

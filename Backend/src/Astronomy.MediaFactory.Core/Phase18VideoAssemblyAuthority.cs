@@ -11,6 +11,7 @@ public static class Phase18ReasonCodes
     public const string AudioPhysicalEvidenceInvalid = "P18_AUDIO_PHYSICAL_EVIDENCE_INVALID";
     public const string SubtitlePhysicalEvidenceInvalid = "P18_SUBTITLE_PHYSICAL_EVIDENCE_INVALID";
     public const string RenderFailed = "P18_RENDER_FAILED";
+    public const string MediaToolchainUnavailable = "P18_MEDIA_TOOLCHAIN_UNAVAILABLE";
     public const string VideoValidationFailed = "P18_VIDEO_VALIDATION_FAILED";
     public const string CandidateValidationFailed = "P18_CANDIDATE_VALIDATION_FAILED";
     public const string CommitFailed = "P18_COMMIT_FAILED";
