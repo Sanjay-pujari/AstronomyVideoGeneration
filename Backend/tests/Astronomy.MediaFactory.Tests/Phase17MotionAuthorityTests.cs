@@ -42,9 +42,49 @@ public sealed class Phase17MotionAuthorityTests
     {
         var source = PublisherSource();
         var sweep = source.IndexOf("SweepStaleTransactions(root)", StringComparison.Ordinal);
-        var reuseDecision = source.IndexOf("if (File.Exists(existingPlan))", StringComparison.Ordinal);
+        var reuseDecision = source.IndexOf("if (File.Exists(existingPlanPath)", StringComparison.Ordinal);
         Assert.True(sweep >= 0 && sweep < reuseDecision);
         Assert.Contains("false, true, false", source);
+    }
+
+    [Fact]
+    public void Phase17ExplicitOverwriteSuppressesReuse()
+    {
+        Assert.False(Phase17MotionAuthorityPublisher.ShouldReuseExistingAuthority(
+            overwriteExisting: true, existingAuthorityValidAndMatching: true));
+    }
+
+    [Fact]
+    public void Phase17OverwriteFalseAllowsReuse()
+    {
+        Assert.True(Phase17MotionAuthorityPublisher.ShouldReuseExistingAuthority(
+            overwriteExisting: false, existingAuthorityValidAndMatching: true));
+    }
+
+    [Fact]
+    public void Phase17ReceivesOverwriteExistingFromProductionRequest()
+    {
+        var source = PipelineSource();
+        Assert.Contains("request.OverwriteExisting, startPhaseNo", source);
+        Assert.Contains("context.OverwriteExisting, cancellationToken", source);
+    }
+
+    [Fact]
+    public void Phase17ForcedRebuildRecordsTransactionalPublicationEvidence()
+    {
+        var source = PublisherSource();
+        Assert.Contains("reuseSuppressedByOverwrite = overwrite && reuseEligibleBeforeOverwrite", source);
+        Assert.Contains("previousAuthorityExisted, candidateGenerated = true", source);
+        Assert.Contains("replacedExistingAuthority = replacingExistingAuthority", source);
+        Assert.Contains("transactionId", source);
+    }
+
+    [Fact]
+    public void Phase17ReuseDecisionPrecedesCandidateBuilder()
+    {
+        var source = PublisherSource();
+        Assert.True(source.IndexOf("ShouldReuseExistingAuthority(overwrite", StringComparison.Ordinal) <
+            source.IndexOf("BuildEntry(root", StringComparison.Ordinal));
     }
 
     [Fact]
