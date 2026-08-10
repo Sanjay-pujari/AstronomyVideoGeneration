@@ -9748,6 +9748,10 @@ public sealed partial class ProductionPipelineExecutionService(
         const string codec = "audio-24khz-160kbitrate-mono-mp3";
         var root = context.OutputRoot;
         var language = ResolvePipelineLanguage(context.Request.Language);
+        var stagingParent = Path.Combine(root, "15-tts", ".staging");
+        // Housekeeping is independent of synthesis/provider availability and therefore runs at
+        // the beginning of every Phase 15 attempt.
+        CleanupPhase15Transaction(stagingParent, null);
         var validationRoot = context.ExecutionContext.ValidationRoot!;
         Directory.CreateDirectory(validationRoot);
         var configuredMode = subtitleTtsOptions?.Value?.TtsMode ?? new SubtitleTtsOptions().TtsMode;
@@ -9765,9 +9769,6 @@ public sealed partial class ProductionPipelineExecutionService(
 
         var finalLanguageRoot = Path.Combine(root, "15-tts", language);
         var replacingExistingAuthority = Directory.Exists(finalLanguageRoot);
-        var stagingParent = Path.Combine(root, "15-tts", ".staging");
-        // An empty container from an older run is internal transaction state, not a package root.
-        CleanupPhase15Transaction(stagingParent, null);
         var stage = Path.Combine(stagingParent, Guid.NewGuid().ToString("N"), language);
         var backup = finalLanguageRoot + ".backup-" + Guid.NewGuid().ToString("N");
         var requests = new List<Phase15SceneSynthesisRequest>();
@@ -9949,8 +9950,18 @@ public sealed partial class ProductionPipelineExecutionService(
 
         // Only the internal staging container is eligible here. Committed language roots are
         // siblings of .staging and can never be reached by this cleanup.
-        if (Directory.Exists(stagingParent) && !Directory.EnumerateFileSystemEntries(stagingParent).Any())
-            Directory.Delete(stagingParent);
+        if (!Directory.Exists(stagingParent)) return;
+
+        // A process can terminate after creating its transaction directory but before entering
+        // the transaction try/finally. Sweep only empty direct children: a non-empty unknown
+        // transaction is deliberately retained because its provenance cannot be proved here.
+        foreach (var candidate in Directory.EnumerateDirectories(stagingParent, "*", SearchOption.TopDirectoryOnly))
+        {
+            if (!Directory.EnumerateFileSystemEntries(candidate).Any())
+                Directory.Delete(candidate);
+        }
+
+        if (!Directory.EnumerateFileSystemEntries(stagingParent).Any()) Directory.Delete(stagingParent);
     }
 
     internal static (bool Short, bool Long) ResolveCommittedPhase15TtsFormats(string planRoot, string language)
@@ -9970,10 +9981,9 @@ public sealed partial class ProductionPipelineExecutionService(
             using var timeline = JsonDocument.Parse(File.ReadAllText(timelinePath));
             if (!timeline.RootElement.TryGetProperty("entries", out var entries) || entries.ValueKind != JsonValueKind.Array)
                 return (false, false);
+            var authorityPrefix = Path.GetFullPath(authorityRoot) + Path.DirectorySeparatorChar;
             var formats = entries.EnumerateArray()
-                .Where(entry => entry.TryGetProperty("audioRelativePath", out var path)
-                    && path.ValueKind == JsonValueKind.String
-                    && File.Exists(Path.Combine(planRoot, path.GetString()!.Replace('/', Path.DirectorySeparatorChar))))
+                .Where(entry => IsCommittedAudioEntry(entry, planRoot, authorityPrefix))
                 .Select(entry => entry.TryGetProperty("format", out var format) ? format.GetString() : null)
                 .Where(format => !string.IsNullOrWhiteSpace(format))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -9983,6 +9993,15 @@ public sealed partial class ProductionPipelineExecutionService(
         {
             return (false, false);
         }
+    }
+
+    private static bool IsCommittedAudioEntry(JsonElement entry, string planRoot, string authorityPrefix)
+    {
+        if (!entry.TryGetProperty("audioRelativePath", out var path) || path.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(path.GetString())) return false;
+        var audioPath = Path.GetFullPath(Path.Combine(planRoot, path.GetString()!.Replace('/', Path.DirectorySeparatorChar)));
+        return audioPath.StartsWith(authorityPrefix, StringComparison.OrdinalIgnoreCase)
+            && File.Exists(audioPath) && new FileInfo(audioPath).Length > 0;
     }
 
     private static string ResolvePhase15SrtPath(string planRoot, string language, string format)
