@@ -343,7 +343,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         var final = Path.Combine(dir, "final.mp4");
         var burn = language == "en";
         if (burn) { Log("PHASE18_SUBTITLE_BURN_START", new { Format = format, SidecarPath = sidecar }); diagnostics.SubtitleBurnCallsThisPhase++;
-            await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", $"subtitles={EscapeFilter(sidecar)}", "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final],
+            await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", BuildSubtitleFilter(sidecar), "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final],
                 new MediaProcessContext("SubtitleBurn", format), dir, ct);
             Log("PHASE18_SUBTITLE_BURN_COMPLETE", new { Format = format, OutputPath = final }); }
         else File.Copy(unburned, final, true);
@@ -716,7 +716,15 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     private static string String(JsonElement e, string n) => e.TryGetProperty(n, out var v) ? v.GetString() ?? "" : ""; private static bool Bool(JsonElement e, string n) => e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.True;
     private static void RequireFiles(IEnumerable<string> files, string code) { if (files.Any(x => !File.Exists(x))) Fail(code, "A required committed artifact is missing."); }
     private static string Hash(string x) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(x))).ToLowerInvariant(); private static async Task<string> HashFile(string p, CancellationToken ct) { await using var s = File.OpenRead(p); return Convert.ToHexString(await SHA256.HashDataAsync(s, ct)).ToLowerInvariant(); }
-    private static string EscapeFilter(string p) => p.Replace("\\", "/").Replace(":", "\\:").Replace("'", "\\'");
+    internal static string BuildSubtitleFilter(string absolutePath) =>
+        $"subtitles=filename='{EscapeSubtitleFilterPath(absolutePath)}'";
+
+    // A filter graph and the subtitles option parser each consume one escaping layer.
+    // ProcessStartInfo.ArgumentList deliberately supplies no process/shell escaping here.
+    internal static string EscapeSubtitleFilterPath(string absolutePath) => absolutePath
+        .Replace("\\", "/", StringComparison.Ordinal)
+        .Replace(":", "\\\\:", StringComparison.Ordinal)
+        .Replace("'", "'\\\\''", StringComparison.Ordinal);
     private static void Cleanup(string p) { if (Directory.Exists(p)) Directory.Delete(p, true); var parent = Path.GetDirectoryName(p); if (parent is not null && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any()) Directory.Delete(parent); }
     [DoesNotReturn]
     private static void Fail(string code, string reason) => throw new InvalidOperationException($"{code}: {reason}");
