@@ -13,6 +13,12 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 /// Strict adapter from the three frozen upstream authorities to FFmpeg.  This class deliberately
 /// contains no asset discovery, editorial fallback, timing calculation, or motion invention.
 /// </summary>
+internal sealed record Phase15TimelineEntry(string SceneAudioUnitId, string SceneId, int Sequence, string Format,
+    string Language, string AudioRelativePath, long AudioByteLength, string AudioSha256, string TextChecksum,
+    long ActualAudioDurationMs, string VoiceProfileRef, string SpeechStyleRef, string ResolvedVoice,
+    string ResolvedRate, string ResolvedStyle, string ProviderRequestId, IReadOnlyList<string> SubtitleSegmentIds,
+    string SourcePhase14AuthorityChecksum);
+
 internal static class Phase18VideoAssemblyAuthorityPublisher
 {
     internal static readonly Phase18VideoPolicy VideoPolicy = new("phase18-video/1.0", "h264", "libx264",
@@ -64,7 +70,8 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             motion.SelectMany(x => x.Entries).Select(x => new Phase18SceneLineageRow(x.SceneAudioUnitId, x.SceneId,
                 x.Format, x.Sequence, x.Language, x.AudioSha256, x.DurationMs, x.SceneStartMs, x.SceneEndMs)),
             inputs);
-        ValidateExpectedSceneCounts(motion.SelectMany(x => x.Entries), inputs);
+        ValidateAuthorityDrivenSceneCounts(audio.Values, calibrated.Values, motion.SelectMany(x => x.Entries), inputs);
+        await PreflightPhysicalEvidence(root, language, audio, calibrated, motion.SelectMany(x => x.Entries), srts, ct);
         var toolchain = await ToolchainIdentity(ct);
         var requested = new[] { "Short", "Long" };
         var identity = Hash(JsonSerializer.Serialize(new { Schema, language, requested, p15Checksum, p16Checksum,
@@ -127,11 +134,12 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
 
     private static async Task<Phase18MediaEvidence> RenderFormat(string root, string stage, string language,
         string format, Phase17MotionPlan plan, IReadOnlyDictionary<string, Phase16CalibratedScene> calibrated,
-        IReadOnlyDictionary<string, Phase15Entry> audio, string srt, CancellationToken ct)
+        IReadOnlyDictionary<string, Phase15TimelineEntry> audio, string srt, CancellationToken ct)
     {
         var requestedFormat = ParseProductionFormat(format);
+        var sequences = plan.Entries.Select(x => x.Sequence).ToArray();
         if (ParseProductionFormat(plan.Format) != requestedFormat || plan.Entries.Count != plan.SceneCount ||
-            plan.Entries.Select(x => x.Sequence).SequenceEqual(Enumerable.Range(1, plan.Entries.Count)) is false)
+            sequences.Distinct().Count() != sequences.Length || sequences.Zip(sequences.Skip(1)).Any(x => x.First >= x.Second))
             Fail(Phase18ReasonCodes.CandidateValidationFailed, $"{format} plan order/count is invalid.");
         var dir = Path.Combine(stage, format.ToLowerInvariant()); Directory.CreateDirectory(dir);
         var clips = Path.Combine(stage, ".intermediates", format.ToLowerInvariant()); Directory.CreateDirectory(clips);
@@ -251,8 +259,9 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             Compare(unit, "Phase15.Language", audioRow.Language, "Phase17.Language", motionRow.Language, loadedAuthorityArtifacts);
             Compare(unit, "Phase16.Language", timingRow.Language, "Phase17.Language", motionRow.Language, loadedAuthorityArtifacts);
             Compare(unit, "Phase15.AudioSha256", audioRow.AudioSha256, "Phase17.AudioSha256", motionRow.AudioSha256, loadedAuthorityArtifacts);
-            if (!string.IsNullOrWhiteSpace(timingRow.AudioSha256))
-                Compare(unit, "Phase15.AudioSha256", audioRow.AudioSha256, "Phase16.AudioSha256", timingRow.AudioSha256, loadedAuthorityArtifacts);
+            if (string.IsNullOrWhiteSpace(timingRow.AudioSha256))
+                Mismatch(unit, "Phase15.AudioSha256", audioRow.AudioSha256, "Phase16.AudioSha256", timingRow.AudioSha256, loadedAuthorityArtifacts);
+            Compare(unit, "Phase15.AudioSha256", audioRow.AudioSha256, "Phase16.AudioSha256", timingRow.AudioSha256, loadedAuthorityArtifacts);
             if (audioRow.ActualAudioDurationMs <= 0)
                 Mismatch(unit, "Phase15.ActualAudioDurationMs", audioRow.ActualAudioDurationMs, "required minimum", 1, loadedAuthorityArtifacts);
             if (audioRow.ActualAudioDurationMs > timingRow.DurationMs + ProbeToleranceMs)
@@ -294,16 +303,55 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
 
     private sealed record NormalizedLineageRow(Phase18SceneLineageRow Row, Phase18ProductionFormat ParsedFormat);
 
-    private static void ValidateExpectedSceneCounts(IEnumerable<Phase17MotionEntry> entries,
+    internal static void ValidateAuthorityDrivenSceneCounts(IEnumerable<string> phase15Formats,
+        IEnumerable<string> phase16Formats, IEnumerable<string> phase17Formats,
         IReadOnlyList<string> loadedAuthorityArtifacts)
     {
-        var counts = entries.GroupBy(x => ParseProductionFormat(x.Format)).ToDictionary(x => x.Key, x => x.Count());
-        var shortCount = counts.GetValueOrDefault(Phase18ProductionFormat.Short);
-        var longCount = counts.GetValueOrDefault(Phase18ProductionFormat.Long);
-        if (shortCount != 4 || longCount != 12)
-            throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
-                $"Canonical scene counts differ: Phase17.Short={shortCount}, expected=4; Phase17.Long={longCount}, expected=12.",
-                loadedAuthorityArtifacts);
+        Dictionary<Phase18ProductionFormat, int> Counts(IEnumerable<string> formats) => formats
+            .GroupBy(ParseProductionFormat).ToDictionary(x => x.Key, x => x.Count());
+        var p15 = Counts(phase15Formats); var p16 = Counts(phase16Formats); var p17 = Counts(phase17Formats);
+        foreach (var format in Enum.GetValues<Phase18ProductionFormat>())
+        {
+            var c15 = p15.GetValueOrDefault(format); var c16 = p16.GetValueOrDefault(format); var c17 = p17.GetValueOrDefault(format);
+            if (c15 != c16 || c15 != c17)
+                throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
+                    $"Canonical {format} scene counts differ: Phase15={c15}, Phase16={c16}, Phase17={c17}.",
+                    loadedAuthorityArtifacts);
+        }
+    }
+
+    private static void ValidateAuthorityDrivenSceneCounts(IEnumerable<Phase15TimelineEntry> phase15,
+        IEnumerable<Phase16CalibratedScene> phase16, IEnumerable<Phase17MotionEntry> phase17,
+        IReadOnlyList<string> loadedAuthorityArtifacts) => ValidateAuthorityDrivenSceneCounts(
+            phase15.Select(x => x.Format), phase16.Select(x => x.Format), phase17.Select(x => x.Format), loadedAuthorityArtifacts);
+
+    private static async Task PreflightPhysicalEvidence(string root, string language,
+        IReadOnlyDictionary<string, Phase15TimelineEntry> audio,
+        IReadOnlyDictionary<string, Phase16CalibratedScene> calibrated,
+        IEnumerable<Phase17MotionEntry> motion, IEnumerable<string> srts, CancellationToken ct)
+    {
+        foreach (var srt in srts) ValidateSrt(srt);
+        foreach (var entry in motion)
+        {
+            var speech = audio[entry.SceneAudioUnitId];
+            var timing = calibrated[entry.SceneAudioUnitId];
+            if (entry.Language != language || speech.Language != language || timing.Language != language)
+                throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
+                    $"SceneAudioUnitId {entry.SceneAudioUnitId}: requested language='{language}', Phase15='{speech.Language}', Phase16='{timing.Language}', Phase17='{entry.Language}'.", []);
+            if (speech.AudioByteLength <= 0 || string.IsNullOrWhiteSpace(speech.AudioSha256) ||
+                speech.ActualAudioDurationMs <= 0 || string.IsNullOrWhiteSpace(speech.AudioRelativePath))
+                Fail(Phase18ReasonCodes.AudioPhysicalEvidenceInvalid, $"Canonical Phase15 audio fields are invalid for {entry.SceneAudioUnitId}.");
+            var speechPath = ResolveOwned(root, speech.AudioRelativePath);
+            if (!File.Exists(speechPath) || new FileInfo(speechPath).Length != speech.AudioByteLength ||
+                await HashFile(speechPath, ct) != speech.AudioSha256)
+                Fail(Phase18ReasonCodes.AudioPhysicalEvidenceInvalid, entry.SceneId);
+            var image = ResolveOwned(root, entry.VisualAssetPath);
+            if (!File.Exists(image) || await HashFile(image, ct) != entry.VisualAssetSha256)
+                Fail(Phase18ReasonCodes.VisualPhysicalEvidenceInvalid, entry.SceneId);
+            var dimensions = await Image.IdentifyAsync(image, ct);
+            if (dimensions?.Width != entry.Width || dimensions.Height != entry.Height)
+                Fail(Phase18ReasonCodes.VisualPhysicalEvidenceInvalid, entry.SceneId);
+        }
     }
 
     private static void Compare<T>(string unit, string expectedField, T expected, string actualField, T actual,
@@ -402,15 +450,29 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         }
     }
     private static string[] AuthorityFiles(string root, string phaseRoot, string language, string stem) => [Path.Combine(root, phaseRoot, language, $"{stem}-manifest.json"), Path.Combine(root, phaseRoot, language, $"{stem}-publication-report.json"), Path.Combine(root, "validation", stem.Replace("phase", "phase-") + "-validation.json")];
-    private static async Task<Dictionary<string, Phase15Entry>> ReadTimeline15(string path, Phase18Phase15AuthoritySnapshot authority, CancellationToken ct)
+    internal static async Task<Dictionary<string, Phase15TimelineEntry>> ReadTimeline15(string path, Phase18Phase15AuthoritySnapshot authority, CancellationToken ct)
     {
         using var d = await ReadDocument(path, ct);
-        if (!String(d.RootElement, "authorityChecksum").Equals(authority.AuthorityChecksum, StringComparison.OrdinalIgnoreCase)
-            || !String(d.RootElement, "sourcePhase14AuthorityChecksum").Equals(authority.SourcePhase14AuthorityChecksum, StringComparison.OrdinalIgnoreCase))
+        if (!String(d.RootElement, "authorityChecksum").Equals(authority.AuthorityChecksum, StringComparison.Ordinal)
+            || !String(d.RootElement, "sourcePhase14AuthorityChecksum").Equals(authority.SourcePhase14AuthorityChecksum, StringComparison.Ordinal))
             throw new Phase18AuthorityValidationException(Phase18ReasonCodes.UpstreamPhase15Invalid,
                 "Timeline authority checksum lineage does not agree.", authority.LoadedAuthorityArtifacts.Append(path).ToArray());
-        return new[] { "short", "long" }.SelectMany(n => d.RootElement.GetProperty(n).GetProperty("items").Deserialize<List<Phase15Entry>>(Json) ?? [])
-            .ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
+        var entries = d.RootElement.GetProperty("entries").Deserialize<List<Phase15TimelineEntry>>(Json)
+            ?? throw new JsonException("Phase15 canonical entries are absent.");
+        foreach (var entry in entries)
+        {
+            if (!entry.SourcePhase14AuthorityChecksum.Equals(authority.SourcePhase14AuthorityChecksum, StringComparison.Ordinal))
+                throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
+                    $"SceneAudioUnitId {entry.SceneAudioUnitId}: Phase15 entry source Phase14 checksum differs from its timeline root.",
+                    authority.LoadedAuthorityArtifacts.Append(path).ToArray());
+            if (string.IsNullOrWhiteSpace(entry.SceneAudioUnitId) || string.IsNullOrWhiteSpace(entry.SceneId) ||
+                string.IsNullOrWhiteSpace(entry.Language) || string.IsNullOrWhiteSpace(entry.AudioRelativePath) ||
+                entry.AudioByteLength <= 0 || string.IsNullOrWhiteSpace(entry.AudioSha256) || entry.ActualAudioDurationMs <= 0)
+                throw new Phase18AuthorityValidationException(Phase18ReasonCodes.UpstreamPhase15Invalid,
+                    $"Canonical Phase15 entry {entry.SceneAudioUnitId} has missing physical authority fields.",
+                    authority.LoadedAuthorityArtifacts.Append(path).ToArray());
+        }
+        return entries.ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
     }
     private static async Task<Dictionary<string, Phase16CalibratedScene>> ReadTimeline16(string path, CancellationToken ct) { using var d = await ReadDocument(path, ct); return new[] { "short", "long" }.SelectMany(n => d.RootElement.GetProperty(n).Deserialize<List<Phase16CalibratedScene>>(Json) ?? []).ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal); }
     private static void ValidateSrt(string path) { var text = File.ReadAllText(path, new UTF8Encoding(false, true)); if (string.IsNullOrWhiteSpace(text) || !text.Contains(" --> ", StringComparison.Ordinal)) Fail(Phase18ReasonCodes.SubtitlePhysicalEvidenceInvalid, "SRT is not valid UTF-8/timed text."); }
@@ -430,7 +492,6 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     private static void Cleanup(string p) { if (Directory.Exists(p)) Directory.Delete(p, true); var parent = Path.GetDirectoryName(p); if (parent is not null && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any()) Directory.Delete(parent); }
     [DoesNotReturn]
     private static void Fail(string code, string reason) => throw new InvalidOperationException($"{code}: {reason}");
-    private sealed record Phase15Entry(string SceneAudioUnitId, string SceneId, int Sequence, string Format, string Language, string AudioRelativePath, long AudioByteLength, string AudioSha256, string TextChecksum, long ActualAudioDurationMs, IReadOnlyList<string> SubtitleSegmentIds, string SourcePhase14AuthorityChecksum);
     private sealed record Phase15ManifestContract(string SchemaVersion, string Language,
         string SourcePhase14AuthorityChecksum, string AuthorityChecksum, string ValidationStatus,
         bool PublicationCommitted, bool DownstreamReady);

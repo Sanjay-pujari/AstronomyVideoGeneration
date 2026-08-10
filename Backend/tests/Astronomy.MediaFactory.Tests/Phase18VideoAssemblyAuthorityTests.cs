@@ -173,12 +173,14 @@ public sealed class Phase18VideoAssemblyAuthorityTests
     }
 
     [Fact]
-    public void Phase18TreatsPhase16AudioHashAsOptionalCopiedLineage()
+    public void Phase18RequiresPhase16CopiedAudioHashLineage()
     {
         var p15 = Row(audioHash: "AAA", actualAudioDurationMs: 100);
         var p17 = Row(audioHash: "AAA", durationMs: 100, endMs: 100);
-        Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(
-            [p15], [Row(audioHash: null, durationMs: 100, endMs: 100)], [p17], ["p15", "p16", "p17"]);
+        var missing = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(
+                [p15], [Row(audioHash: null, durationMs: 100, endMs: 100)], [p17], ["p15", "p16", "p17"]));
+        Assert.Contains("Phase16.AudioSha256=<absent>", missing.Reason);
 
         var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
             Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(
@@ -249,6 +251,42 @@ public sealed class Phase18VideoAssemblyAuthorityTests
     }
 
     [Fact]
+    public async Task Phase18ReadsCanonicalPhase15EntriesArray()
+    {
+        using var fixture = CanonicalTimelineFixture.Create();
+        var entries = await Phase18VideoAssemblyAuthorityPublisher.ReadTimeline15(
+            fixture.Path, fixture.Authority, CancellationToken.None);
+
+        var entry = Assert.Single(entries).Value;
+        Assert.Equal(1, entry.Sequence);
+        Assert.Equal("15-tts/en/short/unit.mp3", entry.AudioRelativePath);
+        Assert.Equal(12_345, entry.AudioByteLength);
+        Assert.Equal("AAA", entry.AudioSha256);
+        Assert.Equal(24_000, entry.ActualAudioDurationMs);
+    }
+
+    [Theory]
+    [InlineData("short")]
+    [InlineData("long")]
+    public async Task Phase18DoesNotDeserializeCompatibilityItemsAsPhase15Entry(string compatibilityFormat)
+    {
+        using var fixture = CanonicalTimelineFixture.Create(compatibilityFormat);
+        var entries = await Phase18VideoAssemblyAuthorityPublisher.ReadTimeline15(
+            fixture.Path, fixture.Authority, CancellationToken.None);
+
+        Assert.Single(entries);
+        Assert.DoesNotContain(entries.Keys, key => key.StartsWith("compat-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Phase18AcceptsAuthorityDrivenNonFourTwelveCounts()
+    {
+        var formats = Enumerable.Repeat("Short", 3).Concat(Enumerable.Repeat("Long", 8)).ToArray();
+        Phase18VideoAssemblyAuthorityPublisher.ValidateAuthorityDrivenSceneCounts(
+            formats, formats.Select(x => x.ToLowerInvariant()), formats, ["p15", "p16", "p17"]);
+    }
+
+    [Fact]
     public void Phase18CurrentStyleFourShortAndTwelveLongRowsPassLineage()
     {
         Phase18SceneLineageRow Make(int index, string format, bool audio) =>
@@ -264,6 +302,38 @@ public sealed class Phase18VideoAssemblyAuthorityTests
     private static Phase18SceneLineageRow Row(string? audioHash, long durationMs = 0, long endMs = 0,
         long actualAudioDurationMs = 0) =>
         new("unit", "scene", "Short", 1, "en", audioHash, durationMs, 0, endMs, actualAudioDurationMs);
+
+    private sealed class CanonicalTimelineFixture : IDisposable
+    {
+        private CanonicalTimelineFixture(string root, string path, Phase18Phase15AuthoritySnapshot authority)
+        { Root = root; Path = path; Authority = authority; }
+        public string Root { get; }
+        public string Path { get; }
+        public Phase18Phase15AuthoritySnapshot Authority { get; }
+
+        public static CanonicalTimelineFixture Create(string compatibilityFormat = "both")
+        {
+            var root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "phase18-timeline-tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            var path = System.IO.Path.Combine(root, "tts-timeline.json");
+            object Item(string format) => new { sceneAudioUnitId = $"compat-{format}", sceneId = "wrong",
+                cueIndex = 1, format, audioPath = "wrong.mp3", durationSec = 1 };
+            var shortItems = compatibilityFormat is "short" or "both" ? new[] { Item("short") } : [];
+            var longItems = compatibilityFormat is "long" or "both" ? new[] { Item("long") } : [];
+            File.WriteAllText(path, JsonSerializer.Serialize(new { authorityChecksum = "P15", sourcePhase14AuthorityChecksum = "P14",
+                entries = new[] { new { sceneAudioUnitId = "unit", sceneId = "scene", sequence = 1, format = "Short", language = "en",
+                    audioRelativePath = "15-tts/en/short/unit.mp3", audioByteLength = 12_345, audioSha256 = "AAA", textChecksum = "TEXT",
+                    actualAudioDurationMs = 24_000, voiceProfileRef = "voice", speechStyleRef = "style", resolvedVoice = "resolved",
+                    resolvedRate = "1", resolvedStyle = "neutral", providerRequestId = "request", subtitleSegmentIds = new[] { "sub-1" },
+                    sourcePhase14AuthorityChecksum = "P14" } },
+                @short = new { items = shortItems }, @long = new { items = longItems } }));
+            var authority = new Phase18Phase15AuthoritySnapshot("en", "P15", "P14", true, true, true, true, true,
+                true, true, true, "Valid", true, [path]);
+            return new(root, path, authority);
+        }
+
+        public void Dispose() => Directory.Delete(Root, true);
+    }
 
     private sealed class Phase15Fixture : IDisposable
     {
