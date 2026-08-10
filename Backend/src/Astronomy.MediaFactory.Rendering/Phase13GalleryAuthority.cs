@@ -68,6 +68,11 @@ internal static class Phase13GalleryAuthority
         IReadOnlyList<GalleryAuthorityReference> PublicAuthorityReferences,
         IReadOnlyList<GalleryAuthorityReference> VisualPlanningReferences, string ProviderPrompt);
 
+    internal sealed record GalleryProviderAttemptDiagnostic(int Slot, string Role, int AttemptCount,
+        IReadOnlyList<int?> ProviderStatusCodes, IReadOnlyList<string?> ProviderRequestIds, bool Successful,
+        long ProviderDurationMs, string? BackgroundPhysicalSha256, string PromptChecksum, string SemanticRole,
+        string VisualTreatment, bool TransientFailure, bool RetryPerformed);
+
     internal sealed record GalleryCopyDuplicateGroup(string NormalizedValue, IReadOnlyList<int> PageSlots);
     internal sealed record GalleryCopyDiversityResult(int DistinctHeadlineCount, int DistinctPrimaryContentCount,
         IReadOnlyList<GalleryCopyDuplicateGroup> DuplicateHeadlineGroups,
@@ -111,6 +116,7 @@ internal static class Phase13GalleryAuthority
         SafeDeleteDirectory(staging);
         Directory.CreateDirectory(staging);
         var committed = false;
+        var providerAttempts = new List<GalleryProviderAttemptDiagnostic>();
         try
         {
             var pages = new List<object>();
@@ -124,8 +130,15 @@ internal static class Phase13GalleryAuthority
                 var background = Path.Combine(staging, $".background-{index + 1:00}.png");
                 var generation = await AstroPulseGalleryService.GenerateBackgroundWithAzureImage2Async(
                     providerOptions, prompt, background, AstroPulseGalleryAspect.Landscape, ct);
-                Require(generation.ProviderSucceeded, "P13_PROVIDER_FAILURE", generation.FailureReason ?? "Azure Image2 generation failed.");
+                var promptChecksum = Hash(prompt);
+                providerAttempts.Add(new(plan.Slot, plan.CanonicalRole, generation.AttemptCount,
+                    generation.ProviderStatusCodes, generation.ProviderRequestIds, generation.ProviderSucceeded,
+                    generation.AzureRequestMs + generation.ImageDownloadMs, null, promptChecksum, plan.CanonicalRole,
+                    plan.VisualTreatment, generation.TransientFailure, generation.RetryPerformed));
+                Require(generation.ProviderSucceeded, "P13_PROVIDER_FAILURE",
+                    $"Gallery page {plan.Slot}/6 '{plan.CanonicalRole}': {generation.FailureReason ?? "Azure Image2 generation failed."}");
                 var backgroundSha = Sha(background);
+                providerAttempts[^1] = providerAttempts[^1] with { BackgroundPhysicalSha256 = backgroundSha };
                 Require(backgroundHashes.Add(backgroundSha), "P13_BACKGROUND_NOT_UNIQUE", "Each Gallery role requires a distinct generated background.");
                 var file = $"gallery-{index + 1:00}.png";
                 var target = Path.Combine(staging, file);
@@ -143,7 +156,7 @@ internal static class Phase13GalleryAuthority
                     copyAuthorityReferences = authorities, publicAuthorityReferences = authorities,
                     visualPlanningReferences = plan.VisualPlanningReferences,
                     promptSemanticInputs = new[] { p2.EventFamily, plan.CanonicalRole, plan.Detail },
-                    promptAuthorityReferences = authorities, promptPolicyVersion = Policy, promptChecksum = Hash(prompt),
+                    promptAuthorityReferences = authorities, promptPolicyVersion = Policy, promptChecksum,
                     provider = "AzureOpenAIForImage", providerDeployment = providerOptions.ImageDeployment,
                     providerAttemptCount = generation.AttemptCount, successfulGenerationCount = 1,
                     providerRequestSize = "1792x1024", backgroundPhysicalSha256 = backgroundSha,
@@ -170,10 +183,10 @@ internal static class Phase13GalleryAuthority
                 semanticAuthorityChecksums = hydration.InputFiles.ToDictionary(path => path, path => Sha(Path.Combine(outputRoot, path.Replace('/', Path.DirectorySeparatorChar)))),
                 galleryPolicyVersion = Policy, rendererVersion = Renderer, overlayVersion = "MatureGalleryOverlay/3.5",
                 provider = "AzureOpenAIForImage", providerDeployment = providerOptions.ImageDeployment,
-                pageCount = 6, azureImageCallsThisPhase = 6, independentlyGeneratedPageCount = 6,
+                pageCount = 6, azureImageCallsThisPhase = providerAttempts.Sum(x => x.AttemptCount), independentlyGeneratedPageCount = 6,
                 phase8RasterUsed = false, phase9RasterUsed = false, phase10RasterUsed = false,
                 heroRasterUsed = false, thumbnailRasterUsed = false,
-                providerCallCount = 6, successfulGenerationCount = 6, backgroundHashes = backgroundHashes.ToArray(),
+                providerCallCount = providerAttempts.Sum(x => x.AttemptCount), successfulGenerationCount = providerAttempts.Count(x => x.Successful), backgroundHashes = backgroundHashes.ToArray(),
                 pages, physicalMetadata = metadata, validationStatus = "Valid", publicationState = "Committed",
                 candidateValidationPassed = true, candidateReadbackPassed = true, downstreamReady = true,
                 deterministicChecksum = authorityChecksum };
@@ -195,10 +208,24 @@ internal static class Phase13GalleryAuthority
                 visualPlanningEligibleCount = hydration.Context.AllItems.Count(x => x.IsVisualPlanningEligible),
                 rejectedSemanticItems = hydration.Context.AllItems.Where(x => !x.IsPublicationEligible).Select(x => new { x.SemanticId, x.Usage, x.SourceArtifact, x.SourceJsonPointer, rejectionReason = "Usage is planning-only and not publication eligible." }),
                 matureGalleryPlannerActivated = true, abandonedSquareRolePlannerActivated = false,
-                topicPlanCount = topicPlans.Count, canonicalRoles = CanonicalRoles, publicCopyValidated = true,
+                topicPlanCount = topicPlans.Count, topicPlanValidationPassed = true, providerGenerationStarted = true,
+                canonicalRoles = CanonicalRoles, publicCopyValidated = true,
+                topicPlans = topicPlans.Select(plan => new { plan.Slot, plan.CanonicalRole, plan.ResolvedTreatment,
+                    plan.PublicRoleLabel, plan.Headline, promptChecksum = Hash(plan.ProviderPrompt) }),
                 sixRolePlanCreated = topicPlans.Count == 6, sixRolePlanValidated = true,
                 phase8RasterUsed = false, phase9RasterUsed = false, phase10RasterUsed = false, heroRasterUsed = false, thumbnailRasterUsed = false,
-                azureImageCallsThisPhase = 6, independentlyGeneratedPageCount = 6, canonicalWidth = 1920, canonicalHeight = 1080,
+                providerConfigured = true, providerDeployment = providerOptions.ImageDeployment, providerApiVersion = "2024-10-21",
+                providerTimeoutSeconds = 300, providerAttempts,
+                azureImageCallsAttempted = providerAttempts.Sum(x => x.AttemptCount), azureImageCallsSucceeded = providerAttempts.Count(x => x.Successful),
+                azureImageRetryCount = providerAttempts.Sum(x => Math.Max(0, x.AttemptCount - 1)),
+                azureTransientFailureCount = providerAttempts.Sum(x => x.ProviderStatusCodes.Count(code => code is 408 or 429 or 500 or 502 or 503 or 504)),
+                azurePermanentFailureCount = providerAttempts.Sum(x => x.ProviderStatusCodes.Count(code => code is not null && code is not (408 or 429 or 500 or 502 or 503 or 504) && code >= 400)),
+                lastProviderStatusCode = providerAttempts.LastOrDefault()?.ProviderStatusCodes.LastOrDefault(),
+                lastProviderRequestId = providerAttempts.LastOrDefault()?.ProviderRequestIds.LastOrDefault(),
+                providerFailurePageSlot = (int?)null, providerFailurePageRole = (string?)null,
+                azureImageRequestAttemptCount = providerAttempts.Sum(x => x.AttemptCount),
+                successfulBackgroundGenerationCount = providerAttempts.Count(x => x.Successful), expectedBackgroundGenerationCount = 6,
+                azureImageCallsThisPhase = providerAttempts.Sum(x => x.AttemptCount), independentlyGeneratedPageCount = 6, canonicalWidth = 1920, canonicalHeight = 1080,
                 promptsRequestNoEmbeddedText = true, deterministicOverlay = true, internalCopyLeakDetected = false,
                 copyDiversityPassed = true, visualRoleDiversityPassed = true, fullFrame16x9Passed = true,
                 letterboxDetected = false, pillarboxDetected = false, textOverlapDetected = false, textClipped = false,
@@ -235,7 +262,7 @@ internal static class Phase13GalleryAuthority
             await Write(validation, new { phaseNo = 13, status = "Valid", validationPassed = true,
                 publicationCommitted = true, committedReadbackPassed = true, authorityChecksum,
                 inputFiles = hydration.InputFiles,
-                pageCount = 6, azureImageCallsThisPhase = 6, independentlyGeneratedPageCount = 6,
+                pageCount = 6, azureImageCallsThisPhase = providerAttempts.Sum(x => x.AttemptCount), independentlyGeneratedPageCount = 6,
                 fullFrame16x9Passed = true, letterboxDetected = false, pillarboxDetected = false,
                 internalCopyLeakDetected = false, copyDiversityPassed = true, visualRoleDiversityPassed = true,
                 textOverlapDetected = false, textClipped = false, minimumFontSizePassed = true,
@@ -243,6 +270,37 @@ internal static class Phase13GalleryAuthority
             var paths = Enumerable.Range(1, 6).Select(i => Path.Combine(galleryRoot, $"gallery-{i:00}.png")).ToArray();
             return new(galleryRoot, paths, Path.Combine(galleryRoot, "phase13-publication-report.json"),
                 Path.Combine(galleryRoot, "gallery-manifest.json"), Path.Combine(galleryRoot, "phase13-authority-diagnostics.json"), validation);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("P13_PROVIDER_FAILURE", StringComparison.Ordinal))
+        {
+            var failed = providerAttempts.LastOrDefault(x => !x.Successful);
+            Directory.CreateDirectory(Path.Combine(outputRoot, "validation"));
+            await Write(Path.Combine(outputRoot, "validation", "phase-13-validation.json"), new {
+                phaseNo = 13, status = "Failed", validationPassed = false, reasonCode = "P13_PROVIDER_FAILURE",
+                reason = ex.Message, publicationCommitted = false, committedReadbackPassed = false,
+                inputFiles = hydration.InputFiles, semanticContextLoaded = true, matureGalleryPlannerActivated = true,
+                abandonedSquareRolePlannerActivated = false, topicPlanCount = topicPlans.Count,
+                topicPlanValidationPassed = true, providerGenerationStarted = true,
+                topicPlans = topicPlans.Select(plan => new { plan.Slot, plan.CanonicalRole, plan.ResolvedTreatment,
+                    plan.PublicRoleLabel, plan.Headline, promptChecksum = Hash(plan.ProviderPrompt) }),
+                providerConfigured = true, providerDeployment = providerOptions.ImageDeployment,
+                providerApiVersion = "2024-10-21", providerTimeoutSeconds = 300, providerAttempts,
+                azureImageCallsAttempted = providerAttempts.Sum(x => x.AttemptCount),
+                azureImageCallsSucceeded = providerAttempts.Count(x => x.Successful),
+                azureImageRetryCount = providerAttempts.Sum(x => Math.Max(0, x.AttemptCount - 1)),
+                azureTransientFailureCount = providerAttempts.Sum(x => x.ProviderStatusCodes.Count(code => code is 408 or 429 or 500 or 502 or 503 or 504)),
+                azurePermanentFailureCount = providerAttempts.Sum(x => x.ProviderStatusCodes.Count(code => code is not null && code is not (408 or 429 or 500 or 502 or 503 or 504) && code >= 400)),
+                lastProviderStatusCode = failed?.ProviderStatusCodes.LastOrDefault(),
+                lastProviderRequestId = failed?.ProviderRequestIds.LastOrDefault(),
+                providerFailurePageSlot = failed?.Slot, providerFailurePageRole = failed?.Role,
+                pageSlot = failed?.Slot, pageRole = failed?.Role, attempt = failed?.AttemptCount,
+                providerStatusCode = failed?.ProviderStatusCodes.LastOrDefault(),
+                providerRequestId = failed?.ProviderRequestIds.LastOrDefault(), transientFailure = failed?.TransientFailure,
+                retryPerformed = failed?.RetryPerformed, azureImageRequestAttemptCount = providerAttempts.Sum(x => x.AttemptCount),
+                successfulBackgroundGenerationCount = providerAttempts.Count(x => x.Successful), expectedBackgroundGenerationCount = 6,
+                publicationStagingCleaned = true, downstreamReady = false
+            }, ct);
+            throw;
         }
         finally
         {

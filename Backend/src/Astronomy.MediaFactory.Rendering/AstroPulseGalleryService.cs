@@ -333,38 +333,112 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
         return list.Length <= 1 ? 100 : (int)Math.Round(100.0 * list.Distinct(StringComparer.OrdinalIgnoreCase).Count() / list.Length, MidpointRounding.AwayFromZero);
     }
 
-    internal static async Task<AzureImage2GenerationResult> GenerateBackgroundWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, AstroPulseGalleryAspect aspect, CancellationToken ct)
+    internal static Task<AzureImage2GenerationResult> GenerateBackgroundWithAzureImage2Async(AzureOpenAIForImageOptions options, string promptText, string imagePath, AstroPulseGalleryAspect aspect, CancellationToken ct)
+        => GenerateBackgroundWithAzureImage2Async(options, promptText, imagePath, aspect, ct, null, null);
+
+    internal static async Task<AzureImage2GenerationResult> GenerateBackgroundWithAzureImage2Async(
+        AzureOpenAIForImageOptions options, string promptText, string imagePath, AstroPulseGalleryAspect aspect,
+        CancellationToken ct, HttpMessageInvoker? transport, Func<TimeSpan, CancellationToken, Task>? retryDelay)
     {
         var endpoint = options.Endpoint.TrimEnd('/');
         var deployment = Uri.EscapeDataString(options.ImageDeployment.Trim());
         const string apiVersion = "2024-10-21";
         var requestUri = $"{endpoint}/openai/deployments/{deployment}/images/generations?api-version={apiVersion}";
         var size = aspect.Width >= aspect.Height ? "1792x1024" : "1024x1792";
-        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = JsonContent.Create(new { prompt = promptText, n = 1, size }) };
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        await AddAzureImage2AuthorizationAsync(request, options, ct);
-        var stopwatch = Stopwatch.StartNew();
+        const int timeoutSeconds = 300;
+        var statuses = new List<int?>();
+        var requestIds = new List<string?>();
+        var totalRequestMs = 0L;
+        var totalDownloadMs = 0L;
+        var ownsTransport = transport is null;
+        transport ??= new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        retryDelay ??= Task.Delay;
         try
         {
-            using var http = new HttpClient();
-            using var response = await http.SendAsync(request, ct);
-            var payload = await response.Content.ReadAsStringAsync(ct);
-            stopwatch.Stop();
-            if (!response.IsSuccessStatusCode) return new(true, false, stopwatch.ElapsedMilliseconds, 0, $"Azure Image2 request failed with status {(int)response.StatusCode} ({response.StatusCode}): {payload}");
-            var downloadStopwatch = Stopwatch.StartNew();
-            var bytes = await ExtractAzureImage2BytesAsync(http, payload, ct);
-            await File.WriteAllBytesAsync(imagePath, bytes, ct);
-            downloadStopwatch.Stop();
-            return new(true, true, stopwatch.ElapsedMilliseconds, downloadStopwatch.ElapsedMilliseconds, null);
+            for (var attempt = 1; attempt <= 2; attempt++)
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = JsonContent.Create(new { prompt = promptText, n = 1, size }) };
+                request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                await AddAzureImage2AuthorizationAsync(request, options, ct);
+                var stopwatch = Stopwatch.StartNew();
+                try
+                {
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+                    using var response = await transport.SendAsync(request, timeoutCts.Token);
+                    var payload = await response.Content.ReadAsStringAsync(timeoutCts.Token);
+                    stopwatch.Stop();
+                    totalRequestMs += stopwatch.ElapsedMilliseconds;
+                    var status = (int)response.StatusCode;
+                    var requestId = ExtractAzureRequestId(response, payload);
+                    statuses.Add(status);
+                    requestIds.Add(requestId);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var downloadStopwatch = Stopwatch.StartNew();
+                        var bytes = await ExtractAzureImage2BytesAsync(transport, payload, timeoutCts.Token);
+                        Directory.CreateDirectory(Path.GetDirectoryName(imagePath) ?? Directory.GetCurrentDirectory());
+                        await File.WriteAllBytesAsync(imagePath, bytes, ct);
+                        downloadStopwatch.Stop();
+                        totalDownloadMs += downloadStopwatch.ElapsedMilliseconds;
+                        return new(true, true, totalRequestMs, totalDownloadMs, null, attempt, statuses, requestIds,
+                            false, attempt > 1, status, requestId, timeoutSeconds, apiVersion, size);
+                    }
+
+                    var transient = IsTransientAzureImageFailure(status);
+                    if (!transient || attempt == 2)
+                        return new(true, false, totalRequestMs, totalDownloadMs,
+                            $"Azure Image2 returned HTTP {status} {response.StatusCode} after {attempt} attempt{(attempt == 1 ? "" : "s")}." +
+                            (requestId is null ? "" : $" Request ID: {requestId}."), attempt, statuses, requestIds,
+                            transient, attempt > 1, status, requestId, timeoutSeconds, apiVersion, size);
+                    await retryDelay(RetryDelay(attempt), ct);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    stopwatch.Stop(); totalRequestMs += stopwatch.ElapsedMilliseconds;
+                    statuses.Add(null); requestIds.Add(null);
+                    if (attempt == 2) return new(true, false, totalRequestMs, 0,
+                        $"Azure Image2 network timeout after {attempt} attempts.", attempt, statuses, requestIds,
+                        true, true, null, null, timeoutSeconds, apiVersion, size);
+                    await retryDelay(RetryDelay(attempt), ct);
+                }
+                catch (HttpRequestException ex)
+                {
+                    stopwatch.Stop(); totalRequestMs += stopwatch.ElapsedMilliseconds;
+                    statuses.Add(ex.StatusCode is null ? null : (int)ex.StatusCode.Value); requestIds.Add(null);
+                    if (attempt == 2) return new(true, false, totalRequestMs, 0,
+                        $"Azure Image2 transient connection failure after {attempt} attempts: {ex.Message}", attempt, statuses, requestIds,
+                        true, true, statuses[^1], null, timeoutSeconds, apiVersion, size);
+                    await retryDelay(RetryDelay(attempt), ct);
+                }
+            }
+            throw new UnreachableException();
         }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { stopwatch.Stop(); return new(true, false, stopwatch.ElapsedMilliseconds, 0, ex.ToString()); }
+        finally { if (ownsTransport) transport.Dispose(); }
+    }
+
+    internal static bool IsTransientAzureImageFailure(int statusCode) => statusCode is 408 or 429 or 500 or 502 or 503 or 504;
+    internal static TimeSpan RetryDelay(int attempt) => TimeSpan.FromMilliseconds(2000 + Random.Shared.Next(0, 3001));
+
+    private static string? ExtractAzureRequestId(HttpResponseMessage response, string payload)
+    {
+        foreach (var header in new[] { "x-request-id", "apim-request-id", "x-ms-request-id" })
+            if (response.Headers.TryGetValues(header, out var values) && values.FirstOrDefault() is { Length: > 0 } value) return value;
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            var root = document.RootElement;
+            if (root.TryGetProperty("requestId", out var direct)) return direct.GetString();
+            if (root.TryGetProperty("error", out var error) && error.TryGetProperty("requestId", out var nested)) return nested.GetString();
+        }
+        catch (JsonException) { }
+        return null;
     }
 
     private static bool IsAzureImage2Configured(AzureOpenAIForImageOptions options) => !string.IsNullOrWhiteSpace(options.Endpoint) && !string.IsNullOrWhiteSpace(options.ImageDeployment) && (options.UseManagedIdentity || !string.IsNullOrWhiteSpace(options.ApiKey));
     private static void EnsureAzureImage2Configured(AzureOpenAIForImageOptions options) { if (!IsAzureImage2Configured(options)) throw new InvalidOperationException("Phase 13 Gallery V3 requires Azure Image2 configuration; local fallback is not allowed unless Azure fails during a configured request."); }
     private static async Task AddAzureImage2AuthorizationAsync(HttpRequestMessage request, AzureOpenAIForImageOptions options, CancellationToken ct) { if (options.UseManagedIdentity) { var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions { ManagedIdentityClientId = string.IsNullOrWhiteSpace(options.ManagedIdentityClientId) ? null : options.ManagedIdentityClientId.Trim() }); var token = await credential.GetTokenAsync(new TokenRequestContext(["https://cognitiveservices.azure.com/.default"]), ct); request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token); return; } request.Headers.Add("api-key", options.ApiKey); }
-    private static async Task<byte[]> ExtractAzureImage2BytesAsync(HttpClient http, string payload, CancellationToken ct) { using var doc = JsonDocument.Parse(payload); var first = doc.RootElement.GetProperty("data")[0]; if (first.TryGetProperty("b64_json", out var b64) && !string.IsNullOrWhiteSpace(b64.GetString())) return Convert.FromBase64String(b64.GetString()!); if (first.TryGetProperty("url", out var url) && !string.IsNullOrWhiteSpace(url.GetString())) return await http.GetByteArrayAsync(url.GetString()!, ct); throw new InvalidOperationException("Azure Image2 response did not include b64_json or url image content."); }
+    private static async Task<byte[]> ExtractAzureImage2BytesAsync(HttpMessageInvoker http, string payload, CancellationToken ct) { using var doc = JsonDocument.Parse(payload); var first = doc.RootElement.GetProperty("data")[0]; if (first.TryGetProperty("b64_json", out var b64) && !string.IsNullOrWhiteSpace(b64.GetString())) return Convert.FromBase64String(b64.GetString()!); if (first.TryGetProperty("url", out var url) && !string.IsNullOrWhiteSpace(url.GetString())) { using var response = await http.SendAsync(new HttpRequestMessage(HttpMethod.Get, url.GetString()), ct); response.EnsureSuccessStatusCode(); return await response.Content.ReadAsByteArrayAsync(ct); } throw new InvalidOperationException("Azure Image2 response did not include b64_json or url image content."); }
     private static async Task<string> ComputeHashAsync(string path, CancellationToken ct) { await using var stream = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant(); }
 
     public static GalleryContext LoadGalleryContextForTesting(string outputDirectory) => LoadGalleryContext(outputDirectory);
@@ -1131,5 +1205,8 @@ public sealed class AstroPulseGalleryService(IOptions<AzureOpenAIForImageOptions
     public sealed record GalleryContext(string EventType, string Title, string StoryTheme, string VisualTheme, string EventDate, string LocalTime, string Location, string RequestedLanguage, string Language, string Timezone, EventObjectContext EventObjectContext, IReadOnlyList<string> ForbiddenTerms, string EventName = "", string EventFamily = "", string EventSubtype = "", string LocalizedEventTitle = "", string TitleSource = "", string MoonSubtypeVisualAttributes = "", bool HeroTitleResolverReused = true, bool GenericMoonFallbackUsed = false, ObservationInfo? ObservationInfo = null);
 
     public sealed record GalleryTopic(int Number, string Purpose, string Concept, IReadOnlyList<string> TextBlocks, string VisualIntent, string OverlayStyle, string AzureImage2Prompt, string EducationalRole, string LocalizedEducationalRole, string FooterLabel, string Language);
-    internal sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs, long ImageDownloadMs, string? FailureReason) { public int AttemptCount => 1; }
+    internal sealed record AzureImage2GenerationResult(bool ProviderCalled, bool ProviderSucceeded, long AzureRequestMs,
+        long ImageDownloadMs, string? FailureReason, int AttemptCount, IReadOnlyList<int?> ProviderStatusCodes,
+        IReadOnlyList<string?> ProviderRequestIds, bool TransientFailure, bool RetryPerformed, int? LastStatusCode,
+        string? LastRequestId, int TimeoutSeconds, string ApiVersion, string RequestSize);
 }
