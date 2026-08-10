@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -229,6 +230,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     private static string Hash(string x) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(x))).ToLowerInvariant(); private static async Task<string> HashFile(string p, CancellationToken ct) { await using var s = File.OpenRead(p); return Convert.ToHexString(await SHA256.HashDataAsync(s, ct)).ToLowerInvariant(); }
     private static string EscapeFilter(string p) => p.Replace("\\", "/").Replace(":", "\\:").Replace("'", "\\'");
     private static void Cleanup(string p) { if (Directory.Exists(p)) Directory.Delete(p, true); var parent = Path.GetDirectoryName(p); if (parent is not null && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any()) Directory.Delete(parent); }
+    [DoesNotReturn]
     private static void Fail(string code, string reason) => throw new InvalidOperationException($"{code}: {reason}");
     private sealed record Phase15Entry(string SceneAudioUnitId, string SceneId, int Sequence, string Format, string Language, string AudioRelativePath, long AudioByteLength, string AudioSha256, string TextChecksum, long ActualAudioDurationMs, IReadOnlyList<string> SubtitleSegmentIds, string SourcePhase14AuthorityChecksum);
 }
