@@ -82,6 +82,60 @@ public sealed class Phase18VideoAssemblyAuthorityTests
         Assert.Equal(3, error.LoadedAuthorityArtifacts.Count);
     }
 
+    [Fact]
+    public void Phase18AcceptsDistinctAuthoritiesWithCorrectReferences()
+    {
+        var result = Phase18VideoAssemblyAuthorityPublisher.ValidateAuthorityLineage(
+            "AAA", "P14", "BBB", "AAA", "CCC", "BBB", ["p15", "p16", "p17"]);
+
+        Assert.True(result.Phase15To16LineagePassed);
+        Assert.True(result.Phase16To17LineagePassed);
+        Assert.True(result.OverallLineagePassed);
+        Assert.NotEqual(result.Phase15AuthorityChecksum, result.Phase16AuthorityChecksum);
+        Assert.NotEqual(result.Phase16AuthorityChecksum, result.Phase17AuthorityChecksum);
+    }
+
+    [Fact]
+    public void Phase18Phase15To16MismatchIsPreciseAndReportsLoadedArtifacts()
+    {
+        var files = new[] { "phase15-manifest.json", "phase16-manifest.json", "phase17-manifest.json" };
+        var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ValidateAuthorityLineage(
+                "AAA", "P14", "BBB", "XXX", "CCC", "BBB", files));
+
+        Assert.Equal(Phase18ReasonCodes.LineageMismatch, error.ReasonCode);
+        Assert.Equal(files, error.LoadedAuthorityArtifacts);
+        Assert.Contains("Expected 'AAA', actual 'XXX'", error.Reason);
+    }
+
+    [Fact]
+    public void Phase18Phase16To17MismatchIsPreciseAndReportsReasonCode()
+    {
+        var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ValidateAuthorityLineage(
+                "AAA", "P14", "BBB", "AAA", "CCC", "YYY", ["p15", "p16", "p17"]));
+
+        Assert.Equal("P18_LINEAGE_MISMATCH", error.ReasonCode);
+        Assert.Contains("Expected 'BBB', actual 'YYY'", error.Reason);
+    }
+
+    [Theory]
+    [InlineData("different-scene", "hash", 1, 0, 100)]
+    [InlineData("scene", "different-hash", 1, 0, 100)]
+    [InlineData("scene", "hash", 101, 0, 101)]
+    public void Phase18RejectsRowPhysicalLineageMismatch(string sceneId, string audioHash,
+        long duration, long start, long end)
+    {
+        var p15 = new Phase18SceneLineageRow("unit", "scene", "Short", 1, "en", "hash", 0, 0, 0);
+        var p16 = p15 with { DurationMs = 100, SceneEndMs = 100 };
+        var p17 = p16 with { SceneId = sceneId, AudioSha256 = audioHash, DurationMs = duration,
+            SceneStartMs = start, SceneEndMs = end };
+
+        var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage([p15], [p16], [p17], ["p15", "p16", "p17"]));
+        Assert.Equal(Phase18ReasonCodes.LineageMismatch, error.ReasonCode);
+    }
+
     private sealed class Phase15Fixture : IDisposable
     {
         private Phase15Fixture(string root, string[] files, string checksum)
