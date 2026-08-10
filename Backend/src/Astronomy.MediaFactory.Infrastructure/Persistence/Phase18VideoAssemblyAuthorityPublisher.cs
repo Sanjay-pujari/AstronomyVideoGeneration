@@ -126,7 +126,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         "yuv420p", 30, "veryfast", 20, 1080, 1920, 1280, 720);
     internal static readonly Phase18AudioPolicy AudioPolicy = new("phase18-audio/1.0", "aac", 48_000, 2, 192_000);
     internal static readonly Phase18SubtitlePolicy SubtitlePolicy = new("phase18-subtitle/1.0",
-        Phase18SubtitleMode.BurnInAndSidecar, Phase18SubtitleMode.SidecarOnly, "Noto Sans Devanagari");
+        Phase18SubtitleMode.BurnInAndSidecar, Phase18SubtitleMode.SidecarOnly, "Noto Sans");
     internal const string RenderPolicy = "phase18-governed-scene-render/1.0";
     private const string Schema = "phase18.video-assembly/1.0";
     private const long ProbeToleranceMs = 35; // one 30 fps frame plus container rounding
@@ -286,9 +286,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         var sourceHashes = new List<string>(); long governed = 0;
         foreach (var entry in plan.Entries)
         {
-            if (entry.MotionType != Phase17MotionType.Static || entry.TransitionIn.Type != Phase17TransitionType.Cut ||
-                entry.TransitionOut.Type != Phase17TransitionType.Cut || entry.TransitionIn.DurationMs != 0 || entry.TransitionOut.DurationMs != 0)
-                Fail(Phase18ReasonCodes.CandidateValidationFailed, "Only explicitly implemented Static and Cut/0 semantics are accepted.");
+            ValidateMotionInstruction(entry);
             if (!Enum.IsDefined(entry.Easing)) Fail(Phase18ReasonCodes.CandidateValidationFailed, "Unknown easing.");
             if (!calibrated.TryGetValue(entry.SceneAudioUnitId, out var timing))
                 Fail(Phase18ReasonCodes.LineageMismatch, $"Calibrated timing is missing for {entry.SceneAudioUnitId}.");
@@ -319,8 +317,10 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             diagnostics.RenderCallsThisPhase++;
             var sceneContext = new MediaProcessContext("SceneRender", format, entry.Sequence, entry.SceneAudioUnitId, entry.SceneId);
             MediaProcessResult sceneResult;
+            var videoFilter = BuildMotionFilter(entry, w, h);
+            Log("PHASE18_SCENE_MOTION_APPLIED", MotionDiagnostic(format, plan, entry, videoFilter));
             try { sceneResult = await Run(tools.FFmpegExecutable, ["-y", "-loop", "1", "-framerate", "30", "-i", image, "-i", speechPath,
-                "-filter_complex", $"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps=30,format=yuv420p[v];[1:a]apad=whole_dur={seconds},aresample=48000,aformat=channel_layouts=stereo[a]",
+                "-filter_complex", $"[0:v]{videoFilter}[v];[1:a]apad=whole_dur={seconds},aresample=48000,aformat=channel_layouts=stereo[a]",
                 "-map", "[v]", "-map", "[a]", "-t", seconds, "-c:v", "libx264", "-preset", VideoPolicy.Preset,
                 "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", VideoPolicy.PixelFormat, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", clip], sceneContext, clips, ct); }
             catch { diagnostics.FailedSceneRenderCount++; throw; }
@@ -332,7 +332,8 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         }
         Log("PHASE18_FORMAT_SCENES_COMPLETE", new { Format = format });
         ValidateSrt(srt);
-        var sidecar = Path.Combine(dir, "final.srt"); File.Copy(srt, sidecar, true);
+        var sidecar = Path.Combine(dir, "captions", $"{language}.srt");
+        Directory.CreateDirectory(Path.GetDirectoryName(sidecar)!); File.Copy(srt, sidecar, true);
         var concat = Path.Combine(clips, "concat.txt");
         await File.WriteAllLinesAsync(concat, plan.Entries.Select(x => $"file '{x.Sequence:000}.mp4'"), new UTF8Encoding(false), ct);
         var unburned = Path.Combine(clips, "unsubtitled.mp4");
@@ -343,13 +344,13 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         var final = Path.Combine(dir, "final.mp4");
         var burn = language == "en";
         if (burn) { Log("PHASE18_SUBTITLE_BURN_START", new { Format = format, SidecarPath = sidecar }); diagnostics.SubtitleBurnCallsThisPhase++;
-            await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", BuildSubtitleFilter(sidecar), "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final],
+            await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", BuildSubtitleFilter(sidecar, requestedFormat), "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final],
                 new MediaProcessContext("SubtitleBurn", format), dir, ct);
             Log("PHASE18_SUBTITLE_BURN_COMPLETE", new { Format = format, OutputPath = final }); }
         else File.Copy(unburned, final, true);
         var physical = await ProbeDuration(tools.FFprobeExecutable, final, new MediaProcessContext("FinalProbe", format), diagnostics, ct);
         if (Math.Abs(physical - governed) > ProbeToleranceMs) Fail(Phase18ReasonCodes.VideoValidationFailed, $"{format} duration differs by {Math.Abs(physical-governed)}ms.");
-        var relativeVideo = $"{format.ToLowerInvariant()}/final.mp4"; var relativeSrt = $"{format.ToLowerInvariant()}/final.srt";
+        var relativeVideo = $"{format.ToLowerInvariant()}/final.mp4"; var relativeSrt = $"{format.ToLowerInvariant()}/captions/{language}.srt";
         var result = new Phase18MediaEvidence(format, relativeVideo, relativeSrt, governed, physical,
             format == "Short" ? VideoPolicy.ShortWidth : VideoPolicy.LongWidth, format == "Short" ? VideoPolicy.ShortHeight : VideoPolicy.LongHeight,
             "h264", "yuv420p", "aac", 48000, 2, await HashFile(final, ct), new FileInfo(final).Length,
@@ -363,6 +364,64 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
 
     internal static bool CanonicalArgumentsAreSafe(IEnumerable<string> args) =>
         !args.Any(x => x.Equals("-shortest", StringComparison.OrdinalIgnoreCase) || x.Contains("atrim", StringComparison.OrdinalIgnoreCase));
+
+    internal static void ValidateMotionInstruction(Phase17MotionEntry entry)
+    {
+        if (!Enum.IsDefined(entry.MotionType) || !Enum.IsDefined(entry.Easing) ||
+            !Enum.IsDefined(entry.TransitionIn.Type) || !Enum.IsDefined(entry.TransitionOut.Type))
+            Fail(Phase18ReasonCodes.CandidateValidationFailed, $"Unknown governed motion token for {entry.SceneAudioUnitId}.");
+        if (entry.DurationMs <= 0 || entry.StartTransform.Scale < 1 || entry.EndTransform.Scale < 1)
+            Fail(Phase18ReasonCodes.CandidateValidationFailed, $"Invalid governed transform for {entry.SceneAudioUnitId}.");
+        if (entry.TransitionIn.DurationMs < 0 || entry.TransitionOut.DurationMs < 0 ||
+            entry.TransitionIn.DurationMs + entry.TransitionOut.DurationMs >= entry.DurationMs)
+            Fail(Phase18ReasonCodes.CandidateValidationFailed, $"Invalid governed transition duration for {entry.SceneAudioUnitId}.");
+    }
+
+    /// <summary>Translate renderer-neutral Phase 17 transforms without substituting editorial motion.</summary>
+    internal static string BuildMotionFilter(Phase17MotionEntry entry, int width, int height)
+    {
+        ValidateMotionInstruction(entry);
+        var frames = Math.Max(2L, (long)Math.Round(entry.DurationMs / 1000d * VideoPolicy.FramesPerSecond));
+        string N(double value) => value.ToString("0.######", CultureInfo.InvariantCulture);
+        var progress = entry.Easing switch
+        {
+            Phase17Easing.Linear => $"on/{frames - 1}",
+            Phase17Easing.EaseIn or Phase17Easing.EaseInOutSine => entry.Easing == Phase17Easing.EaseIn
+                ? $"pow(on/{frames - 1},2)" : $"(1-cos(PI*on/{frames - 1}))/2",
+            Phase17Easing.EaseOut or Phase17Easing.EaseOutCubic => entry.Easing == Phase17Easing.EaseOut
+                ? $"1-pow(1-on/{frames - 1},2)" : $"1-pow(1-on/{frames - 1},3)",
+            Phase17Easing.EaseInOut => $"(1-cos(PI*on/{frames - 1}))/2",
+            _ => throw new InvalidOperationException("Unsupported easing.")
+        };
+        var z = $"{N(entry.StartTransform.Scale)}+({N(entry.EndTransform.Scale - entry.StartTransform.Scale)})*({progress})";
+        var focusX = entry.FocusRegion is null ? .5 : entry.FocusRegion.X + entry.FocusRegion.Width / 2;
+        var focusY = entry.FocusRegion is null ? .5 : entry.FocusRegion.Y + entry.FocusRegion.Height / 2;
+        var startX = Math.Clamp(focusX + entry.StartTransform.TranslateX, 0, 1);
+        var endX = Math.Clamp(focusX + entry.EndTransform.TranslateX, 0, 1);
+        var startY = Math.Clamp(focusY + entry.StartTransform.TranslateY, 0, 1);
+        var endY = Math.Clamp(focusY + entry.EndTransform.TranslateY, 0, 1);
+        var x = $"(iw-iw/zoom)*({N(startX)}+({N(endX - startX)})*({progress}))";
+        var y = $"(ih-ih/zoom)*({N(startY)}+({N(endY - startY)})*({progress}))";
+        var filter = $"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}," +
+            $"zoompan=z='{z}':x='{x}':y='{y}':d=1:s={width}x{height}:fps={VideoPolicy.FramesPerSecond}";
+        if (entry.TransitionIn.Type != Phase17TransitionType.Cut && entry.TransitionIn.DurationMs > 0)
+            filter += $",fade=t=in:st=0:d={N(entry.TransitionIn.DurationMs / 1000d)}";
+        if (entry.TransitionOut.Type != Phase17TransitionType.Cut && entry.TransitionOut.DurationMs > 0)
+            filter += $",fade=t=out:st={N((entry.DurationMs - entry.TransitionOut.DurationMs) / 1000d)}:d={N(entry.TransitionOut.DurationMs / 1000d)}";
+        return filter + ",fps=30,format=yuv420p";
+    }
+
+    private static object MotionDiagnostic(string format, Phase17MotionPlan plan, Phase17MotionEntry entry,
+        string filter) => new { format, entry.Sequence, entry.SceneId, entry.SceneAudioUnitId,
+            motionType = entry.MotionType.ToString(), sourceMotionPlanPath = $"17-motion/{entry.Language}/{format.ToLowerInvariant()}/motion-plan.json",
+            zoomStart = entry.StartTransform.Scale, zoomEnd = entry.EndTransform.Scale,
+            panStartX = entry.StartTransform.TranslateX, panStartY = entry.StartTransform.TranslateY,
+            panEndX = entry.EndTransform.TranslateX, panEndY = entry.EndTransform.TranslateY,
+            focalPoint = entry.FocusRegion, easing = entry.Easing.ToString(),
+            fadeInMs = entry.TransitionIn.Type == Phase17TransitionType.Cut ? 0 : entry.TransitionIn.DurationMs,
+            fadeOutMs = entry.TransitionOut.Type == Phase17TransitionType.Cut ? 0 : entry.TransitionOut.DurationMs,
+            transitionOut = entry.TransitionOut.Type.ToString(), transitionDurationMs = entry.TransitionOut.DurationMs,
+            ffmpegVideoFilter = filter, motionApplied = entry.MotionType is not Phase17MotionType.Static and not Phase17MotionType.Hold };
 
     internal static Phase18AuthorityLineageValidation ValidateAuthorityLineage(string phase15AuthorityChecksum,
         string phase15SourcePhase14AuthorityChecksum, string phase16AuthorityChecksum,
@@ -718,6 +777,14 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     private static string Hash(string x) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(x))).ToLowerInvariant(); private static async Task<string> HashFile(string p, CancellationToken ct) { await using var s = File.OpenRead(p); return Convert.ToHexString(await SHA256.HashDataAsync(s, ct)).ToLowerInvariant(); }
     internal static string BuildSubtitleFilter(string absolutePath) =>
         $"subtitles=filename='{EscapeSubtitleFilterPath(absolutePath)}'";
+    internal static string BuildSubtitleFilter(string absolutePath, Phase18ProductionFormat format)
+    {
+        var fontSize = format == Phase18ProductionFormat.Short ? SubtitlePolicy.ShortFontSize : SubtitlePolicy.LongFontSize;
+        var margin = format == Phase18ProductionFormat.Short ? SubtitlePolicy.ShortMarginBottom : SubtitlePolicy.LongMarginBottom;
+        var style = $"FontName={SubtitlePolicy.BurnInFontFamily},FontSize={fontSize},Bold=0,Alignment=2," +
+            $"MarginV={margin},Outline={SubtitlePolicy.Outline},Shadow={SubtitlePolicy.Shadow},WrapStyle=0";
+        return $"{BuildSubtitleFilter(absolutePath)}:force_style='{style}'";
+    }
 
     // ArgumentList transports this value verbatim; add only the escaping consumed by
     // FFmpeg's filter expression parser (never an additional shell escaping layer).
