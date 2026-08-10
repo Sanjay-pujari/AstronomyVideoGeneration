@@ -115,6 +115,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private readonly ConcurrentDictionary<string, Phase15PublicationResult> phase15PublicationResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Phase16PublicationResult> phase16PublicationResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Phase17PublicationResult> phase17PublicationResults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Phase18PublicationResult> phase18PublicationResults = new(StringComparer.OrdinalIgnoreCase);
     // Carries the exact, validated read-back returned by Phase 4 across the in-process
     // phase boundary. Disk is intentionally not consulted by downstream phases in the
     // same run; the authority reader remains the resume/recovery boundary.
@@ -12460,6 +12461,16 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseVideoAssemblyV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
+        var result = await Phase18VideoAssemblyAuthorityPublisher.ExecuteAsync(context.OutputRoot,
+            ResolvePipelineLanguage(context.Request.Language), context.OverwriteExisting, cancellationToken);
+        phase18PublicationResults[context.OutputRoot] = result;
+        return result.OutputFiles;
+    }
+
+    // Retained solely as a non-governing compatibility implementation. The phase registry never
+    // dispatches here; canonical publication is exclusively the strict numbered-authority adapter.
+    private async Task<IReadOnlyList<string>> PhaseVideoAssemblyLegacyCompatibilityAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
+    {
         var planRoot = context.OutputRoot;
         var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
         var videoRoot = Path.Combine(planRoot, "video-assembly", requestedLanguage);
@@ -14173,8 +14184,13 @@ public sealed partial class ProductionPipelineExecutionService(
         Directory.CreateDirectory(reviewRoot);
         Directory.CreateDirectory(validationRoot);
 
-        var shortVideoPath = Path.Combine(planRoot, "video", "short", "final-short.mp4");
-        var longVideoPath = Path.Combine(planRoot, "video", "long", "final-long.mp4");
+        var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
+        var phase18AuthorityRoot = Path.Combine(planRoot, "18-video-assembly", requestedLanguage);
+        var phase18ManifestPath = Path.Combine(phase18AuthorityRoot, "phase18-manifest.json");
+        var phase18PublicationPath = Path.Combine(phase18AuthorityRoot, "phase18-publication-report.json");
+        var phase18ValidationPath = Path.Combine(validationRoot, "phase-18-validation.json");
+        var shortVideoPath = Path.Combine(phase18AuthorityRoot, "short", "final.mp4");
+        var longVideoPath = Path.Combine(phase18AuthorityRoot, "long", "final.mp4");
         var syncPath = Path.Combine(planRoot, "sync", "scene-audio-sync.json");
         var ttsPath = Path.Combine(planRoot, "tts", "tts-timeline.json");
         var durationPlanPath = Path.Combine(planRoot, "timing", "scene-duration-plan.json");
@@ -14182,7 +14198,11 @@ public sealed partial class ProductionPipelineExecutionService(
         var sceneAssetsRoot = Path.Combine(planRoot, "scene-assets-v3");
         var motionDebugPath = Path.Combine(planRoot, "motion", "motion-debug.json");
         var phase18DiagnosticsPath = Path.Combine(validationRoot, "phase-18-video-diagnostics.json");
-        var inputs = new[] { shortVideoPath, longVideoPath, syncPath, ttsPath, durationPlanPath, motionPlanPath, motionDebugPath, phase18DiagnosticsPath, sceneAssetsRoot };
+        // Phase 18's committed package is the governing handoff. Legacy paths below are consumed
+        // only by compatibility scoring helpers and are never used to select the videos under QA.
+        var inputs = new[] { phase18ManifestPath, phase18PublicationPath, phase18ValidationPath,
+            shortVideoPath, longVideoPath, Path.Combine(phase18AuthorityRoot, "short", "final.srt"),
+            Path.Combine(phase18AuthorityRoot, "long", "final.srt") };
         var errors = new List<string>();
         foreach (var input in inputs)
             if (!File.Exists(input) && !Directory.Exists(input)) errors.Add($"Input missing: {NormalizePath(input)}");
@@ -14193,8 +14213,9 @@ public sealed partial class ProductionPipelineExecutionService(
         var storyChecks = BuildPhase19StoryChecks(syncPath, ttsPath, sceneAssetsRoot);
         var audioChecks = await BuildPhase19AudioChecksAsync(shortVideoPath, longVideoPath, cancellationToken);
         var visualChecks = BuildPhase19VisualChecks(motionPlanPath, sceneAssetsRoot);
-        var phase18Root = File.Exists(phase18DiagnosticsPath) ? JsonNode.Parse(await File.ReadAllTextAsync(phase18DiagnosticsPath, cancellationToken)) : null;
-        var phase18ValidationPassed = GetBool(phase18Root, "validationPassed") ?? false;
+        var phase18Root = File.Exists(phase18ValidationPath) ? JsonNode.Parse(await File.ReadAllTextAsync(phase18ValidationPath, cancellationToken)) : null;
+        var phase18ValidationPassed = string.Equals(GetString(phase18Root, "status"), "Succeeded", StringComparison.Ordinal) &&
+            (GetBool(phase18Root, "publicationCommitted") ?? false) && (GetBool(phase18Root, "downstreamReady") ?? false);
         var shortDurationValidationPassed = GetBool(phase18Root, "shortDurationValidationPassed") ?? false;
         var longDurationValidationPassed = GetBool(phase18Root, "longDurationValidationPassed") ?? false;
         var phase18MotionDebugFound = GetBool(phase18Root, "motionDebugFound") ?? false;
@@ -14208,8 +14229,8 @@ public sealed partial class ProductionPipelineExecutionService(
         errors.AddRange(audioChecks.Errors);
         errors.AddRange(visualChecks.Errors);
         if (!phase18ValidationPassed) errors.Add("Phase 18 validation did not pass");
-        if (!cinematicOutroValidated) errors.Add("Cinematic outro duration validation failed");
-        if (!fadeToBlackValidated) errors.Add("Fade-to-black validation failed");
+        // Phase 19 evaluates exactly the governed Phase 18 timeline. An outro/fade is neither
+        // required nor inferred unless a future authority explicitly declares one.
 
         var qaIssues = shortVideo.Issues.Concat(longVideo.Issues).Concat(sceneChecks.Issues).Concat(storyChecks.Issues).ToArray();
         var storytellingScore = ScoreBooleans(storyChecks.Checks);

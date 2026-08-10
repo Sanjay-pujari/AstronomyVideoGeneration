@@ -93,6 +93,18 @@ Core service interfaces, Infrastructure implementations, ContentGen, Rendering, 
 ## Implementation Notes
 The code currently clamps production executions to phases 1-20. This document intentionally details phases 1-18 because the sprint request ends at video assembly. Phases 19-20 remain implementation-defined follow-ons for production review and publishing package validation.
 
+### Governed media authorities (Phases 15-19)
+
+The production boundary is deliberately one-way: Phase 15 owns physical scene speech, Phase 16
+owns final scene duration and subtitle timing, Phase 17 owns renderer-neutral motion semantics,
+Phase 18 owns physical video assembly, and Phase 19 owns QA/review. Phase 18 binds rows only by
+`SceneAudioUnitId` plus exact scene, format, sequence, and language identity. It renders the exact
+Phase 17 visual for the Phase 17 duration, pads shorter Phase 15 narration with silence, copies the
+Phase 16 SRT byte-for-byte, and publishes a language-scoped transaction under
+`18-video-assembly/{language}`. It never selects assets, retimes subtitles, invents motion,
+crossfades, music, intros, or outros. Phase 19 reads this committed manifest handoff rather than
+searching compatibility video folders.
+
 ## Failure Modes
 - Input contract failures before phase execution.
 - Missing generated files after a phase.
