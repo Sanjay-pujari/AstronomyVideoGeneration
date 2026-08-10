@@ -430,7 +430,7 @@ public sealed partial class ProductionPipelineExecutionService(
         (14, "Scene Audio Sync V1", PhaseSceneAudioSyncAsync),
         (15, "Real TTS V2", PhaseGenerateTtsTimelineV1Async),
         (16, "Duration Calibration V1", PhaseDurationCalibrationV1Async),
-        (17, "Motion Layer V1", PhaseMotionLayerV1Async),
+        (17, "Governed Motion Authority", PhaseMotionLayerV1Async),
         (18, "Cinematic Video Assembly V2", PhaseVideoAssemblyV1Async),
         (19, "Video QA & Production Review", PhaseVideoQaProductionReviewAsync),
         (20, "Publishing Package", PhaseFinalValidationAsync)
@@ -11071,125 +11071,10 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseMotionLayerV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        if (context.PipelineRequest.MotionPreviewOnly)
-            return await PhaseMotionLayerV2PreviewAsync(context, cancellationToken);
-
-        var planRoot = context.OutputRoot;
-        var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
-        var motionRoot = Path.Combine(planRoot, "motion");
-        var validationRoot = context.ExecutionContext.ValidationRoot!;
-        Directory.CreateDirectory(motionRoot);
-        Directory.CreateDirectory(validationRoot);
-
-        var durationPlanPath = Path.Combine(planRoot, "timing", "scene-duration-plan.json");
-        var shortSceneRoot = Path.Combine(planRoot, "scene-assets-v3", "short");
-        var longSceneRoot = Path.Combine(planRoot, "scene-assets-v3", "long");
-        var oldPaths = new[]
-        {
-            Path.Combine(planRoot, "question-engine", "scene-approval-v3", "scene-assets"),
-            Path.Combine(planRoot, "scene-approval-v3", "scene-assets"),
-            Path.Combine(planRoot, "scene-assets")
-        };
-        var inputPathsChecked = new[] { durationPlanPath, shortSceneRoot, longSceneRoot };
-        var errors = new List<string>();
-        var missingSceneImages = new List<string>();
-        var missingAudioFiles = new List<string>();
-        var invalidDurations = new List<string>();
-        var unsupportedMotionStyles = new List<string>();
-
-        if (!File.Exists(durationPlanPath)) errors.Add($"scene-duration-plan.json missing: {NormalizePath(durationPlanPath)}");
-        if (!Directory.Exists(shortSceneRoot)) errors.Add($"short scene-assets-v3 root missing: {NormalizePath(shortSceneRoot)}");
-        if (!Directory.Exists(longSceneRoot)) errors.Add($"long scene-assets-v3 root missing: {NormalizePath(longSceneRoot)}");
-
-        var sourceDurationPlanVersion = "v1";
-        var shortItems = new List<MotionPlanItem>();
-        var longItems = new List<MotionPlanItem>();
-        var oldPathUsageReasons = new List<string>();
-        AddOldPathUsageReason(oldPathUsageReasons, "selectedDurationPlanPath", durationPlanPath, oldPaths);
-        AddOldPathUsageReason(oldPathUsageReasons, "selectedShortSceneRoot", shortSceneRoot, oldPaths);
-        AddOldPathUsageReason(oldPathUsageReasons, "selectedLongSceneRoot", longSceneRoot, oldPaths);
-        if (File.Exists(durationPlanPath))
-        {
-            var durationRoot = JsonNode.Parse(await File.ReadAllTextAsync(durationPlanPath, cancellationToken)) ?? new JsonObject();
-            sourceDurationPlanVersion = GetString(durationRoot, "version") ?? "v1";
-            shortItems.AddRange(BuildMotionPlanItems(durationRoot, "short", shortSceneRoot, 5, missingSceneImages, missingAudioFiles, invalidDurations, unsupportedMotionStyles, oldPaths, oldPathUsageReasons));
-            longItems.AddRange(BuildMotionPlanItems(durationRoot, "long", longSceneRoot, 9, missingSceneImages, missingAudioFiles, invalidDurations, unsupportedMotionStyles, oldPaths, oldPathUsageReasons));
-        }
-        var oldPathUsed = oldPathUsageReasons.Count > 0;
-
-        if (shortItems.Count != 5) errors.Add($"short scene count != 5; actual={shortItems.Count}");
-        if (longItems.Count != 9) errors.Add($"long scene count != 9; actual={longItems.Count}");
-        errors.AddRange(missingSceneImages.Select(p => $"Scene image missing: {p}"));
-        errors.AddRange(missingAudioFiles.Select(p => $"Audio missing: {p}"));
-        errors.AddRange(invalidDurations.Select(x => $"sceneDurationSec <= 0: {x}"));
-        errors.AddRange(unsupportedMotionStyles.Select(x => $"Unsupported motionStyle: {x}"));
-        if (oldPathUsed) errors.Add("Old scene asset path used");
-
-        var motionPlanPath = Path.Combine(motionRoot, "motion-plan.json");
-        await File.WriteAllTextAsync(motionPlanPath, JsonSerializer.Serialize(new
-        {
-            version = "v1",
-            sourceDurationPlanVersion,
-            @short = new { sceneCount = shortItems.Count, items = shortItems },
-            @long = new { sceneCount = longItems.Count, items = longItems }
-        }, JsonOptions), cancellationToken);
-        if (!File.Exists(motionPlanPath)) errors.Add($"motion-plan.json missing: {NormalizePath(motionPlanPath)}");
-
-        var motionDebugPath = Path.Combine(motionRoot, "motion-debug.json");
-        await WriteMotionRc1DebugAsync(motionDebugPath, FirstNonEmpty(context.ProductionEventIntelligence.EventType, context.Request.EventType, context.ExecutionContext.EventType, "SolarEclipse"), shortItems, longItems, cancellationToken);
-        if (!File.Exists(motionDebugPath)) errors.Add($"motion-debug.json missing: {NormalizePath(motionDebugPath)}");
-        ValidateMotionRc1Debug(shortItems.Concat(longItems), errors);
-
-        var validationPassed = errors.Count == 0;
-        var diagnostics = new
-        {
-            requestedLanguage,
-            selectedNarrationLanguage = requestedLanguage,
-            selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, requestedLanguage)),
-            selectedSrtPath = new { @short = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "short")), @long = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "long")) },
-            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
-            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)),
-            languageScopedArtifactsUsed = true,
-            inputPathsChecked = inputPathsChecked.Select(NormalizePath),
-            selectedDurationPlanPath = NormalizePath(durationPlanPath),
-            selectedShortSceneRoot = NormalizePath(shortSceneRoot),
-            selectedLongSceneRoot = NormalizePath(longSceneRoot),
-            oldPathsChecked = oldPaths.Select(NormalizePath),
-            oldPathsIgnored = oldPaths.Select(NormalizePath),
-            oldPathUsed,
-            oldPathUsageReasons,
-            shortSceneCount = shortItems.Count,
-            longSceneCount = longItems.Count,
-            missingSceneImages,
-            missingAudioFiles,
-            invalidDurations,
-            unsupportedMotionStyles,
-            validationPassed
-        };
-        var diagnosticsPath = Path.Combine(validationRoot, "phase-17-motion-diagnostics.json");
-        await File.WriteAllTextAsync(diagnosticsPath, JsonSerializer.Serialize(diagnostics, JsonOptions), cancellationToken);
-        var validationPath = Path.Combine(validationRoot, "phase-17-validation.json");
-        await File.WriteAllTextAsync(validationPath, JsonSerializer.Serialize(new
-        {
-            phaseNo = 17,
-            phaseName = "Motion Layer V1",
-            requestedLanguage,
-            selectedNarrationLanguage = requestedLanguage,
-            selectedTtsTimelinePath = NormalizePath(ResolveLanguageScopedTtsTimelinePath(planRoot, requestedLanguage)),
-            selectedSrtPath = new { @short = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "short")), @long = NormalizePath(ResolvePhase15SrtPath(planRoot, requestedLanguage, "long")) },
-            selectedAudioPathPrefix = NormalizePath(Path.Combine(planRoot, "tts", requestedLanguage)),
-            selectedVideoAssemblyRoot = NormalizePath(Path.Combine(planRoot, "video-assembly", requestedLanguage)),
-            languageScopedArtifactsUsed = true,
-            status = validationPassed ? "Succeeded" : "Failed",
-            motionPlanPath = NormalizePath(motionPlanPath),
-            motionDebugPath = NormalizePath(motionDebugPath),
-            oldPathUsed,
-            oldPathUsageReasons,
-            validationPassed,
-            errors
-        }, JsonOptions), cancellationToken);
-        if (!validationPassed) throw new InvalidOperationException("Phase 17 Motion Layer V1 failed: " + string.Join(" | ", errors));
-        return [motionPlanPath, validationPath, diagnosticsPath];
+        // MotionPreviewOnly is compatibility-only; governed Phase 17 always consumes committed numbered authorities.
+        var result = await Phase17MotionAuthorityPublisher.ExecuteAsync(context.OutputRoot,
+            ResolvePipelineLanguage(context.Request.Language), context.OverwriteExisting, cancellationToken);
+        return result.OutputFiles;
     }
 
     private async Task<IReadOnlyList<string>> PhaseMotionLayerV2PreviewAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
