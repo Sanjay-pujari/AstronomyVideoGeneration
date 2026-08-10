@@ -12,7 +12,7 @@ public sealed class AzureSpeechOptions
 
     public bool UseSsml { get; set; } = true;
     public string? DefaultVoiceName { get; set; } = "hi-IN-MadhurNeural";
-    public string? DefaultAudioFormat { get; set; } = "audio-24khz-96kbitrate-mono-mp3";
+    public string? DefaultAudioFormat { get; set; } = "audio-24khz-160kbitrate-mono-mp3";
     public string DefaultLanguage { get; set; } = "en";
     public Dictionary<string, string> Voices { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -60,7 +60,8 @@ public sealed class AzureSpeechOptions
         {
             AddIfSet(voices, PrimaryVoice);
         }
-        foreach (var fallbackVoice in FallbackVoices)
+        foreach (var fallbackVoice in FallbackVoices.Where(voice => !string.Equals(normalizedLanguage, "hi", StringComparison.OrdinalIgnoreCase)
+                     || voice.StartsWith("hi-", StringComparison.OrdinalIgnoreCase)))
         {
             AddIfSet(voices, fallbackVoice);
         }
