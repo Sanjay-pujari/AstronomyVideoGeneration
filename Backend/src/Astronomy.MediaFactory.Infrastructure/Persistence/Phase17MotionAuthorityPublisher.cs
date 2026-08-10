@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Rendering;
+using SixLabors.ImageSharp;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -11,6 +12,7 @@ internal static class Phase17MotionAuthorityPublisher
 {
     internal const string Accepted = "P17_MOTION_AUTHORITY_ACCEPTED";
     internal const string UpstreamPhase16Invalid = "P17_UPSTREAM_PHASE16_INVALID";
+    internal const string PhysicalEvidenceInvalid = "P17_VISUAL_PHYSICAL_EVIDENCE_INVALID";
     internal const string MotionPolicy = "motion-profile-selector-v2/bounded-amplitude-1.0";
     internal const string SafetyPolicy = "certified-regions-fail-static/1.0";
     private const string Schema = "phase17.motion-plan/1.0";
@@ -71,15 +73,20 @@ internal static class Phase17MotionAuthorityPublisher
         foreach (var scene in shortScenes.OrderBy(x => x.Sequence))
         {
             var visual = shortById[scene.SceneId];
-            shortEntries.Add(await BuildEntry(root, scene, visual.PhysicalPath, visual.Checksum,
-                visual.Width, visual.Height, p16Checksum, visualChecksum, p10.DeterministicChecksum, shortScenes.Count, ct));
+            shortEntries.Add(await BuildEntry(root, root, scene, visual.PhysicalPath, visual.Checksum,
+                visual.Width, visual.Height, p16Checksum, visualChecksum, p10.DeterministicChecksum,
+                p8.DeterministicChecksum, p9.DeterministicChecksum, "Phase8.SceneAssetManifestItem.Checksum", shortScenes.Count, inputs, ct));
         }
         var longEntries = new List<Phase17MotionEntry>();
         foreach (var scene in longScenes.OrderBy(x => x.Sequence))
         {
             var visual = longById[scene.SceneId];
-            longEntries.Add(await BuildEntry(root, scene, visual.PhysicalPath, visual.PhysicalSha256,
-                visual.Width, visual.Height, p16Checksum, visualChecksum, p10.DeterministicChecksum, longScenes.Count, ct));
+            // Phase 9 defines PhysicalPath relative to its package root (the same rule used by
+            // LongSceneImageManifestValidator). It is not relative to the execution root.
+            longEntries.Add(await BuildEntry(root, Path.Combine(root, "09-long-scenes"), scene,
+                visual.PhysicalPath, visual.PhysicalSha256, visual.Width, visual.Height, p16Checksum,
+                visualChecksum, p10.DeterministicChecksum, p8.DeterministicChecksum, p9.DeterministicChecksum,
+                "Phase9.LongSceneImageManifestItem.PhysicalSha256", longScenes.Count, inputs, ct));
         }
         ValidateEntries(shortEntries, "Short"); ValidateEntries(longEntries, "Long");
         var authorityChecksum = Hash(JsonSerializer.Serialize(new { Schema, language, MotionPolicy, SafetyPolicy,
@@ -144,19 +151,34 @@ internal static class Phase17MotionAuthorityPublisher
         catch { if (Directory.Exists(stage)) Directory.Delete(stage, true); throw; }
     }
 
-    private static async Task<Phase17MotionEntry> BuildEntry(string root, Phase16CalibratedScene scene,
+    private static async Task<Phase17MotionEntry> BuildEntry(string root, string physicalPathRoot, Phase16CalibratedScene scene,
         string path, string expectedHash, int width, int height, string p16Checksum, string visualChecksum,
-        string p10Checksum, int sceneCount, CancellationToken ct)
+        string p10Checksum, string p8Checksum, string p9Checksum, string expectedAuthoritySource,
+        int sceneCount, IReadOnlyList<string> loadedInputs, CancellationToken ct)
     {
         if (scene.FinalSceneDurationMs <= 0 || scene.SceneEndMs - scene.SceneStartMs != scene.FinalSceneDurationMs)
             Fail("P17_PHASE16_TIMING_BINDING_INVALID", $"Invalid frozen scene window for {scene.SceneId}.");
         if (scene.Format.Equals("Short", StringComparison.OrdinalIgnoreCase) ? width >= height : width <= height)
             Fail("P17_VISUAL_ASPECT_INVALID", $"Certified aspect family is invalid for {scene.Format}/{scene.SceneId}.");
-        var physical = Path.IsPathRooted(path) ? path : Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar));
+        var physical = Path.IsPathRooted(path) ? path : Path.Combine(physicalPathRoot, path.Replace('/', Path.DirectorySeparatorChar));
         var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var full = Path.GetFullPath(physical);
-        if (!full.StartsWith(fullRoot, StringComparison.Ordinal) || !File.Exists(full) || await HashFile(full, ct) != expectedHash)
-            Fail("P17_VISUAL_PHYSICAL_EVIDENCE_INVALID", $"Physical visual does not match certification for {scene.SceneId}.");
+        string? actualHash = null; int? actualWidth = null; int? actualHeight = null;
+        if (full.StartsWith(fullRoot, StringComparison.Ordinal) && File.Exists(full))
+        {
+            actualHash = await HashFile(full, ct);
+            var info = await Image.IdentifyAsync(full, ct);
+            actualWidth = info?.Width; actualHeight = info?.Height;
+        }
+        if (!full.StartsWith(fullRoot, StringComparison.Ordinal) || actualHash != expectedHash
+            || actualWidth != width || actualHeight != height)
+            throw new Phase17PhysicalEvidenceException(
+                $"Physical visual does not match certification. sceneId={scene.SceneId}; format={scene.Format}; " +
+                $"selectedVisualPath={full}; expectedPhysicalSha256={expectedHash}; actualPhysicalSha256={actualHash ?? "<missing>"}; " +
+                $"expectedWidth={width}; actualWidth={actualWidth?.ToString() ?? "<missing>"}; expectedHeight={height}; " +
+                $"actualHeight={actualHeight?.ToString() ?? "<missing>"}; expectedAuthoritySource={expectedAuthoritySource}; " +
+                $"phase8AuthorityChecksum={p8Checksum}; phase9AuthorityChecksum={p9Checksum}; " +
+                $"phase10CertificationChecksum={p10Checksum}", loadedInputs);
         var relative = Path.GetRelativePath(root, full).Replace('\\', '/');
         var selected = new MotionProfileSelector().SelectSemantic($"planetary conjunction {scene.SceneId}", scene.Sequence - 1, sceneCount);
         var role = selected.Kind.ToString();
@@ -294,4 +316,12 @@ internal static class Phase17MotionAuthorityPublisher
     { await using var stream = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant(); }
     private static InvalidOperationException Error(string code, string message) => new($"{code}: {message}");
     private static void Fail(string code, string message) => throw Error(code, message);
+}
+
+internal sealed class Phase17PhysicalEvidenceException(string detail, IReadOnlyList<string> loadedAuthorityArtifacts)
+    : InvalidOperationException($"{Phase17MotionAuthorityPublisher.PhysicalEvidenceInvalid}: {detail}")
+{
+    internal string ReasonCode => Phase17MotionAuthorityPublisher.PhysicalEvidenceInvalid;
+    internal string Reason => detail;
+    internal IReadOnlyList<string> LoadedAuthorityArtifacts { get; } = loadedAuthorityArtifacts;
 }
