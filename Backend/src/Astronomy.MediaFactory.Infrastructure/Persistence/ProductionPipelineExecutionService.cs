@@ -393,7 +393,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var success = CalculatePipelineSuccess(context, phaseResults, errors);
         var shortNarrationAccepted = File.Exists(Path.Combine(outputRoot, "07-narration", "short", "accepted-release-candidate.json"));
         var longNarrationAccepted = File.Exists(Path.Combine(outputRoot, "07-narration", "long", "accepted-release-candidate.json"));
-        return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, HeroContractExists(outputRoot), ThumbnailsExist(outputRoot), shortNarrationAccepted || File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), longNarrationAccepted || File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), File.Exists(Path.Combine(outputRoot, "tts", "short", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-tts-audio.mp3")), File.Exists(Path.Combine(outputRoot, "tts", "long", "narration.mp3")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-tts-audio.mp3")), File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, requestedOutputCompletion);
+        var phase15Tts = ResolveCommittedPhase15TtsFormats(outputRoot, ResolvePipelineLanguage(request.Language));
+        return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, HeroContractExists(outputRoot), ThumbnailsExist(outputRoot), shortNarrationAccepted || File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), longNarrationAccepted || File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), phase15Tts.Short, phase15Tts.Long, File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, requestedOutputCompletion);
     }
 
     internal static bool ShouldRunGenericOverwriteCleanup(bool overwriteExisting, int startPhaseNo)
@@ -9765,6 +9766,8 @@ public sealed partial class ProductionPipelineExecutionService(
         var finalLanguageRoot = Path.Combine(root, "15-tts", language);
         var replacingExistingAuthority = Directory.Exists(finalLanguageRoot);
         var stagingParent = Path.Combine(root, "15-tts", ".staging");
+        // An empty container from an older run is internal transaction state, not a package root.
+        CleanupPhase15Transaction(stagingParent, null);
         var stage = Path.Combine(stagingParent, Guid.NewGuid().ToString("N"), language);
         var backup = finalLanguageRoot + ".backup-" + Guid.NewGuid().ToString("N");
         var requests = new List<Phase15SceneSynthesisRequest>();
@@ -9925,16 +9928,60 @@ public sealed partial class ProductionPipelineExecutionService(
                 "Phase 15 Real TTS authority accepted.", true, false, context.OverwriteExisting && replacingExistingAuthority,
                 true, true, true, true, true, authority.AuthorityChecksum, phase15AuthorityChecksum,
                 "Valid", "Valid", true, true, true, true);
-            var completedTransactionRoot = Directory.GetParent(stage)?.FullName;
-            if (completedTransactionRoot is not null && Directory.Exists(completedTransactionRoot)) Directory.Delete(completedTransactionRoot, true);
             return outputs.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
         catch
         {
-            var transactionRoot = Directory.GetParent(stage)?.FullName;
-            if (transactionRoot is not null && Directory.Exists(transactionRoot)) Directory.Delete(transactionRoot, true);
             if (!Directory.Exists(finalLanguageRoot) && Directory.Exists(backup)) Directory.Move(backup, finalLanguageRoot);
             throw;
+        }
+        finally
+        {
+            CleanupPhase15Transaction(stagingParent, Directory.GetParent(stage)?.FullName);
+        }
+    }
+
+    internal static void CleanupPhase15Transaction(string stagingParent, string? transactionRoot)
+    {
+        if (transactionRoot is not null && Directory.Exists(transactionRoot)
+            && string.Equals(Directory.GetParent(transactionRoot)?.FullName, stagingParent, StringComparison.OrdinalIgnoreCase))
+            Directory.Delete(transactionRoot, true);
+
+        // Only the internal staging container is eligible here. Committed language roots are
+        // siblings of .staging and can never be reached by this cleanup.
+        if (Directory.Exists(stagingParent) && !Directory.EnumerateFileSystemEntries(stagingParent).Any())
+            Directory.Delete(stagingParent);
+    }
+
+    internal static (bool Short, bool Long) ResolveCommittedPhase15TtsFormats(string planRoot, string language)
+    {
+        var authorityRoot = Path.Combine(planRoot, "15-tts", ResolvePipelineLanguage(language));
+        var manifestPath = Path.Combine(authorityRoot, "phase15-manifest.json");
+        var timelinePath = Path.Combine(authorityRoot, "tts-timeline.json");
+        if (!File.Exists(manifestPath) || !File.Exists(timelinePath)) return (false, false);
+        try
+        {
+            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (!GetJsonBool(manifest.RootElement, "publicationCommitted")
+                || !GetJsonBool(manifest.RootElement, "downstreamReady")
+                || !GetJsonString(manifest.RootElement, "validationStatus", string.Empty).Equals("Valid", StringComparison.OrdinalIgnoreCase))
+                return (false, false);
+
+            using var timeline = JsonDocument.Parse(File.ReadAllText(timelinePath));
+            if (!timeline.RootElement.TryGetProperty("entries", out var entries) || entries.ValueKind != JsonValueKind.Array)
+                return (false, false);
+            var formats = entries.EnumerateArray()
+                .Where(entry => entry.TryGetProperty("audioRelativePath", out var path)
+                    && path.ValueKind == JsonValueKind.String
+                    && File.Exists(Path.Combine(planRoot, path.GetString()!.Replace('/', Path.DirectorySeparatorChar))))
+                .Select(entry => entry.TryGetProperty("format", out var format) ? format.GetString() : null)
+                .Where(format => !string.IsNullOrWhiteSpace(format))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return (formats.Contains("Short"), formats.Contains("Long"));
+        }
+        catch (JsonException)
+        {
+            return (false, false);
         }
     }
 
