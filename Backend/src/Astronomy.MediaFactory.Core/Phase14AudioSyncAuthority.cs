@@ -39,3 +39,10 @@ public sealed record Phase14AudioSyncAuthority(string SchemaVersion, string Plan
     string SceneAuthorityChecksum, string SyncPolicyVersion, string GroupingPolicyVersion,
     string GroupingPolicyChecksum, string RequestIdentity, Phase14AudioSyncStream ShortStream,
     Phase14AudioSyncStream LongStream, string AuthorityChecksum, string PublicationState);
+
+/// <summary>The single committed Phase 14 result projected to the pipeline/API.</summary>
+public sealed record Phase14PublicationResult(IReadOnlyList<string> LoadedAuthorityArtifacts,
+    IReadOnlyList<string> OutputFiles, string ReasonCode, string Reason,
+    bool PublicationCommitted, bool CommittedStateValidationPassed, string AuthorityChecksum,
+    string ManifestValidationStatus, string ValidationStatus, bool SemanticValidationPassed,
+    bool ChecksumValidationPassed, bool ManifestValidationPassed, bool DownstreamReady);

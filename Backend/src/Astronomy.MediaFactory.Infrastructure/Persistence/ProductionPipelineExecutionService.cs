@@ -110,6 +110,8 @@ public sealed partial class ProductionPipelineExecutionService(
     // Phase 9 result so the generic validation mapper can publish its commit evidence.
     private readonly ConcurrentDictionary<string, LongSceneImagePublicationResult> phase9PublicationResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Phase10CertificationResult> phase10CertificationResults = new(StringComparer.OrdinalIgnoreCase);
+    // Phase 14's committed readback is the sole source for API success projection.
+    private readonly ConcurrentDictionary<string, Phase14PublicationResult> phase14PublicationResults = new(StringComparer.OrdinalIgnoreCase);
     // Carries the exact, validated read-back returned by Phase 4 across the in-process
     // phase boundary. Disk is intentionally not consulted by downstream phases in the
     // same run; the authority reader remains the resume/recovery boundary.
@@ -780,15 +782,17 @@ public sealed partial class ProductionPipelineExecutionService(
                 && phase10CertificationResults.TryGetValue(context.OutputRoot, out var acceptedPhase10) ? acceptedPhase10 : null;
             var phase11Authority = phaseNo == 11 && missing.Length == 0 && IsSceneAssetsV3Enabled(context)
                 && phase11AuthorityResults.TryGetValue(context.OutputRoot, out var acceptedPhase11) ? acceptedPhase11 : null;
+            var phase14Authority = phaseNo == 14 && missing.Length == 0
+                && phase14PublicationResults.TryGetValue(context.OutputRoot, out var acceptedPhase14) ? acceptedPhase14 : null;
             var reason = missing.Length == 0
                 ? phaseNo == 3 ? (context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED")
                     : phaseNo == 8 && IsSceneAssetsV3Enabled(context) ? "Authority scene assets generated, validated, committed and read back."
-                    : phase9Publication?.Reason ?? phase10Certification?.Reason ?? phase11Authority?.Reason ?? "Validation passed."
+                    : phase14Authority?.Reason ?? phase9Publication?.Reason ?? phase10Certification?.Reason ?? phase11Authority?.Reason ?? "Validation passed."
                 : BuildPhase7RequiredOutputFailureReason(requiredOutputDiagnostics, missing);
-            var inputFiles = phase11Authority?.InputFiles ?? phase10Certification?.InputFiles ?? (phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot));
+            var inputFiles = phase14Authority?.LoadedAuthorityArtifacts ?? phase11Authority?.InputFiles ?? phase10Certification?.InputFiles ?? (phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot));
             return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, inputFiles, outputs, warnings, missing, reason, missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics,
                 phaseExecutionBegan: true,
-                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode ?? phase11Authority?.ReasonCode);
+                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase14Authority?.ReasonCode ?? phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode ?? phase11Authority?.ReasonCode);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
@@ -4401,9 +4405,11 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         // Phase 7 is frozen narration authority. The governed Phase 14 path only plans
         // scene-level audio units and subtitle text, then transactionally publishes them.
-        return await Phase14AudioSyncPublisher.ExecuteAsync(context.OutputRoot,
+        var result = await Phase14AudioSyncPublisher.ExecuteAsync(context.OutputRoot,
             context.Request.PlanId.ToString("D"), context.EventId,
             ResolvePipelineLanguage(context.Request.Language), cancellationToken);
+        phase14PublicationResults[context.OutputRoot] = result;
+        return result.OutputFiles;
 #if false // Compatibility-only historical writer; intentionally unreachable from governed Phase 14.
         var planRoot = context.OutputRoot;
         var syncRoot = Path.Combine(planRoot, "sync");
@@ -15259,6 +15265,8 @@ public sealed partial class ProductionPipelineExecutionService(
             && phase11AuthorityResults.TryRemove(context.OutputRoot, out var phase11Result) ? phase11Result : null;
         var phase12Certification = phaseNo == 12
             && phase12AuthorityResults.TryRemove(context.OutputRoot, out var phase12Result) ? phase12Result : null;
+        var phase14Certification = phaseNo == 14
+            && phase14PublicationResults.TryRemove(context.OutputRoot, out var phase14Result) ? phase14Result : null;
         if (phase3Certification is { Passed: false })
         {
             status = ProductionPhaseStatus.Failed;
@@ -15271,6 +15279,17 @@ public sealed partial class ProductionPipelineExecutionService(
                 ? phase3Certification?.Recovered == true ? "P3_RECOVERED" : phase3Certification?.Reused == true ? "P3_REUSED" : context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED"
                 : "P3_COMMITTED_VALIDATION_FAILED"
             : null);
+        if (phaseNo == 14 && status == ProductionPhaseStatus.Succeeded
+            && (phase14Certification is not { PublicationCommitted: true, CommittedStateValidationPassed: true,
+                    ValidationStatus: "Valid", DownstreamReady: true }
+                || string.IsNullOrWhiteSpace(phase14Certification.AuthorityChecksum)))
+        {
+            status = ProductionPhaseStatus.Failed;
+            reasonCode = "P14_FINAL_AUTHORITY_INVARIANT_FAILED";
+            reason = "Phase 14 cannot succeed without a valid committed authority readback and downstream readiness.";
+            errors = errors.Concat([reason]).ToArray();
+            canRetry = true;
+        }
         if (phaseNo == 12)
         {
             reasonCode = phase12Certification?.ReasonCode ?? (status == ProductionPhaseStatus.Succeeded
@@ -15313,16 +15332,16 @@ public sealed partial class ProductionPipelineExecutionService(
         if (phaseNo == 12 && inputFiles.Count == 0) inputFiles = phase12Inputs;
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason)
         {
-            ReasonCode = reasonCode,
-            PublicationCommitted = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? false),
-            CommittedStateValidationPassed = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed ?? false),
-            AuthorityChecksum = phaseNo == 13 ? phase13Checksum : phaseNo == 12 ? phase12Checksum : phase11Certification?.ManifestChecksum,
-            ManifestValidationStatus = phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ManifestValidationStatus,
-            ValidationStatus = phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus,
-            SemanticValidationPassed = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed,
-            ChecksumValidationPassed = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ChecksumValidationPassed,
-            ManifestValidationPassed = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ManifestValidationPassed,
-            DownstreamReady = phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady,
+            ReasonCode = phase14Certification?.ReasonCode ?? reasonCode,
+            PublicationCommitted = phase14Certification?.PublicationCommitted ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? false)),
+            CommittedStateValidationPassed = phase14Certification?.CommittedStateValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed ?? false)),
+            AuthorityChecksum = phase14Certification?.AuthorityChecksum ?? (phaseNo == 13 ? phase13Checksum : phaseNo == 12 ? phase12Checksum : phase11Certification?.ManifestChecksum),
+            ManifestValidationStatus = phase14Certification?.ManifestValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ManifestValidationStatus),
+            ValidationStatus = phase14Certification?.ValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus),
+            SemanticValidationPassed = phase14Certification?.SemanticValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed),
+            ChecksumValidationPassed = phase14Certification?.ChecksumValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ChecksumValidationPassed),
+            ManifestValidationPassed = phase14Certification?.ManifestValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ManifestValidationPassed),
+            DownstreamReady = phase14Certification?.DownstreamReady ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady),
             Phase11HeroDiagnostics = phase11Certification?.HeroAuthorityDiagnostics
         };
         if (phaseNo == 14 && File.Exists(validationPath))
