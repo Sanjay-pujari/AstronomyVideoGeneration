@@ -212,10 +212,10 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         var requested = new[] { "Short", "Long" };
         var identity = Hash(JsonSerializer.Serialize(new { Schema, language, requested, p15Checksum, p16Checksum,
             p17Checksum, RenderPolicy, VideoPolicy, AudioPolicy, toolchain,
-            rendering.FrameRate, assembly.Subtitles.Enabled, assembly.Subtitles.BurnIn,
+            rendering.FrameRate, subtitlesEnabled = assembly.Subtitles.Enabled, assembly.Subtitles.BurnIn,
             assembly.Subtitles.GenerateSrt, assembly.Subtitles.GenerateAss,
             assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent,
-            music.Enabled, music.LevelPercent, music.DuckUnderNarration, music.Sha256 }, Json));
+            musicEnabled = music.Enabled, music.LevelPercent, music.DuckUnderNarration, music.Sha256 }, Json));
         var finalRoot = Path.Combine(root, "18-video-assembly", language);
         var existingManifestPath = Path.Combine(finalRoot, "phase18-manifest.json");
         if (!overwrite && File.Exists(existingManifestPath))
