@@ -393,7 +393,7 @@ public sealed partial class ProductionPipelineExecutionService(
         var success = CalculatePipelineSuccess(context, phaseResults, errors);
         var shortNarrationAccepted = File.Exists(Path.Combine(outputRoot, "07-narration", "short", "accepted-release-candidate.json"));
         var longNarrationAccepted = File.Exists(Path.Combine(outputRoot, "07-narration", "long", "accepted-release-candidate.json"));
-        var phase15Tts = ResolveCommittedPhase15TtsFormats(outputRoot, ResolvePipelineLanguage(request.Language));
+        var phase15Tts = ResolveCommittedPhase15TtsFormats(outputRoot, ResolvePipelineLanguage(request.Request.Language));
         return BuildResult(success, false, outputRoot, File.Exists(Path.Combine(outputRoot, "question-engine", "question-answer-set.json")), shortScenesGenerated, longScenesGenerated, HeroContractExists(outputRoot), ThumbnailsExist(outputRoot), shortNarrationAccepted || File.Exists(Path.Combine(outputRoot, "narration", "short", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "short", "video-narration-script.json")), longNarrationAccepted || File.Exists(Path.Combine(outputRoot, "narration", "long", "narration.txt")) || File.Exists(Path.Combine(outputRoot, "video-assembly", "long", "video-long-narration-script.json")), phase15Tts.Short, phase15Tts.Long, File.Exists(shortVideo), File.Exists(longVideo), File.Exists(shortVideo) ? shortVideo : string.Empty, File.Exists(longVideo) ? longVideo : string.Empty, generatedFiles.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), warnings.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), errors.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), phaseResults, requestedOutputCompletion);
     }
 
