@@ -453,8 +453,13 @@ public sealed record ProductionPhaseResult(
     /// <summary>Stable machine-readable outcome code; Reason is operator text only.</summary>
     public string? ReasonCode { get; init; }
     public bool AlreadyPublished { get; init; }
+    public bool Generated { get; init; }
+    public bool Reused { get; init; }
+    public bool Regenerated { get; init; }
     public bool PublicationCommitted { get; init; }
+    public bool CommittedReadbackPassed { get; init; }
     public bool CommittedStateValidationPassed { get; init; }
+    public string? SourcePhase14AuthorityChecksum { get; init; }
     public string? AuthorityChecksum { get; init; }
     public string? ManifestValidationStatus { get; init; }
     public string? ValidationStatus { get; init; }

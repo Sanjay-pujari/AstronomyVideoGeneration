@@ -163,7 +163,11 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
         Add(12,context.ExecutionContext.ThumbnailRoot,compatibility:true,canDeleteOnOverwrite:false);
         Add(13,Path.Combine(root,"13-gallery"),canDeleteOnOverwrite:false);
         Add(14,Path.Combine(root,"sync"));
-        Add(15,context.ExecutionContext.TtsRoot);
+        // Phase 15 canonical authority is language scoped. Its publisher performs atomic
+        // replacement; legacy TTS and narration tracks are compatibility projections only.
+        var phase15Language=context.Request.Language.StartsWith("hi",StringComparison.OrdinalIgnoreCase)?"hi":"en";
+        Add(15,Path.Combine(root,"15-tts",phase15Language),canDeleteOnOverwrite:false);
+        Add(15,Path.Combine(root,"tts",phase15Language),compatibility:true,canDeleteOnOverwrite:false);
         Add(16,Path.Combine(root,"duration-calibration"));
         Add(17,Path.Combine(root,"motion"));
         Add(18,context.ExecutionContext.VideoAssemblyRoot);
