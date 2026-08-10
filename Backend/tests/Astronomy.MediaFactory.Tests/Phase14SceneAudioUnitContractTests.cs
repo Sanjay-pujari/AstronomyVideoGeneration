@@ -5,6 +5,42 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Phase14SceneAudioUnitContractTests
 {
+    [Theory]
+    [InlineData("High above, the night sky reveals a celestial")]
+    [InlineData("Betelgeuse Mintaka Alnilam Alnitak Orion constellation")]
+    [InlineData("आकाश में ओरायन तारामंडल स्पष्ट दिखाई देता है।")]
+    public void Phase14SubtitleWrapping_PreservesWholeUnicodeTokens(string text)
+    {
+        var lines = Phase14AudioSyncPublisher.WrapSubtitle(text);
+
+        Assert.Equal(text, string.Join(' ', lines));
+        Assert.DoesNotContain(lines, line => line.EndsWith("celest", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line is "Bete" or "Mint" or "Alni");
+    }
+
+    [Fact]
+    public void Phase14SubtitleWrapping_MovesCompleteWordRatherThanFillingLine()
+    {
+        const string text = "High above, the night sky reveals a celestial";
+
+        var lines = Phase14AudioSyncPublisher.WrapSubtitle(text);
+
+        Assert.Equal(["High above, the night sky reveals a", "celestial"], lines);
+        Assert.True(lines[0].Length < 42);
+    }
+
+    [Fact]
+    public void Phase14SubtitleSegmentation_PreservesAstronomyNamesAndText()
+    {
+        const string text = "Orion is easy to recognize. Its Belt contains Betelgeuse Mintaka Alnilam Alnitak and three prominent stars.";
+
+        var segments = Phase14AudioSyncPublisher.SplitSubtitles(text);
+
+        Assert.Equal(text, string.Join(' ', segments));
+        Assert.All(segments.SelectMany(Phase14AudioSyncPublisher.WrapSubtitle), line =>
+            Assert.DoesNotMatch(@"(?:Bete|Mint|Alni)$", line));
+    }
+
     [Fact]
     public void Phase14SceneAudioUnitMayContainMultipleSubtitleSegments_WithoutCreatingTtsUnits()
     {
