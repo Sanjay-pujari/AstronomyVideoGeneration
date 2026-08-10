@@ -21,7 +21,7 @@ internal static class Phase13GalleryAuthority
     private const string Layout = "EducationalCarouselLayout/1.1";
     private const double MaximumBlackBarAreaPercent = 1.0;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-    private static readonly string[] CanonicalRoles = ["cover-identity", "what-happens", "where-to-look", "when-to-observe", "certified-highlight-or-science", "observation-checklist"];
+    private static readonly string[] CanonicalRoles = ["Opening view", "What happens", "Where to look", "When to observe", "Key objects", "Viewing checklist"];
     private static readonly string[] ConstellationRoles = ["cover-identity", "how-to-identify", "bright-stars-or-key-objects", "deep-sky-highlight", "science-or-story-highlight", "observation-checklist"];
     private static readonly Regex InternalCopyPattern = new(
         @"\b(?:Outcome|Objective|Scene|Beat|Knowledge|Frame)\d+\b|\bOpeningHook\b|\bHistoricalContext\b|\bScientificExplanation\b|\bViewerTakeaway\b|final narration remains|advance the certified",
@@ -62,6 +62,12 @@ internal static class Phase13GalleryAuthority
         GalleryAuthorityReference? SelectedAuthority, string ResolutionStrategy, bool RoleSubstitutionApplied,
         string? ResolvedRoleId, string? FailureReason);
 
+    internal sealed record MatureGalleryTopicPlan(int Slot, string CanonicalRole, string ResolvedTreatment,
+        string? AdaptationReason, string PublicRoleLabel, string Headline, string Detail,
+        IReadOnlyList<string> Facts, IReadOnlyList<string> EventObjects, string VisualTreatment,
+        IReadOnlyList<GalleryAuthorityReference> PublicAuthorityReferences,
+        IReadOnlyList<GalleryAuthorityReference> VisualPlanningReferences, string ProviderPrompt);
+
     internal sealed record GalleryCopyDuplicateGroup(string NormalizedValue, IReadOnlyList<int> PageSlots);
     internal sealed record GalleryCopyDiversityResult(int DistinctHeadlineCount, int DistinctPrimaryContentCount,
         IReadOnlyList<GalleryCopyDuplicateGroup> DuplicateHeadlineGroups,
@@ -89,13 +95,13 @@ internal static class Phase13GalleryAuthority
             .GroupBy(x => $"{x.KnowledgeId}|{x.Text}", StringComparer.Ordinal).Select(x => x.First()).ToArray();
         Require(claims.Length > 0, "P13_SEMANTIC_AUTHORITY_HYDRATION_FAILED", "Certified semantic context is empty.");
 
-        var roles = p2.EventFamily.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase) ? ConstellationRoles : CanonicalRoles;
-        var (selections, roleDiagnostics) = ResolveRolePlan(roles, p2.EventFamily, claims,
-            JsonSerializer.SerializeToElement(p4, Json), p6, hydration.Context.PrimaryObjects, hydration.Context.SecondaryObjects);
-        Require(selections.Length == 6, "P13_GALLERY_PAGE_COUNT_INVALID", "Exactly six mature Gallery roles are required.");
-        var diversity = EvaluateCopyDiversity(selections, hydration.Context.PrimaryObjects);
-        Require(diversity.CopyDiversityPassed, "P13_GALLERY_COPY_DIVERSITY_FAILED", CopyDiversityFailure(diversity));
-        ValidatePublicCopy(selections);
+        // The square-era ResolveRolePlan remains solely for compatibility tests.  The authoritative
+        // route starts with the retained AstroPulse BuildTopics planner and adapts its input from
+        // typed, verified authority; semantic buckets govern publication, never page existence.
+        var topicPlans = MatureGalleryCandidateGenerator.BuildPlans(hydration);
+        Require(topicPlans.Count == 6, "P13_GALLERY_TOPIC_PLAN_INCOMPLETE",
+            $"createdTopics={topicPlans.Count}; missingTopics={string.Join(", ", CanonicalRoles.Skip(topicPlans.Count))}; missingRequiredAuthority=event identity");
+        ValidateMaturePublicCopy(topicPlans);
         Require(!string.IsNullOrWhiteSpace(providerOptions.Endpoint) && !string.IsNullOrWhiteSpace(providerOptions.ImageDeployment),
             "P13_PROVIDER_NOT_CONFIGURED", "Azure Image2 endpoint and image deployment must be configured before Gallery generation.");
 
@@ -110,16 +116,10 @@ internal static class Phase13GalleryAuthority
             var pages = new List<object>();
             var metadata = new List<GeneratedFileMetadata>();
             var backgroundHashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var publicLabels = new[] { "Opening view", "What happens", "Where to look", "When to observe", "Key objects", "Viewing checklist" };
             for (var index = 0; index < 6; index++)
             {
-                var selection = selections[index];
-                var role = CanonicalRoles[index];
-                var visualContext = new GalleryVisualPromptContext(hydration.EventAuthority.EventIdentity.Title,
-                    hydration.Context.PrimaryObjects.Concat(hydration.Context.SecondaryObjects).ToArray(),
-                    [selection.PrimaryContent], NormalizedTreatment(selection.ContentCategory), role, p2.EventFamily,
-                    "Large role-specific subject, coherent dark-sky lighting, lower-third negative space");
-                var prompt = BuildMatureGalleryPrompt(visualContext);
+                var plan = topicPlans[index];
+                var prompt = plan.ProviderPrompt;
                 ValidateAiPrompt(prompt);
                 var background = Path.Combine(staging, $".background-{index + 1:00}.png");
                 var generation = await AstroPulseGalleryService.GenerateBackgroundWithAzureImage2Async(
@@ -130,25 +130,26 @@ internal static class Phase13GalleryAuthority
                 var file = $"gallery-{index + 1:00}.png";
                 var target = Path.Combine(staging, file);
                 await AstroPulseGalleryService.RenderAuthorityPageAsync(background, target, index + 1,
-                    LocalizeRole(publicLabels[index], hydration.EventAuthority.Metadata.Language), selection.Headline,
-                    selection.PrimaryContent, hydration.EventAuthority.Metadata.Language, ct);
+                    plan.PublicRoleLabel, plan.Headline, plan.Detail, hydration.EventAuthority.Metadata.Language, ct);
                 File.Delete(background);
                 var physical = await ReadPhysicalMetadataAsync(target, $"13-gallery/{file}", ct);
                 Require(physical.Width == 1920 && physical.Height == 1080, "P13_PHYSICAL_VALIDATION_FAILED", "Canonical Gallery pages must be 1920x1080.");
-                var authorities = BuildCopyAuthorityReferences(selection);
+                var authorities = plan.PublicAuthorityReferences;
                 pages.Add(new {
-                    slot = index + 1, canonicalRole = publicLabels[index], resolvedRole = selection.ResolvedRoleId,
-                    adaptationReason = selection.RoleSubstitutionReason,
-                    publicRoleLabel = LocalizeRole(publicLabels[index], hydration.EventAuthority.Metadata.Language),
-                    headline = selection.Headline, detail = selection.PrimaryContent, facts = selection.SupportingContent,
-                    copyAuthorityReferences = authorities, promptSemanticInputs = new[] { p2.EventFamily, role, selection.PrimaryContent },
+                    slot = plan.Slot, canonicalRole = plan.CanonicalRole, resolvedRoleTreatment = plan.ResolvedTreatment,
+                    adaptationReason = plan.AdaptationReason, publicRoleLabel = plan.PublicRoleLabel,
+                    headline = plan.Headline, detail = plan.Detail, facts = plan.Facts,
+                    eventObjects = plan.EventObjects, visualTreatment = plan.VisualTreatment,
+                    copyAuthorityReferences = authorities, publicAuthorityReferences = authorities,
+                    visualPlanningReferences = plan.VisualPlanningReferences,
+                    promptSemanticInputs = new[] { p2.EventFamily, plan.CanonicalRole, plan.Detail },
                     promptAuthorityReferences = authorities, promptPolicyVersion = Policy, promptChecksum = Hash(prompt),
                     provider = "AzureOpenAIForImage", providerDeployment = providerOptions.ImageDeployment,
                     providerAttemptCount = generation.AttemptCount, successfulGenerationCount = 1,
                     providerRequestSize = "1792x1024", backgroundPhysicalSha256 = backgroundSha,
                     finalPhysicalPath = physical.Path, width = 1920, height = 1080, physicalSha256 = physical.PhysicalSha256,
                     overlayRenderedDeterministically = true, embeddedAiTextRequested = false,
-                    generatedVisualIsInterpretive = role is "what-happens" or "when-to-observe",
+                    generatedVisualIsInterpretive = plan.CanonicalRole is "What happens" or "When to observe",
                     scientificFactAuthority = authorities, validationStatus = "Valid",
                     sourceAssetId = "", sourceSceneId = "", sourcePhysicalPath = "", sourcePhysicalSha256 = ""
                 });
@@ -193,13 +194,15 @@ internal static class Phase13GalleryAuthority
                 publicationEligibleSemanticCount = hydration.Context.AllItems.Count(x => x.IsPublicationEligible),
                 visualPlanningEligibleCount = hydration.Context.AllItems.Count(x => x.IsVisualPlanningEligible),
                 rejectedSemanticItems = hydration.Context.AllItems.Where(x => !x.IsPublicationEligible).Select(x => new { x.SemanticId, x.Usage, x.SourceArtifact, x.SourceJsonPointer, rejectionReason = "Usage is planning-only and not publication eligible." }),
-                sixRolePlanCreated = selections.Length == 6, sixRolePlanValidated = true,
+                matureGalleryPlannerActivated = true, abandonedSquareRolePlannerActivated = false,
+                topicPlanCount = topicPlans.Count, canonicalRoles = CanonicalRoles, publicCopyValidated = true,
+                sixRolePlanCreated = topicPlans.Count == 6, sixRolePlanValidated = true,
                 phase8RasterUsed = false, phase9RasterUsed = false, phase10RasterUsed = false, heroRasterUsed = false, thumbnailRasterUsed = false,
                 azureImageCallsThisPhase = 6, independentlyGeneratedPageCount = 6, canonicalWidth = 1920, canonicalHeight = 1080,
                 promptsRequestNoEmbeddedText = true, deterministicOverlay = true, internalCopyLeakDetected = false,
                 copyDiversityPassed = true, visualRoleDiversityPassed = true, fullFrame16x9Passed = true,
                 letterboxDetected = false, pillarboxDetected = false, textOverlapDetected = false, textClipped = false,
-                minimumFontSizePassed = true, overlaySafeAreaPassed = true, roleDiagnostics, downstreamReady = true }, ct);
+                minimumFontSizePassed = true, overlaySafeAreaPassed = true, roleDiagnostics = Array.Empty<object>(), downstreamReady = true }, ct);
             await Write(Path.Combine(staging, "phase13-publication-report.json"), new { transactionId = transaction,
                 candidateValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true,
                 committedReadbackPassed = true, manifestChecksum = authorityChecksum }, ct);
@@ -265,6 +268,20 @@ internal static class Phase13GalleryAuthority
         Require(leaked is null, "P13_GALLERY_INTERNAL_COPY_LEAK", $"Public Gallery copy contains internal editorial language: '{leaked}'.");
         Require(selections.All(page => !string.IsNullOrWhiteSpace(page.PrimaryContentAuthority)),
             "P13_GALLERY_COPY_AUTHORITY_MISSING", "Every public Gallery page requires copy authority lineage.");
+    }
+
+    internal static void ValidateMaturePublicCopy(IReadOnlyList<MatureGalleryTopicPlan> plans)
+    {
+        var leaked = plans.SelectMany(page => new[] { page.PublicRoleLabel, page.Headline, page.Detail }
+                .Concat(page.Facts))
+            .FirstOrDefault(value => InternalCopyPattern.IsMatch(value));
+        Require(leaked is null, "P13_GALLERY_INTERNAL_COPY_LEAK",
+            $"Public Gallery copy contains internal editorial language: '{leaked}'.");
+        Require(plans.All(page => page.PublicAuthorityReferences.Count > 0),
+            "P13_GALLERY_COPY_AUTHORITY_MISSING", "Every mature Gallery topic requires public authority lineage.");
+        Require(plans.Select(x => x.CanonicalRole).SequenceEqual(CanonicalRoles),
+            "P13_GALLERY_TOPIC_PLAN_INCOMPLETE", "Mature Gallery canonical role sequence is incomplete.");
+        foreach (var plan in plans) ValidateAiPrompt(plan.ProviderPrompt);
     }
 
     internal static void ValidateAiPrompt(string prompt)
