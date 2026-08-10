@@ -460,6 +460,8 @@ public sealed record ProductionPhaseResult(
     public bool CommittedReadbackPassed { get; init; }
     public bool CommittedStateValidationPassed { get; init; }
     public string? SourcePhase14AuthorityChecksum { get; init; }
+    public string? SourcePhase16AuthorityChecksum { get; init; }
+    public string? SourceVisualAuthorityChecksum { get; init; }
     public string? AuthorityChecksum { get; init; }
     public string? ManifestValidationStatus { get; init; }
     public string? ValidationStatus { get; init; }

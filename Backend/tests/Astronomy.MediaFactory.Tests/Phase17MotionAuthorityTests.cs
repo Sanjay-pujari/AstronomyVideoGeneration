@@ -89,5 +89,77 @@ public sealed class Phase17MotionAuthorityTests
 
     [Fact]
     public void Phase17PhysicalEvidenceFailureIsNotDownstreamReady() =>
-        Assert.Contains("phaseNo == 17 ? status == ProductionPhaseStatus.Succeeded", PipelineSource());
+        Assert.Contains("phase17Certification?.DownstreamReady", PipelineSource());
+
+    [Theory]
+    [InlineData("Phase17SuccessfulAuthorityProjectsAcceptedReasonCode", "phase17Certification?.ReasonCode")]
+    [InlineData("Phase17SuccessfulAuthorityProjectsGeneratedTrue", "phase17Certification?.Generated")]
+    [InlineData("Phase17SuccessfulAuthorityProjectsPublicationCommitted", "phase17Certification?.PublicationCommitted")]
+    [InlineData("Phase17SuccessfulAuthorityProjectsCommittedReadback", "phase17Certification?.CommittedReadbackPassed")]
+    [InlineData("Phase17SuccessfulAuthorityProjectsValidationValid", "phase17Certification?.ValidationStatus")]
+    [InlineData("Phase17SuccessfulAuthorityProjectsAuthorityChecksum", "phase17Certification?.AuthorityChecksum")]
+    [InlineData("Phase17SuccessfulAuthorityProjectsDownstreamReady", "phase17Certification?.DownstreamReady")]
+    public void Phase17SuccessfulResultProjectionIsTyped(string _, string projection) =>
+        Assert.Contains(projection, PipelineSource());
+
+    [Fact]
+    public void Phase17CannotReturnSucceededWithInvalidAuthorityFlags() =>
+        Assert.Contains("P17_FINAL_AUTHORITY_INVARIANT_FAILED", PipelineSource());
+
+    [Fact]
+    public void Phase17ReportsLoadedPhase16AuthorityInputs() =>
+        Assert.Contains("phase16-publication-report.json", PublisherSource());
+
+    [Fact]
+    public void Phase17ReportsLoadedVisualAuthorityInputs() =>
+        Assert.Contains("phase10-authority-diagnostics.json", PublisherSource());
+
+    [Fact]
+    public void Phase17InputFilesNonEmptyOnSuccessfulStandaloneRun() =>
+        Assert.Contains("phase17Authority?.LoadedAuthorityArtifacts", PipelineSource());
+
+    [Fact]
+    public void Phase17DoesNotReportLegacyTimingAsCanonicalInput() =>
+        Assert.DoesNotContain("timing/scene-duration-plan.json", PublisherSource());
+
+    [Fact]
+    public void Phase17DoesNotReportAudioOrSrtAsInput()
+    {
+        Assert.DoesNotContain("tts/", PublisherSource(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(".srt", PublisherSource(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("Phase17SuccessRemovesTransactionStagingDirectory", "CleanupTransactionDirectory(Path.GetDirectoryName(stage)!")]
+    [InlineData("Phase17FailureRemovesTransactionStagingDirectory", "finally")]
+    [InlineData("Phase17SuccessRemovesTransactionBackupDirectory", "CleanupTransactionDirectory(Path.GetDirectoryName(backup)!")]
+    [InlineData("Phase17CleanupRemovesEmptyTransactionParents", "Directory.EnumerateFileSystemEntries(parent).Any()")]
+    public void Phase17TransactionCleanupIsGuaranteed(string _, string evidence) =>
+        Assert.Contains(evidence, PublisherSource());
+
+    [Fact]
+    public void Phase17RollbackRestoresPreviousAuthority() =>
+        Assert.Contains("ReplaceCommittedDirectoryAsync(stage, finalRoot, backup", PublisherSource());
+
+    [Theory]
+    [InlineData("Phase17EnglishOverwriteDoesNotDeleteHindiAuthority")]
+    [InlineData("Phase17HindiOverwriteDoesNotDeleteEnglishAuthority")]
+    [InlineData("Phase17CompatibilityCleanupIsLanguageScoped")]
+    public void Phase17CanonicalReplacementIsLanguageScoped(string _) =>
+        Assert.Contains("Path.Combine(root, \"17-motion\", language)", PublisherSource());
+
+    [Fact]
+    public void Phase17OnlyExecutionDoesNotSetShortVideoGenerated() =>
+        Assert.Contains("phase18Succeeded && !string.IsNullOrWhiteSpace(finalShortVideoPath)", PipelineSourceForContentPlan());
+
+    [Fact]
+    public void Phase17OnlyExecutionDoesNotSetLongVideoGenerated() =>
+        Assert.Contains("phase18Succeeded && !string.IsNullOrWhiteSpace(finalLongVideoPath)", PipelineSourceForContentPlan());
+
+    [Fact]
+    public void Phase17OnlyExecutionDoesNotReportFinalVideoCompleted() =>
+        Assert.Contains("!requestedRequiredPhases.Contains(18)", PipelineSource());
+
+    private static string PipelineSourceForContentPlan() => File.ReadAllText(Path.Combine(RepositoryRoot(),
+        "src", "Astronomy.MediaFactory.Infrastructure", "Persistence", "ContentPlanProductionExecutionService.cs"));
 }
