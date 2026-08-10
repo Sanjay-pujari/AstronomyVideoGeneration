@@ -816,6 +816,12 @@ public sealed partial class ProductionPipelineExecutionService(
                 ex.LoadedAuthorityArtifacts, [], [], [ex.Message], ex.Reason, true, cancellationToken, started,
                 reasonCodeOverride: ex.ReasonCode, phaseExecutionBegan: true);
         }
+        catch (Phase18AuthorityValidationException ex) when (phaseNo == 18)
+        {
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed,
+                ex.LoadedAuthorityArtifacts, [], [], [ex.Message], ex.Message, true, cancellationToken, started,
+                reasonCodeOverride: ex.ReasonCode, phaseExecutionBegan: true);
+        }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
             var phase10TitleDiagnostics = phaseNo == 10
@@ -15452,9 +15458,9 @@ public sealed partial class ProductionPipelineExecutionService(
             reason,
             executionKind = phase1Outcome?.Kind.ToString(),
             reasonCode,
-            generated = phase15Certification?.Generated ?? (phaseNo == 13 ? phase13Accepted : phase11Certification is not null ? true : phaseNo == 3 ? phase3Certification?.Generated : phase1Outcome is not null && !phase1Outcome.Reused),
-            reused = phase15Certification?.Reused ?? (phaseNo == 13 ? false : phaseNo == 3 ? phase3Certification?.Reused : phase1Outcome?.Reused),
-            regenerated = phase15Certification?.Regenerated ?? (phaseNo == 13 ? phase13Accepted && context.OverwriteExisting : phaseNo == 3 ? phase3Certification?.Regenerated : phase1Outcome?.Kind.ToString().StartsWith("Regenerated",StringComparison.Ordinal) == true),
+            generated = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.Generated ?? (phaseNo == 13 ? phase13Accepted : phase11Certification is not null ? true : phaseNo == 3 ? phase3Certification?.Generated : phase1Outcome is not null && !phase1Outcome.Reused),
+            reused = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.Reused ?? (phaseNo == 13 ? false : phaseNo == 3 ? phase3Certification?.Reused : phase1Outcome?.Reused),
+            regenerated = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.Regenerated ?? (phaseNo == 13 ? phase13Accepted && context.OverwriteExisting : phaseNo == 3 ? phase3Certification?.Regenerated : phase1Outcome?.Kind.ToString().StartsWith("Regenerated",StringComparison.Ordinal) == true),
             materialized = phase9Certification?.Manifest.Images.Count > 0 ? true : (bool?)null,
             materializedAssetCount = phase9Certification?.Manifest.Images.Count,
             recovered = phaseNo == 3 ? phase3Certification?.Recovered : phase1Outcome?.RecoveryStatus.Recovered,
@@ -15468,18 +15474,18 @@ public sealed partial class ProductionPipelineExecutionService(
             rollbackPerformed = phase1Outcome?.RollbackPerformed ?? false,
             rollbackSucceeded = phase1Outcome?.RollbackSucceeded ?? false,
             transactionId = phaseNo == 1 ? phase1Outcome?.PublicationTransactionId : phase3Certification?.TransactionId,
-            publicationCommitted = phase15Certification?.PublicationCommitted ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? (phaseNo == 5 ? status == ProductionPhaseStatus.Succeeded : phaseNo == 3 ? phase3Certification?.PublicationCommitted == true : phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid"))),
+            publicationCommitted = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.PublicationCommitted ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? (phaseNo == 5 ? status == ProductionPhaseStatus.Succeeded : phaseNo == 3 ? phase3Certification?.PublicationCommitted == true : phaseNo == 1 && status is ProductionPhaseStatus.Succeeded or ProductionPhaseStatus.Skipped && phase1Outcome?.ValidationStatus == "Valid"))),
             committedReadbackPassed = phase15Certification?.CommittedReadbackPassed,
             sourcePhase14AuthorityChecksum = phase15Certification?.SourcePhase14AuthorityChecksum,
-            validationStatus = phase15Certification?.ValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus ?? (phase10Certification is not null ? "Valid" : phase9Certification is null ? phase8Certification?.ValidationStatus ?? (phaseNo == 5 && status == ProductionPhaseStatus.Succeeded ? "Valid" : phase3Certification?.ValidationStatus ?? phase1Outcome?.ValidationStatus) : phase9Certification.CommittedStateValidationPassed ? "Valid" : "Invalid")),
-            semanticValidationPassed = phase15Certification?.SemanticValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.SemanticValidationPassed ?? phase3Certification?.SemanticValidationPassed)),
+            validationStatus = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? "Invalid" : phase15Certification?.ValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus ?? (phase10Certification is not null ? "Valid" : phase9Certification is null ? phase8Certification?.ValidationStatus ?? (phaseNo == 5 && status == ProductionPhaseStatus.Succeeded ? "Valid" : phase3Certification?.ValidationStatus ?? phase1Outcome?.ValidationStatus) : phase9Certification.CommittedStateValidationPassed ? "Valid" : "Invalid")),
+            semanticValidationPassed = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.SemanticValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.SemanticValidationPassed ?? phase3Certification?.SemanticValidationPassed)),
             checksumValidationPassed = phase15Certification?.ChecksumValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ChecksumValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ChecksumValidationPassed ?? phase3Certification?.ChecksumValidationPassed)),
             manifestValidationPassed = phase15Certification?.ManifestValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ManifestValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.ManifestValidationPassed ?? phase8Certification?.ManifestValidationPassed ?? phase3Certification?.ManifestValidationPassed)),
             committedStateValidationPassed = phase15Certification?.CommittedStateValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed)),
             compatibilityEquivalencePassed = phase3Certification?.CompatibilityEquivalencePassed,
             phase2LineageValidationPassed = phase3Certification?.Phase2LineageValidationPassed,
             questionPlanReconciliationPassed = phase3Certification?.QuestionPlanReconciliationPassed,
-            downstreamReady = phase15Certification?.DownstreamReady ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady ?? phase10Certification?.Certification.DownstreamReady ?? phase9Certification?.DownstreamReady ?? phase8Certification?.DownstreamReady ?? phase3Certification?.DownstreamReady),
+            downstreamReady = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.DownstreamReady ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady ?? phase10Certification?.Certification.DownstreamReady ?? phase9Certification?.DownstreamReady ?? phase8Certification?.DownstreamReady ?? phase3Certification?.DownstreamReady),
             questionCount = phase3Certification?.QuestionCount,
             learningObjectiveCount = phase3Certification?.LearningObjectiveCount,
             questionPlanTotalCount = phase3Certification?.QuestionPlanTotalCount,
@@ -17602,12 +17608,22 @@ public sealed partial class ProductionPipelineExecutionService(
             ownedOutputRoots = ResolvePhaseOwnedOutputRoots(context, deleteStartPhaseNo, deleteEndPhaseNo)
                 .Where(root => (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(root.OwnerPhase))
                 .Select(root => NormalizePath(root.Path)).ToArray(),
-            canonicalOwnedRoots = (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(17)
+            canonicalOwnedRoots = (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(18)
+                ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "18-video-assembly", ResolvePipelineLanguage(context.Request.Language))) }
+                : (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(17)
                 ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "17-motion", ResolvePipelineLanguage(context.Request.Language))) }
                 : (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(15)
                 ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "15-tts", ResolvePipelineLanguage(context.Request.Language))) }
                 : Array.Empty<string>(),
-            compatibilityProjectionPaths = (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(17)
+            compatibilityProjectionPaths = (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(18)
+                ? new[]
+                {
+                    NormalizePath(Path.Combine(context.OutputRoot, "video-assembly", ResolvePipelineLanguage(context.Request.Language), "short", "final.mp4")),
+                    NormalizePath(Path.Combine(context.OutputRoot, "video-assembly", ResolvePipelineLanguage(context.Request.Language), "long", "final.mp4")),
+                    NormalizePath(Path.Combine(context.OutputRoot, "video", "short", "final-short.mp4")),
+                    NormalizePath(Path.Combine(context.OutputRoot, "video", "long", "final-long.mp4"))
+                }
+                : (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(17)
                 ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "motion", "motion-plan.json")) }
                 : (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(15)
                 ? new[]

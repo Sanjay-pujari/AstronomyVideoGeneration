@@ -42,3 +42,20 @@ public sealed record Phase18PublicationResult(IReadOnlyList<string> InputFiles, 
     string SourcePhase17AuthorityChecksum, string AuthorityChecksum, string ManifestValidationStatus,
     string ValidationStatus, bool SemanticValidationPassed, bool ChecksumValidationPassed,
     bool ManifestValidationPassed, bool DownstreamReady);
+
+/// <summary>A Phase 18 view of the facts owned by the frozen Phase 15 artifacts.</summary>
+public sealed record Phase18Phase15AuthoritySnapshot(string Language, string AuthorityChecksum,
+    string SourcePhase14AuthorityChecksum, bool PublicationCommitted, bool CandidateValidationPassed,
+    bool CandidateReadbackPassed, bool CommittedReadbackPassed, bool CommittedStateValidationPassed,
+    bool SemanticValidationPassed, bool ChecksumValidationPassed, bool ManifestValidationPassed,
+    string ValidationStatus, bool DownstreamReady, IReadOnlyList<string> LoadedAuthorityArtifacts);
+
+public sealed class Phase18AuthorityValidationException : InvalidOperationException
+{
+    public Phase18AuthorityValidationException(string reasonCode, string reason,
+        IReadOnlyList<string> loadedAuthorityArtifacts) : base($"{reasonCode}: {reason}")
+    { ReasonCode = reasonCode; Reason = reason; LoadedAuthorityArtifacts = loadedAuthorityArtifacts; }
+    public string ReasonCode { get; }
+    public string Reason { get; }
+    public IReadOnlyList<string> LoadedAuthorityArtifacts { get; }
+}
