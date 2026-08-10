@@ -1,9 +1,9 @@
 namespace Astronomy.MediaFactory.Core;
 
-public enum Phase17MotionType { Static, SlowZoomIn, SlowZoomOut, PanLeft, PanRight, PushToObject }
-public enum Phase17Easing { Linear, EaseInOutSine, EaseOutCubic }
+public enum Phase17MotionType { Static, SlowZoomIn, SlowZoomOut, PanLeft, PanRight, PushToObject, PanUp, PanDown, ZoomInPanLeft, ZoomInPanRight, ZoomOutPanLeft, ZoomOutPanRight, Hold }
+public enum Phase17Easing { Linear, EaseInOutSine, EaseOutCubic, EaseIn, EaseOut, EaseInOut }
 public enum Phase17SafetyDecision { CertifiedRegionSafe, FullFrameTransformSafe, StaticFallbackNoCertifiedFocus, StaticFallbackCropUnsafe }
-public enum Phase17TransitionType { Cut }
+public enum Phase17TransitionType { Cut, CrossFade, FadeThroughBlack }
 public sealed record Phase17NormalizedTransform(double Scale, double TranslateX, double TranslateY);
 public sealed record Phase17Keyframe(double NormalizedTime, Phase17NormalizedTransform Transform);
 public sealed record Phase17NormalizedRegion(double X, double Y, double Width, double Height);

@@ -26,7 +26,9 @@ public sealed record Phase18VideoPolicy(string Version, string Codec, string Enc
     int FramesPerSecond, string Preset, int Crf, int ShortWidth, int ShortHeight, int LongWidth, int LongHeight);
 public sealed record Phase18AudioPolicy(string Version, string Codec, int SampleRate, int Channels, int Bitrate);
 public sealed record Phase18SubtitlePolicy(string Version, Phase18SubtitleMode EnglishMode,
-    Phase18SubtitleMode HindiMode, string? BurnInFontFamily);
+    Phase18SubtitleMode HindiMode, string? BurnInFontFamily, int ShortFontSize = 34,
+    int LongFontSize = 22, int Outline = 1, int Shadow = 1, int ShortMarginBottom = 96,
+    int LongMarginBottom = 42);
 public sealed record Phase18MediaEvidence(string Format, string VideoRelativePath, string SubtitleRelativePath,
     long GovernedDurationMs, long PhysicalDurationMs, int Width, int Height, string VideoCodec,
     string PixelFormat, string AudioCodec, int AudioSampleRate, int AudioChannels, string VideoSha256,

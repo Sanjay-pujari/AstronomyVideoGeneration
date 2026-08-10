@@ -121,7 +121,53 @@ public sealed class Phase18VideoAssemblyAuthorityTests
             Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.EnglishMode);
         Assert.Equal(Phase18SubtitleMode.SidecarOnly,
             Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.HindiMode);
+        Assert.Equal((34, 22), (Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.ShortFontSize,
+            Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.LongFontSize));
     }
+
+    [Fact]
+    public void Phase18MotionFilterConsumesGovernedTransformsFocalPointEasingAndFades()
+    {
+        var entry = Motion(Phase17MotionType.SlowZoomIn,
+            new(1, 0, 0), new(1.13, .2, -.1), Phase17Easing.EaseInOut,
+            new(Phase17TransitionType.FadeThroughBlack, 400), new(Phase17TransitionType.FadeThroughBlack, 500));
+
+        var filter = Phase18VideoAssemblyAuthorityPublisher.BuildMotionFilter(entry, 1080, 1920);
+
+        Assert.Contains("zoompan=z='1+(0.13)*((1-cos(PI*on/239))/2)'", filter);
+        Assert.Contains("fade=t=in:st=0:d=0.4", filter);
+        Assert.Contains("fade=t=out:st=7.5:d=0.5", filter);
+        Assert.Contains("s=1080x1920:fps=30", filter);
+    }
+
+    [Theory]
+    [InlineData(Phase17MotionType.SlowZoomOut, 1.13, 1.0)]
+    [InlineData(Phase17MotionType.PanLeft, 1.08, 1.08)]
+    [InlineData(Phase17MotionType.ZoomInPanRight, 1.0, 1.18)]
+    [InlineData(Phase17MotionType.Hold, 1.0, 1.0)]
+    public void Phase18SupportsGovernedCinematicMotionVocabulary(Phase17MotionType type, double start, double end)
+    {
+        var filter = Phase18VideoAssemblyAuthorityPublisher.BuildMotionFilter(
+            Motion(type, new(start, -.2, 0), new(end, .2, 0), Phase17Easing.Linear,
+                new(Phase17TransitionType.Cut, 0), new(Phase17TransitionType.Cut, 0)), 1280, 720);
+        Assert.Contains("zoompan", filter);
+        Assert.Contains("s=1280x720", filter);
+    }
+
+    [Fact]
+    public void Phase18BurnInSidecarPathCannotCollideWithFinalVideoBasename()
+    {
+        var relative = "short/captions/en.srt";
+        Assert.NotEqual(Path.GetFileNameWithoutExtension("short/final.mp4"), Path.GetFileNameWithoutExtension(relative));
+        Assert.Contains("FontSize=34", Phase18VideoAssemblyAuthorityPublisher.BuildSubtitleFilter("captions/en.srt", Phase18ProductionFormat.Short));
+    }
+
+    private static Phase17MotionEntry Motion(Phase17MotionType type, Phase17NormalizedTransform start,
+        Phase17NormalizedTransform end, Phase17Easing easing, Phase17Transition transitionIn,
+        Phase17Transition transitionOut) => new("scene", "unit", "Short", 1, "en", 8_000, 0, 8_000,
+            [], "audio", "image.png", "visual", 1920, 1080, "Portrait", "p16", "visual-authority", "p10",
+            "Hero", type, start, end, [], easing, null, new(.2, .2, .4, .4), [],
+            Phase17SafetyDecision.CertifiedRegionSafe, false, transitionIn, transitionOut, "motion", "safety");
 
     [Fact]
     public void Phase18AcceptedAuthorityProjectsGovernedReasonCode()
