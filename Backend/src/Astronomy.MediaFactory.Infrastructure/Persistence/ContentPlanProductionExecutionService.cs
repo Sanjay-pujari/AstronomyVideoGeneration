@@ -605,8 +605,11 @@ public sealed class ContentPlanProductionExecutionService(
         {
             heroGenerated = RequestedOutputSucceeded(requestedOutputCompletion, "HeroAsset");
             thumbnailsGenerated = RequestedOutputSucceeded(requestedOutputCompletion, "Thumbnail");
-            shortVideoGenerated = RequestedOutputSucceeded(requestedOutputCompletion, "ShortVideo");
-            longVideoGenerated = RequestedOutputSucceeded(requestedOutputCompletion, "LongVideo");
+            // Only committed Phase 18 media can set video-generation flags. Upstream
+            // authority success (including Phase 17) is not a rendered output.
+            var phase18Succeeded = phaseResults.Any(result => result.PhaseNo == 18 && result.Status == ProductionPhaseStatus.Succeeded);
+            shortVideoGenerated = phase18Succeeded && !string.IsNullOrWhiteSpace(finalShortVideoPath) && File.Exists(finalShortVideoPath);
+            longVideoGenerated = phase18Succeeded && !string.IsNullOrWhiteSpace(finalLongVideoPath) && File.Exists(finalLongVideoPath);
         }
 
         var publishGateDiagnosticsPath = Path.Combine(outputRoot, "validation", "phase-20-publish-gate-diagnostics.json");

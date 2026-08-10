@@ -98,6 +98,8 @@ internal static class Phase17MotionAuthorityPublisher
             SafetyPolicy, p16Checksum, visualChecksum, longEntries, authorityChecksum);
 
         var finalRoot = Path.Combine(root, "17-motion", language);
+        var validationRoot = Path.Combine(root, "validation");
+        var validationPath = Path.Combine(validationRoot, "phase-17-validation.json");
         var existingPlan = Path.Combine(finalRoot, "short", "motion-plan.json");
         if (File.Exists(existingPlan))
         {
@@ -109,12 +111,18 @@ internal static class Phase17MotionAuthorityPublisher
                 File.Exists(existingManifestPath) && File.Exists(existingReportPath) &&
                 (await Read<Phase17MotionPlan>(existingLongPath, ct)).AuthorityChecksum == authorityChecksum &&
                 await IsAcceptedPublication(existingManifestPath, existingReportPath, authorityChecksum, ct))
-                return Result(inputs, Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories).ToArray(),
-                    false, true, false, p16Checksum, visualChecksum, authorityChecksum);
+            {
+                var reused = Result(inputs, Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories)
+                    .Append(validationPath).ToArray(), false, true, false, p16Checksum, visualChecksum, authorityChecksum);
+                Directory.CreateDirectory(validationRoot);
+                await WriteValidation(validationPath, reused, ct);
+                return reused;
+            }
         }
         var transactionId = Guid.NewGuid().ToString("N"); // Filesystem transaction identity is never semantic authority input.
         var stage = Path.Combine(root, "17-motion", ".staging", transactionId, language);
         var backup = Path.Combine(root, "17-motion", ".backup", transactionId, language);
+        var replacingExistingAuthority = Directory.Exists(finalRoot);
         try
         {
             Directory.CreateDirectory(Path.Combine(stage, "short")); Directory.CreateDirectory(Path.Combine(stage, "long"));
@@ -129,7 +137,11 @@ internal static class Phase17MotionAuthorityPublisher
             await Write(Path.Combine(stage, "phase17-authority-diagnostics.json"), new { schemaVersion = "phase17.diagnostics/1.0",
                 language, shortSceneCount = shortEntries.Count, longSceneCount = longEntries.Count,
                 staticFallbackCount = shortEntries.Count + longEntries.Count, renderCallsThisPhase = 0,
-                audioFilesOpened = 0, srtFilesRead = 0, authorityChecksum }, ct);
+                audioFilesOpened = 0, srtFilesRead = 0, sourcePhase16AuthorityChecksum = p16Checksum,
+                sourceVisualAuthorityChecksum = visualChecksum, candidateValidationPassed = true,
+                candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true,
+                authorityChecksum, downstreamReady = true, canonicalOwnedRoots = new[] { $"17-motion/{language}" },
+                compatibilityProjectionPaths = new[] { "motion/motion-plan.json" } }, ct);
             await Write(Path.Combine(stage, "phase17-publication-report.json"), Publication(authorityChecksum), ct);
             _ = await Read<Phase17MotionPlan>(Path.Combine(stage, "short", "motion-plan.json"), ct);
             await Phase16DurationCalibrationPublisher.ReplaceCommittedDirectoryAsync(stage, finalRoot, backup, async () =>
@@ -137,18 +149,17 @@ internal static class Phase17MotionAuthorityPublisher
                 var committed = await Read<Phase17MotionPlan>(Path.Combine(finalRoot, "long", "motion-plan.json"), ct);
                 if (committed.AuthorityChecksum != authorityChecksum) Fail("P17_COMMITTED_READBACK_FAILED", "Committed checksum differs.");
             });
-            var validationRoot = Path.Combine(root, "validation"); Directory.CreateDirectory(validationRoot);
-            var validationPath = Path.Combine(validationRoot, "phase-17-validation.json");
-            await Write(validationPath, new { phaseNo = 17, phaseName = "Governed Motion Authority", status = "Succeeded",
-                reasonCode = Accepted, reason = "Phase 17 motion authority accepted.", generated = true, reused = false,
-                regenerated = overwrite, publicationCommitted = true, committedReadbackPassed = true,
-                committedStateValidationPassed = true, semanticValidationPassed = true, checksumValidationPassed = true,
-                manifestValidationPassed = true, validationStatus = "Valid", downstreamReady = true,
-                sourcePhase16AuthorityChecksum = p16Checksum, sourceVisualAuthorityChecksum = visualChecksum, authorityChecksum }, ct);
-            return Result(inputs, Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories).Append(validationPath).ToArray(),
-                true, false, overwrite, p16Checksum, visualChecksum, authorityChecksum);
+            Directory.CreateDirectory(validationRoot);
+            var result = Result(inputs, Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories).Append(validationPath).ToArray(),
+                true, false, replacingExistingAuthority, p16Checksum, visualChecksum, authorityChecksum);
+            await WriteValidation(validationPath, result, ct);
+            return result;
         }
-        catch { if (Directory.Exists(stage)) Directory.Delete(stage, true); throw; }
+        finally
+        {
+            CleanupTransactionDirectory(Path.GetDirectoryName(stage)!);
+            CleanupTransactionDirectory(Path.GetDirectoryName(backup)!);
+        }
     }
 
     private static async Task<Phase17MotionEntry> BuildEntry(string root, string physicalPathRoot, Phase16CalibratedScene scene,
@@ -295,6 +306,22 @@ internal static class Phase17MotionAuthorityPublisher
         bool generated, bool reused, bool regenerated, string p16, string visual, string checksum) =>
         new(inputs, outputs, Accepted, "Phase 17 motion authority accepted.", generated, reused, regenerated,
             true, true, true, true, true, true, true, true, p16, visual, checksum, "Valid", true);
+    private static Task WriteValidation(string path, Phase17PublicationResult result, CancellationToken ct) =>
+        Write(path, new { phaseNo = 17, phaseName = "Governed Motion Authority", status = "Succeeded",
+            result.ReasonCode, result.Reason, result.Generated, result.Reused, result.Regenerated,
+            manifestValidationStatus = result.ValidationStatus, result.ValidationStatus,
+            result.CandidateValidationPassed, result.CandidateReadbackPassed, result.PublicationCommitted,
+            result.CommittedReadbackPassed, result.CommittedStateValidationPassed, result.SemanticValidationPassed,
+            result.ChecksumValidationPassed, result.ManifestValidationPassed, result.DownstreamReady,
+            inputFiles = result.LoadedAuthorityArtifacts, result.SourcePhase16AuthorityChecksum,
+            result.SourceVisualAuthorityChecksum, result.AuthorityChecksum }, ct);
+    private static void CleanupTransactionDirectory(string transactionRoot)
+    {
+        if (Directory.Exists(transactionRoot)) Directory.Delete(transactionRoot, true);
+        var parent = Path.GetDirectoryName(transactionRoot);
+        if (parent is not null && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any())
+            Directory.Delete(parent);
+    }
     private static async Task<T> Read<T>(string path, CancellationToken ct) =>
         JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, ct), Json) ?? throw new InvalidDataException($"Invalid JSON: {path}");
     private static async Task<JsonDocument> ReadDocument(string path, CancellationToken ct) =>

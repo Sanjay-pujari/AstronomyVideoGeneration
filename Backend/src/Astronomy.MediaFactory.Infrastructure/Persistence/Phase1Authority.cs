@@ -170,7 +170,10 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
         Add(15,Path.Combine(root,"tts",phase15Language),compatibility:true,canDeleteOnOverwrite:false);
         // Phase 16 canonical authority is language scoped and atomically replaced by its publisher.
         Add(16,Path.Combine(root,"16-duration-calibration",phase15Language),canDeleteOnOverwrite:false);
-        Add(17,Path.Combine(root,"motion"));
+        // Phase 17 canonical authority is language scoped and transactionally replaced.
+        // The legacy motion root is a compatibility projection, never canonical ownership.
+        Add(17,Path.Combine(root,"17-motion",phase15Language),canDeleteOnOverwrite:false);
+        Add(17,Path.Combine(root,"motion"),compatibility:true,canDeleteOnOverwrite:false);
         Add(18,context.ExecutionContext.VideoAssemblyRoot);
         Add(19,Path.Combine(root,"video-qa"));
         Add(20,Path.Combine(root,"publishing"));
