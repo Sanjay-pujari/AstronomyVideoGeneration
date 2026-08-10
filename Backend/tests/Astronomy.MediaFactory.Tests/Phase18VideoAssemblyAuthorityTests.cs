@@ -117,7 +117,7 @@ public sealed class Phase18VideoAssemblyAuthorityTests
     {
         var audio = Phase18VideoAssemblyAuthorityPublisher.AudioPolicy;
         Assert.Equal(("aac", 48_000, 2, 192_000), (audio.Codec, audio.SampleRate, audio.Channels, audio.Bitrate));
-        Assert.Equal(Phase18SubtitleMode.BurnInAndSidecar,
+        Assert.Equal(Phase18SubtitleMode.SidecarOnly,
             Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.EnglishMode);
         Assert.Equal(Phase18SubtitleMode.SidecarOnly,
             Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.HindiMode);

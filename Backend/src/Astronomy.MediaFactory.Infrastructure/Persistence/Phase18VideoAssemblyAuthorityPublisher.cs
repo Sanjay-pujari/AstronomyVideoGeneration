@@ -5,7 +5,9 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Contracts;
 using SixLabors.ImageSharp;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -126,7 +128,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         "yuv420p", 30, "veryfast", 20, 1080, 1920, 1280, 720);
     internal static readonly Phase18AudioPolicy AudioPolicy = new("phase18-audio/1.0", "aac", 48_000, 2, 192_000);
     internal static readonly Phase18SubtitlePolicy SubtitlePolicy = new("phase18-subtitle/1.0",
-        Phase18SubtitleMode.BurnInAndSidecar, Phase18SubtitleMode.SidecarOnly, "Noto Sans");
+        Phase18SubtitleMode.SidecarOnly, Phase18SubtitleMode.SidecarOnly, "Noto Sans");
     internal const string RenderPolicy = "phase18-governed-scene-render/1.0";
     private const string Schema = "phase18.video-assembly/1.0";
     private const long ProbeToleranceMs = 35; // one 30 fps frame plus container rounding
@@ -134,9 +136,15 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
 
     internal static async Task<Phase18PublicationResult> ExecuteAsync(string root, string language,
         bool overwrite, string? configuredFfmpeg, string? configuredFfprobe, CancellationToken ct)
+        => await ExecuteAsync(root, language, overwrite,
+            new RenderingOptions { FfmpegPath = configuredFfmpeg ?? "ffmpeg", FfprobePath = configuredFfprobe },
+            new VideoAssemblyOptions { BackgroundMusic = new VideoAssemblyBackgroundMusicOptions { Enabled = false } }, ct);
+
+    internal static async Task<Phase18PublicationResult> ExecuteAsync(string root, string language,
+        bool overwrite, RenderingOptions rendering, VideoAssemblyOptions assembly, CancellationToken ct)
     {
         var diagnostics = new Phase18RenderDiagnostics();
-        try { return await ExecuteCoreAsync(root, language, overwrite, configuredFfmpeg, configuredFfprobe, diagnostics, ct); }
+        try { return await ExecuteCoreAsync(root, language, overwrite, rendering, assembly, diagnostics, ct); }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) when (ex is Phase18AuthorityValidationException or Win32Exception or IOException or InvalidOperationException)
         {
@@ -157,7 +165,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     }
 
     private static async Task<Phase18PublicationResult> ExecuteCoreAsync(string root, string language,
-        bool overwrite, string? configuredFfmpeg, string? configuredFfprobe, Phase18RenderDiagnostics diagnostics,
+        bool overwrite, RenderingOptions rendering, VideoAssemblyOptions assembly, Phase18RenderDiagnostics diagnostics,
         CancellationToken ct)
     {
         language = string.IsNullOrWhiteSpace(language) ? "en" : language.Trim().ToLowerInvariant();
@@ -198,11 +206,16 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             inputs);
         ValidateAuthorityDrivenSceneCounts(audio.Values, calibrated.Values, motion.SelectMany(x => x.Entries), inputs);
         await PreflightPhysicalEvidence(root, language, audio, calibrated, motion.SelectMany(x => x.Entries), srts, ct);
-        var tools = await Phase18MediaToolchainResolver.ResolveAsync(configuredFfmpeg, configuredFfprobe, ct);
+        var tools = await Phase18MediaToolchainResolver.ResolveAsync(rendering.FfmpegPath, rendering.FfprobePath, ct);
+        var music = await ResolveMusicAsync(assembly.BackgroundMusic, tools.FFprobeExecutable, diagnostics, ct);
         var toolchain = $"{tools.FFmpegVersion} | {tools.FFprobeVersion}";
         var requested = new[] { "Short", "Long" };
         var identity = Hash(JsonSerializer.Serialize(new { Schema, language, requested, p15Checksum, p16Checksum,
-            p17Checksum, RenderPolicy, VideoPolicy, AudioPolicy, SubtitlePolicy, toolchain }, Json));
+            p17Checksum, RenderPolicy, VideoPolicy, AudioPolicy, toolchain,
+            rendering.FrameRate, assembly.Subtitles.Enabled, assembly.Subtitles.BurnIn,
+            assembly.Subtitles.GenerateSrt, assembly.Subtitles.GenerateAss,
+            assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent,
+            music.Enabled, music.LevelPercent, music.DuckUnderNarration, music.Sha256 }, Json));
         var finalRoot = Path.Combine(root, "18-video-assembly", language);
         var existingManifestPath = Path.Combine(finalRoot, "phase18-manifest.json");
         if (!overwrite && File.Exists(existingManifestPath))
@@ -225,7 +238,8 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         {
             Directory.CreateDirectory(stage);
             for (var f = 0; f < requested.Length; f++)
-                evidence.Add(await RenderFormat(root, stage, language, requested[f], motion[f], calibrated, audio, srts[f], tools, diagnostics, ct));
+                evidence.Add(await RenderFormat(root, stage, language, requested[f], motion[f], calibrated, audio,
+                    srts[f], tools, rendering, assembly, music, diagnostics, ct));
             var authorityChecksum = Hash(JsonSerializer.Serialize(new { identity, outputs = evidence }, Json));
             var manifest = new Phase18Manifest(Schema, language, requested, p15Checksum, p16Checksum, p17Checksum,
                 RenderPolicy, VideoPolicy.Version, AudioPolicy.Version, SubtitlePolicy.Version, toolchain, evidence,
@@ -239,7 +253,19 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
                 renderCallsThisPhase = evidence.Sum(x => x.SourceAudioSha256.Count) + 3, probeCallsThisPhase = 2,
                 candidateValidationPassed = true,
                 candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true,
-                stagingCleanupRequired = true, backgroundMusicUsed = false, outroDurationMs = 0,
+                stagingCleanupRequired = true, renderingConfigLoaded = true,
+                rendering.EnableKenBurns, rendering.KenBurnsZoomStart, rendering.KenBurnsZoomEnd,
+                rendering.ShortKenBurnsZoomEnd, rendering.KenBurnsUseEasing,
+                rendering.EnableDirectionalMotion, rendering.DirectionalPanStrength,
+                rendering.EnableTransitions, rendering.TransitionType, rendering.TransitionDurationSeconds,
+                rendering.EnableFadeInOut, rendering.FadeDurationSeconds, rendering.ShortFadeDurationSeconds,
+                backgroundMusicEnabled = music.Enabled, backgroundMusicPath = music.Path,
+                backgroundMusicLevelPercent = music.LevelPercent, music.DuckUnderNarration,
+                subtitleEnabled = assembly.Subtitles.Enabled, subtitleBurnIn = assembly.Subtitles.BurnIn,
+                subtitleGenerateSrt = assembly.Subtitles.GenerateSrt, subtitleGenerateAss = assembly.Subtitles.GenerateAss,
+                assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent,
+                subtitleBurnCalls = diagnostics.SubtitleBurnCallsThisPhase,
+                backgroundMusicUsed = music.Enabled, backgroundMusicSha256 = music.Sha256, outroDurationMs = 0,
                 sourcePhase15AuthorityChecksum = p15Checksum, sourcePhase16AuthorityChecksum = p16Checksum,
                 sourcePhase17AuthorityChecksum = p17Checksum, authorityChecksum }, ct);
             await Write(Path.Combine(stage, "phase18-publication-report.json"), Publication(authorityChecksum), ct);
@@ -273,6 +299,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     private static async Task<Phase18MediaEvidence> RenderFormat(string root, string stage, string language,
         string format, Phase17MotionPlan plan, IReadOnlyDictionary<string, Phase16CalibratedScene> calibrated,
         IReadOnlyDictionary<string, Phase15TimelineEntry> audio, string srt, Phase18MediaTools tools,
+        RenderingOptions rendering, VideoAssemblyOptions assembly, Phase18Music music,
         Phase18RenderDiagnostics diagnostics, CancellationToken ct)
     {
         Log("PHASE18_FORMAT_RENDER_START", new { Format = format });
@@ -319,7 +346,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             MediaProcessResult sceneResult;
             var videoFilter = BuildMotionFilter(entry, w, h);
             Log("PHASE18_SCENE_MOTION_APPLIED", MotionDiagnostic(format, plan, entry, videoFilter));
-            try { sceneResult = await Run(tools.FFmpegExecutable, ["-y", "-loop", "1", "-framerate", "30", "-i", image, "-i", speechPath,
+            try { sceneResult = await Run(tools.FFmpegExecutable, ["-y", "-loop", "1", "-framerate", rendering.FrameRate.ToString(CultureInfo.InvariantCulture), "-i", image, "-i", speechPath,
                 "-filter_complex", $"[0:v]{videoFilter}[v];[1:a]apad=whole_dur={seconds},aresample=48000,aformat=channel_layouts=stereo[a]",
                 "-map", "[v]", "-map", "[a]", "-t", seconds, "-c:v", "libx264", "-preset", VideoPolicy.Preset,
                 "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", VideoPolicy.PixelFormat, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", clip], sceneContext, clips, ct); }
@@ -331,18 +358,38 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
                 PhysicalDurationMs = clipDuration, ElapsedMs = sceneResult.DurationMs });
         }
         Log("PHASE18_FORMAT_SCENES_COMPLETE", new { Format = format });
-        ValidateSrt(srt);
+        if (assembly.Subtitles.Enabled) ValidateSrt(srt);
         var sidecar = Path.Combine(dir, "captions", $"{language}.srt");
-        Directory.CreateDirectory(Path.GetDirectoryName(sidecar)!); File.Copy(srt, sidecar, true);
+        Directory.CreateDirectory(Path.GetDirectoryName(sidecar)!);
+        // Phase16 final.srt is copied byte-for-byte; Phase18 never retimes or recombines its cues.
+        File.Copy(srt, sidecar, true);
+        if (assembly.Subtitles.Enabled && assembly.Subtitles.GenerateAss)
+            await WriteAssSidecar(srt, Path.Combine(dir, "captions", $"{language}.ass"), requestedFormat,
+                assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent, ct);
         var concat = Path.Combine(clips, "concat.txt");
         await File.WriteAllLinesAsync(concat, plan.Entries.Select(x => $"file '{x.Sequence:000}.mp4'"), new UTF8Encoding(false), ct);
-        var unburned = Path.Combine(clips, "unsubtitled.mp4");
+        var narrated = Path.Combine(clips, "narrated.mp4");
         Log("PHASE18_FORMAT_CONCAT_START", new { Format = format, ConcatPath = concat }); diagnostics.ConcatCallsThisPhase++;
-        await Run(tools.FFmpegExecutable, ["-y", "-f", "concat", "-safe", "0", "-i", concat, "-c", "copy", unburned],
+        await Run(tools.FFmpegExecutable, ["-y", "-f", "concat", "-safe", "0", "-i", concat, "-c", "copy", narrated],
             new MediaProcessContext("Concat", format), clips, ct);
-        Log("PHASE18_FORMAT_CONCAT_COMPLETE", new { Format = format, OutputPath = unburned });
+        var unburned = narrated;
+        if (music.Enabled)
+        {
+            var mixed = Path.Combine(clips, "mixed.mp4");
+            var totalSeconds = (governed / 1000d).ToString("0.###", CultureInfo.InvariantCulture);
+            var level = (music.LevelPercent / 100d).ToString("0.######", CultureInfo.InvariantCulture);
+            var audioFilter = music.DuckUnderNarration
+                ? $"[0:a]aresample=48000[n];[1:a]volume={level},aresample=48000[m];[m][n]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=500[duck];[n][duck]amix=inputs=2:duration=first:normalize=0[a]"
+                : $"[0:a]aresample=48000[n];[1:a]volume={level},aresample=48000[m];[n][m]amix=inputs=2:duration=first:normalize=0[a]";
+            await Run(tools.FFmpegExecutable, ["-y", "-i", narrated, "-stream_loop", "-1", "-i", music.Path,
+                "-filter_complex", audioFilter, "-map", "0:v", "-map", "[a]", "-t", totalSeconds,
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", mixed],
+                new MediaProcessContext("BackgroundMusicMix", format), clips, ct);
+            unburned = mixed;
+        }
+        Log("PHASE18_FORMAT_CONCAT_COMPLETE", new { Format = format, OutputPath = unburned, backgroundMusicUsed = music.Enabled });
         var final = Path.Combine(dir, "final.mp4");
-        var burn = language == "en";
+        var burn = assembly.Subtitles.Enabled && assembly.Subtitles.BurnIn;
         if (burn) { Log("PHASE18_SUBTITLE_BURN_START", new { Format = format, SidecarPath = sidecar }); diagnostics.SubtitleBurnCallsThisPhase++;
             await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", BuildSubtitleFilter(sidecar, requestedFormat), "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final],
                 new MediaProcessContext("SubtitleBurn", format), dir, ct);
@@ -736,6 +783,48 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         return entries.ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
     }
     private static async Task<Dictionary<string, Phase16CalibratedScene>> ReadTimeline16(string path, CancellationToken ct) { using var d = await ReadDocument(path, ct); return new[] { "short", "long" }.SelectMany(n => d.RootElement.GetProperty(n).Deserialize<List<Phase16CalibratedScene>>(Json) ?? []).ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal); }
+    private sealed record Phase18Music(bool Enabled, string Path, int LevelPercent, bool DuckUnderNarration, string Sha256);
+
+    private static async Task<Phase18Music> ResolveMusicAsync(VideoAssemblyBackgroundMusicOptions options,
+        string ffprobe, Phase18RenderDiagnostics diagnostics, CancellationToken ct)
+    {
+        if (!options.Enabled) return new(false, string.Empty, Math.Clamp(options.DefaultLevelPercent, 0, 100), options.DuckUnderNarration, string.Empty);
+        var path = options.WonderCuriosityPath?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) || new FileInfo(path).Length <= 0)
+            throw new Phase18AuthorityValidationException(Phase18ReasonCodes.AudioPhysicalEvidenceInvalid,
+                $"Configured VideoAssembly:BackgroundMusic:WonderCuriosityPath is missing or empty: '{path}'.", []);
+        _ = await ProbeDuration(ffprobe, path, new MediaProcessContext("BackgroundMusicPreflight"), diagnostics, ct);
+        return new(true, Path.GetFullPath(path), Math.Clamp(options.DefaultLevelPercent, 0, 100),
+            options.DuckUnderNarration, await HashFile(path, ct));
+    }
+
+    private static async Task WriteAssSidecar(string srtPath, string assPath, Phase18ProductionFormat format,
+        double shortScale, double shortBottomMarginPercent, CancellationToken ct)
+    {
+        var portrait = format == Phase18ProductionFormat.Short;
+        var width = portrait ? VideoPolicy.ShortWidth : VideoPolicy.LongWidth;
+        var height = portrait ? VideoPolicy.ShortHeight : VideoPolicy.LongHeight;
+        var fontSize = portrait ? Math.Max(12, (int)Math.Round(100 * shortScale)) : 22;
+        var margin = portrait ? Math.Max(0, (int)Math.Round(height * shortBottomMarginPercent / 100d)) : 60;
+        static string AssTime(string value)
+        {
+            var time = TimeSpan.ParseExact(value.Trim().Replace(',', '.'), @"hh\:mm\:ss\.fff", CultureInfo.InvariantCulture);
+            return $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}.{time.Milliseconds / 10:00}";
+        }
+        var dialogues = new List<string>();
+        foreach (var block in Regex.Split(await File.ReadAllTextAsync(srtPath, ct), @"\r?\n\r?\n"))
+        {
+            var lines = block.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            if (lines.Length < 3) continue;
+            var times = lines[1].Split(" --> ", StringSplitOptions.TrimEntries);
+            if (times.Length != 2) continue;
+            var cue = string.Join(@"\N", lines.Skip(2)).Replace("{", "\\{").Replace("}", "\\}");
+            dialogues.Add($"Dialogue: 0,{AssTime(times[0])},{AssTime(times[1])},Default,,0,0,0,,{cue}");
+        }
+        var header = $"[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Noto Sans,{fontSize},&H00FFFFFF,&H000000FF,&H80000000,&H40000000,0,0,0,0,100,100,0,0,1,2,1,2,40,40,{margin},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
+        await File.WriteAllTextAsync(assPath, header + string.Join('\n', dialogues) + "\n", new UTF8Encoding(false), ct);
+    }
+
     private static void ValidateSrt(string path) { var text = File.ReadAllText(path, new UTF8Encoding(false, true)); if (string.IsNullOrWhiteSpace(text) || !text.Contains(" --> ", StringComparison.Ordinal)) Fail(Phase18ReasonCodes.SubtitlePhysicalEvidenceInvalid, "SRT is not valid UTF-8/timed text."); }
     private static string ResolveOwned(string root, string path) { var full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(root, path)); var owned = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar; if (!full.StartsWith(owned, StringComparison.Ordinal)) Fail(Phase18ReasonCodes.CandidateValidationFailed, "Authority path escapes the execution root."); return full; }
     private static async Task ProjectCompatibility(string root, string language, IEnumerable<Phase18MediaEvidence> outputs, string canonical, CancellationToken ct) { foreach (var x in outputs) { var format = x.Format.ToLowerInvariant(); var destinations = new[] { Path.Combine(root, "video-assembly", language, format, "final.mp4"), Path.Combine(root, "video", format, format == "short" ? "final-short.mp4" : "final-long.mp4") }; foreach (var destination in destinations) { Directory.CreateDirectory(Path.GetDirectoryName(destination)!); File.Copy(Path.Combine(canonical, x.VideoRelativePath), destination, true); } } await Task.CompletedTask; }
