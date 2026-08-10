@@ -128,9 +128,12 @@ internal static class Phase16DurationCalibrationPublisher
                 return Result(inputs, Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories).ToArray(), false, true, false, p14.AuthorityChecksum, p15Checksum, identity);
         }
 
-        var stagingParent = Path.Combine(root, "16-duration-calibration", ".staging");
-        var stage = Path.Combine(stagingParent, Guid.NewGuid().ToString("N"), language);
-        var backup = finalRoot + ".backup-" + Guid.NewGuid().ToString("N");
+        var authorityParent = Path.Combine(root, "16-duration-calibration");
+        Directory.CreateDirectory(authorityParent);
+        var transactionId = Guid.NewGuid().ToString("N");
+        var stagingParent = Path.Combine(authorityParent, ".staging");
+        var stage = Path.Combine(stagingParent, transactionId, language);
+        var backup = Path.Combine(authorityParent, ".backup", transactionId, language);
         try
         {
             Directory.CreateDirectory(Path.Combine(stage, "short")); Directory.CreateDirectory(Path.Combine(stage, "long"));
@@ -156,10 +159,9 @@ internal static class Phase16DurationCalibrationPublisher
                 committedReadbackPassed = true, committedStateValidationPassed = true, semanticValidationPassed = true,
                 checksumValidationPassed = true, manifestValidationPassed = true, downstreamReady = true, authorityChecksum }, ct);
             ValidateSrt(await File.ReadAllTextAsync(Path.Combine(stage, "short", "final.srt"), ct), cues.Where(x => x.Format == "Short").OrderBy(x => x.StartMs).ToArray());
-            if (Directory.Exists(finalRoot)) Directory.Move(finalRoot, backup);
-            Directory.Move(stage, finalRoot);
-            ValidateSrt(await File.ReadAllTextAsync(Path.Combine(finalRoot, "long", "final.srt"), ct), cues.Where(x => x.Format == "Long").OrderBy(x => x.StartMs).ToArray());
-            if (Directory.Exists(backup)) Directory.Delete(backup, true);
+            await ReplaceCommittedDirectoryAsync(stage, finalRoot, backup, async () =>
+                ValidateSrt(await File.ReadAllTextAsync(Path.Combine(finalRoot, "long", "final.srt"), ct),
+                    cues.Where(x => x.Format == "Long").OrderBy(x => x.StartMs).ToArray()));
             await ProjectCompatibility(root, language, scenes, finalRoot, ct);
             var validationRoot = Path.Combine(root, "validation"); Directory.CreateDirectory(validationRoot);
             await Write(Path.Combine(validationRoot, "phase-16-validation.json"), new { phaseNo = 16, phaseName = "Duration Calibration V1",
@@ -172,8 +174,50 @@ internal static class Phase16DurationCalibrationPublisher
             var outputs = Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories).Append(Path.Combine(validationRoot, "phase-16-validation.json")).ToArray();
             return Result(inputs, outputs, true, false, overwrite, p14.AuthorityChecksum, p15Checksum, authorityChecksum);
         }
-        catch { if (Directory.Exists(stage)) Directory.Delete(stage, true); if (!Directory.Exists(finalRoot) && Directory.Exists(backup)) Directory.Move(backup, finalRoot); throw; }
-        finally { var transaction = Directory.GetParent(stage)?.FullName; if (transaction is not null && Directory.Exists(transaction)) Directory.Delete(transaction, true); }
+        catch { if (Directory.Exists(stage)) Directory.Delete(stage, true); throw; }
+        finally
+        {
+            DeleteEmptyTransactionParent(stage);
+            DeleteEmptyTransactionParent(backup);
+        }
+    }
+
+    internal static async Task ReplaceCommittedDirectoryAsync(string stage, string finalRoot, string backup,
+        Func<Task> committedReadback)
+    {
+        if (!Directory.Exists(stage)) throw new DirectoryNotFoundException($"Phase 16 staging directory is missing: {stage}");
+        Directory.CreateDirectory(Path.GetDirectoryName(finalRoot)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+        var previousMoved = false;
+        try
+        {
+            if (Directory.Exists(finalRoot))
+            {
+                Directory.Move(finalRoot, backup);
+                previousMoved = true;
+            }
+            Directory.Move(stage, finalRoot);
+            await committedReadback();
+            if (Directory.Exists(backup)) Directory.Delete(backup, recursive: true);
+        }
+        catch
+        {
+            if (Directory.Exists(finalRoot)) Directory.Delete(finalRoot, recursive: true);
+            if (previousMoved && Directory.Exists(backup)) Directory.Move(backup, finalRoot);
+            throw;
+        }
+    }
+
+    private static void DeleteEmptyTransactionParent(string languageRoot)
+    {
+        var transactionRoot = Directory.GetParent(languageRoot)?.FullName;
+        if (transactionRoot is not null && Directory.Exists(transactionRoot)
+            && !Directory.EnumerateFileSystemEntries(transactionRoot).Any())
+            Directory.Delete(transactionRoot);
+        var categoryRoot = transactionRoot is null ? null : Directory.GetParent(transactionRoot)?.FullName;
+        if (categoryRoot is not null && Directory.Exists(categoryRoot)
+            && !Directory.EnumerateFileSystemEntries(categoryRoot).Any())
+            Directory.Delete(categoryRoot);
     }
 
     private static long[] Allocate(SubtitleSegment[] segments, long total)
