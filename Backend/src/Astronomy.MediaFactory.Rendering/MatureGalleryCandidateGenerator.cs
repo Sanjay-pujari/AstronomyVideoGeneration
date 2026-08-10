@@ -65,7 +65,9 @@ internal static class MatureGalleryCandidateGenerator
             || context.EventFamily.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase);
         var recognition = publicFacts.FirstOrDefault(IsRecognitionFact);
         var deepSky = publicFacts.FirstOrDefault(IsDeepSkyFact);
-        var keyObjects = SelectGalleryKeyObjects(context.EventFamily, primary, context.SecondaryObjects, publicFacts, publicFacts, publicFacts, 5);
+        var keyObjectEvaluation = EvaluateGalleryKeyObjects(context.EventFamily, primary, context.SecondaryObjects,
+            publicFacts, publicFacts, publicFacts, 5);
+        var keyObjects = keyObjectEvaluation.Selected;
         var objectSummary = CompactObjectPresentation(keyObjects, primary);
         var (treatment, reason, headline, detail, facts, visualTreatmentId, promptPurpose, visualTreatment) = topic.Purpose switch
         {
@@ -127,7 +129,11 @@ internal static class MatureGalleryCandidateGenerator
             "Large role-specific subject, coherent dark-sky lighting, lower-third negative space"));
         return new(topic.Number, topic.Purpose, treatment, reason, topic.LocalizedEducationalRole,
             headline, detail, facts, context.PrimaryObjects.Concat(context.SecondaryObjects).ToArray(),
-            visualTreatmentId, promptPurpose, visualTreatment, authorities, visualReferences, prompt);
+            visualTreatmentId, promptPurpose, visualTreatment, authorities, visualReferences, prompt,
+            topic.Purpose == "Key objects" ? keyObjectEvaluation.Candidates : [],
+            topic.Purpose == "Key objects" ? keyObjectEvaluation.SelectedCategoryCount : 0,
+            topic.Purpose == "Key objects" ? keyObjectEvaluation.AvailableCategoryCount : 0,
+            topic.Purpose != "Key objects" || keyObjectEvaluation.DiversityPassed);
     }
 
     private static bool IsRecognitionFact(string value) => new[] { "recogn", "identify", "spot", "find", "belt", "pattern", "shape" }
@@ -151,31 +157,99 @@ internal static class MatureGalleryCandidateGenerator
     }
 
     internal sealed record GalleryKeyObjectSelection(string SourceValue, string DisplayValue, string AuthorityPath,
-        string TransformationRule, int RankScore, IReadOnlyList<string> RankingReasons);
+        string TransformationRule, string Category, int BaseScore, int DiversityBonus, int FinalScore,
+        bool Selected, string SelectionReason, IReadOnlyList<string> RankingReasons)
+    {
+        // Retained for callers of the previous diagnostic contract.
+        public int RankScore => FinalScore;
+    }
+
+    internal sealed record GalleryKeyObjectEvaluation(IReadOnlyList<GalleryKeyObjectSelection> Candidates,
+        IReadOnlyList<GalleryKeyObjectSelection> Selected, int SelectedCategoryCount,
+        int AvailableCategoryCount, bool DiversityPassed);
 
     internal static IReadOnlyList<GalleryKeyObjectSelection> SelectGalleryKeyObjects(string eventFamily,
         string primaryObject, IReadOnlyList<string> certifiedSecondaryObjects,
         IReadOnlyList<string> certifiedObjectClassifications, IReadOnlyList<string> certifiedRelationships,
         IReadOnlyList<string> certifiedDeepSkyIdentities, int pageCapacity)
     {
-        if (pageCapacity <= 0) return [];
-        return certifiedSecondaryObjects.Where(x => !string.IsNullOrWhiteSpace(x))
+        return EvaluateGalleryKeyObjects(eventFamily, primaryObject, certifiedSecondaryObjects,
+            certifiedObjectClassifications, certifiedRelationships, certifiedDeepSkyIdentities, pageCapacity).Selected;
+    }
+
+    internal static GalleryKeyObjectEvaluation EvaluateGalleryKeyObjects(string eventFamily,
+        string primaryObject, IReadOnlyList<string> certifiedSecondaryObjects,
+        IReadOnlyList<string> certifiedObjectClassifications, IReadOnlyList<string> certifiedRelationships,
+        IReadOnlyList<string> certifiedDeepSkyIdentities, int pageCapacity)
+    {
+        if (pageCapacity <= 0) return new([], [], 0, 0, true);
+        var candidates = certifiedSecondaryObjects.Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase).Select(value =>
             {
                 var name = value.Split('/')[0].Trim();
-                var mentions = certifiedObjectClassifications.Concat(certifiedRelationships).Concat(certifiedDeepSkyIdentities)
+                var classifications = certifiedObjectClassifications
                     .Where(f => f.Contains(name, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var relationships = certifiedRelationships
+                    .Where(f => f.Contains(name, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var deepSkyIdentities = certifiedDeepSkyIdentities
+                    .Where(f => f.Contains(name, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var mentions = classifications.Concat(relationships).Concat(deepSkyIdentities).ToArray();
                 var reasons = new List<string>();
-                var score = 10;
-                if (mentions.Any(f => f.Contains("bright", StringComparison.OrdinalIgnoreCase) && f.Contains("star", StringComparison.OrdinalIgnoreCase))) { score += 100; reasons.Add("CertifiedRecognizableStar"); }
-                if (mentions.Any(f => new[] { "recogn", "identify", "anchor", "belt", "pattern" }.Any(k => f.Contains(k, StringComparison.OrdinalIgnoreCase)))) { score += 70; reasons.Add("CertifiedRecognitionAnchor"); }
-                if (mentions.Any(IsDeepSkyFact)) { score += 50; reasons.Add("CertifiedDeepSkyIdentity"); }
+                var score = 20;
+                var isDeepSky = IsDeepSkyFact(value) || deepSkyIdentities.Any(IsDeepSkyFact);
+                var isRecognition = relationships.Any(f => new[] { "recogn", "identify", "anchor", "belt", "pattern", "shape" }
+                    .Any(k => f.Contains(k, StringComparison.OrdinalIgnoreCase)));
+                var isProminentStar = classifications.Any(f => f.Contains("star", StringComparison.OrdinalIgnoreCase)
+                    && new[] { "bright", "prominent", "major", "key", "important" }.Any(k => f.Contains(k, StringComparison.OrdinalIgnoreCase)));
+                var isStar = classifications.Any(f => f.Contains("star", StringComparison.OrdinalIgnoreCase))
+                    || relationships.Any(f => f.Contains("star", StringComparison.OrdinalIgnoreCase));
+                var category = isDeepSky ? "DeepSkyObject" : isRecognition ? "RecognitionAnchor"
+                    : isProminentStar || isStar ? "ProminentOrKeyStar" : "OtherDistinctiveObject";
+                if (isProminentStar) { score += 70; reasons.Add("CertifiedProminentOrKeyStar"); }
+                else if (isStar) { score += 25; reasons.Add("CertifiedStar"); }
+                if (isRecognition) { score += 60; reasons.Add("CertifiedRecognitionAnchor"); }
+                if (isDeepSky) { score += 65; reasons.Add("CertifiedDeepSkyIdentity"); }
+                if (mentions.Length > 0) { score += 10; reasons.Add("CertifiedAuthorityMention"); }
+                if (value.Contains('/')) { score += 5; reasons.Add("AudienceFriendlyCertifiedAlias"); }
                 if (reasons.Count == 0) reasons.Add("CertifiedMemberObject");
                 var display = value.Contains('/') ? string.Join(" • ", value.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Select(DisplayIdentity)) : DisplayIdentity(value);
                 return new GalleryKeyObjectSelection(value, display, "/intelligence/secondaryObjects",
-                    value.Contains('/') ? "AstronomyObjectAlias.DisplayNamePlusCatalogId" : "StructuredObjectList.ToRankedGalleryHighlights", score, reasons);
-            }).OrderByDescending(x => x.RankScore).ThenBy(x => x.DisplayValue, StringComparer.OrdinalIgnoreCase)
-            .Take(Math.Min(pageCapacity, 5)).ToArray();
+                    value.Contains('/') ? "AstronomyObjectAlias.DisplayNamePlusCatalogId" : "StructuredObjectList.ToRankedGalleryHighlights",
+                    category, score, 0, score, false, "Not selected: outside display capacity.", reasons);
+            }).ToArray();
+
+        var capacity = Math.Min(pageCapacity, 5);
+        var availableCategories = candidates.Select(x => x.Category).Distinct(StringComparer.Ordinal).Count();
+        var selected = new List<GalleryKeyObjectSelection>();
+        var remaining = candidates.ToList();
+        while (selected.Count < capacity && remaining.Count > 0)
+        {
+            var selectedCategories = selected.Select(x => x.Category).ToHashSet(StringComparer.Ordinal);
+            var ranked = remaining.Select(candidate =>
+            {
+                // A marginal bonus makes a certified category representative outrank a redundant,
+                // similarly valuable member without allowing weak uncertified semantics to win.
+                var bonus = selectedCategories.Contains(candidate.Category) ? 0 : 35;
+                if (candidate.Category == "DeepSkyObject" && !selectedCategories.Contains(candidate.Category)) bonus += 20;
+                return candidate with { DiversityBonus = bonus, FinalScore = candidate.BaseScore + bonus };
+            }).OrderByDescending(x => x.FinalScore)
+              .ThenByDescending(x => x.BaseScore)
+              .ThenBy(x => x.SourceValue, StringComparer.OrdinalIgnoreCase).ToArray();
+            var winner = ranked[0] with { Selected = true,
+                SelectionReason = ranked[0].DiversityBonus > 0
+                    ? "Selected by authority score plus category-diversity contribution."
+                    : "Selected by certified authority score within display capacity." };
+            selected.Add(winner);
+            remaining.RemoveAll(x => x.SourceValue.Equals(winner.SourceValue, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var selectedMap = selected.ToDictionary(x => x.SourceValue, StringComparer.OrdinalIgnoreCase);
+        var diagnostics = candidates.Select(candidate => selectedMap.TryGetValue(candidate.SourceValue, out var item)
+            ? item : candidate).OrderByDescending(x => x.FinalScore)
+            .ThenBy(x => x.SourceValue, StringComparer.OrdinalIgnoreCase).ToArray();
+        var selectedCategoryCount = selected.Select(x => x.Category).Distinct(StringComparer.Ordinal).Count();
+        var diversityPassed = selected.Count == 0 || selectedCategoryCount == Math.Min(availableCategories, selected.Count);
+        return new(diagnostics, selected, selectedCategoryCount, availableCategories, diversityPassed);
     }
 
     private static (string Detail, IReadOnlyList<string> Facts) CompactObjectPresentation(

@@ -70,7 +70,9 @@ internal static class Phase13GalleryAuthority
         IReadOnlyList<string> Facts, IReadOnlyList<string> EventObjects, string VisualTreatmentId,
         string PromptPurpose, string VisualTreatment,
         IReadOnlyList<GalleryAuthorityReference> PublicAuthorityReferences,
-        IReadOnlyList<GalleryAuthorityReference> VisualPlanningReferences, string ProviderPrompt);
+        IReadOnlyList<GalleryAuthorityReference> VisualPlanningReferences, string ProviderPrompt,
+        IReadOnlyList<MatureGalleryCandidateGenerator.GalleryKeyObjectSelection>? KeyObjectCandidates = null,
+        int SelectedCategoryCount = 0, int AvailableCategoryCount = 0, bool KeyObjectDiversityPassed = true);
 
     internal sealed record GalleryProviderAttemptDiagnostic(int Slot, string Role, int AttemptCount,
         IReadOnlyList<int?> ProviderStatusCodes, IReadOnlyList<string?> ProviderRequestIds, bool Successful,
@@ -165,6 +167,10 @@ internal static class Phase13GalleryAuthority
                     publicCopyTransformationRule = "certified-structured-authority-to-role-specific-viewer-copy/v1",
                     copyAuthorityReferences = authorities, publicAuthorityReferences = authorities,
                     visualPlanningReferences = plan.VisualPlanningReferences,
+                    keyObjectCandidates = plan.KeyObjectCandidates ?? [],
+                    selectedCategoryCount = plan.SelectedCategoryCount,
+                    availableCategoryCount = plan.AvailableCategoryCount,
+                    keyObjectDiversityPassed = plan.KeyObjectDiversityPassed,
                     promptSemanticInputs = new[] { p2.EventFamily, plan.CanonicalRole, plan.Detail },
                     promptAuthorityReferences = authorities, promptPolicyVersion = Policy, promptChecksum,
                     provider = "AzureOpenAIForImage", providerDeployment = providerOptions.ImageDeployment,
