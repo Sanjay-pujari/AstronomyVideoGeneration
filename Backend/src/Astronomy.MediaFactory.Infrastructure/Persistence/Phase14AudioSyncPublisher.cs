@@ -205,7 +205,45 @@ internal static class Phase14AudioSyncPublisher
 /// <summary>Minimal Phase 15 boundary: synthesis requests are the governed scene audio units, never subtitle segments.</summary>
 public static class Phase15SceneAudioUnitAdapter
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
+    public static async Task<Phase14AudioSyncAuthority> LoadAuthorityAsync(string outputRoot, string planId, string eventId, string language, CancellationToken ct = default)
+    {
+        var authorityRoot = Path.Combine(outputRoot, "14-audio-sync");
+        var path = Path.Combine(authorityRoot, "narration-cue-plan.json");
+        var validationPath = Path.Combine(outputRoot, "validation", "phase-14-validation.json");
+        var reportPath = Path.Combine(authorityRoot, "phase14-publication-report.json");
+        var manifestPath = Path.Combine(authorityRoot, "phase14-manifest.json");
+        foreach (var required in new[] { path, validationPath, reportPath, manifestPath })
+            if (!File.Exists(required)) throw new InvalidOperationException($"{Phase14ReasonCodes.UpstreamMissing}: required Phase 14 authority evidence is missing: {required}");
+
+        await using var stream = File.OpenRead(path);
+        var authority = await JsonSerializer.DeserializeAsync<Phase14AudioSyncAuthority>(stream, Json, ct)
+            ?? throw new InvalidOperationException($"{Phase14ReasonCodes.CuePlanInvalid}: Phase 14 cue plan is invalid.");
+        var computed = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(authority with { AuthorityChecksum = "" }, Json)))).ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(authority.AuthorityChecksum) || !computed.Equals(authority.AuthorityChecksum, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"{Phase14ReasonCodes.CuePlanInvalid}: Phase 14 authority checksum is invalid.");
+        if (authority.PublicationState != "Committed" || !authority.PlanId.Equals(planId, StringComparison.OrdinalIgnoreCase)
+            || !authority.EventId.Equals(eventId, StringComparison.OrdinalIgnoreCase) || !authority.Language.Equals(language, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"{Phase14ReasonCodes.CuePlanInvalid}: Phase 14 authority identity/publication state is invalid.");
+
+        using var validation = JsonDocument.Parse(await File.ReadAllTextAsync(validationPath, ct));
+        using var report = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath, ct));
+        using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(manifestPath, ct));
+        Require(validation.RootElement, "status", "Succeeded");
+        Require(validation.RootElement, "reasonCode", Phase14ReasonCodes.Accepted);
+        foreach (var flag in new[] { "publicationCommitted", "committedStateValidationPassed", "semanticValidationPassed", "checksumValidationPassed", "manifestValidationPassed", "downstreamReady" }) RequireTrue(validation.RootElement, flag);
+        foreach (var flag in new[] { "publicationCommitted", "committedReadbackPassed", "candidateValidationPassed", "candidateReadbackPassed", "downstreamReady" }) RequireTrue(report.RootElement, flag);
+        RequireChecksum(validation.RootElement, authority.AuthorityChecksum);
+        RequireChecksum(report.RootElement, authority.AuthorityChecksum);
+        RequireChecksum(manifest.RootElement, authority.AuthorityChecksum);
+
+        var units = authority.ShortStream.SceneAudioUnits.Concat(authority.LongStream.SceneAudioUnits).ToArray();
+        if (units.Length == 0 || units.Any(x => x.MayCrossSceneBoundary || !x.Language.Equals(language, StringComparison.OrdinalIgnoreCase)
+            || x.TextChecksum != Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(x.Text))).ToLowerInvariant()))
+            throw new InvalidOperationException($"{Phase14ReasonCodes.CuePlanInvalid}: Phase 14 unit language, boundary, or exact text checksum is invalid.");
+        return authority;
+    }
 
     public static async Task<IReadOnlyList<SceneAudioUnit>> LoadAsync(string outputRoot, CancellationToken ct = default)
     {
@@ -220,4 +258,20 @@ public static class Phase15SceneAudioUnitAdapter
     }
 
     public static int ProductionSynthesisRequestCount(IEnumerable<SceneAudioUnit> units) => units.Count();
+
+    private static void RequireTrue(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.True)
+            throw new InvalidOperationException($"{Phase14ReasonCodes.CuePlanInvalid}: Phase 14 evidence flag '{name}' is not true.");
+    }
+    private static void Require(JsonElement root, string name, string expected)
+    {
+        if (!root.TryGetProperty(name, out var value) || !string.Equals(value.GetString(), expected, StringComparison.Ordinal))
+            throw new InvalidOperationException($"{Phase14ReasonCodes.CuePlanInvalid}: Phase 14 evidence '{name}' is invalid.");
+    }
+    private static void RequireChecksum(JsonElement root, string expected)
+    {
+        if (!root.TryGetProperty("authorityChecksum", out var value) || !string.Equals(value.GetString(), expected, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"{Phase14ReasonCodes.CuePlanInvalid}: Phase 14 evidence authority checksum is invalid.");
+    }
 }
