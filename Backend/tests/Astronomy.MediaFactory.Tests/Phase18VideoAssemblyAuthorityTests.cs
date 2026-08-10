@@ -45,13 +45,59 @@ public sealed class Phase18VideoAssemblyAuthorityTests
     }
 
     [Theory]
-    [InlineData(@"D:\test\subs\final.srt", @"subtitles=filename='D\\:/test/subs/final.srt'")]
-    [InlineData(@"D:\Astronomy Workspace\Test Subs\final.srt", @"subtitles=filename='D\\:/Astronomy Workspace/Test Subs/final.srt'")]
-    [InlineData(@"D:\Astronomy Workspace\Observer's Guide\final.srt", @"subtitles=filename='D\\:/Astronomy Workspace/Observer'\\''s Guide/final.srt'")]
-    [InlineData(@"D:\Astronomy Workspace\天文\final.srt", @"subtitles=filename='D\\:/Astronomy Workspace/天文/final.srt'")]
+    [InlineData(@"D:\test\subs\final.srt", "subtitles=filename='D\\:/test/subs/final.srt'")]
+    [InlineData(@"D:\Astronomy Workspace\Test Subs\final.srt", "subtitles=filename='D\\:/Astronomy Workspace/Test Subs/final.srt'")]
+    [InlineData(@"D:\Astronomy Workspace\Observer's Guide\final.srt", "subtitles=filename='D\\:/Astronomy Workspace/Observer'\\\\''s Guide/final.srt'")]
+    [InlineData(@"D:\Astronomy Workspace\天文\final.srt", "subtitles=filename='D\\:/Astronomy Workspace/天文/final.srt'")]
     public void Phase18SubtitleFilterEscapesWindowsAbsolutePaths(string path, string expected)
     {
-        Assert.Equal(expected, Phase18VideoAssemblyAuthorityPublisher.BuildSubtitleFilter(path));
+        var runtimeFilter = Phase18VideoAssemblyAuthorityPublisher.BuildSubtitleFilter(path);
+
+        Assert.Equal(expected, runtimeFilter);
+        Assert.Equal(['D', '\\', ':', '/'], runtimeFilter.Skip("subtitles=filename='".Length).Take(4).ToArray());
+        Assert.DoesNotContain("D\\\\:", runtimeFilter, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Phase18ConfiguredWindowsFfmpegBurnsSubtitlesFromRepresentativeDrivePaths()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var ffmpeg = Environment.GetEnvironmentVariable("FFMPEG_PATH") ?? @"D:\AstronomyWorkspace\ffmpeg\bin\ffmpeg.exe";
+        if (!File.Exists(ffmpeg) || !Directory.Exists(@"D:\")) return;
+
+        var root = Path.Combine(@"D:\", "phase18-subtitle-filter-tests", Guid.NewGuid().ToString("N"));
+        var paths = new[]
+        {
+            Path.Combine(root, "test", "subs", "final.srt"),
+            Path.Combine(root, "Astronomy Workspace", "Test Subs", "final.srt"),
+            Path.Combine(root, "Observer's Guide", "final.srt"),
+            Path.Combine(root, "AstronomyWorkspace", "Astronomy", "media-output", "plans", "GLOBAL", "2026",
+                Guid.NewGuid().ToString("N"), "18-video-assembly", ".staging", Guid.NewGuid().ToString("N"), "en", "short", "final.srt")
+        };
+
+        Directory.CreateDirectory(root);
+        try
+        {
+            var input = Path.Combine(root, "input.mp4");
+            await Phase18VideoAssemblyAuthorityPublisher.Run(ffmpeg,
+                ["-y", "-f", "lavfi", "-i", "color=c=black:s=160x90:d=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", input],
+                new MediaProcessContext("SubtitleFixture", "Short"), root, CancellationToken.None);
+            foreach (var subtitle in paths)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(subtitle)!);
+                await File.WriteAllTextAsync(subtitle, "1\n00:00:00,000 --> 00:00:00,800\nPhase 18\n");
+                var output = Path.Combine(Path.GetDirectoryName(subtitle)!, "burned.mp4");
+                var filter = Phase18VideoAssemblyAuthorityPublisher.BuildSubtitleFilter(subtitle);
+                var result = await Phase18VideoAssemblyAuthorityPublisher.Run(ffmpeg,
+                    ["-y", "-i", input, "-vf", filter, "-c:v", "libx264", output],
+                    new MediaProcessContext("SubtitleBurn", "Short"), root, CancellationToken.None);
+
+                Assert.Equal(filter, result.Arguments[4]);
+                Assert.Equal(0, result.ExitCode);
+                Assert.True(new FileInfo(output).Length > 0);
+            }
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     [Fact]

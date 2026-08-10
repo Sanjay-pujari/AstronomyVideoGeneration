@@ -719,11 +719,11 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     internal static string BuildSubtitleFilter(string absolutePath) =>
         $"subtitles=filename='{EscapeSubtitleFilterPath(absolutePath)}'";
 
-    // A filter graph and the subtitles option parser each consume one escaping layer.
-    // ProcessStartInfo.ArgumentList deliberately supplies no process/shell escaping here.
+    // ArgumentList transports this value verbatim; add only the escaping consumed by
+    // FFmpeg's filter expression parser (never an additional shell escaping layer).
     internal static string EscapeSubtitleFilterPath(string absolutePath) => absolutePath
         .Replace("\\", "/", StringComparison.Ordinal)
-        .Replace(":", "\\\\:", StringComparison.Ordinal)
+        .Replace(":", "\\:", StringComparison.Ordinal)
         .Replace("'", "'\\\\''", StringComparison.Ordinal);
     private static void Cleanup(string p) { if (Directory.Exists(p)) Directory.Delete(p, true); var parent = Path.GetDirectoryName(p); if (parent is not null && Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any()) Directory.Delete(parent); }
     [DoesNotReturn]
