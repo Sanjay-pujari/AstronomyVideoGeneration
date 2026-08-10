@@ -4399,6 +4399,12 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseSceneAudioSyncAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
+        // Phase 7 is frozen narration authority. The governed Phase 14 path only plans
+        // scene-level audio units and subtitle text, then transactionally publishes them.
+        return await Phase14AudioSyncPublisher.ExecuteAsync(context.OutputRoot,
+            context.Request.PlanId.ToString("D"), context.EventId,
+            ResolvePipelineLanguage(context.Request.Language), cancellationToken);
+#if false // Compatibility-only historical writer; intentionally unreachable from governed Phase 14.
         var planRoot = context.OutputRoot;
         var syncRoot = Path.Combine(planRoot, "sync");
         var validationRoot = context.ExecutionContext.ValidationRoot!;
@@ -4663,6 +4669,8 @@ public sealed partial class ProductionPipelineExecutionService(
             await WritePhase14SyncDiagnosticsAsync(planRoot, ResolvePipelineLanguage(context.Request.Language), syncRoot, checkedPaths, shortRoot, longRoot, selectedShortNarrationSource, selectedLongNarrationSource, oldPaths, strategyByScene, narrationDiagnostics, matchedPairs, unmatchedNarrationSections, unmatchedScenes, missingFiles, exceptions, documentaryNarration?.AdapterDiagnostics, null, null, null, eventConsistencyDiagnostics, cancellationToken);
             throw;
         }
+    }
+#endif
     }
 
 
@@ -9733,8 +9741,10 @@ public sealed partial class ProductionPipelineExecutionService(
         var errors = new List<string>();
         var requestedLanguage = ResolvePipelineLanguage(context.Request.Language);
         var configuredTtsMode = subtitleTtsOptions?.Value?.TtsMode ?? new SubtitleTtsOptions().TtsMode;
-        var sceneLevelTtsRequested = string.Equals(configuredTtsMode, "SceneLevel", StringComparison.OrdinalIgnoreCase);
-        var selectedBranch = sceneLevelTtsRequested ? "SceneLevel" : "LegacyCueLevel";
+        if (!string.Equals(configuredTtsMode, "SceneLevel", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("P15_LEGACY_CUE_LEVEL_FORBIDDEN: Governed production requires SceneLevel TTS.");
+        const bool sceneLevelTtsRequested = true;
+        const string selectedBranch = "SceneLevel";
         var generatedAudioFileCount = 0;
 
         var selectedShortSrt = ResolvePhase15SrtPath(planRoot, requestedLanguage, "short");

@@ -345,3 +345,19 @@ Infrastructure contains the central service graph. It also guards against accide
 ### Future Improvements
 
 Split service registration by domain as the graph grows and document each registration group.
+# Governed audio authority (Phases 7, 14–16)
+
+Phase 7 is the sole owner of accepted narration semantics. Phase 14 consumes that
+committed narration and certified Phase 10 scene lineage and owns the canonical
+`14-audio-sync/` root. Its contract is **one visual scene = one SceneAudioUnit =
+one future authoritative scene audio file**, with zero or more subtitle text
+segments referring to that unit. Subtitle/SRT segmentation never defines a
+production TTS request boundary.
+
+Phase 15 consumes `14-audio-sync/narration-cue-plan.json` and owns provider speech
+synthesis and physical audio. Governed production is SceneLevel; LegacyCueLevel
+is compatibility-only and cannot be selected by the RC2 Phase 15 route. Phase 16
+owns calibrated duration and final English and Hindi SRT timing.
+
+The historical `sync/`, `narration/`, `narration-v31/`, and `timing/` paths are
+compatibility projections, not canonical Phase 14 authority.
