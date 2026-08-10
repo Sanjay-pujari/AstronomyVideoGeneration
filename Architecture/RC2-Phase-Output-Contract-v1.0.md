@@ -658,34 +658,39 @@ Render short and long videos.
 - QA
 - Publishing
 
-### Phase 16 — Manifest / Packaging
+### Phase 16 — Duration Calibration Authority
 
 **Responsibility:**
-Create final production manifest and publishing package.
+Consume frozen Phase 14 subtitle segmentation and frozen Phase 15 physical audio
+duration authority to publish final scene windows and final timed subtitles. Phase
+16 never changes narration, creates TTS, trims audio, or resegments subtitles.
 
 **Inputs:**
 
-- All generated assets
+- Committed `14-audio-sync/` cue-plan authority
+- Committed requested-language `15-tts/{language}/` authority
 
 **Outputs:**
 
-- Final manifest
-- Publishing package
+- `16-duration-calibration/{language}/calibrated-scene-timeline.json`
+- `16-duration-calibration/{language}/subtitle-timeline.json`
+- Canonical Short and Long `final.srt`
+- Language-scoped manifest, diagnostics, and publication report
 - `validation/phase-16-validation.json`
 
 **Diagnostics:**
 
-- Packaging diagnostics when asset inclusion, manifest generation, or publishing package decisions require explanation.
+- Duration, lineage, subtitle allocation, SRT checksum, and transactional publication diagnostics.
 
 **Validation:**
 
-- Final manifest exists.
-- Publishing package exists.
-- Package references only current outputs.
+- Phase 14 and Phase 15 committed gates and checksum lineage are valid.
+- Every Phase 14 subtitle segment is timed exactly once inside its Phase 15 audio window.
+- Scene windows are positive and contiguous and physical SRT readback matches the timeline.
 
 **Failure:**
 
-- Fail clearly when generated assets are incomplete or the package cannot be created.
+- Fail closed before candidate writes when either upstream authority or lineage is invalid.
 
 **Consumers:**
 

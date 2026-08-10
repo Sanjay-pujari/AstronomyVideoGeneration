@@ -56,3 +56,25 @@ public sealed record Phase15PublicationResult(IReadOnlyList<string> LoadedAuthor
     string SourcePhase14AuthorityChecksum, string AuthorityChecksum, string ManifestValidationStatus,
     string ValidationStatus, bool SemanticValidationPassed, bool ChecksumValidationPassed,
     bool ManifestValidationPassed, bool DownstreamReady);
+
+public sealed record Phase16CalibratedScene(string SceneAudioUnitId, string SceneId, string Format,
+    int Sequence, string Language, long? PlannedSceneDurationMs, long MinimumVisualDurationMs,
+    long ActualAudioDurationMs, long RequiredPaddingMs, long FinalSceneDurationMs,
+    long SceneStartMs, long SceneEndMs, IReadOnlyList<string> SubtitleSegmentIds,
+    string CalibrationReason, string AudioRelativePath, string AudioSha256, long AudioByteLength,
+    string SourcePhase14AuthorityChecksum, string SourcePhase15AuthorityChecksum);
+
+public sealed record Phase16TimedSubtitle(string SubtitleSegmentId, string SceneAudioUnitId,
+    string SceneId, string Format, int Sequence, int SequenceWithinScene, string Text,
+    string TextChecksum, long StartMs, long EndMs, long DurationMs, IReadOnlyList<string> SentenceIds,
+    int? SourceCharacterStart, int? SourceCharacterEnd, string TimingMethod,
+    string SourcePhase14AuthorityChecksum, string SourcePhase15AuthorityChecksum);
+
+public sealed record Phase16PublicationResult(IReadOnlyList<string> LoadedAuthorityArtifacts,
+    IReadOnlyList<string> OutputFiles, string ReasonCode, string Reason, bool Generated, bool Reused,
+    bool Regenerated, bool CandidateValidationPassed, bool CandidateReadbackPassed,
+    bool PublicationCommitted, bool CommittedReadbackPassed, bool CommittedStateValidationPassed,
+    string SourcePhase14AuthorityChecksum, string SourcePhase15AuthorityChecksum,
+    string AuthorityChecksum, string ManifestValidationStatus, string ValidationStatus,
+    bool SemanticValidationPassed, bool ChecksumValidationPassed, bool ManifestValidationPassed,
+    bool DownstreamReady);

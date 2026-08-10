@@ -168,7 +168,8 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
         var phase15Language=context.Request.Language.StartsWith("hi",StringComparison.OrdinalIgnoreCase)?"hi":"en";
         Add(15,Path.Combine(root,"15-tts",phase15Language),canDeleteOnOverwrite:false);
         Add(15,Path.Combine(root,"tts",phase15Language),compatibility:true,canDeleteOnOverwrite:false);
-        Add(16,Path.Combine(root,"duration-calibration"));
+        // Phase 16 canonical authority is language scoped and atomically replaced by its publisher.
+        Add(16,Path.Combine(root,"16-duration-calibration",phase15Language),canDeleteOnOverwrite:false);
         Add(17,Path.Combine(root,"motion"));
         Add(18,context.ExecutionContext.VideoAssemblyRoot);
         Add(19,Path.Combine(root,"video-qa"));
