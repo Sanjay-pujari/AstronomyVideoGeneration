@@ -197,6 +197,70 @@ public sealed class Phase18VideoAssemblyAuthorityTests
         Assert.Contains("Phase17.DurationMs='29999' but Phase16.FinalSceneDurationMs='30000'", error.Reason);
     }
 
+    [Theory]
+    [InlineData("short", Phase18ProductionFormat.Short)]
+    [InlineData("Short", Phase18ProductionFormat.Short)]
+    [InlineData("SHORT", Phase18ProductionFormat.Short)]
+    [InlineData("long", Phase18ProductionFormat.Long)]
+    [InlineData("Long", Phase18ProductionFormat.Long)]
+    [InlineData("LONG", Phase18ProductionFormat.Long)]
+    [InlineData(" short ", Phase18ProductionFormat.Short)]
+    public void Phase18ParsesOnlyDocumentedProductionFormatCasing(string raw, Phase18ProductionFormat expected) =>
+        Assert.Equal(expected, Phase18VideoAssemblyAuthorityPublisher.ParseProductionFormat(raw));
+
+    [Theory]
+    [InlineData("short", "Short")]
+    [InlineData("Short", "short")]
+    [InlineData("SHORT", "Short")]
+    [InlineData("long", "Long")]
+    [InlineData("Long", "long")]
+    [InlineData("LONG", "Long")]
+    public void Phase18ComparesFormatByClosedSemanticType(string phase15Format, string phase17Format)
+    {
+        var p15 = Row("AAA", actualAudioDurationMs: 100) with { Format = phase15Format };
+        var p16 = Row("AAA", durationMs: 100, endMs: 100) with { Format = phase15Format };
+        var p17 = Row("AAA", durationMs: 100, endMs: 100) with { Format = phase17Format };
+
+        Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage([p15], [p16], [p17], ["p15", "p16", "p17"]);
+    }
+
+    [Theory]
+    [InlineData("portrait")]
+    [InlineData("shortvideo")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void Phase18RejectsUndocumentedProductionFormats(string? raw)
+    {
+        var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ParseProductionFormat(raw));
+        Assert.Equal(Phase18ReasonCodes.FormatInvalid, error.ReasonCode);
+    }
+
+    [Fact]
+    public void Phase18SceneAudioUnitIdsRemainOrdinal()
+    {
+        var p15 = Row("AAA", actualAudioDurationMs: 100) with { SceneAudioUnitId = "sau-ABC", Format = "short" };
+        var p16 = Row("AAA", durationMs: 100, endMs: 100) with { SceneAudioUnitId = "sau-ABC", Format = "short" };
+        var p17 = Row("AAA", durationMs: 100, endMs: 100) with { SceneAudioUnitId = "sau-abc", Format = "Short" };
+
+        var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage([p15], [p16], [p17], []));
+        Assert.Contains("Phase15.SceneAudioUnitId='<missing>'", error.Reason);
+    }
+
+    [Fact]
+    public void Phase18CurrentStyleFourShortAndTwelveLongRowsPassLineage()
+    {
+        Phase18SceneLineageRow Make(int index, string format, bool audio) =>
+            new($"sau-{index:00}", $"scene-{index:00}", format, index, "en", $"hash-{index:00}",
+                audio ? 0 : 1_000, (index - 1) * 1_000, index * 1_000, audio ? 900 : 0);
+        var p15 = Enumerable.Range(1, 16).Select(i => Make(i, i <= 4 ? "short" : "long", true)).ToArray();
+        var p16 = Enumerable.Range(1, 16).Select(i => Make(i, i <= 4 ? "short" : "long", false)).ToArray();
+        var p17 = Enumerable.Range(1, 16).Select(i => Make(i, i <= 4 ? "Short" : "Long", false)).ToArray();
+
+        Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(p15, p16, p17, ["p15", "p16", "p17"]);
+    }
+
     private static Phase18SceneLineageRow Row(string? audioHash, long durationMs = 0, long endMs = 0,
         long actualAudioDurationMs = 0) =>
         new("unit", "scene", "Short", 1, "en", audioHash, durationMs, 0, endMs, actualAudioDurationMs);

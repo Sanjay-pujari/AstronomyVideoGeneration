@@ -129,7 +129,8 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         string format, Phase17MotionPlan plan, IReadOnlyDictionary<string, Phase16CalibratedScene> calibrated,
         IReadOnlyDictionary<string, Phase15Entry> audio, string srt, CancellationToken ct)
     {
-        if (!plan.Format.Equals(format, StringComparison.OrdinalIgnoreCase) || plan.Entries.Count != plan.SceneCount ||
+        var requestedFormat = ParseProductionFormat(format);
+        if (ParseProductionFormat(plan.Format) != requestedFormat || plan.Entries.Count != plan.SceneCount ||
             plan.Entries.Select(x => x.Sequence).SequenceEqual(Enumerable.Range(1, plan.Entries.Count)) is false)
             Fail(Phase18ReasonCodes.CandidateValidationFailed, $"{format} plan order/count is invalid.");
         var dir = Path.Combine(stage, format.ToLowerInvariant()); Directory.CreateDirectory(dir);
@@ -146,9 +147,9 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             if (!audio.TryGetValue(entry.SceneAudioUnitId, out var speech))
                 Fail(Phase18ReasonCodes.LineageMismatch, $"Speech audio is missing for {entry.SceneAudioUnitId}.");
             if (entry.SceneId != timing.SceneId || entry.SceneId != speech.SceneId || entry.Sequence != timing.Sequence ||
-                entry.Sequence != speech.Sequence || !entry.Format.Equals(timing.Format, StringComparison.OrdinalIgnoreCase) ||
-                !entry.Format.Equals(speech.Format, StringComparison.OrdinalIgnoreCase) || !entry.Language.Equals(language, StringComparison.OrdinalIgnoreCase) ||
-                !speech.Language.Equals(language, StringComparison.OrdinalIgnoreCase) || entry.DurationMs != timing.FinalSceneDurationMs)
+                entry.Sequence != speech.Sequence || ParseProductionFormat(entry.Format) != ParseProductionFormat(timing.Format) ||
+                ParseProductionFormat(entry.Format) != ParseProductionFormat(speech.Format) || entry.Language != language ||
+                speech.Language != language || entry.DurationMs != timing.FinalSceneDurationMs)
                 Fail(Phase18ReasonCodes.LineageMismatch, $"Strict row binding failed for {entry.SceneAudioUnitId}.");
             if (speech.ActualAudioDurationMs > entry.DurationMs + ProbeToleranceMs)
                 Fail(Phase18ReasonCodes.AudioPhysicalEvidenceInvalid, $"Speech is longer than governed scene {entry.SceneId}.");
@@ -222,35 +223,44 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         IEnumerable<Phase18SceneLineageRow> phase16, IEnumerable<Phase18SceneLineageRow> phase17,
         IReadOnlyList<string> loadedAuthorityArtifacts)
     {
-        var p15 = phase15.ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
-        var p16 = phase16.ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
-        var p17 = phase17.ToArray();
+        // Normalize the three frozen serialization contracts once, at the adapter boundary.
+        // Raw values remain on Phase18SceneLineageRow and are therefore available to diagnostics.
+        var p15 = phase15.Select(x => NormalizeFormat(x, "Phase15", loadedAuthorityArtifacts))
+            .ToDictionary(x => x.Row.SceneAudioUnitId, StringComparer.Ordinal);
+        var p16 = phase16.Select(x => NormalizeFormat(x, "Phase16", loadedAuthorityArtifacts))
+            .ToDictionary(x => x.Row.SceneAudioUnitId, StringComparer.Ordinal);
+        var p17 = phase17.Select(x => NormalizeFormat(x, "Phase17", loadedAuthorityArtifacts)).ToArray();
         foreach (var motion in p17)
         {
-            if (!p15.TryGetValue(motion.SceneAudioUnitId, out var audio))
-                Mismatch(motion.SceneAudioUnitId, "Phase15.SceneAudioUnitId", "<missing>", "Phase17.SceneAudioUnitId", motion.SceneAudioUnitId, loadedAuthorityArtifacts);
-            if (!p16.TryGetValue(motion.SceneAudioUnitId, out var timing))
-                Mismatch(motion.SceneAudioUnitId, "Phase16.SceneAudioUnitId", "<missing>", "Phase17.SceneAudioUnitId", motion.SceneAudioUnitId, loadedAuthorityArtifacts);
+            if (!p15.TryGetValue(motion.Row.SceneAudioUnitId, out var audio))
+                Mismatch(motion.Row.SceneAudioUnitId, "Phase15.SceneAudioUnitId", "<missing>", "Phase17.SceneAudioUnitId", motion.Row.SceneAudioUnitId, loadedAuthorityArtifacts);
+            if (!p16.TryGetValue(motion.Row.SceneAudioUnitId, out var timing))
+                Mismatch(motion.Row.SceneAudioUnitId, "Phase16.SceneAudioUnitId", "<missing>", "Phase17.SceneAudioUnitId", motion.Row.SceneAudioUnitId, loadedAuthorityArtifacts);
 
-            Compare(motion.SceneAudioUnitId, "Phase15.SceneId", audio.SceneId, "Phase17.SceneId", motion.SceneId, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase16.SceneId", timing.SceneId, "Phase17.SceneId", motion.SceneId, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase15.Format", audio.Format, "Phase17.Format", motion.Format, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase16.Format", timing.Format, "Phase17.Format", motion.Format, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase15.Sequence", audio.Sequence, "Phase17.Sequence", motion.Sequence, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase16.Sequence", timing.Sequence, "Phase17.Sequence", motion.Sequence, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase15.Language", audio.Language, "Phase17.Language", motion.Language, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase16.Language", timing.Language, "Phase17.Language", motion.Language, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase15.AudioSha256", audio.AudioSha256, "Phase17.AudioSha256", motion.AudioSha256, loadedAuthorityArtifacts);
-            if (!string.IsNullOrWhiteSpace(timing.AudioSha256))
-                Compare(motion.SceneAudioUnitId, "Phase15.AudioSha256", audio.AudioSha256, "Phase16.AudioSha256", timing.AudioSha256, loadedAuthorityArtifacts);
-            if (audio.ActualAudioDurationMs <= 0)
-                Mismatch(motion.SceneAudioUnitId, "Phase15.ActualAudioDurationMs", audio.ActualAudioDurationMs, "required minimum", 1, loadedAuthorityArtifacts);
-            if (audio.ActualAudioDurationMs > timing.DurationMs + ProbeToleranceMs)
-                Mismatch(motion.SceneAudioUnitId, "Phase15.ActualAudioDurationMs", audio.ActualAudioDurationMs,
-                    $"Phase16.FinalSceneDurationMs+codecToleranceMs({ProbeToleranceMs})", timing.DurationMs + ProbeToleranceMs, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase16.FinalSceneDurationMs", timing.DurationMs, "Phase17.DurationMs", motion.DurationMs, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase16.SceneStartMs", timing.SceneStartMs, "Phase17.SceneStartMs", motion.SceneStartMs, loadedAuthorityArtifacts);
-            Compare(motion.SceneAudioUnitId, "Phase16.SceneEndMs", timing.SceneEndMs, "Phase17.SceneEndMs", motion.SceneEndMs, loadedAuthorityArtifacts);
+            var unit = motion.Row.SceneAudioUnitId;
+            var audioRow = audio.Row;
+            var timingRow = timing.Row;
+            var motionRow = motion.Row;
+
+            Compare(unit, "Phase15.SceneId", audioRow.SceneId, "Phase17.SceneId", motionRow.SceneId, loadedAuthorityArtifacts);
+            Compare(unit, "Phase16.SceneId", timingRow.SceneId, "Phase17.SceneId", motionRow.SceneId, loadedAuthorityArtifacts);
+            Compare(unit, "Phase15.ParsedFormat", audio.ParsedFormat, "Phase17.ParsedFormat", motion.ParsedFormat, loadedAuthorityArtifacts);
+            Compare(unit, "Phase16.ParsedFormat", timing.ParsedFormat, "Phase17.ParsedFormat", motion.ParsedFormat, loadedAuthorityArtifacts);
+            Compare(unit, "Phase15.Sequence", audioRow.Sequence, "Phase17.Sequence", motionRow.Sequence, loadedAuthorityArtifacts);
+            Compare(unit, "Phase16.Sequence", timingRow.Sequence, "Phase17.Sequence", motionRow.Sequence, loadedAuthorityArtifacts);
+            Compare(unit, "Phase15.Language", audioRow.Language, "Phase17.Language", motionRow.Language, loadedAuthorityArtifacts);
+            Compare(unit, "Phase16.Language", timingRow.Language, "Phase17.Language", motionRow.Language, loadedAuthorityArtifacts);
+            Compare(unit, "Phase15.AudioSha256", audioRow.AudioSha256, "Phase17.AudioSha256", motionRow.AudioSha256, loadedAuthorityArtifacts);
+            if (!string.IsNullOrWhiteSpace(timingRow.AudioSha256))
+                Compare(unit, "Phase15.AudioSha256", audioRow.AudioSha256, "Phase16.AudioSha256", timingRow.AudioSha256, loadedAuthorityArtifacts);
+            if (audioRow.ActualAudioDurationMs <= 0)
+                Mismatch(unit, "Phase15.ActualAudioDurationMs", audioRow.ActualAudioDurationMs, "required minimum", 1, loadedAuthorityArtifacts);
+            if (audioRow.ActualAudioDurationMs > timingRow.DurationMs + ProbeToleranceMs)
+                Mismatch(unit, "Phase15.ActualAudioDurationMs", audioRow.ActualAudioDurationMs,
+                    $"Phase16.FinalSceneDurationMs+codecToleranceMs({ProbeToleranceMs})", timingRow.DurationMs + ProbeToleranceMs, loadedAuthorityArtifacts);
+            Compare(unit, "Phase16.FinalSceneDurationMs", timingRow.DurationMs, "Phase17.DurationMs", motionRow.DurationMs, loadedAuthorityArtifacts);
+            Compare(unit, "Phase16.SceneStartMs", timingRow.SceneStartMs, "Phase17.SceneStartMs", motionRow.SceneStartMs, loadedAuthorityArtifacts);
+            Compare(unit, "Phase16.SceneEndMs", timingRow.SceneEndMs, "Phase17.SceneEndMs", motionRow.SceneEndMs, loadedAuthorityArtifacts);
         }
         if (p17.Length != p15.Count || p17.Length != p16.Count)
             throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
@@ -258,13 +268,38 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
                 loadedAuthorityArtifacts);
     }
 
+    internal static Phase18ProductionFormat ParseProductionFormat(string? value)
+    {
+        var token = value?.Trim();
+        return token switch
+        {
+            "short" or "Short" or "SHORT" => Phase18ProductionFormat.Short,
+            "long" or "Long" or "LONG" => Phase18ProductionFormat.Long,
+            _ => throw new Phase18AuthorityValidationException(Phase18ReasonCodes.FormatInvalid,
+                $"Production format token {Value(value)} is not one of short/Short/SHORT/long/Long/LONG.", [])
+        };
+    }
+
+    private static NormalizedLineageRow NormalizeFormat(Phase18SceneLineageRow row, string phase,
+        IReadOnlyList<string> loadedAuthorityArtifacts)
+    {
+        try { return new(row, ParseProductionFormat(row.Format)); }
+        catch (Phase18AuthorityValidationException error)
+        {
+            throw new Phase18AuthorityValidationException(error.ReasonCode,
+                $"SceneAudioUnitId {row.SceneAudioUnitId}: {phase}.Format={Value(row.Format)} is invalid.",
+                loadedAuthorityArtifacts);
+        }
+    }
+
+    private sealed record NormalizedLineageRow(Phase18SceneLineageRow Row, Phase18ProductionFormat ParsedFormat);
+
     private static void ValidateExpectedSceneCounts(IEnumerable<Phase17MotionEntry> entries,
         IReadOnlyList<string> loadedAuthorityArtifacts)
     {
-        var counts = entries.GroupBy(x => x.Format, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(x => x.Key, x => x.Count(), StringComparer.OrdinalIgnoreCase);
-        var shortCount = counts.GetValueOrDefault("Short");
-        var longCount = counts.GetValueOrDefault("Long");
+        var counts = entries.GroupBy(x => ParseProductionFormat(x.Format)).ToDictionary(x => x.Key, x => x.Count());
+        var shortCount = counts.GetValueOrDefault(Phase18ProductionFormat.Short);
+        var longCount = counts.GetValueOrDefault(Phase18ProductionFormat.Long);
         if (shortCount != 4 || longCount != 12)
             throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
                 $"Canonical scene counts differ: Phase17.Short={shortCount}, expected=4; Phase17.Long={longCount}, expected=12.",
