@@ -800,15 +800,18 @@ public sealed partial class ProductionPipelineExecutionService(
                 && phase16PublicationResults.TryGetValue(context.OutputRoot, out var acceptedPhase16) ? acceptedPhase16 : null;
             var phase17Authority = phaseNo == 17 && missing.Length == 0
                 && phase17PublicationResults.TryGetValue(context.OutputRoot, out var acceptedPhase17) ? acceptedPhase17 : null;
+            var phase18Authority = phaseNo == 18
+                && phase18PublicationResults.TryGetValue(context.OutputRoot, out var acceptedPhase18) ? acceptedPhase18 : null;
+            var phase18Failed = phase18Authority is not null && !phase18Authority.DownstreamReady;
             var reason = missing.Length == 0
                 ? phaseNo == 3 ? (context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED")
                     : phaseNo == 8 && IsSceneAssetsV3Enabled(context) ? "Authority scene assets generated, validated, committed and read back."
-                    : phase17Authority?.Reason ?? phase16Authority?.Reason ?? phase15Authority?.Reason ?? phase14Authority?.Reason ?? phase9Publication?.Reason ?? phase10Certification?.Reason ?? phase11Authority?.Reason ?? "Validation passed."
+                    : phase18Authority?.Reason ?? phase17Authority?.Reason ?? phase16Authority?.Reason ?? phase15Authority?.Reason ?? phase14Authority?.Reason ?? phase9Publication?.Reason ?? phase10Certification?.Reason ?? phase11Authority?.Reason ?? "Validation passed."
                 : BuildPhase7RequiredOutputFailureReason(requiredOutputDiagnostics, missing);
-            var inputFiles = phase17Authority?.LoadedAuthorityArtifacts ?? phase16Authority?.LoadedAuthorityArtifacts ?? phase15Authority?.LoadedAuthorityArtifacts ?? phase14Authority?.LoadedAuthorityArtifacts ?? phase11Authority?.InputFiles ?? phase10Certification?.InputFiles ?? (phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot));
-            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, inputFiles, outputs, warnings, missing, reason, missing.Length > 0, cancellationToken, started, phase10TitleDiagnostics,
+            var inputFiles = phase18Authority?.InputFiles ?? phase17Authority?.LoadedAuthorityArtifacts ?? phase16Authority?.LoadedAuthorityArtifacts ?? phase15Authority?.LoadedAuthorityArtifacts ?? phase14Authority?.LoadedAuthorityArtifacts ?? phase11Authority?.InputFiles ?? phase10Certification?.InputFiles ?? (phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot));
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 && !phase18Failed ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, inputFiles, outputs, warnings, phase18Failed ? [reason] : missing, reason, missing.Length > 0 || phase18Failed, cancellationToken, started, phase10TitleDiagnostics,
                 phaseExecutionBegan: true,
-                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase17Authority?.ReasonCode ?? phase16Authority?.ReasonCode ?? phase15Authority?.ReasonCode ?? phase14Authority?.ReasonCode ?? phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode ?? phase11Authority?.ReasonCode);
+                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase18Authority?.ReasonCode ?? phase17Authority?.ReasonCode ?? phase16Authority?.ReasonCode ?? phase15Authority?.ReasonCode ?? phase14Authority?.ReasonCode ?? phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode ?? phase11Authority?.ReasonCode);
         }
         catch (Phase17PhysicalEvidenceException ex) when (phaseNo == 17)
         {
@@ -12468,7 +12471,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseVideoAssemblyV1Async(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var result = await Phase18VideoAssemblyAuthorityPublisher.ExecuteAsync(context.OutputRoot,
-            ResolvePipelineLanguage(context.Request.Language), context.OverwriteExisting, cancellationToken);
+            ResolvePipelineLanguage(context.Request.Language), context.OverwriteExisting,
+            renderingOptions.Value.FfmpegPath, renderingOptions.Value.FfprobePath, cancellationToken);
         phase18PublicationResults[context.OutputRoot] = result;
         return result.OutputFiles;
     }

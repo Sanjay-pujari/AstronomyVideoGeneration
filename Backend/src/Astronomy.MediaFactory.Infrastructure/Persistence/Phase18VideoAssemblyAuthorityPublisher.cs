@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -19,6 +20,90 @@ internal sealed record Phase15TimelineEntry(string SceneAudioUnitId, string Scen
     string ResolvedRate, string ResolvedStyle, string ProviderRequestId, IReadOnlyList<string> SubtitleSegmentIds,
     string SourcePhase14AuthorityChecksum);
 
+internal sealed record Phase18MediaTools(string FFmpegExecutable, string FFprobeExecutable,
+    string FFmpegVersion, string FFprobeVersion, string FFmpegResolutionSource, string FFprobeResolutionSource);
+
+/// <summary>One portable resolution boundary for both native executables used by Phase 18.</summary>
+internal static class Phase18MediaToolchainResolver
+{
+    internal static async Task<Phase18MediaTools> ResolveAsync(string? configuredFfmpeg,
+        string? configuredFfprobe, CancellationToken ct)
+    {
+        try
+        {
+            var ffmpeg = Resolve(configuredFfmpeg, "FFMPEG_PATH", "ffmpeg");
+            var ffmpegVersion = await Version(ffmpeg.Path, "FFmpeg", ct);
+            try
+            {
+                var ffprobe = Resolve(configuredFfprobe, "FFPROBE_PATH", "ffprobe");
+                var ffprobeVersion = await Version(ffprobe.Path, "FFprobe", ct);
+                return new(ffmpeg.Path, ffprobe.Path, ffmpegVersion, ffprobeVersion, ffmpeg.Source, ffprobe.Source);
+            }
+            catch (Phase18AuthorityValidationException ex)
+            {
+                ex.Data["ffmpegResolved"] = true;
+                ex.Data["ffmpegVersion"] = ffmpegVersion;
+                ex.Data["ffmpegResolutionSource"] = ffmpeg.Source;
+                throw;
+            }
+        }
+        catch (Phase18AuthorityValidationException) { throw; }
+    }
+
+    internal static (string Path, string Source) Resolve(string? configured, string environmentName, string executable)
+    {
+        // RenderingOptions defaults to the conventional executable name; regard that as PATH fallback,
+        // rather than claiming it was an explicit application configuration.
+        if (!string.IsNullOrWhiteSpace(configured) &&
+            !string.Equals(configured.Trim(), executable, StringComparison.OrdinalIgnoreCase))
+            return ResolveCandidate(configured.Trim(), "Configuration", executable);
+        var environment = Environment.GetEnvironmentVariable(environmentName);
+        if (!string.IsNullOrWhiteSpace(environment)) return ResolveCandidate(environment.Trim(), "Environment", executable);
+        return ResolveCandidate(executable, "PATH", executable);
+    }
+
+    private static (string Path, string Source) ResolveCandidate(string candidate, string source, string executable)
+    {
+        if (Path.IsPathRooted(candidate) || candidate.Contains(Path.DirectorySeparatorChar) ||
+            candidate.Contains(Path.AltDirectorySeparatorChar))
+        {
+            if (File.Exists(candidate)) return (Path.GetFullPath(candidate), source);
+            throw Unavailable(executable, $"configured candidate '{candidate}' does not exist");
+        }
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var names = OperatingSystem.IsWindows() && Path.GetExtension(candidate).Length == 0
+            ? new[] { candidate, candidate + ".exe" } : new[] { candidate };
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            foreach (var name in names)
+            {
+                var full = Path.Combine(directory, name);
+                if (File.Exists(full)) return (Path.GetFullPath(full), source);
+            }
+        throw Unavailable(executable, $"'{candidate}' was not found on PATH");
+    }
+
+    private static async Task<string> Version(string executable, string displayName, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            psi.ArgumentList.Add("-version");
+            using var process = Process.Start(psi) ?? throw new Win32Exception("Process.Start returned null.");
+            var output = await process.StandardOutput.ReadLineAsync(ct) ?? await process.StandardError.ReadLineAsync(ct);
+            await process.WaitForExitAsync(ct);
+            if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(output)) throw new InvalidOperationException($"version command exited with code {process.ExitCode}");
+            return output.Trim();
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException)
+        { throw Unavailable(displayName, ex.Message); }
+    }
+
+    private static Phase18AuthorityValidationException Unavailable(string tool, string detail) =>
+        new(Phase18ReasonCodes.MediaToolchainUnavailable,
+            $"{tool} executable could not be resolved or started: {detail}.", []);
+}
+
 internal static class Phase18VideoAssemblyAuthorityPublisher
 {
     internal static readonly Phase18VideoPolicy VideoPolicy = new("phase18-video/1.0", "h264", "libx264",
@@ -32,7 +117,28 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     internal static async Task<Phase18PublicationResult> ExecuteAsync(string root, string language,
-        bool overwrite, CancellationToken ct)
+        bool overwrite, string? configuredFfmpeg, string? configuredFfprobe, CancellationToken ct)
+    {
+        try { return await ExecuteCoreAsync(root, language, overwrite, configuredFfmpeg, configuredFfprobe, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) when (ex is Phase18AuthorityValidationException or Win32Exception or IOException or InvalidOperationException)
+        {
+            var authority = ex as Phase18AuthorityValidationException;
+            var inputs = authority?.LoadedAuthorityArtifacts.Count > 0 ? authority.LoadedAuthorityArtifacts : ExistingInputs(root, language);
+            var code = authority?.ReasonCode ?? Phase18ReasonCodes.RenderFailed;
+            var reason = authority?.Reason ?? ex.Message;
+            var result = FailedResult(inputs, code, reason);
+            await Write(Path.Combine(root, "validation", "phase-18-validation.json"), FailureValidation(result,
+                ffmpegResolved: ex.Data["ffmpegResolved"] as bool? ?? false, ffprobeResolved: false,
+                ffmpegVersion: ex.Data["ffmpegVersion"] as string,
+                resolutionSource: ex.Data["ffmpegResolutionSource"] as string,
+                renderCalls: 0, probeCalls: 0), ct);
+            return result;
+        }
+    }
+
+    private static async Task<Phase18PublicationResult> ExecuteCoreAsync(string root, string language,
+        bool overwrite, string? configuredFfmpeg, string? configuredFfprobe, CancellationToken ct)
     {
         language = string.IsNullOrWhiteSpace(language) ? "en" : language.Trim().ToLowerInvariant();
         var p15 = AuthorityFiles(root, "15-tts", language, "phase15");
@@ -72,7 +178,8 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             inputs);
         ValidateAuthorityDrivenSceneCounts(audio.Values, calibrated.Values, motion.SelectMany(x => x.Entries), inputs);
         await PreflightPhysicalEvidence(root, language, audio, calibrated, motion.SelectMany(x => x.Entries), srts, ct);
-        var toolchain = await ToolchainIdentity(ct);
+        var tools = await Phase18MediaToolchainResolver.ResolveAsync(configuredFfmpeg, configuredFfprobe, ct);
+        var toolchain = $"{tools.FFmpegVersion} | {tools.FFprobeVersion}";
         var requested = new[] { "Short", "Long" };
         var identity = Hash(JsonSerializer.Serialize(new { Schema, language, requested, p15Checksum, p16Checksum,
             p17Checksum, RenderPolicy, VideoPolicy, AudioPolicy, SubtitlePolicy, toolchain }, Json));
@@ -98,7 +205,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         {
             Directory.CreateDirectory(stage);
             for (var f = 0; f < requested.Length; f++)
-                evidence.Add(await RenderFormat(root, stage, language, requested[f], motion[f], calibrated, audio, srts[f], ct));
+                evidence.Add(await RenderFormat(root, stage, language, requested[f], motion[f], calibrated, audio, srts[f], tools, ct));
             var authorityChecksum = Hash(JsonSerializer.Serialize(new { identity, outputs = evidence }, Json));
             var manifest = new Phase18Manifest(Schema, language, requested, p15Checksum, p16Checksum, p17Checksum,
                 RenderPolicy, VideoPolicy.Version, AudioPolicy.Version, SubtitlePolicy.Version, toolchain, evidence,
@@ -106,7 +213,11 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             await Write(Path.Combine(stage, "phase18-manifest.json"), manifest, ct);
             await Write(Path.Combine(stage, "phase18-authority-diagnostics.json"), new { schemaVersion = "phase18.diagnostics/1.0",
                 language, requestedFormats = requested, renderPolicy = VideoPolicy, audioPolicy = AudioPolicy,
-                subtitlePolicy = SubtitlePolicy, toolchainIdentity = toolchain, candidateValidationPassed = true,
+                subtitlePolicy = SubtitlePolicy, toolchainIdentity = toolchain, ffmpegResolved = true,
+                ffprobeResolved = true, ffmpegVersion = tools.FFmpegVersion, ffprobeVersion = tools.FFprobeVersion,
+                toolchainResolutionSource = new { ffmpeg = tools.FFmpegResolutionSource, ffprobe = tools.FFprobeResolutionSource },
+                renderCallsThisPhase = evidence.Sum(x => x.SourceAudioSha256.Count) + 3, probeCallsThisPhase = 2,
+                candidateValidationPassed = true,
                 candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true,
                 stagingCleanupRequired = true, backgroundMusicUsed = false, outroDurationMs = 0,
                 sourcePhase15AuthorityChecksum = p15Checksum, sourcePhase16AuthorityChecksum = p16Checksum,
@@ -134,7 +245,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
 
     private static async Task<Phase18MediaEvidence> RenderFormat(string root, string stage, string language,
         string format, Phase17MotionPlan plan, IReadOnlyDictionary<string, Phase16CalibratedScene> calibrated,
-        IReadOnlyDictionary<string, Phase15TimelineEntry> audio, string srt, CancellationToken ct)
+        IReadOnlyDictionary<string, Phase15TimelineEntry> audio, string srt, Phase18MediaTools tools, CancellationToken ct)
     {
         var requestedFormat = ParseProductionFormat(format);
         var sequences = plan.Entries.Select(x => x.Sequence).ToArray();
@@ -172,7 +283,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             var clip = Path.Combine(clips, $"{entry.Sequence:000}.mp4");
             var seconds = (entry.DurationMs / 1000d).ToString("0.###", CultureInfo.InvariantCulture);
             var (w, h) = format == "Short" ? (VideoPolicy.ShortWidth, VideoPolicy.ShortHeight) : (VideoPolicy.LongWidth, VideoPolicy.LongHeight);
-            await Run("ffmpeg", ["-y", "-loop", "1", "-framerate", "30", "-i", image, "-i", speechPath,
+            await Run(tools.FFmpegExecutable, ["-y", "-loop", "1", "-framerate", "30", "-i", image, "-i", speechPath,
                 "-filter_complex", $"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},fps=30,format=yuv420p[v];[1:a]apad=whole_dur={seconds},aresample=48000,aformat=channel_layouts=stereo[a]",
                 "-map", "[v]", "-map", "[a]", "-t", seconds, "-c:v", "libx264", "-preset", VideoPolicy.Preset,
                 "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", VideoPolicy.PixelFormat, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", clip], ct);
@@ -182,12 +293,12 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         var concat = Path.Combine(clips, "concat.txt");
         await File.WriteAllLinesAsync(concat, plan.Entries.Select(x => $"file '{x.Sequence:000}.mp4'"), new UTF8Encoding(false), ct);
         var unburned = Path.Combine(clips, "unsubtitled.mp4");
-        await Run("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concat, "-c", "copy", unburned], ct);
+        await Run(tools.FFmpegExecutable, ["-y", "-f", "concat", "-safe", "0", "-i", concat, "-c", "copy", unburned], ct);
         var final = Path.Combine(dir, "final.mp4");
         var burn = language == "en";
-        if (burn) await Run("ffmpeg", ["-y", "-i", unburned, "-vf", $"subtitles={EscapeFilter(sidecar)}", "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final], ct);
+        if (burn) await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", $"subtitles={EscapeFilter(sidecar)}", "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final], ct);
         else File.Copy(unburned, final, true);
-        var physical = await ProbeDuration(final, ct);
+        var physical = await ProbeDuration(tools.FFprobeExecutable, final, ct);
         if (Math.Abs(physical - governed) > ProbeToleranceMs) Fail(Phase18ReasonCodes.VideoValidationFailed, $"{format} duration differs by {Math.Abs(physical-governed)}ms.");
         var relativeVideo = $"{format.ToLowerInvariant()}/final.mp4"; var relativeSrt = $"{format.ToLowerInvariant()}/final.srt";
         var result = new Phase18MediaEvidence(format, relativeVideo, relativeSrt, governed, physical,
@@ -380,9 +491,9 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         if (process.ExitCode != 0) Fail(Phase18ReasonCodes.RenderFailed, error[..Math.Min(2000, error.Length)]);
     }
 
-    private static async Task<long> ProbeDuration(string path, CancellationToken ct)
+    private static async Task<long> ProbeDuration(string ffprobe, string path, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo("ffprobe") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        var psi = new ProcessStartInfo(ffprobe) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         foreach (var x in new[] { "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path }) psi.ArgumentList.Add(x);
         using var p = Process.Start(psi)!; var output = await p.StandardOutput.ReadToEndAsync(ct); await p.WaitForExitAsync(ct);
         if (!double.TryParse(output.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var sec) || p.ExitCode != 0)
@@ -481,7 +592,21 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     private static object Publication(string checksum) => new { schemaVersion = "phase18.publication/1.0", reasonCode = Phase18ReasonCodes.Accepted, candidateValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, committedStateValidationPassed = true, semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true, validationStatus = "Valid", downstreamReady = true, authorityChecksum = checksum };
     private static object Validation(Phase18PublicationResult x) => new { phaseNo = 18, phaseName = "Video Assembly Authority", status = "Succeeded", x.ReasonCode, x.Reason, inputFiles = x.InputFiles, outputFiles = x.OutputFiles, x.Generated, x.Reused, x.Regenerated, x.CandidateValidationPassed, x.CandidateReadbackPassed, x.PublicationCommitted, x.CommittedReadbackPassed, x.CommittedStateValidationPassed, x.SourcePhase15AuthorityChecksum, x.SourcePhase16AuthorityChecksum, x.SourcePhase17AuthorityChecksum, x.AuthorityChecksum, x.ManifestValidationStatus, x.ValidationStatus, x.SemanticValidationPassed, x.ChecksumValidationPassed, x.ManifestValidationPassed, x.DownstreamReady };
     private static Phase18PublicationResult Result(IReadOnlyList<string> i, IReadOnlyList<string> o, bool g, bool u, bool r, string p15, string p16, string p17, string checksum) => new(i, o, Phase18ReasonCodes.Accepted, "Phase 18 video assembly authority accepted.", g, u, r, true, true, true, true, true, p15, p16, p17, checksum, "Valid", "Valid", true, true, true, true);
-    private static async Task<string> ToolchainIdentity(CancellationToken ct) { var psi = new ProcessStartInfo("ffmpeg") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false }; psi.ArgumentList.Add("-version"); using var p = Process.Start(psi)!; var line = await p.StandardOutput.ReadLineAsync(ct) ?? await p.StandardError.ReadLineAsync(ct) ?? "ffmpeg-unknown"; await p.WaitForExitAsync(ct); return line.Trim(); }
+    private static string[] ExistingInputs(string root, string language) =>
+        new[] { "15-tts", "16-duration-calibration", "17-motion" }
+            .SelectMany(phase => Directory.Exists(Path.Combine(root, phase, language))
+                ? Directory.EnumerateFiles(Path.Combine(root, phase, language), "*", SearchOption.AllDirectories)
+                : []).Concat(new[] { 15, 16, 17 }.Select(number => Path.Combine(root, "validation", $"phase-{number}-validation.json"))
+                    .Where(File.Exists)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    private static Phase18PublicationResult FailedResult(IReadOnlyList<string> inputs, string code, string reason) =>
+        new(inputs, [], code, reason, false, false, false, false, false, false, false, false,
+            "", "", "", "", "Invalid", "Invalid", false, false, false, false);
+    private static object FailureValidation(Phase18PublicationResult x, bool ffmpegResolved, bool ffprobeResolved,
+        string? ffmpegVersion, string? resolutionSource, int renderCalls, int probeCalls) => new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2",
+            status = "Failed", x.ReasonCode, x.Reason, inputFiles = x.InputFiles, outputFiles = Array.Empty<string>(),
+            x.PublicationCommitted, x.DownstreamReady, ffmpegResolved, ffprobeResolved,
+            ffmpegVersion, ffprobeVersion = (string?)null, toolchainResolutionSource = resolutionSource,
+            renderCallsThisPhase = renderCalls, probeCallsThisPhase = probeCalls };
     private static async Task<T> Read<T>(string path, CancellationToken ct) => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, ct), Json) ?? throw new InvalidDataException(path);
     private static Task<JsonDocument> ReadDocument(string path, CancellationToken ct) => Task.Run(() => JsonDocument.Parse(File.ReadAllText(path)), ct);
     private static Task Write(string path, object value, CancellationToken ct) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); return File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Json), new UTF8Encoding(false), ct); }
