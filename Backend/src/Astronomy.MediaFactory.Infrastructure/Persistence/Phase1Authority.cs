@@ -237,9 +237,11 @@ public static class PhaseOwnedCleanupExecutor
             return false;
         }
 
-        if (target.IsDirectory)
+        // Classify the object that is actually present before selecting a destructive API.
+        // The catalogue metadata describes the intended shape, but must never cause File.*
+        // to be used against a directory left by an earlier execution.
+        if (Directory.Exists(target.Path))
         {
-            if (!Directory.Exists(target.Path)) return true;
             deletedFiles.AddRange(Directory.EnumerateFiles(target.Path, "*", SearchOption.AllDirectories).Select(Normalize));
             deletedDirectories.Add(Normalize(target.Path));
             Directory.Delete(target.Path, recursive: true);
