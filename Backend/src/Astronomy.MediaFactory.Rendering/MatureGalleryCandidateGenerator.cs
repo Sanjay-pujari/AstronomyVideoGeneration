@@ -65,16 +65,17 @@ internal static class MatureGalleryCandidateGenerator
             || context.EventFamily.Contains("CONSTELLATION", StringComparison.OrdinalIgnoreCase);
         var recognition = publicFacts.FirstOrDefault(IsRecognitionFact);
         var deepSky = publicFacts.FirstOrDefault(IsDeepSkyFact);
-        var objectSummary = CompactObjectPresentation(context.SecondaryObjects, publicFacts, primary);
+        var keyObjects = SelectGalleryKeyObjects(context.EventFamily, primary, context.SecondaryObjects, publicFacts, publicFacts, publicFacts, 5);
+        var objectSummary = CompactObjectPresentation(keyObjects, primary);
         var (treatment, reason, headline, detail, facts, visualTreatmentId, promptPurpose, visualTreatment) = topic.Purpose switch
         {
             "Opening view" => ("EventIdentity", (string?)null, $"MEET {DisplayIdentity(primary)}",
-                $"A wide-sky introduction to {DisplayIdentity(primary)}.", new[] { primary },
+                NaturalSentence(publicFacts.FirstOrDefault(IsIdentityFact) ?? shortTitle, primary), new[] { primary },
                 "OpeningCinematicWide", "Introduce the event in a wide documentary opening",
                 "wide cinematic night sky with the complete subject and a natural horizon"),
             "What happens" when isConstellation => ("ConstellationRecognition", "The canonical mechanism role adapts to constellation pattern recognition.",
                 recognition?.Contains("belt", StringComparison.OrdinalIgnoreCase) == true ? "START WITH THE BELT" : $"SPOT {Possessive(primary)} PATTERN",
-                recognition is null ? $"Recognize the defining pattern of {DisplayIdentity(primary)}." : $"Pattern cue: {Concise(recognition)}",
+                recognition is null ? $"Look for the recognizable shape of {NaturalName(primary)}." : Concise(recognition),
                 recognition is null ? new[] { primary } : new[] { recognition }, "RecognitionPattern",
                 "Explain the constellation's recognizable geometry", "tight educational pattern study emphasizing certified geometry rather than a generic star field"),
             "What happens" => ("EventMechanism", (string?)null, $"HOW {DisplayIdentity(primary)} UNFOLDS",
@@ -86,8 +87,8 @@ internal static class MatureGalleryCandidateGenerator
             "Where to look" when isConstellation => ("ConstellationFindingContext",
                 "No certified direction is available; the canonical location role adapts to recognition context.",
                 $"TRACE {DisplayIdentity(primary)} FROM THE GROUND", recognition is null
-                    ? $"Use its recognizable shape as the locating cue." : $"Finding cue: {Concise(recognition)}",
-                context.SecondaryObjects.Take(3).ToArray(), "ObserverFindingContext",
+                    ? $"Let the shape of {NaturalName(primary)} guide your eye." : $"Use this clue to find it: {Concise(recognition)}",
+                keyObjects.Take(3).Select(x => x.DisplayValue).ToArray(), "ObserverFindingContext",
                 "Show how an observer can recognize the constellation without compass claims",
                 "ground-based observer framing with horizon and recognition cue; visibly different from the opening"),
             "Where to look" => ("IdentityFindingContext", "No certified direction is available; no direction is asserted.",
@@ -106,14 +107,14 @@ internal static class MatureGalleryCandidateGenerator
                 "Reveal a certified deep-sky highlight in close detail", "cinematic deep-sky close view centered on the certified nebula or object, not the full constellation"),
             "When to observe" => ("EvergreenObservationHighlight",
                 "No certified local time or viewing window is available; the role adapts without inventing timing.",
-                $"NOTICE WHAT MAKES {DisplayIdentity(primary)} DISTINCT", Concise(publicFacts.Skip(1).FirstOrDefault() ?? $"Explore the defining features of {DisplayIdentity(primary)}."),
+                $"NOTICE WHAT MAKES {DisplayIdentity(primary)} DISTINCT", Concise(publicFacts.Skip(1).FirstOrDefault() ?? $"Notice the features that distinguish {NaturalName(primary)}."),
                 publicFacts.Skip(1).Take(1).ToArray(), "ObservationHighlight", "Present an evergreen certified observation highlight",
                 "educational cinematic close treatment rather than a generic wide field"),
             "Key objects" => ("KeyObjectDetail", (string?)null, $"EXPLORE {Possessive(primary)} KEY OBJECTS",
                 objectSummary.Detail, objectSummary.Facts, "KeyObjectCloseup", "Present the certified key objects in a compact portrait",
                 "close detail-oriented celestial portrait featuring only certified objects"),
             _ => ("ViewerTakeaway", (string?)null, $"YOUR {DisplayIdentity(primary)} SKY CHECK",
-                recognition is null ? $"Remember the defining shape and key highlights of {DisplayIdentity(primary)}." : $"Remember this cue: {Concise(recognition)}",
+                recognition is null ? $"Take away the shape and standout objects of {NaturalName(primary)}." : $"One last clue: {Concise(recognition)}",
                 objectSummary.Facts.Take(2).ToArray(), "ViewerChecklistContext", "Conclude with a practical recognition takeaway",
                 "observer-centric cinematic horizon with a person beneath the visible subject; no unverified equipment")
         };
@@ -133,35 +134,56 @@ internal static class MatureGalleryCandidateGenerator
         .Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static bool IsDeepSkyFact(string value) => new[] { "m42", "nebula", "deep sky", "cluster", "galaxy" }
         .Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+    private static bool IsIdentityFact(string value) => new[] { "constellation", "asterism", "nebula", "galaxy", "cluster" }
+        .Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static bool IsViewerSemantic(string value) => !new[]
         { "eventType", "primaryObjects", "secondaryObjects", "ProductionEventIntelligence", " is the primary CONSTELLATION object" }
         .Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
     private static string DisplayIdentity(string value) => value.Trim().ToUpperInvariant();
+    private static string NaturalName(string value) => System.Globalization.CultureInfo.InvariantCulture.TextInfo
+        .ToTitleCase(value.Trim().ToLowerInvariant());
     private static string Possessive(string value) => DisplayIdentity(value) + (value.EndsWith('s') ? "'" : "'S");
     private static string Concise(string value) => value.Length <= 96 ? value.Trim() : value[..95].TrimEnd() + "…";
+    private static string NaturalSentence(string value, string primary)
+    {
+        var text = Concise(value).Replace(primary.ToUpperInvariant(), NaturalName(primary), StringComparison.Ordinal);
+        return text.EndsWith('.') ? text : text + ".";
+    }
+
+    internal sealed record GalleryKeyObjectSelection(string SourceValue, string DisplayValue, string AuthorityPath,
+        string TransformationRule, int RankScore, IReadOnlyList<string> RankingReasons);
+
+    internal static IReadOnlyList<GalleryKeyObjectSelection> SelectGalleryKeyObjects(string eventFamily,
+        string primaryObject, IReadOnlyList<string> certifiedSecondaryObjects,
+        IReadOnlyList<string> certifiedObjectClassifications, IReadOnlyList<string> certifiedRelationships,
+        IReadOnlyList<string> certifiedDeepSkyIdentities, int pageCapacity)
+    {
+        if (pageCapacity <= 0) return [];
+        return certifiedSecondaryObjects.Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Select(value =>
+            {
+                var name = value.Split('/')[0].Trim();
+                var mentions = certifiedObjectClassifications.Concat(certifiedRelationships).Concat(certifiedDeepSkyIdentities)
+                    .Where(f => f.Contains(name, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var reasons = new List<string>();
+                var score = 10;
+                if (mentions.Any(f => f.Contains("bright", StringComparison.OrdinalIgnoreCase) && f.Contains("star", StringComparison.OrdinalIgnoreCase))) { score += 100; reasons.Add("CertifiedRecognizableStar"); }
+                if (mentions.Any(f => new[] { "recogn", "identify", "anchor", "belt", "pattern" }.Any(k => f.Contains(k, StringComparison.OrdinalIgnoreCase)))) { score += 70; reasons.Add("CertifiedRecognitionAnchor"); }
+                if (mentions.Any(IsDeepSkyFact)) { score += 50; reasons.Add("CertifiedDeepSkyIdentity"); }
+                if (reasons.Count == 0) reasons.Add("CertifiedMemberObject");
+                var display = value.Contains('/') ? string.Join(" • ", value.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Select(DisplayIdentity)) : DisplayIdentity(value);
+                return new GalleryKeyObjectSelection(value, display, "/intelligence/secondaryObjects",
+                    value.Contains('/') ? "AstronomyObjectAlias.DisplayNamePlusCatalogId" : "StructuredObjectList.ToRankedGalleryHighlights", score, reasons);
+            }).OrderByDescending(x => x.RankScore).ThenBy(x => x.DisplayValue, StringComparer.OrdinalIgnoreCase)
+            .Take(Math.Min(pageCapacity, 5)).ToArray();
+    }
 
     private static (string Detail, IReadOnlyList<string> Facts) CompactObjectPresentation(
-        IReadOnlyList<string> objects, IReadOnlyList<string> certifiedFacts, string fallback)
+        IReadOnlyList<GalleryKeyObjectSelection> objects, string fallback)
     {
-        var values = objects.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (values.Length == 0) return ($"KEY OBJECT • {fallback.ToUpperInvariant()}", new[] { fallback });
-        var groups = new List<string>();
-        AddCertifiedGroup("BELT", ["alnitak", "alnilam", "mintaka"], "belt");
-        AddCertifiedGroup("BRIGHT STARS", ["betelgeuse", "rigel"], "bright star");
-        AddCertifiedGroup("DEEP SKY", ["m42", "nebula"], "nebula");
-        var groupedNames = groups.SelectMany(group => values.Where(value => group.Contains(value, StringComparison.OrdinalIgnoreCase)))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var remaining = values.Where(x => !groupedNames.Contains(x)).Take(4).Select(x => x.ToUpperInvariant()).ToArray();
-        if (remaining.Length > 0) groups.Add(string.Join(" • ", remaining));
-        return (string.Join("   |   ", groups.Take(3)), groups.Take(3).ToArray());
-
-        void AddCertifiedGroup(string label, IReadOnlyList<string> names, string relation)
-        {
-            var members = values.Where(value => names.Any(name => value.Contains(name, StringComparison.OrdinalIgnoreCase))).ToArray();
-            var authorityProvesGroup = certifiedFacts.Any(fact => fact.Contains(relation, StringComparison.OrdinalIgnoreCase)
-                && members.Count(member => fact.Contains(member.Split('/')[0].Trim(), StringComparison.OrdinalIgnoreCase)) > 0);
-            if (authorityProvesGroup && members.Length > 0) groups.Add($"{label}  {string.Join(" • ", members.Select(x => x.ToUpperInvariant()))}");
-        }
+        var values = objects.Select(x => x.DisplayValue).ToArray();
+        if (values.Length == 0) return ($"KEY OBJECT • {DisplayIdentity(fallback)}", new[] { fallback });
+        return (string.Join(" • ", values), values);
     }
 
     private static IEnumerable<Phase13GalleryAuthority.GalleryAuthorityReference> AuthoritiesFor(string detail,
