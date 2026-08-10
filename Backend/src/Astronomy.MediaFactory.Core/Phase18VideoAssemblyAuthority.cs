@@ -6,6 +6,7 @@ public static class Phase18ReasonCodes
     public const string UpstreamPhase16Invalid = "P18_UPSTREAM_PHASE16_INVALID";
     public const string UpstreamPhase17Invalid = "P18_UPSTREAM_PHASE17_INVALID";
     public const string LineageMismatch = "P18_LINEAGE_MISMATCH";
+    public const string FormatInvalid = "P18_FORMAT_INVALID";
     public const string VisualPhysicalEvidenceInvalid = "P18_VISUAL_PHYSICAL_EVIDENCE_INVALID";
     public const string AudioPhysicalEvidenceInvalid = "P18_AUDIO_PHYSICAL_EVIDENCE_INVALID";
     public const string SubtitlePhysicalEvidenceInvalid = "P18_SUBTITLE_PHYSICAL_EVIDENCE_INVALID";
@@ -18,6 +19,8 @@ public static class Phase18ReasonCodes
 }
 
 public enum Phase18SubtitleMode { SidecarOnly, BurnInAndSidecar }
+/// <summary>The closed production-format vocabulary understood by the Phase 18 adapter.</summary>
+public enum Phase18ProductionFormat { Short, Long }
 public sealed record Phase18VideoPolicy(string Version, string Codec, string Encoder, string PixelFormat,
     int FramesPerSecond, string Preset, int Crf, int ShortWidth, int ShortHeight, int LongWidth, int LongHeight);
 public sealed record Phase18AudioPolicy(string Version, string Codec, int SampleRate, int Channels, int Bitrate);
