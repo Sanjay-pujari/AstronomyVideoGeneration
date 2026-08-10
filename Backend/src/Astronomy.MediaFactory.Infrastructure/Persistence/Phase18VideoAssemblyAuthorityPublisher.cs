@@ -131,8 +131,11 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
                 entry.TransitionOut.Type != Phase17TransitionType.Cut || entry.TransitionIn.DurationMs != 0 || entry.TransitionOut.DurationMs != 0)
                 Fail(Phase18ReasonCodes.CandidateValidationFailed, "Only explicitly implemented Static and Cut/0 semantics are accepted.");
             if (!Enum.IsDefined(entry.Easing)) Fail(Phase18ReasonCodes.CandidateValidationFailed, "Unknown easing.");
-            if (!calibrated.TryGetValue(entry.SceneAudioUnitId, out var timing) || !audio.TryGetValue(entry.SceneAudioUnitId, out var speech) ||
-                entry.SceneId != timing.SceneId || entry.SceneId != speech.SceneId || entry.Sequence != timing.Sequence ||
+            if (!calibrated.TryGetValue(entry.SceneAudioUnitId, out var timing))
+                Fail(Phase18ReasonCodes.LineageMismatch, $"Calibrated timing is missing for {entry.SceneAudioUnitId}.");
+            if (!audio.TryGetValue(entry.SceneAudioUnitId, out var speech))
+                Fail(Phase18ReasonCodes.LineageMismatch, $"Speech audio is missing for {entry.SceneAudioUnitId}.");
+            if (entry.SceneId != timing.SceneId || entry.SceneId != speech.SceneId || entry.Sequence != timing.Sequence ||
                 entry.Sequence != speech.Sequence || !entry.Format.Equals(timing.Format, StringComparison.OrdinalIgnoreCase) ||
                 !entry.Format.Equals(speech.Format, StringComparison.OrdinalIgnoreCase) || !entry.Language.Equals(language, StringComparison.OrdinalIgnoreCase) ||
                 !speech.Language.Equals(language, StringComparison.OrdinalIgnoreCase) || entry.DurationMs != timing.FinalSceneDurationMs)
@@ -196,7 +199,8 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         var psi = new ProcessStartInfo("ffprobe") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         foreach (var x in new[] { "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path }) psi.ArgumentList.Add(x);
         using var p = Process.Start(psi)!; var output = await p.StandardOutput.ReadToEndAsync(ct); await p.WaitForExitAsync(ct);
-        if (p.ExitCode != 0 || !double.TryParse(output.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var sec)) Fail(Phase18ReasonCodes.VideoValidationFailed, "ffprobe failed.");
+        if (!double.TryParse(output.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var sec) || p.ExitCode != 0)
+            Fail(Phase18ReasonCodes.VideoValidationFailed, "ffprobe failed.");
         return (long)Math.Round(sec * 1000, MidpointRounding.AwayFromZero);
     }
 
