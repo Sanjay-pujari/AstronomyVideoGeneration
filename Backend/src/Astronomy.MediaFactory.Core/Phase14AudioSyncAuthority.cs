@@ -62,7 +62,9 @@ public sealed record Phase16CalibratedScene(string SceneAudioUnitId, string Scen
     long ActualAudioDurationMs, long RequiredPaddingMs, long FinalSceneDurationMs,
     long SceneStartMs, long SceneEndMs, IReadOnlyList<string> SubtitleSegmentIds,
     string CalibrationReason, string AudioRelativePath, string AudioSha256, long AudioByteLength,
-    string SourcePhase14AuthorityChecksum, string SourcePhase15AuthorityChecksum);
+    string SourcePhase14AuthorityChecksum, string SourcePhase15AuthorityChecksum,
+    string PlannedDurationSource, string? PlannedDurationSourceArtifact,
+    string? PlannedDurationSourcePath, string? PlannedDurationSourceChecksum);
 
 public sealed record Phase16TimedSubtitle(string SubtitleSegmentId, string SceneAudioUnitId,
     string SceneId, string Format, int Sequence, int SequenceWithinScene, string Text,

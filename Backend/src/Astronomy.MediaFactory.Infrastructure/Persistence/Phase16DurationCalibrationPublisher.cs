@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -32,7 +33,7 @@ internal static class Phase16DurationCalibrationPublisher
             Path.Combine(p14Root, "phase14-publication-report.json"), Path.Combine(root, "validation", "phase-14-validation.json"),
             Path.Combine(p15Root, "tts-timeline.json"), Path.Combine(p15Root, "phase15-manifest.json"),
             Path.Combine(p15Root, "phase15-publication-report.json"), Path.Combine(root, "validation", "phase-15-validation.json")
-        };
+        }.ToList();
         if (inputs.Take(4).Any(path => !File.Exists(path))) Fail("P16_UPSTREAM_PHASE14_INVALID", "Committed Phase 14 evidence is missing.");
         if (inputs.Skip(4).Any(path => !File.Exists(path))) Fail("P16_UPSTREAM_PHASE15_INVALID", "Committed Phase 15 evidence is missing.");
 
@@ -51,6 +52,12 @@ internal static class Phase16DurationCalibrationPublisher
 
         var p15Entries = timeline.GetProperty("entries").EnumerateArray().Select(ReadEntry).ToArray();
         var units = p14.ShortStream.SceneAudioUnits.Concat(p14.LongStream.SceneAudioUnits).ToArray();
+        var plannedAuthority = await LoadPlannedDurationAuthorityAsync(root, ct);
+        if (plannedAuthority.Available)
+        {
+            inputs.Add(plannedAuthority.AuthorityPath!);
+            inputs.Add(plannedAuthority.IndexPath!);
+        }
         if (p15Entries.Length != units.Length || p15Entries.Select(x => x.SceneAudioUnitId).Distinct(StringComparer.Ordinal).Count() != p15Entries.Length)
             Fail("P16_SCENE_MAPPING_INVALID", "Phase 14 and Phase 15 unit counts/identities differ.");
         var byId = p15Entries.ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
@@ -74,10 +81,12 @@ internal static class Phase16DurationCalibrationPublisher
             foreach (var unit in units.Where(x => x.Format.Equals(format, StringComparison.OrdinalIgnoreCase)).OrderBy(x => x.Sequence))
             {
                 var audio = byId[unit.SceneAudioUnitId];
-                long? planned = null; // No numbered scene authority currently publishes a reliable duration.
-                var basis = planned ?? MinimumVisualDurationMs;
-                var final = Math.Max(basis, audio.ActualAudioDurationMs + RequiredPaddingMs);
-                var reason = audio.ActualAudioDurationMs + RequiredPaddingMs > basis ? "AudioExtendedVisual" : "PlannedVisualRetained";
+                var key = PlannedDurationKey(format, unit.SceneId);
+                var hasPlanned = plannedAuthority.DurationsMs.TryGetValue(key, out var governedDuration);
+                long? planned = hasPlanned ? governedDuration : null;
+                var calibration = Calibrate(planned, MinimumVisualDurationMs, audio.ActualAudioDurationMs);
+                var final = calibration.FinalDurationMs;
+                var reason = calibration.Reason;
                 var ordered = unit.SubtitleSegments.OrderBy(x => x.SequenceWithinScene).ToArray();
                 var allocations = Allocate(ordered, audio.ActualAudioDurationMs);
                 long cueCursor = cursor;
@@ -92,7 +101,11 @@ internal static class Phase16DurationCalibrationPublisher
                 scenes.Add(new(unit.SceneAudioUnitId, unit.SceneId, format, unit.Sequence, language, planned,
                     MinimumVisualDurationMs, audio.ActualAudioDurationMs, RequiredPaddingMs, final, cursor, cursor + final,
                     ordered.Select(x => x.SubtitleSegmentId).ToArray(), reason, audio.AudioRelativePath, audio.AudioSha256,
-                    audio.AudioByteLength, p14.AuthorityChecksum, p15Checksum)); cursor += final;
+                    audio.AudioByteLength, p14.AuthorityChecksum, p15Checksum,
+                    hasPlanned ? "Phase6StoryFrameIndexEstimatedDuration" : "ConfiguredMinimumVisualDurationMs",
+                    hasPlanned ? Path.GetRelativePath(root, plannedAuthority.IndexPath!).Replace('\\', '/') : null,
+                    hasPlanned ? $"$.scenes[variant='{format}',sceneId='{unit.SceneId}'].estimatedDuration" : null,
+                    hasPlanned ? plannedAuthority.Checksum : null)); cursor += final;
             }
         }
         ValidateCandidate(units, scenes, cues);
@@ -102,6 +115,8 @@ internal static class Phase16DurationCalibrationPublisher
         ValidateSrt(longSrt, cues.Where(x => x.Format == "Long").OrderBy(x => x.StartMs).ToArray());
         var shortHash = HashBytes(Encoding.UTF8.GetBytes(shortSrt)); var longHash = HashBytes(Encoding.UTF8.GetBytes(longSrt));
         var authorityChecksum = Hash(JsonSerializer.Serialize(new { Schema, p14.AuthorityChecksum, p15Checksum, language,
+            plannedDurationAuthorityChecksum = plannedAuthority.Checksum,
+            plannedDurationReuseIdentity = PlannedDurationReuseIdentity(plannedAuthority.Checksum, plannedAuthority.DurationsMs),
             CalibrationPolicy, TimingPolicy, Serializer, scenes, cues, shortHash, longHash }, Json));
         var identity = authorityChecksum;
         var finalRoot = Path.Combine(root, "16-duration-calibration", language);
@@ -134,7 +149,7 @@ internal static class Phase16DurationCalibrationPublisher
             await Write(Path.Combine(stage, "phase16-manifest.json"), new { schemaVersion = "phase16.manifest/1.0", language,
                 authorityChecksum, publicationState = "Committed", publicationCommitted = true, validationStatus = "Valid",
                 downstreamReady = true, artifacts }, ct);
-            var diagnostics = BuildDiagnostics(language, p14.AuthorityChecksum, p15Checksum, scenes, cues, shortHash, longHash, authorityChecksum);
+            var diagnostics = BuildDiagnostics(language, p14.AuthorityChecksum, p15Checksum, plannedAuthority, scenes, cues, shortHash, longHash, authorityChecksum);
             await Write(Path.Combine(stage, "phase16-authority-diagnostics.json"), diagnostics, ct);
             await Write(Path.Combine(stage, "phase16-publication-report.json"), new { schemaVersion = "phase16.publication/1.0",
                 candidateValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true,
@@ -194,7 +209,8 @@ internal static class Phase16DurationCalibrationPublisher
         foreach (var scene in scenes)
         {
             var own = cues.Where(x => x.SceneAudioUnitId == scene.SceneAudioUnitId).OrderBy(x => x.StartMs).ToArray();
-            if (scene.FinalSceneDurationMs < scene.ActualAudioDurationMs + scene.RequiredPaddingMs || own.Any(x => x.StartMs < scene.SceneStartMs || x.EndMs > scene.SceneStartMs + scene.ActualAudioDurationMs || x.StartMs >= x.EndMs)
+            if (scene.FinalSceneDurationMs < (scene.PlannedSceneDurationMs ?? scene.MinimumVisualDurationMs)
+                || scene.FinalSceneDurationMs < scene.ActualAudioDurationMs + scene.RequiredPaddingMs || own.Any(x => x.StartMs < scene.SceneStartMs || x.EndMs > scene.SceneStartMs + scene.ActualAudioDurationMs || x.StartMs >= x.EndMs)
                 || own.Zip(own.Skip(1)).Any(x => x.First.EndMs != x.Second.StartMs) || own[^1].EndMs != scene.SceneStartMs + scene.ActualAudioDurationMs)
                 Fail("P16_SUBTITLE_TIMING_INVALID", $"Cue window validation failed for {scene.SceneAudioUnitId}.");
         }
@@ -208,7 +224,66 @@ internal static class Phase16DurationCalibrationPublisher
         File.Copy(Path.Combine(finalRoot, "short", "final.srt"), Path.Combine(subtitles, "short.srt"), true);
         File.Copy(Path.Combine(finalRoot, "long", "final.srt"), Path.Combine(subtitles, "long.srt"), true);
     }
-    private static object BuildDiagnostics(string language, string p14, string p15, IReadOnlyList<Phase16CalibratedScene> scenes, IReadOnlyList<Phase16TimedSubtitle> cues, string shortHash, string longHash, string checksum) => new { schemaVersion = "phase16.diagnostics/1.0", language, sourcePhase14AuthorityChecksum = p14, sourcePhase15AuthorityChecksum = p15, shortSceneAudioUnitCount = scenes.Count(x => x.Format == "Short"), longSceneAudioUnitCount = scenes.Count(x => x.Format == "Long"), shortCalibratedSceneCount = scenes.Count(x => x.Format == "Short"), longCalibratedSceneCount = scenes.Count(x => x.Format == "Long"), shortSubtitleSegmentCount = cues.Count(x => x.Format == "Short"), longSubtitleSegmentCount = cues.Count(x => x.Format == "Long"), plannedDurationSource = "ConfiguredMinimumVisualDurationMs/1.0", requiredPaddingMs = RequiredPaddingMs, phase15DurationAuthorityUsed = true, physicalProbeUsedForVerificationOnly = false, audioExtendedVisualCount = scenes.Count(x => x.CalibrationReason == "AudioExtendedVisual"), plannedVisualRetainedCount = scenes.Count(x => x.CalibrationReason == "PlannedVisualRetained"), subtitleTimingMethod = TimingMethod, subtitleTimedExactlyOncePassed = true, subtitleTextFidelityPassed = true, subtitleLineagePassed = true, crossSceneSubtitleCueCount = 0, overlapCueCount = 0, nonPositiveCueCount = 0, shortSrtSha256 = shortHash, longSrtSha256 = longHash, providerCallsThisPhase = 0, ttsRegenerated = false, audioTrimmed = false, narrationModified = false, candidateValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, authorityChecksum = checksum, downstreamReady = true };
+    private static object BuildDiagnostics(string language, string p14, string p15, PlannedDurationAuthority plannedAuthority, IReadOnlyList<Phase16CalibratedScene> scenes, IReadOnlyList<Phase16TimedSubtitle> cues, string shortHash, string longHash, string checksum)
+    {
+        long Total(string format, Func<Phase16CalibratedScene, long> value) => scenes.Where(x => x.Format == format).Sum(value);
+        return new { schemaVersion = "phase16.diagnostics/1.0", language, sourcePhase14AuthorityChecksum = p14, sourcePhase15AuthorityChecksum = p15,
+            plannedDurationAuthorityAvailable = plannedAuthority.Available, plannedDurationAuthorityPhase = plannedAuthority.Available ? 6 : (int?)null,
+            plannedDurationAuthorityChecksum = plannedAuthority.Checksum,
+            scenesWithGovernedPlannedDuration = scenes.Count(x => x.PlannedSceneDurationMs.HasValue),
+            scenesUsingMinimumVisualFallback = scenes.Count(x => !x.PlannedSceneDurationMs.HasValue),
+            shortSceneAudioUnitCount = scenes.Count(x => x.Format == "Short"), longSceneAudioUnitCount = scenes.Count(x => x.Format == "Long"),
+            shortCalibratedSceneCount = scenes.Count(x => x.Format == "Short"), longCalibratedSceneCount = scenes.Count(x => x.Format == "Long"),
+            shortSubtitleSegmentCount = cues.Count(x => x.Format == "Short"), longSubtitleSegmentCount = cues.Count(x => x.Format == "Long"),
+            shortPlannedDurationMs = Total("Short", x => x.PlannedSceneDurationMs ?? x.MinimumVisualDurationMs),
+            longPlannedDurationMs = Total("Long", x => x.PlannedSceneDurationMs ?? x.MinimumVisualDurationMs),
+            shortActualAudioDurationMs = Total("Short", x => x.ActualAudioDurationMs), longActualAudioDurationMs = Total("Long", x => x.ActualAudioDurationMs),
+            shortFinalCalibratedDurationMs = Total("Short", x => x.FinalSceneDurationMs), longFinalCalibratedDurationMs = Total("Long", x => x.FinalSceneDurationMs),
+            requiredPaddingMs = RequiredPaddingMs, phase15DurationAuthorityUsed = true, physicalProbeUsedForVerificationOnly = false,
+            audioExtendedVisualCount = scenes.Count(x => x.CalibrationReason == "AudioExtendedVisual"), plannedVisualRetainedCount = scenes.Count(x => x.CalibrationReason == "PlannedVisualRetained"), subtitleTimingMethod = TimingMethod,
+            subtitleTimedExactlyOncePassed = true, subtitleTextFidelityPassed = true, subtitleLineagePassed = true, crossSceneSubtitleCueCount = 0, overlapCueCount = 0, nonPositiveCueCount = 0,
+            shortSrtSha256 = shortHash, longSrtSha256 = longHash, providerCallsThisPhase = 0, ttsRegenerated = false, audioTrimmed = false, narrationModified = false,
+            candidateValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true, authorityChecksum = checksum, downstreamReady = true };
+    }
+
+    internal static (long FinalDurationMs, string Reason, string Source) Calibrate(long? plannedMs, long minimumMs, long audioMs)
+    {
+        var basis = plannedMs ?? minimumMs;
+        var audioWithPadding = audioMs + RequiredPaddingMs;
+        return (Math.Max(basis, audioWithPadding), audioWithPadding > basis ? "AudioExtendedVisual" : "PlannedVisualRetained",
+            plannedMs.HasValue ? "Phase6StoryFrameIndexEstimatedDuration" : "ConfiguredMinimumVisualDurationMs");
+    }
+
+    internal static string PlannedDurationKey(string format, string sceneId) => $"{format.Trim().ToLowerInvariant()}\n{sceneId}";
+
+    internal static string PlannedDurationReuseIdentity(string? sourceChecksum, IReadOnlyDictionary<string, long> durations) =>
+        Hash(JsonSerializer.Serialize(new { sourceChecksum, durations = durations.OrderBy(x => x.Key, StringComparer.Ordinal) }, Json));
+
+    private static async Task<PlannedDurationAuthority> LoadPlannedDurationAuthorityAsync(string root, CancellationToken ct)
+    {
+        var authorityPath = Path.Combine(root, "06-story-frames", "story-frames.json");
+        var indexPath = Path.Combine(root, "06-story-frames", "story-frame-index.json");
+        if (!File.Exists(authorityPath) && !File.Exists(indexPath)) return PlannedDurationAuthority.None;
+        if (!File.Exists(authorityPath) || !File.Exists(indexPath)) Fail("P16_PLANNED_DURATION_AUTHORITY_INVALID", "Phase 6 planned-duration evidence is incomplete.");
+        var authority = JsonSerializer.Deserialize<StoryFramesAuthority>(await File.ReadAllTextAsync(authorityPath, ct), Json)
+            ?? throw new InvalidOperationException("P16_PLANNED_DURATION_AUTHORITY_INVALID: Phase 6 authority is unreadable.");
+        var index = JsonSerializer.Deserialize<StoryFrameIndex>(await File.ReadAllTextAsync(indexPath, ct), Json)
+            ?? throw new InvalidOperationException("P16_PLANNED_DURATION_AUTHORITY_INVALID: Phase 6 index is unreadable.");
+        if (authority.SemanticChecksum != StoryFrameAuthorityChecksum.Authority(authority)
+            || index.Checksum != StoryFrameAuthorityChecksum.Index(index)
+            || index.SourceStoryFramesChecksum != authority.SemanticChecksum || index.SourceStoryFramesAuthorityId != authority.AuthorityId)
+            Fail("P16_PLANNED_DURATION_AUTHORITY_INVALID", "Phase 6 story-frame authority/index checksum lineage failed.");
+        var durations = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var scene in index.Scenes)
+        {
+            if (!double.IsFinite(scene.EstimatedDuration) || scene.EstimatedDuration <= 0)
+                Fail("P16_PLANNED_DURATION_AUTHORITY_INVALID", $"Invalid planned duration for {scene.SceneId}.");
+            var key = PlannedDurationKey(scene.Variant, scene.SceneId);
+            if (!durations.TryAdd(key, checked((long)Math.Round(scene.EstimatedDuration * 1000d, MidpointRounding.AwayFromZero))))
+                Fail("P16_PLANNED_DURATION_AUTHORITY_INVALID", $"Duplicate Phase 6 scene identity {scene.Variant}/{scene.SceneId}.");
+        }
+        return new(true, authorityPath, indexPath, index.Checksum, durations);
+    }
     private static object Artifact(string relative, string value, string hash) => new { relativePath = relative, byteLength = Encoding.UTF8.GetByteCount(value), sha256 = hash };
     private static Phase16PublicationResult Result(IReadOnlyList<string> inputs, IReadOnlyList<string> outputs, bool generated, bool reused, bool regenerated, string p14, string p15, string checksum) => new(inputs, outputs, Accepted, "Phase 16 duration authority accepted.", generated, reused, regenerated, true, true, true, true, true, p14, p15, checksum, "Valid", "Valid", true, true, true, true);
     private static Phase15Entry ReadEntry(JsonElement x) => new(x.GetProperty("sceneAudioUnitId").GetString()!, x.GetProperty("sceneId").GetString()!, x.GetProperty("sequence").GetInt32(), x.GetProperty("format").GetString()!, x.GetProperty("language").GetString()!, x.GetProperty("audioRelativePath").GetString()!, x.GetProperty("audioByteLength").GetInt64(), x.GetProperty("audioSha256").GetString()!, x.GetProperty("textChecksum").GetString()!, x.GetProperty("actualAudioDurationMs").GetInt64(), x.GetProperty("subtitleSegmentIds").EnumerateArray().Select(y => y.GetString()!).ToArray(), x.GetProperty("sourcePhase14AuthorityChecksum").GetString()!);
@@ -224,5 +299,11 @@ internal static class Phase16DurationCalibrationPublisher
     private static async Task<string> HashFile(string path, CancellationToken ct) { await using var stream = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant(); }
     private static Task Write<T>(string path, T value, CancellationToken ct) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Json), ct);
     private static void Fail(string code, string message) => throw new InvalidOperationException($"{code}: {message}");
+    private sealed record PlannedDurationAuthority(bool Available, string? AuthorityPath, string? IndexPath,
+        string? Checksum, IReadOnlyDictionary<string, long> DurationsMs)
+    {
+        internal static readonly PlannedDurationAuthority None = new(false, null, null, null,
+            new Dictionary<string, long>(StringComparer.Ordinal));
+    }
     private sealed record Phase15Entry(string SceneAudioUnitId, string SceneId, int Sequence, string Format, string Language, string AudioRelativePath, long AudioByteLength, string AudioSha256, string TextChecksum, long ActualAudioDurationMs, IReadOnlyList<string> SubtitleSegmentIds, string SourcePhase14AuthorityChecksum);
 }
