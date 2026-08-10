@@ -10,6 +10,12 @@ public sealed class MotionProfileSelector
     public MotionProfile Select(RenderPlanScene scene, int sceneIndex, int sceneCount)
     {
         var role = $"{scene.SceneType} {scene.Segment} {scene.Caption} {scene.ObjectName}";
+        return SelectSemantic(role, sceneIndex, sceneCount);
+    }
+
+    /// <summary>Applies the mature deterministic semantic policy without coupling authority consumers to render DTOs.</summary>
+    public MotionProfile SelectSemantic(string role, int sceneIndex, int sceneCount)
+    {
 
         // Motion Layer V2 first family: planetary conjunction videos use only smooth,
         // deterministic documentary motion.  Every profile starts from a stable centered

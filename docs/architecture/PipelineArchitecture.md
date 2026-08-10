@@ -1,5 +1,19 @@
 # Pipeline Architecture
 
+## Phase 17 governed motion authority
+
+Phase 17 is a language-scoped, metadata-only authority beneath `17-motion/{language}`. It binds
+each complete ordered Phase 16 scene window verbatim to exactly one Phase 8/9 visual certified by
+Phase 10, using `(Format, SceneId)` as the sole join key. It does not read compatibility duration
+plans, audio, TTS, narration, SRT, or legacy `scene-assets-v3` assets and never renders media.
+
+Motion is expressed as renderer-neutral normalized transforms and normalized-time keyframes. The
+policy reuses the deterministic semantic `MotionProfileSelector`; however, until visual authority
+publishes certified focus/safe/overlay regions, candidates are explicitly reduced to a valid
+`StaticFallbackNoCertifiedFocus`. Future certified normalized regions can be consumed by the same
+contract without reopening Phases 8–10 or introducing image analysis in Phase 17. Phase 18 retains
+ownership of FFmpeg interpretation and video rendering.
+
 ## Purpose
 Document the actual 18-phase production pipeline requested for Sprint 2, while noting that the implementation currently defines phases 1-20 and uses phases 19-20 for QA/review and publishing package work.
 
@@ -38,7 +52,7 @@ flowchart TD
 | 14 | Scene Audio Sync V1 | Pair visual scenes with narration sections and generate SRT/subtitle artifacts. | Phase 7 narration, Phase 8/9 scenes, language. | `sync/scene-audio-sync.json`, narration text, SRT files, diagnostics. | Scene-id lineage, event-consistency, subtitle segmentation, Hindi translation validation. |
 | 15 | Real TTS V2 | Generate cue-level TTS audio and timeline. | Phase 14 SRT/sync, Azure Speech, language-scoped paths. | TTS audio files, timeline JSON, `phase-15-validation.json`. | Requires Azure Speech; validates scene-id lineage and audio item coverage. |
 | 16 | Duration Calibration Authority | Preserve Phase 14 segments while assigning final scene and subtitle windows from Phase 15 `ActualAudioDurationMs`. | Committed numbered Phase 14 cue plan and requested-language Phase 15 authority. | Language-scoped calibrated scene timeline, subtitle timeline, canonical Short/Long SRT, manifest/report/diagnostics. | Fails closed on upstream gates, strict unit lineage, audio metadata, timing feasibility, or physical SRT readback. |
-| 17 | Motion Layer V1 / V2 preview | Create per-scene motion and filter plans. | Scene assets, duration plan, request motion strength. | Motion plan JSON, `phase-17-validation.json`. | Detects motion-strength mismatches and missing motion data. |
+| 17 | Governed Motion Authority | Bind frozen language-scoped timing to certified visuals and publish deterministic renderer-neutral motion semantics. | Committed Phase 16 timeline/gates; Phase 8/9 manifests and publication evidence; Phase 10 certification. | `17-motion/{language}/{short,long}/motion-plan.json`, manifest/report/diagnostics, `phase-17-validation.json`. | Fails closed on upstream gates, identity bijection, physical visual evidence, exact timing, aspect, semantic checksum, or transactional readback; missing certified regions safely produce Static. |
 | 18 | Cinematic Video Assembly V2 | Assemble short/long video media with subtitles, audio mix, outro, and fade. | Phase 10 assets, Phase 15 audio, Phase 16 durations, Phase 17 motion, SRT. | Final MP4s, mixed audio, render diagnostics, `phase-18-validation.json`. | Validates cue subtitle drift, scene audio/video sync, final audio/video duration, subtitle safe area. |
 
 

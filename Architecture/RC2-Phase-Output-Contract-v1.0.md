@@ -1,5 +1,18 @@
 # RC2 Phase Output Contract v1.0
 
+## Phase 17 — Governed Motion Authority
+
+Canonical output is language-scoped at `17-motion/{language}` and contains common typed Short and
+Long `motion-plan.json` documents, `phase17-manifest.json`, authority diagnostics, and a publication
+report, plus `validation/phase-17-validation.json`. Plans carry the committed Phase 16 checksum,
+deterministic certified-visual checksum, exact millisecond scene windows, immutable audio/subtitle
+lineage, repository-relative visual identity, normalized transforms/keyframes, closed easing and
+motion values, explicit safety fallback, and conservative `Cut/0` transition intent.
+
+Publication is staged, candidate-read, atomically replaced with rollback, committed-read, and
+validated before `downstreamReady` is asserted. The semantic checksum excludes transaction IDs,
+clocks, absolute paths, render diagnostics, and all other machine-specific state.
+
 ## 1. Purpose
 
 This contract freezes the expected responsibility, inputs, outputs, diagnostics, validation, failure behavior, and downstream consumers for every RC2 / Platform V2 phase.
