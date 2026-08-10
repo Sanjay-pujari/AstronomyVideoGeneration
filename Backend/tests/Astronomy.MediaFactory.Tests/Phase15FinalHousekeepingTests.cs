@@ -6,41 +6,110 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Phase15FinalHousekeepingTests
 {
     [Fact]
-    public void Phase15SuccessfulExecutionLeavesNoTransactionGuidDirectory()
+    public void Phase15SuccessRemovesCurrentTransactionDirectory()
         => AssertTransactionCleanup(remainsCommittedAuthority: false);
 
     [Fact]
-    public void Phase15FailedExecutionLeavesNoTransactionGuidDirectory()
+    public void Phase15FailureRemovesCurrentTransactionDirectory()
         => AssertTransactionCleanup(remainsCommittedAuthority: false);
 
     [Fact]
-    public void Phase15DoesNotDeleteCommittedAuthorityDuringStagingCleanup()
+    public void Phase15StagingCleanupNeverDeletesCommittedEnglishAuthority()
         => AssertTransactionCleanup(remainsCommittedAuthority: true);
 
     [Fact]
-    public void Phase15SuccessfulShortAuthorityProjectsShortTtsGeneratedTrue()
+    public void Phase15StartupRemovesEmptyStaleTransactionDirectories()
+    {
+        using var fixture = new TemporaryDirectory("phase15-stale-");
+        var staging = Path.Combine(fixture.Root, "15-tts", ".staging");
+        var stale = Path.Combine(staging, Guid.NewGuid().ToString("N"));
+        var nonEmpty = Path.Combine(staging, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(stale);
+        Directory.CreateDirectory(nonEmpty);
+        File.WriteAllText(Path.Combine(nonEmpty, "candidate.json"), "retain");
+
+        ProductionPipelineExecutionService.CleanupPhase15Transaction(staging, null);
+
+        Assert.False(Directory.Exists(stale));
+        Assert.True(Directory.Exists(nonEmpty));
+    }
+
+    [Fact]
+    public void Phase15RemovesEmptyStagingParent()
+    {
+        using var fixture = new TemporaryDirectory("phase15-parent-");
+        var staging = Path.Combine(fixture.Root, "15-tts", ".staging");
+        Directory.CreateDirectory(staging);
+        ProductionPipelineExecutionService.CleanupPhase15Transaction(staging, null);
+        Assert.False(Directory.Exists(staging));
+    }
+
+    [Fact]
+    public void Phase15StagingCleanupNeverDeletesCommittedHindiAuthority()
+    {
+        using var fixture = new TemporaryDirectory("phase15-hi-");
+        var committed = Path.Combine(fixture.Root, "15-tts", "hi");
+        var staging = Path.Combine(fixture.Root, "15-tts", ".staging");
+        Directory.CreateDirectory(committed);
+        Directory.CreateDirectory(Path.Combine(staging, Guid.NewGuid().ToString("N")));
+        File.WriteAllText(Path.Combine(committed, "phase15-manifest.json"), "committed");
+        ProductionPipelineExecutionService.CleanupPhase15Transaction(staging, null);
+        Assert.True(File.Exists(Path.Combine(committed, "phase15-manifest.json")));
+    }
+
+    [Fact]
+    public void Phase15CommittedShortAuthorityProjectsShortTtsGeneratedTrue()
     {
         using var fixture = new AuthorityFixture("Short");
         Assert.Equal((true, false), ProductionPipelineExecutionService.ResolveCommittedPhase15TtsFormats(fixture.Root, "en"));
     }
 
     [Fact]
-    public void Phase15SuccessfulLongAuthorityProjectsLongTtsGeneratedTrue()
+    public void Phase15CommittedLongAuthorityProjectsLongTtsGeneratedTrue()
     {
         using var fixture = new AuthorityFixture("Long");
         Assert.Equal((false, true), ProductionPipelineExecutionService.ResolveCommittedPhase15TtsFormats(fixture.Root, "en"));
     }
 
     [Fact]
-    public void Phase15AggregateTtsFlagsComeFromCommittedAuthority()
+    public void Phase15CommittedShortAndLongProjectsBothFlagsTrue()
     {
         using var fixture = new AuthorityFixture("Short", "Long");
         Directory.CreateDirectory(Path.Combine(fixture.Root, "tts", "short"));
         File.WriteAllBytes(Path.Combine(fixture.Root, "tts", "short", "narration.mp3"), [1]);
         Assert.Equal((true, true), ProductionPipelineExecutionService.ResolveCommittedPhase15TtsFormats(fixture.Root, "en"));
 
-        File.Delete(Path.Combine(fixture.Root, "15-tts", "en", "long", "long.mp3"));
+    }
+
+    [Fact]
+    public void Phase15ReuseProjectsTtsGeneratedFlagsFromCommittedAuthority()
+    {
+        using var fixture = new AuthorityFixture("Short", "Long");
+        Assert.Equal((true, true), ProductionPipelineExecutionService.ResolveCommittedPhase15TtsFormats(fixture.Root, "en"));
+    }
+
+    [Fact]
+    public void Phase15FailureDoesNotProjectFlagsFromStaging()
+    {
+        using var fixture = new TemporaryDirectory("phase15-failed-");
+        var stagedAudio = Path.Combine(fixture.Root, "15-tts", ".staging", Guid.NewGuid().ToString("N"), "en", "short", "unit.mp3");
+        Directory.CreateDirectory(Path.GetDirectoryName(stagedAudio)!);
+        File.WriteAllBytes(stagedAudio, [1, 2, 3]);
+        Assert.Equal((false, false), ProductionPipelineExecutionService.ResolveCommittedPhase15TtsFormats(fixture.Root, "en"));
+    }
+
+    [Fact]
+    public void Phase15ShortOnlyDoesNotSetLongFlag()
+    {
+        using var fixture = new AuthorityFixture("Short");
         Assert.Equal((true, false), ProductionPipelineExecutionService.ResolveCommittedPhase15TtsFormats(fixture.Root, "en"));
+    }
+
+    [Fact]
+    public void Phase15LongOnlyDoesNotSetShortFlag()
+    {
+        using var fixture = new AuthorityFixture("Long");
+        Assert.Equal((false, true), ProductionPipelineExecutionService.ResolveCommittedPhase15TtsFormats(fixture.Root, "en"));
     }
 
     private static void AssertTransactionCleanup(bool remainsCommittedAuthority)
@@ -87,6 +156,13 @@ public sealed class Phase15FinalHousekeepingTests
             File.WriteAllText(Path.Combine(authority, "tts-timeline.json"), JsonSerializer.Serialize(new { entries }));
         }
 
+        public string Root { get; }
+        public void Dispose() { if (Directory.Exists(Root)) Directory.Delete(Root, true); }
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory(string prefix) => Root = Path.Combine(Path.GetTempPath(), prefix + Guid.NewGuid().ToString("N"));
         public string Root { get; }
         public void Dispose() { if (Directory.Exists(Root)) Directory.Delete(Root, true); }
     }
