@@ -42,7 +42,8 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         RequireFiles(p16.Append(timeline16).Append(subtitleTimeline).Concat(srts), Phase18ReasonCodes.UpstreamPhase16Invalid);
         RequireFiles(p17.Concat(plans), Phase18ReasonCodes.UpstreamPhase17Invalid);
 
-        var p15Checksum = await ValidateAuthority(p15, "P15_TTS_AUTHORITY_ACCEPTED", Phase18ReasonCodes.UpstreamPhase15Invalid, ct);
+        var p15Snapshot = await LoadPhase15AuthorityAsync(p15, language, ct);
+        var p15Checksum = p15Snapshot.AuthorityChecksum;
         var p16Checksum = await ValidateAuthority(p16, "P16_DURATION_AUTHORITY_ACCEPTED", Phase18ReasonCodes.UpstreamPhase16Invalid, ct);
         var p17Checksum = await ValidateAuthority(p17, "P17_MOTION_AUTHORITY_ACCEPTED", Phase18ReasonCodes.UpstreamPhase17Invalid, ct);
         using var p16Manifest = await ReadDocument(p16[0], ct);
@@ -51,7 +52,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             String(p17Manifest.RootElement, "sourcePhase16AuthorityChecksum") != p16Checksum)
             Fail(Phase18ReasonCodes.LineageMismatch, "Phase 15 -> 16 -> 17 authority checksum lineage differs.");
 
-        var audio = await ReadTimeline15(timeline15, ct);
+        var audio = await ReadTimeline15(timeline15, p15Snapshot, ct);
         var calibrated = await ReadTimeline16(timeline16, ct);
         var motion = new List<Phase17MotionPlan>();
         foreach (var path in plans) motion.Add(await Read<Phase17MotionPlan>(path, ct));
@@ -216,8 +217,64 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         if (!Bool(manifest.RootElement, "publicationCommitted") || !Bool(manifest.RootElement, "downstreamReady") || String(manifest.RootElement, "validationStatus") != "Valid") Fail(code, "Manifest is not downstream ready.");
         return checksum;
     }
+
+    internal static async Task<Phase18Phase15AuthoritySnapshot> LoadPhase15AuthorityAsync(
+        string[] files, string language, CancellationToken ct)
+    {
+        var loaded = new List<string>();
+        try
+        {
+            var manifest = await Read<Phase15ManifestContract>(files[0], ct); loaded.Add(files[0]);
+            var report = await Read<Phase15PublicationContract>(files[1], ct); loaded.Add(files[1]);
+            var validation = await Read<Phase15ValidationContract>(files[2], ct); loaded.Add(files[2]);
+            void Require(bool condition, string reason)
+            { if (!condition) throw new Phase18AuthorityValidationException(Phase18ReasonCodes.UpstreamPhase15Invalid, reason, loaded.ToArray()); }
+
+            Require(!string.IsNullOrWhiteSpace(manifest.AuthorityChecksum), "authorityChecksum must be present.");
+            Require(string.Equals(report.AuthorityChecksum, manifest.AuthorityChecksum, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(validation.AuthorityChecksum, manifest.AuthorityChecksum, StringComparison.OrdinalIgnoreCase),
+                "Authority checksums do not agree.");
+            Require(string.Equals(report.SourcePhase14AuthorityChecksum, manifest.SourcePhase14AuthorityChecksum, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(validation.SourcePhase14AuthorityChecksum, manifest.SourcePhase14AuthorityChecksum, StringComparison.OrdinalIgnoreCase),
+                "sourcePhase14AuthorityChecksum does not agree.");
+            Require(report.PublicationCommitted, "publicationCommitted must be true.");
+            Require(report.CandidateValidationPassed, "candidateValidationPassed must be true.");
+            Require(report.CandidateReadbackPassed, "candidateReadbackPassed must be true.");
+            Require(report.CommittedReadbackPassed, "committedReadbackPassed must be true.");
+            Require(report.CommittedStateValidationPassed, "committedStateValidationPassed must be true.");
+            Require(validation.SemanticValidationPassed == true, "semanticValidationPassed must be true.");
+            Require(validation.ChecksumValidationPassed == true, "checksumValidationPassed must be true.");
+            Require(validation.ManifestValidationPassed == true, "manifestValidationPassed must be true.");
+            Require(validation.Status == "Succeeded" && validation.ReasonCode == "P15_TTS_AUTHORITY_ACCEPTED"
+                && validation.ValidationStatus == "Valid", "Validation authority is not accepted and Valid.");
+            Require(manifest.PublicationCommitted && manifest.DownstreamReady && manifest.ValidationStatus == "Valid",
+                "Manifest is not downstream ready.");
+            Require(report.DownstreamReady && validation.DownstreamReady == true, "downstreamReady must be true.");
+            return new(language, manifest.AuthorityChecksum, manifest.SourcePhase14AuthorityChecksum,
+                report.PublicationCommitted, report.CandidateValidationPassed, report.CandidateReadbackPassed,
+                report.CommittedReadbackPassed, report.CommittedStateValidationPassed,
+                validation.SemanticValidationPassed!.Value, validation.ChecksumValidationPassed!.Value,
+                validation.ManifestValidationPassed!.Value, validation.ValidationStatus,
+                manifest.DownstreamReady && report.DownstreamReady && validation.DownstreamReady == true, loaded.ToArray());
+        }
+        catch (Phase18AuthorityValidationException) { throw; }
+        catch (Exception ex) when (ex is IOException or JsonException or InvalidDataException)
+        {
+            throw new Phase18AuthorityValidationException(Phase18ReasonCodes.UpstreamPhase15Invalid,
+                $"Phase 15 authority could not be read: {ex.Message}", loaded.ToArray());
+        }
+    }
     private static string[] AuthorityFiles(string root, string phaseRoot, string language, string stem) => [Path.Combine(root, phaseRoot, language, $"{stem}-manifest.json"), Path.Combine(root, phaseRoot, language, $"{stem}-publication-report.json"), Path.Combine(root, "validation", stem.Replace("phase", "phase-") + "-validation.json")];
-    private static async Task<Dictionary<string, Phase15Entry>> ReadTimeline15(string path, CancellationToken ct) { using var d = await ReadDocument(path, ct); return new[] { "short", "long" }.SelectMany(n => d.RootElement.GetProperty(n).GetProperty("items").Deserialize<List<Phase15Entry>>(Json) ?? []).ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal); }
+    private static async Task<Dictionary<string, Phase15Entry>> ReadTimeline15(string path, Phase18Phase15AuthoritySnapshot authority, CancellationToken ct)
+    {
+        using var d = await ReadDocument(path, ct);
+        if (!String(d.RootElement, "authorityChecksum").Equals(authority.AuthorityChecksum, StringComparison.OrdinalIgnoreCase)
+            || !String(d.RootElement, "sourcePhase14AuthorityChecksum").Equals(authority.SourcePhase14AuthorityChecksum, StringComparison.OrdinalIgnoreCase))
+            throw new Phase18AuthorityValidationException(Phase18ReasonCodes.UpstreamPhase15Invalid,
+                "Timeline authority checksum lineage does not agree.", authority.LoadedAuthorityArtifacts.Append(path).ToArray());
+        return new[] { "short", "long" }.SelectMany(n => d.RootElement.GetProperty(n).GetProperty("items").Deserialize<List<Phase15Entry>>(Json) ?? [])
+            .ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
+    }
     private static async Task<Dictionary<string, Phase16CalibratedScene>> ReadTimeline16(string path, CancellationToken ct) { using var d = await ReadDocument(path, ct); return new[] { "short", "long" }.SelectMany(n => d.RootElement.GetProperty(n).Deserialize<List<Phase16CalibratedScene>>(Json) ?? []).ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal); }
     private static void ValidateSrt(string path) { var text = File.ReadAllText(path, new UTF8Encoding(false, true)); if (string.IsNullOrWhiteSpace(text) || !text.Contains(" --> ", StringComparison.Ordinal)) Fail(Phase18ReasonCodes.SubtitlePhysicalEvidenceInvalid, "SRT is not valid UTF-8/timed text."); }
     private static string ResolveOwned(string root, string path) { var full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(root, path)); var owned = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar; if (!full.StartsWith(owned, StringComparison.Ordinal)) Fail(Phase18ReasonCodes.CandidateValidationFailed, "Authority path escapes the execution root."); return full; }
@@ -237,4 +294,15 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     [DoesNotReturn]
     private static void Fail(string code, string reason) => throw new InvalidOperationException($"{code}: {reason}");
     private sealed record Phase15Entry(string SceneAudioUnitId, string SceneId, int Sequence, string Format, string Language, string AudioRelativePath, long AudioByteLength, string AudioSha256, string TextChecksum, long ActualAudioDurationMs, IReadOnlyList<string> SubtitleSegmentIds, string SourcePhase14AuthorityChecksum);
+    private sealed record Phase15ManifestContract(string SchemaVersion, string Language,
+        string SourcePhase14AuthorityChecksum, string AuthorityChecksum, string ValidationStatus,
+        bool PublicationCommitted, bool DownstreamReady);
+    private sealed record Phase15PublicationContract(string SchemaVersion, bool CandidateValidationPassed,
+        bool CandidateReadbackPassed, bool PublicationCommitted, bool CommittedReadbackPassed,
+        bool CommittedStateValidationPassed, bool DownstreamReady, string SourcePhase14AuthorityChecksum,
+        string AuthorityChecksum);
+    private sealed record Phase15ValidationContract(int PhaseNo, string Status, string ReasonCode,
+        string SourcePhase14AuthorityChecksum, string AuthorityChecksum, string ValidationStatus,
+        bool? SemanticValidationPassed, bool? ChecksumValidationPassed, bool? ManifestValidationPassed,
+        bool? DownstreamReady);
 }

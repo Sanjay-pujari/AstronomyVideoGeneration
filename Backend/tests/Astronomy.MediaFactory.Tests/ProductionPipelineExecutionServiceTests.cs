@@ -3294,6 +3294,38 @@ Second display cue.
         Assert.Contains(targets, x => x.IsCompatibility && x.RelativePath == "motion" && !x.CanDeleteOnOverwrite);
     }
 
+    [Fact]
+    public void Phase18CleanupCatalogReportsCanonicalLanguageRoot()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]) with { StartPhaseNo = 18, EndPhaseNo = 18 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 18, 18);
+
+        Assert.Contains(targets, x => x.IsAuthority && x.RelativePath == "18-video-assembly/en" && !x.CanDeleteOnOverwrite);
+    }
+
+    [Fact]
+    public void Phase18CleanupDoesNotOwnLegacyVideoAssemblyRoot()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]) with { StartPhaseNo = 18, EndPhaseNo = 18 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 18, 18);
+
+        Assert.DoesNotContain(targets, x => x.RelativePath == "video-assembly");
+        Assert.DoesNotContain(targets, x => x.RelativePath.Contains("narration-track.mp3", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Phase18OuterCleanupDoesNotPreDeleteCommittedTransactionalAuthority()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]) with { StartPhaseNo = 18, EndPhaseNo = 18 };
+        var target = Assert.Single(new PhaseOutputTargetResolver().Resolve(context, 18, 18), x => x.IsAuthority);
+        Directory.CreateDirectory(target.Path);
+        var committed = Path.Combine(target.Path, "phase18-manifest.json");
+        File.WriteAllText(committed, "committed");
+
+        Assert.False(PhaseOwnedCleanupExecutor.TryDelete(target, 18, 18, new HashSet<int> { 18 }, [], [], []));
+        Assert.True(File.Exists(committed));
+    }
+
     [Theory]
     [InlineData(11, "11-hero")]
     [InlineData(10, "10-scene-validation")]
