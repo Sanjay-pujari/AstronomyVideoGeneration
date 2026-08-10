@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -195,6 +196,7 @@ internal static class Phase14AudioSyncPublisher
     private static async Task<string> HashFile(string path, CancellationToken ct) { await using var s = File.OpenRead(path); return Convert.ToHexString(await SHA256.HashDataAsync(s, ct)).ToLowerInvariant(); }
     private static async Task<T> Read<T>(string path, CancellationToken ct) { await using var s = File.OpenRead(path); return await JsonSerializer.DeserializeAsync<T>(s, Json, ct) ?? throw new InvalidOperationException($"{Phase14ReasonCodes.UpstreamInvalid}: {path} is invalid."); }
     private static Task Write<T>(string path, T value, CancellationToken ct) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Json), ct);
+    [DoesNotReturn]
     private static void Fail(string code, string message) => throw new InvalidOperationException($"{code}: {message}");
 }
 
