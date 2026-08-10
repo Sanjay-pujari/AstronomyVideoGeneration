@@ -44,6 +44,16 @@ public sealed class Phase18VideoAssemblyAuthorityTests
         Assert.True(Phase18VideoAssemblyAuthorityPublisher.CanonicalArgumentsAreSafe(["-af", "apad=whole_dur=30"]));
     }
 
+    [Theory]
+    [InlineData(@"D:\test\subs\final.srt", @"subtitles=filename='D\\:/test/subs/final.srt'")]
+    [InlineData(@"D:\Astronomy Workspace\Test Subs\final.srt", @"subtitles=filename='D\\:/Astronomy Workspace/Test Subs/final.srt'")]
+    [InlineData(@"D:\Astronomy Workspace\Observer's Guide\final.srt", @"subtitles=filename='D\\:/Astronomy Workspace/Observer'\\''s Guide/final.srt'")]
+    [InlineData(@"D:\Astronomy Workspace\天文\final.srt", @"subtitles=filename='D\\:/Astronomy Workspace/天文/final.srt'")]
+    public void Phase18SubtitleFilterEscapesWindowsAbsolutePaths(string path, string expected)
+    {
+        Assert.Equal(expected, Phase18VideoAssemblyAuthorityPublisher.BuildSubtitleFilter(path));
+    }
+
     [Fact]
     public void Phase18CodecPolicyIsFrozenForShortAndLong()
     {
