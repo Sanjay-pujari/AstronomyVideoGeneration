@@ -73,6 +73,18 @@ public sealed class Phase13GalleryCopyDiversityTests
     [Fact] public void GalleryRejectsOutcomeTokenInDetail() => RejectField(p => p with { PrimaryContent = "Outcome01" });
     [Fact] public void GalleryRejectsOutcomeTokenInFacts() => RejectField(p => p with { SupportingContent = ["Outcome01"] });
 
+    [Theory]
+    [InlineData("Orion is the primary CONSTELLATION object.")]
+    [InlineData("Read eventType and primaryObjects.")]
+    [InlineData("verified ProductionEventIntelligence")]
+    public void GalleryRejectsMachineOrContractCopy(string leakedCopy)
+    {
+        var plans = Plans();
+        plans[0] = plans[0] with { PrimaryContent = leakedCopy };
+        var error = Assert.Throws<InvalidOperationException>(() => Phase13GalleryAuthority.ValidatePublicCopy(plans));
+        Assert.StartsWith("P13_GALLERY_MACHINE_COPY_LEAK", error.Message);
+    }
+
     [Fact]
     public void GalleryRejectsOutcomeTokenInPrompt()
     {

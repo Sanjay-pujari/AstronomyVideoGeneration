@@ -36,9 +36,10 @@ public sealed class Phase13MatureGalleryRoutingTests
     [Fact]
     public void OrionWithoutDirectionOrTimingAdaptsMatureRoles()
     {
-        Assert.Contains("How to recognize", Adapter);
-        Assert.Contains("Evergreen observing context", Adapter);
-        Assert.Contains("No certified local time or viewing window", Adapter);
+        Assert.Contains("ConstellationFindingContext", Adapter);
+        Assert.Contains("ConstellationObservationHighlight", Adapter);
+        Assert.Contains("No certified timing exists", Adapter);
+        Assert.Contains("no compass direction", Adapter);
     }
 
     private static void AssertBucketDoesNotGate(string bucket)
