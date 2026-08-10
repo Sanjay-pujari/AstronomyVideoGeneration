@@ -46,16 +46,24 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         var p15Checksum = p15Snapshot.AuthorityChecksum;
         var p16Checksum = await ValidateAuthority(p16, "P16_DURATION_AUTHORITY_ACCEPTED", Phase18ReasonCodes.UpstreamPhase16Invalid, ct);
         var p17Checksum = await ValidateAuthority(p17, "P17_MOTION_AUTHORITY_ACCEPTED", Phase18ReasonCodes.UpstreamPhase17Invalid, ct);
-        using var p16Manifest = await ReadDocument(p16[0], ct);
+        using var p16Timeline = await ReadDocument(timeline16, ct);
         using var p17Manifest = await ReadDocument(p17[0], ct);
-        if (String(p16Manifest.RootElement, "sourcePhase15AuthorityChecksum") != p15Checksum ||
-            String(p17Manifest.RootElement, "sourcePhase16AuthorityChecksum") != p16Checksum)
-            Fail(Phase18ReasonCodes.LineageMismatch, "Phase 15 -> 16 -> 17 authority checksum lineage differs.");
+        var loadedAuthorities = p15.Concat(p16).Concat(p17).Append(timeline16).Append(p17[0]).Distinct().ToArray();
+        _ = ValidateAuthorityLineage(p15Checksum, p15Snapshot.SourcePhase14AuthorityChecksum,
+            p16Checksum, String(p16Timeline.RootElement, "sourcePhase15AuthorityChecksum"),
+            p17Checksum, String(p17Manifest.RootElement, "sourcePhase16AuthorityChecksum"), loadedAuthorities);
 
         var audio = await ReadTimeline15(timeline15, p15Snapshot, ct);
         var calibrated = await ReadTimeline16(timeline16, ct);
         var motion = new List<Phase17MotionPlan>();
         foreach (var path in plans) motion.Add(await Read<Phase17MotionPlan>(path, ct));
+        ValidateSceneLineage(audio.Values.Select(x => new Phase18SceneLineageRow(x.SceneAudioUnitId, x.SceneId,
+                x.Format, x.Sequence, x.Language, x.AudioSha256, 0, 0, 0)),
+            calibrated.Values.Select(x => new Phase18SceneLineageRow(x.SceneAudioUnitId, x.SceneId,
+                x.Format, x.Sequence, x.Language, x.AudioSha256, x.FinalSceneDurationMs, x.SceneStartMs, x.SceneEndMs)),
+            motion.SelectMany(x => x.Entries).Select(x => new Phase18SceneLineageRow(x.SceneAudioUnitId, x.SceneId,
+                x.Format, x.Sequence, x.Language, x.AudioSha256, x.DurationMs, x.SceneStartMs, x.SceneEndMs)),
+            inputs);
         var toolchain = await ToolchainIdentity(ct);
         var requested = new[] { "Short", "Long" };
         var identity = Hash(JsonSerializer.Serialize(new { Schema, language, requested, p15Checksum, p16Checksum,
@@ -184,6 +192,57 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
 
     internal static bool CanonicalArgumentsAreSafe(IEnumerable<string> args) =>
         !args.Any(x => x.Equals("-shortest", StringComparison.OrdinalIgnoreCase) || x.Contains("atrim", StringComparison.OrdinalIgnoreCase));
+
+    internal static Phase18AuthorityLineageValidation ValidateAuthorityLineage(string phase15AuthorityChecksum,
+        string phase15SourcePhase14AuthorityChecksum, string phase16AuthorityChecksum,
+        string phase16SourcePhase15AuthorityChecksum, string phase17AuthorityChecksum,
+        string phase17SourcePhase16AuthorityChecksum, IReadOnlyList<string> loadedAuthorityArtifacts)
+    {
+        var p15To16 = string.Equals(phase16SourcePhase15AuthorityChecksum, phase15AuthorityChecksum,
+            StringComparison.Ordinal);
+        var p16To17 = string.Equals(phase17SourcePhase16AuthorityChecksum, phase16AuthorityChecksum,
+            StringComparison.Ordinal);
+        var result = new Phase18AuthorityLineageValidation(phase15AuthorityChecksum,
+            phase15SourcePhase14AuthorityChecksum, phase16AuthorityChecksum,
+            phase16SourcePhase15AuthorityChecksum, phase17AuthorityChecksum,
+            phase17SourcePhase16AuthorityChecksum, p15To16, p16To17, p15To16 && p16To17);
+        if (!p15To16)
+            throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
+                $"Phase16 source Phase15 checksum does not match committed Phase15 authority. Expected '{phase15AuthorityChecksum}', actual '{phase16SourcePhase15AuthorityChecksum}'.",
+                loadedAuthorityArtifacts);
+        if (!p16To17)
+            throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
+                $"Phase17 source Phase16 checksum does not match committed Phase16 authority. Expected '{phase16AuthorityChecksum}', actual '{phase17SourcePhase16AuthorityChecksum}'.",
+                loadedAuthorityArtifacts);
+        return result;
+    }
+
+    internal static void ValidateSceneLineage(IEnumerable<Phase18SceneLineageRow> phase15,
+        IEnumerable<Phase18SceneLineageRow> phase16, IEnumerable<Phase18SceneLineageRow> phase17,
+        IReadOnlyList<string> loadedAuthorityArtifacts)
+    {
+        var p15 = phase15.ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
+        var p16 = phase16.ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
+        var p17 = phase17.ToArray();
+        foreach (var motion in p17)
+        {
+            if (!p15.TryGetValue(motion.SceneAudioUnitId, out var audio) ||
+                !p16.TryGetValue(motion.SceneAudioUnitId, out var timing) ||
+                motion.SceneId != audio.SceneId || motion.SceneId != timing.SceneId ||
+                motion.Format != audio.Format || motion.Format != timing.Format ||
+                motion.Sequence != audio.Sequence || motion.Sequence != timing.Sequence ||
+                motion.Language != audio.Language || motion.Language != timing.Language ||
+                motion.AudioSha256 != audio.AudioSha256 || motion.DurationMs != timing.DurationMs ||
+                motion.SceneStartMs != timing.SceneStartMs || motion.SceneEndMs != timing.SceneEndMs)
+                throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
+                    $"Scene identity, audio hash, or duration window lineage differs for '{motion.SceneAudioUnitId}'.",
+                    loadedAuthorityArtifacts);
+        }
+        if (p17.Length != p15.Count || p17.Length != p16.Count)
+            throw new Phase18AuthorityValidationException(Phase18ReasonCodes.LineageMismatch,
+                $"Scene lineage counts differ. Phase15={p15.Count}, Phase16={p16.Count}, Phase17={p17.Length}.",
+                loadedAuthorityArtifacts);
+    }
     private static async Task Run(string file, IReadOnlyList<string> args, CancellationToken ct)
     {
         if (!CanonicalArgumentsAreSafe(args)) Fail(Phase18ReasonCodes.RenderFailed, "Speech-trimming FFmpeg arguments are prohibited.");

@@ -50,6 +50,21 @@ public sealed record Phase18Phase15AuthoritySnapshot(string Language, string Aut
     bool SemanticValidationPassed, bool ChecksumValidationPassed, bool ManifestValidationPassed,
     string ValidationStatus, bool DownstreamReady, IReadOnlyList<string> LoadedAuthorityArtifacts);
 
+/// <summary>Unambiguous Phase 18 interpretation of the three distinct upstream authorities.</summary>
+public sealed record Phase18AuthorityLineageValidation(
+    string Phase15AuthorityChecksum,
+    string Phase15SourcePhase14AuthorityChecksum,
+    string Phase16AuthorityChecksum,
+    string Phase16SourcePhase15AuthorityChecksum,
+    string Phase17AuthorityChecksum,
+    string Phase17SourcePhase16AuthorityChecksum,
+    bool Phase15To16LineagePassed,
+    bool Phase16To17LineagePassed,
+    bool OverallLineagePassed);
+
+public sealed record Phase18SceneLineageRow(string SceneAudioUnitId, string SceneId, string Format,
+    int Sequence, string Language, string AudioSha256, long DurationMs, long SceneStartMs, long SceneEndMs);
+
 public sealed class Phase18AuthorityValidationException : InvalidOperationException
 {
     public Phase18AuthorityValidationException(string reasonCode, string reason,
