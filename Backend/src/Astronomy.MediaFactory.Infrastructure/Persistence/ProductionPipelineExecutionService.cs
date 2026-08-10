@@ -801,6 +801,12 @@ public sealed partial class ProductionPipelineExecutionService(
                 phaseExecutionBegan: true,
                 reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase16Authority?.ReasonCode ?? phase15Authority?.ReasonCode ?? phase14Authority?.ReasonCode ?? phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode ?? phase11Authority?.ReasonCode);
         }
+        catch (Phase17PhysicalEvidenceException ex) when (phaseNo == 17)
+        {
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed,
+                ex.LoadedAuthorityArtifacts, [], [], [ex.Message], ex.Reason, true, cancellationToken, started,
+                reasonCodeOverride: ex.ReasonCode, phaseExecutionBegan: true);
+        }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
             var phase10TitleDiagnostics = phaseNo == 10
@@ -15221,6 +15227,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 ? phase3Certification?.Recovered == true ? "P3_RECOVERED" : phase3Certification?.Reused == true ? "P3_REUSED" : context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED"
                 : "P3_COMMITTED_VALIDATION_FAILED"
             : null);
+        if (phaseNo == 17 && status == ProductionPhaseStatus.Failed)
+            reasonCode ??= Regex.Match(reason ?? string.Empty, @"^(P17_[A-Z0-9_]+):").Groups[1].Value is { Length: > 0 } p17Code
+                ? p17Code : null;
         if (phaseNo == 14 && status == ProductionPhaseStatus.Succeeded
             && (phase14Certification is not { PublicationCommitted: true, CommittedStateValidationPassed: true,
                     ValidationStatus: "Valid", DownstreamReady: true }
@@ -15293,11 +15302,11 @@ public sealed partial class ProductionPipelineExecutionService(
             SourcePhase14AuthorityChecksum = phase16Certification?.SourcePhase14AuthorityChecksum ?? phase15Certification?.SourcePhase14AuthorityChecksum,
             AuthorityChecksum = phase16Certification?.AuthorityChecksum ?? phase15Certification?.AuthorityChecksum ?? phase14Certification?.AuthorityChecksum ?? (phaseNo == 13 ? phase13Checksum : phaseNo == 12 ? phase12Checksum : phase11Certification?.ManifestChecksum),
             ManifestValidationStatus = phase16Certification?.ManifestValidationStatus ?? phase15Certification?.ManifestValidationStatus ?? phase14Certification?.ManifestValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ManifestValidationStatus),
-            ValidationStatus = phase16Certification?.ValidationStatus ?? phase15Certification?.ValidationStatus ?? phase14Certification?.ValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus),
-            SemanticValidationPassed = phase16Certification?.SemanticValidationPassed ?? phase15Certification?.SemanticValidationPassed ?? phase14Certification?.SemanticValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed),
+            ValidationStatus = phaseNo == 17 ? status == ProductionPhaseStatus.Succeeded ? "Valid" : "Invalid" : phase16Certification?.ValidationStatus ?? phase15Certification?.ValidationStatus ?? phase14Certification?.ValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus),
+            SemanticValidationPassed = phaseNo == 17 ? status == ProductionPhaseStatus.Succeeded : phase16Certification?.SemanticValidationPassed ?? phase15Certification?.SemanticValidationPassed ?? phase14Certification?.SemanticValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed),
             ChecksumValidationPassed = phase16Certification?.ChecksumValidationPassed ?? phase15Certification?.ChecksumValidationPassed ?? phase14Certification?.ChecksumValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ChecksumValidationPassed),
             ManifestValidationPassed = phase16Certification?.ManifestValidationPassed ?? phase15Certification?.ManifestValidationPassed ?? phase14Certification?.ManifestValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ManifestValidationPassed),
-            DownstreamReady = phase16Certification?.DownstreamReady ?? phase15Certification?.DownstreamReady ?? phase14Certification?.DownstreamReady ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady),
+            DownstreamReady = phaseNo == 17 ? status == ProductionPhaseStatus.Succeeded : phase16Certification?.DownstreamReady ?? phase15Certification?.DownstreamReady ?? phase14Certification?.DownstreamReady ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady),
             Phase11HeroDiagnostics = phase11Certification?.HeroAuthorityDiagnostics
         };
         if (phaseNo is 14 or 16 && File.Exists(validationPath))
