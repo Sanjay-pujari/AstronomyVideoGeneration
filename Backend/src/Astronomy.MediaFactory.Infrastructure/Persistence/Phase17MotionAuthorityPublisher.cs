@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Rendering;
 using SixLabors.ImageSharp;
 
@@ -14,13 +15,17 @@ internal static class Phase17MotionAuthorityPublisher
     internal const string Accepted = "P17_MOTION_AUTHORITY_ACCEPTED";
     internal const string UpstreamPhase16Invalid = "P17_UPSTREAM_PHASE16_INVALID";
     internal const string PhysicalEvidenceInvalid = "P17_VISUAL_PHYSICAL_EVIDENCE_INVALID";
-    internal const string MotionPolicy = "motion-profile-selector-v2/bounded-amplitude-1.0";
-    internal const string SafetyPolicy = "certified-regions-fail-static/1.0";
+    internal const string MotionPolicy = "configured-safe-ken-burns/1.0";
+    internal const string SafetyPolicy = "certified-focus-or-crop-safe-full-frame/1.0";
     private const string Schema = "phase17.motion-plan/1.0";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     internal static async Task<Phase17PublicationResult> ExecuteAsync(string root, string language,
         bool overwrite, CancellationToken ct)
+        => await ExecuteAsync(root, language, overwrite, new RenderingOptions(), ct);
+
+    internal static async Task<Phase17PublicationResult> ExecuteAsync(string root, string language,
+        bool overwrite, RenderingOptions rendering, CancellationToken ct)
     {
         language = string.IsNullOrWhiteSpace(language) ? "en" : language.Trim().ToLowerInvariant();
         SweepStaleTransactions(root);
@@ -111,7 +116,7 @@ internal static class Phase17MotionAuthorityPublisher
             var visual = shortById[scene.SceneId];
             shortEntries.Add(await BuildEntry(root, root, scene, visual.PhysicalPath, visual.Checksum,
                 visual.Width, visual.Height, p16Checksum, visualChecksum, p10.DeterministicChecksum,
-                p8.DeterministicChecksum, p9.DeterministicChecksum, "Phase8.SceneAssetManifestItem.Checksum", shortScenes.Count, inputs, ct));
+                p8.DeterministicChecksum, p9.DeterministicChecksum, "Phase8.SceneAssetManifestItem.Checksum", shortScenes.Count, inputs, rendering, ct));
         }
         var longEntries = new List<Phase17MotionEntry>();
         foreach (var scene in longScenes.OrderBy(x => x.Sequence))
@@ -122,7 +127,7 @@ internal static class Phase17MotionAuthorityPublisher
             longEntries.Add(await BuildEntry(root, Path.Combine(root, "09-long-scenes"), scene,
                 visual.PhysicalPath, visual.PhysicalSha256, visual.Width, visual.Height, p16Checksum,
                 visualChecksum, p10.DeterministicChecksum, p8.DeterministicChecksum, p9.DeterministicChecksum,
-                "Phase9.LongSceneImageManifestItem.PhysicalSha256", longScenes.Count, inputs, ct));
+                "Phase9.LongSceneImageManifestItem.PhysicalSha256", longScenes.Count, inputs, rendering, ct));
         }
         ValidateEntries(shortEntries, "Short"); ValidateEntries(longEntries, "Long");
         var authorityChecksum = Hash(JsonSerializer.Serialize(new { Schema, language, MotionPolicy, SafetyPolicy,
@@ -150,7 +155,8 @@ internal static class Phase17MotionAuthorityPublisher
                 artifacts = new[] { "short/motion-plan.json", "long/motion-plan.json" } }, ct);
             await Write(Path.Combine(stage, "phase17-authority-diagnostics.json"), new { schemaVersion = "phase17.diagnostics/1.0",
                 language, shortSceneCount = shortEntries.Count, longSceneCount = longEntries.Count,
-                staticFallbackCount = shortEntries.Count + longEntries.Count, renderCallsThisPhase = 0,
+                staticFallbackCount = shortEntries.Concat(longEntries).Count(x => x.MotionType == Phase17MotionType.Static),
+                motionDistribution = shortEntries.Concat(longEntries).GroupBy(x => $"{x.Format}:{x.MotionType}").ToDictionary(x => x.Key, x => x.Count()), renderCallsThisPhase = 0,
                 audioFilesOpened = 0, srtFilesRead = 0, sourcePhase16AuthorityChecksum = p16Checksum,
                 sourceVisualAuthorityChecksum = visualChecksum, candidateValidationPassed = true,
                 candidateReadbackPassed = true, publicationCommitted = true, committedReadbackPassed = true,
@@ -216,7 +222,7 @@ internal static class Phase17MotionAuthorityPublisher
     private static async Task<Phase17MotionEntry> BuildEntry(string root, string physicalPathRoot, Phase16CalibratedScene scene,
         string path, string expectedHash, int width, int height, string p16Checksum, string visualChecksum,
         string p10Checksum, string p8Checksum, string p9Checksum, string expectedAuthoritySource,
-        int sceneCount, IReadOnlyList<string> loadedInputs, CancellationToken ct)
+        int sceneCount, IReadOnlyList<string> loadedInputs, RenderingOptions rendering, CancellationToken ct)
     {
         if (scene.FinalSceneDurationMs <= 0 || scene.SceneEndMs - scene.SceneStartMs != scene.FinalSceneDurationMs)
             Fail("P17_PHASE16_TIMING_BINDING_INVALID", $"Invalid frozen scene window for {scene.SceneId}.");
@@ -244,18 +250,61 @@ internal static class Phase17MotionAuthorityPublisher
         var relative = Path.GetRelativePath(root, full).Replace('\\', '/');
         var selected = new MotionProfileSelector().SelectSemantic($"planetary conjunction {scene.SceneId}", scene.Sequence - 1, sceneCount);
         var role = selected.Kind.ToString();
-        // Current visual authority has no certified focus/safe/overlay geometry. The mature candidate
-        // is deliberately downgraded rather than guessing from pixels or allowing an unsafe crop.
-        var transform = new Phase17NormalizedTransform(1d, 0d, 0d);
-        var keyframes = new[] { new Phase17Keyframe(0d, transform), new Phase17Keyframe(1d, transform) };
-        var cut = new Phase17Transition(Phase17TransitionType.Cut, 0);
+        var zoomStart = rendering.KenBurnsZoomStart;
+        var zoomEnd = scene.Format.Equals("Short", StringComparison.OrdinalIgnoreCase)
+            ? rendering.ShortKenBurnsZoomEnd : rendering.KenBurnsZoomEnd;
+        var pan = rendering.EnableDirectionalMotion ? Math.Clamp(rendering.DirectionalPanStrength, 0, .25) : 0;
+        var cycle = Math.Max(0, scene.Sequence - 1) % 4;
+        var motionType = !rendering.EnableKenBurns ? Phase17MotionType.Static : cycle switch
+        {
+            0 => Phase17MotionType.SlowZoomIn,
+            1 when rendering.EnableDirectionalMotion => Phase17MotionType.ZoomInPanRight,
+            2 => Phase17MotionType.SlowZoomOut,
+            3 when rendering.EnableDirectionalMotion => Phase17MotionType.ZoomInPanLeft,
+            _ => Phase17MotionType.SlowZoomIn
+        };
+        var start = motionType switch
+        {
+            Phase17MotionType.SlowZoomOut => new Phase17NormalizedTransform(zoomEnd, 0, 0),
+            Phase17MotionType.ZoomInPanRight => new Phase17NormalizedTransform(zoomStart, -pan, 0),
+            Phase17MotionType.ZoomInPanLeft => new Phase17NormalizedTransform(zoomStart, pan, 0),
+            _ => new Phase17NormalizedTransform(zoomStart, 0, 0)
+        };
+        var end = motionType switch
+        {
+            Phase17MotionType.SlowZoomOut => new Phase17NormalizedTransform(zoomStart, 0, 0),
+            Phase17MotionType.ZoomInPanRight => new Phase17NormalizedTransform(zoomEnd, pan, 0),
+            Phase17MotionType.ZoomInPanLeft => new Phase17NormalizedTransform(zoomEnd, -pan, 0),
+            Phase17MotionType.Static => start,
+            _ => new Phase17NormalizedTransform(zoomEnd, 0, 0)
+        };
+        var keyframes = new[] { new Phase17Keyframe(0d, start), new Phase17Keyframe(1d, end) };
+        var easing = rendering.KenBurnsUseEasing ? Phase17Easing.EaseInOutSine : Phase17Easing.Linear;
+        var transitionMs = rendering.EnableTransitions
+            ? (long)Math.Round(Math.Max(0, rendering.TransitionDurationSeconds) * 1000) : 0;
+        var transitionType = rendering.EnableTransitions && rendering.TransitionType.Equals("fade", StringComparison.OrdinalIgnoreCase)
+            ? Phase17TransitionType.FadeThroughBlack : Phase17TransitionType.Cut;
+        var edgeFadeMs = rendering.EnableFadeInOut
+            ? (long)Math.Round((scene.Format.Equals("Short", StringComparison.OrdinalIgnoreCase)
+                ? rendering.ShortFadeDurationSeconds : rendering.FadeDurationSeconds) * 1000) : 0;
+        // Fades are non-overlap scene-edge fades: outer program edges use the configured format fade;
+        // internal boundaries use the configured transition on the outgoing scene only. This preserves Phase16 duration.
+        var transitionIn = scene.Sequence == 1 && edgeFadeMs > 0
+            ? new Phase17Transition(Phase17TransitionType.FadeThroughBlack, edgeFadeMs)
+            : new Phase17Transition(Phase17TransitionType.Cut, 0);
+        var transitionOut = scene.Sequence == sceneCount && edgeFadeMs > 0
+            ? new Phase17Transition(Phase17TransitionType.FadeThroughBlack, edgeFadeMs)
+            : scene.Sequence < sceneCount && transitionMs > 0
+                ? new Phase17Transition(transitionType, transitionMs)
+                : new Phase17Transition(Phase17TransitionType.Cut, 0);
         return new(scene.SceneId, scene.SceneAudioUnitId, scene.Format, scene.Sequence, scene.Language,
             scene.FinalSceneDurationMs, scene.SceneStartMs, scene.SceneEndMs, scene.SubtitleSegmentIds,
             scene.AudioSha256, relative, expectedHash, width, height,
             scene.Format.Equals("Short", StringComparison.OrdinalIgnoreCase) ? "Portrait" : "Landscape",
-            p16Checksum, visualChecksum, p10Checksum, role, Phase17MotionType.Static, transform, transform,
-            keyframes, Phase17Easing.Linear, null, null, Array.Empty<Phase17NormalizedRegion>(),
-            Phase17SafetyDecision.StaticFallbackNoCertifiedFocus, true, cut, cut, MotionPolicy, SafetyPolicy);
+            p16Checksum, visualChecksum, p10Checksum, role, motionType, start, end,
+            keyframes, easing, null, null, Array.Empty<Phase17NormalizedRegion>(),
+            motionType == Phase17MotionType.Static ? Phase17SafetyDecision.StaticFallbackNoCertifiedFocus : Phase17SafetyDecision.FullFrameTransformSafe,
+            motionType == Phase17MotionType.Static, transitionIn, transitionOut, MotionPolicy, SafetyPolicy);
     }
 
     private static void ValidatePhase16(JsonElement manifest, JsonElement report, JsonElement validation, string checksum)
