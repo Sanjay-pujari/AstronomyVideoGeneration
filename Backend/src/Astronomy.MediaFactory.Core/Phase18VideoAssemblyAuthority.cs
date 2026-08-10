@@ -63,7 +63,8 @@ public sealed record Phase18AuthorityLineageValidation(
     bool OverallLineagePassed);
 
 public sealed record Phase18SceneLineageRow(string SceneAudioUnitId, string SceneId, string Format,
-    int Sequence, string Language, string AudioSha256, long DurationMs, long SceneStartMs, long SceneEndMs);
+    int Sequence, string Language, string? AudioSha256, long DurationMs, long SceneStartMs, long SceneEndMs,
+    long ActualAudioDurationMs = 0);
 
 public sealed class Phase18AuthorityValidationException : InvalidOperationException
 {
