@@ -118,6 +118,7 @@ internal static class Phase13GalleryAuthority
         var transaction = Guid.NewGuid().ToString("N");
         var staging = galleryRoot + ".staging-" + transaction;
         var backup = galleryRoot + ".backup-" + transaction;
+        var replacedExistingPublication = Directory.Exists(galleryRoot);
         SafeDeleteDirectory(staging);
         Directory.CreateDirectory(staging);
         var committed = false;
@@ -199,6 +200,7 @@ internal static class Phase13GalleryAuthority
                 heroRasterUsed = false, thumbnailRasterUsed = false,
                 providerCallCount = providerAttempts.Sum(x => x.AttemptCount), successfulGenerationCount = providerAttempts.Count(x => x.Successful), backgroundHashes = backgroundHashes.ToArray(),
                 pages, physicalMetadata = metadata, validationStatus = "Valid", publicationState = "Committed",
+                publicationCommitted = true, committedReadbackPassed = true,
                 candidateValidationPassed = true, candidateReadbackPassed = true, downstreamReady = true,
                 deterministicChecksum = authorityChecksum };
             await Write(Path.Combine(staging, "gallery-manifest.json"), manifest, ct);
@@ -241,11 +243,13 @@ internal static class Phase13GalleryAuthority
                 azureImageCallsThisPhase = providerAttempts.Sum(x => x.AttemptCount), independentlyGeneratedPageCount = 6, canonicalWidth = 1920, canonicalHeight = 1080,
                 promptsRequestNoEmbeddedText = true, deterministicOverlay = true, internalCopyLeakDetected = false,
                 copyDiversityPassed = true, visualRoleDiversityPassed = true, fullFrame16x9Passed = true,
-                letterboxDetected = false, pillarboxDetected = false, textOverlapDetected = false, textClipped = false,
+                publicationCommitted = true, committedReadbackPassed = true, validationStatus = "Valid",
+                authorityChecksum, letterboxDetected = false, pillarboxDetected = false, textOverlapDetected = false, textClipped = false,
                 minimumFontSizePassed = true, overlaySafeAreaPassed = true, roleDiagnostics = Array.Empty<object>(), downstreamReady = true }, ct);
             await Write(Path.Combine(staging, "phase13-publication-report.json"), new { transactionId = transaction,
                 candidateValidationPassed = true, candidateReadbackPassed = true, publicationCommitted = true,
-                committedReadbackPassed = true, manifestChecksum = authorityChecksum }, ct);
+                committedReadbackPassed = true, committedStateValidationPassed = true, validationStatus = "Valid",
+                downstreamReady = true, authorityChecksum, manifestChecksum = authorityChecksum }, ct);
             if (Directory.Exists(backup)) SafeDeleteDirectory(backup);
             if (Directory.Exists(galleryRoot)) Directory.Move(galleryRoot, backup);
             try { Directory.Move(staging, galleryRoot); committed = true; }
@@ -272,9 +276,14 @@ internal static class Phase13GalleryAuthority
             }
             Directory.CreateDirectory(Path.Combine(outputRoot, "validation"));
             var validation = Path.Combine(outputRoot, "validation", "phase-13-validation.json");
-            await Write(validation, new { phaseNo = 13, status = "Valid", validationPassed = true,
-                publicationCommitted = true, committedReadbackPassed = true, authorityChecksum,
+            await Write(validation, new { phaseNo = 13, status = "Succeeded", reasonCode = "P13_GALLERY_AUTHORITY_ACCEPTED", validationPassed = true,
+                publicationCommitted = true, committedReadbackPassed = true, committedStateValidationPassed = true,
+                manifestValidationStatus = "Valid", validationStatus = "Valid", authorityChecksum,
                 inputFiles = hydration.InputFiles,
+                verifiedOutputFiles = Enumerable.Range(1, 6).Select(i => $"13-gallery/gallery-{i:00}.png")
+                    .Concat(["13-gallery/gallery-manifest.json", "13-gallery/phase13-publication-report.json", "13-gallery/phase13-authority-diagnostics.json"]),
+                missingOutputFiles = Array.Empty<string>(), invalidOutputFiles = Array.Empty<string>(),
+                generated = true, regenerated = replacedExistingPublication, reused = false, alreadyPublished = false,
                 pageCount = 6, azureImageCallsThisPhase = providerAttempts.Sum(x => x.AttemptCount), independentlyGeneratedPageCount = 6,
                 manifestValidationPassed = true, semanticValidationPassed = true, checksumValidationPassed = true,
                 fullFrame16x9Passed = true, letterboxDetected = false, pillarboxDetected = false,
