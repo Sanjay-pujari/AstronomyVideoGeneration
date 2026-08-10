@@ -126,7 +126,7 @@ public sealed class Phase18VideoAssemblyAuthorityTests
     public void Phase18RejectsRowPhysicalLineageMismatch(string sceneId, string audioHash,
         long duration, long start, long end)
     {
-        var p15 = new Phase18SceneLineageRow("unit", "scene", "Short", 1, "en", "hash", 0, 0, 0);
+        var p15 = new Phase18SceneLineageRow("unit", "scene", "Short", 1, "en", "hash", 0, 0, 0, 1);
         var p16 = p15 with { DurationMs = 100, SceneEndMs = 100 };
         var p17 = p16 with { SceneId = sceneId, AudioSha256 = audioHash, DurationMs = duration,
             SceneStartMs = start, SceneEndMs = end };
@@ -134,7 +134,72 @@ public sealed class Phase18VideoAssemblyAuthorityTests
         var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
             Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage([p15], [p16], [p17], ["p15", "p16", "p17"]));
         Assert.Equal(Phase18ReasonCodes.LineageMismatch, error.ReasonCode);
+        Assert.Contains("Phase17.", error.Reason);
     }
+
+    [Fact]
+    public void Phase18AllowsPhysicalAudioShorterThanFinalScene()
+    {
+        var p15 = Row(audioHash: "AAA", actualAudioDurationMs: 24_000);
+        var p16 = Row(audioHash: "AAA", durationMs: 30_000, endMs: 30_000);
+        var p17 = Row(audioHash: "AAA", durationMs: 30_000, endMs: 30_000);
+
+        Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage([p15], [p16], [p17], ["p15", "p16", "p17"]);
+    }
+
+    [Fact]
+    public void Phase18RejectsPhysicalAudioLongerThanFinalSceneWithPreciseDiagnostic()
+    {
+        var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(
+                [Row(audioHash: "AAA", actualAudioDurationMs: 31_000)],
+                [Row(audioHash: "AAA", durationMs: 30_000, endMs: 30_000)],
+                [Row(audioHash: "AAA", durationMs: 30_000, endMs: 30_000)], ["p15", "p16", "p17"]));
+
+        Assert.Contains("Phase15.ActualAudioDurationMs='31000'", error.Reason);
+        Assert.Contains("Phase16.FinalSceneDurationMs+codecToleranceMs(35)='30035'", error.Reason);
+    }
+
+    [Fact]
+    public void Phase18ValidatesPhase17AudioHashAgainstPhase15()
+    {
+        var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(
+                [Row(audioHash: "AAA", actualAudioDurationMs: 100)],
+                [Row(audioHash: "AAA", durationMs: 100, endMs: 100)],
+                [Row(audioHash: "BBB", durationMs: 100, endMs: 100)], ["p15", "p16", "p17"]));
+
+        Assert.Contains("Phase17.AudioSha256='BBB' but Phase15.AudioSha256='AAA'", error.Reason);
+    }
+
+    [Fact]
+    public void Phase18TreatsPhase16AudioHashAsOptionalCopiedLineage()
+    {
+        var p15 = Row(audioHash: "AAA", actualAudioDurationMs: 100);
+        var p17 = Row(audioHash: "AAA", durationMs: 100, endMs: 100);
+        Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(
+            [p15], [Row(audioHash: null, durationMs: 100, endMs: 100)], [p17], ["p15", "p16", "p17"]);
+
+        var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(
+                [p15], [Row(audioHash: "BBB", durationMs: 100, endMs: 100)], [p17], ["p15", "p16", "p17"]));
+        Assert.Contains("Phase16.AudioSha256='BBB' but Phase15.AudioSha256='AAA'", error.Reason);
+    }
+
+    [Fact]
+    public void Phase18RequiresExactPhase16ToPhase17Timing()
+    {
+        var error = Assert.Throws<Phase18AuthorityValidationException>(() =>
+            Phase18VideoAssemblyAuthorityPublisher.ValidateSceneLineage(
+                [Row(audioHash: "AAA", actualAudioDurationMs: 100)],
+                [Row(audioHash: "AAA", durationMs: 30_000, endMs: 30_000)],
+                [Row(audioHash: "AAA", durationMs: 29_999, endMs: 30_000)], ["p15", "p16", "p17"]));
+        Assert.Contains("Phase17.DurationMs='29999' but Phase16.FinalSceneDurationMs='30000'", error.Reason);
+    }
+
+    private static Phase18SceneLineageRow Row(string? audioHash, long durationMs = 0, long endMs = 0,
+        long actualAudioDurationMs = 0) =>
+        new("unit", "scene", "Short", 1, "en", audioHash, durationMs, 0, endMs, actualAudioDurationMs);
 
     private sealed class Phase15Fixture : IDisposable
     {
