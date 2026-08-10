@@ -9846,7 +9846,7 @@ public sealed partial class ProductionPipelineExecutionService(
                 entries = entries.OrderBy(x => x.Format, StringComparer.OrdinalIgnoreCase).ThenBy(x => x.Sequence)
                     .Select(x => new { x.SceneAudioUnitId, x.SceneId, x.Sequence, x.Format, x.AudioSha256,
                         x.AudioByteLength, x.ActualAudioDurationMs, x.TextChecksum, x.SubtitleSegmentIds,
-                        x.ResolvedVoice, x.ProsodyRate, x.VoiceProfileRef, x.SpeechStyleRef }).ToArray()
+                        x.ResolvedVoice, x.ResolvedRate, x.VoiceProfileRef, x.SpeechStyleRef }).ToArray()
             }, JsonOptions);
             var phase15AuthorityChecksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(authorityMaterial))).ToLowerInvariant();
             var shortCount = entries.Count(x => x.Format.Equals("Short", StringComparison.OrdinalIgnoreCase));
