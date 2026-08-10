@@ -166,7 +166,9 @@ internal static class Phase14AudioSyncPublisher
         var previousEnd = 0;
         foreach (var segment in segments)
         {
-            if (segment.SourceCharacterStart is not int start || segment.SourceCharacterEnd is not int end || start < 0 || end > parent.Length || start >= end || start < previousEnd)
+            var start = segment.SourceCharacterStart.GetValueOrDefault();
+            var end = segment.SourceCharacterEnd.GetValueOrDefault();
+            if (!segment.SourceCharacterStart.HasValue || !segment.SourceCharacterEnd.HasValue || start < 0 || end > parent.Length || start >= end || start < previousEnd)
                 Fail(Phase14ReasonCodes.CuePlanInvalid, "Subtitle character spans are invalid or overlap.");
             if (Normalize(parent[start..end]) != Normalize(segment.Text) || Normalize(string.Join(' ', new[] { segment.Line1, segment.Line2 }.Where(x => !string.IsNullOrWhiteSpace(x)))) != Normalize(segment.Text))
                 Fail(Phase14ReasonCodes.CuePlanInvalid, "Subtitle text/line reconstruction failed.");
