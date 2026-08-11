@@ -32,7 +32,11 @@ public sealed record Phase19SceneQaEvidence(string SceneId, string SceneAudioUni
     long FadeTransitionStartExclusionMs, long FadeTransitionEndExclusionMs,
     double ExpectedStartScale, double ExpectedEndScale, double ExpectedStartX, double ExpectedEndX,
     double ExpectedStartY, double ExpectedEndY, string Phase18ExecutionFilter,
-    bool NarrationPassed, bool FadePassed, bool TransitionPassed);
+    bool NarrationPassed, bool FadePassed, bool TransitionPassed,
+    string MotionQaPolicyVersion, IReadOnlyList<double> ChangedPixelRatios,
+    IReadOnlyList<double> EdgeDifferences, IReadOnlyList<double> EdgeChangedRatios,
+    bool CaptionMaskApplied, int CaptionMaskTopY, int ValidPixelCount,
+    bool FadeExcluded, bool TransitionExcluded);
 public sealed record Phase19FormatQaEvidence(string Format, string VideoRelativePath, string VideoSha256,
     long VideoByteLength, long GovernedDurationMs, long PhysicalDurationMs,
     Phase19StreamEvidence VideoStream, Phase19StreamEvidence AudioStream, bool SubtitlePassed,
