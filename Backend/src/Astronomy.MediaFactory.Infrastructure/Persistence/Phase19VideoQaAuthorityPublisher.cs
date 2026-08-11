@@ -25,7 +25,7 @@ internal static class Phase19VideoQaAuthorityPublisher
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     internal static async Task<Phase19PublicationResult> ExecuteAsync(string root, string language,
-        RenderingOptions rendering, CancellationToken ct)
+        RenderingOptions rendering, bool overwriteExisting, CancellationToken ct)
     {
         var p18Root = Path.Combine(root, "18-video-assembly", language);
         var validationRoot = Path.Combine(root, "validation");
@@ -47,6 +47,11 @@ internal static class Phase19VideoQaAuthorityPublisher
             ValidatePhase18Governance(manifest, diagnostics.RootElement, publication.RootElement,
                 validation.RootElement, language, inputs);
             phase18Governed = true;
+            if (!overwriteExisting)
+            {
+                var reusable = await TryReadReusablePublication(root, language, manifest.AuthorityChecksum, loaded, ct);
+                if (reusable is not null) return reusable;
+            }
 
             var ffprobe = string.IsNullOrWhiteSpace(rendering.FfprobePath) ? "ffprobe" : rendering.FfprobePath!;
             var ffmpeg = string.IsNullOrWhiteSpace(rendering.FfmpegPath) ? "ffmpeg" : rendering.FfmpegPath;
@@ -193,7 +198,8 @@ internal static class Phase19VideoQaAuthorityPublisher
             var identity = Hash(JsonSerializer.Serialize(new { manifest.AuthorityChecksum, requested, outputs, QaPolicy }, Json));
             var authority = new Phase19Manifest(Schema, language, manifest.AuthorityChecksum, requested, QaPolicy,
                 "Phase18GovernedTimeline", outputs, identity, true, true, "Valid", true);
-            return await Publish(root, language, authority, loaded, ct);
+            var replacedExisting = Directory.Exists(Path.Combine(root, "19-video-qa", language));
+            return await Publish(root, language, authority, loaded, replacedExisting, ct);
         }
         catch (Phase19AuthorityValidationException) { throw; }
         catch (Exception ex)
@@ -373,7 +379,7 @@ internal static class Phase19VideoQaAuthorityPublisher
         long.Parse(m.Groups[i + 2].Value)) * 1000) + long.Parse(m.Groups[i + 3].Value);
 
     private static async Task<Phase19PublicationResult> Publish(string root, string language, Phase19Manifest manifest,
-        IReadOnlyList<string> inputs, CancellationToken ct)
+        IReadOnlyList<string> inputs, bool replacedExisting, CancellationToken ct)
     {
         var finalRoot = Path.Combine(root, "19-video-qa", language);
         var transaction = Guid.NewGuid().ToString("N");
@@ -393,12 +399,22 @@ internal static class Phase19VideoQaAuthorityPublisher
             publicationCommitted = true, committedReadbackPassed = true, committedStateValidationPassed = true,
             semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true,
             validationStatus = "Valid", downstreamReady = true }, ct);
-        await Phase16DurationCalibrationPublisher.ReplaceCommittedDirectoryAsync(stage, finalRoot, backup, async () =>
+        var committedSuccessfully = false;
+        try
         {
-            var committed = await ReadPlain<Phase19Manifest>(Path.Combine(finalRoot, "phase19-manifest.json"), ct);
-            if (committed.AuthorityChecksum != manifest.AuthorityChecksum)
-                Fail(Phase19ReasonCodes.UpstreamPhase18Invalid, "Phase 19 committed readback failed.", inputs);
-        });
+            await Phase16DurationCalibrationPublisher.ReplaceCommittedDirectoryAsync(stage, finalRoot, backup, async () =>
+            {
+                var committed = await ReadPlain<Phase19Manifest>(Path.Combine(finalRoot, "phase19-manifest.json"), ct);
+                if (committed.AuthorityChecksum != manifest.AuthorityChecksum)
+                    Fail(Phase19ReasonCodes.UpstreamPhase18Invalid, "Phase 19 committed readback failed.", inputs);
+            });
+            committedSuccessfully = true;
+        }
+        finally
+        {
+            CleanupTransactionPath(stage);
+            if (committedSuccessfully) CleanupTransactionPath(backup);
+        }
 
         var validationRoot = Path.Combine(root, "validation"); var reviewRoot = Path.Combine(root, "review");
         Directory.CreateDirectory(validationRoot); Directory.CreateDirectory(reviewRoot);
@@ -406,11 +422,14 @@ internal static class Phase19VideoQaAuthorityPublisher
         var qa = Path.Combine(reviewRoot, "qa-report.json"); var review = Path.Combine(reviewRoot, "video-review.json");
         var diagnosticProjection = Path.Combine(validationRoot, "phase-19-review-diagnostics.json");
         await Write(review, new { phaseNo = 19, phaseName = "Final Video Technical QA Authority", reviewOnly = true,
+            artifactClassification = "compatibilityProjection",
             technicalQaApproved = true, sourcePhase18AuthorityChecksum = manifest.SourcePhase18AuthorityChecksum,
             requestedFormats = manifest.RequestedFormats, outputs = manifest.Outputs }, ct);
         await Write(qa, new { status = "Approved", technicalQaApproved = true, recommendation = "Approved",
+            artifactClassification = "compatibilityProjection",
             authorityChecksum = manifest.AuthorityChecksum, issues = Array.Empty<object>(), errors = Array.Empty<string>() }, ct);
         await Write(diagnosticProjection, new { technicalQaApproved = true, validationPassed = true,
+            artifactClassification = "diagnosticProjection",
             authorityChecksum = manifest.AuthorityChecksum, inputPathsChecked = inputs }, ct);
         await Write(validation, new { phaseNo = 19, phaseName = "Final Video Technical QA Authority", status = "Succeeded",
             reasonCode = Phase19ReasonCodes.Accepted, validationPassed = true, technicalQaApproved = true,
@@ -418,11 +437,66 @@ internal static class Phase19VideoQaAuthorityPublisher
             sourcePhase18AuthorityChecksum = manifest.SourcePhase18AuthorityChecksum, authorityChecksum = manifest.AuthorityChecksum,
             publicationCommitted = true, committedReadbackPassed = true, committedStateValidationPassed = true,
             semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true,
-            validationStatus = "Valid", downstreamReady = true }, ct);
+            manifestValidationStatus = "Valid", validationStatus = "Valid", downstreamReady = true,
+            generated = true, reused = false, regenerated = replacedExisting,
+            replacedExistingAuthority = replacedExisting, inputFiles = inputs }, ct);
         var outputs = Directory.EnumerateFiles(finalRoot).Concat([validation, qa, review, diagnosticProjection]).ToArray();
         return new(inputs, outputs, Phase19ReasonCodes.Accepted, "Phase 19 final-video technical QA authority accepted.",
             manifest.SourcePhase18AuthorityChecksum, manifest.AuthorityChecksum, true, true, true, true, true, true,
-            "Valid", true, true);
+            "Valid", true, true, true, false, replacedExisting, replacedExisting);
+    }
+
+    internal static void CleanupTransactionPath(string languagePath)
+    {
+        var transaction = Directory.GetParent(languagePath)?.FullName;
+        if (transaction is not null && Directory.Exists(transaction)) Directory.Delete(transaction, true);
+        var container = transaction is null ? null : Directory.GetParent(transaction)?.FullName;
+        if (container is not null && Directory.Exists(container) && !Directory.EnumerateFileSystemEntries(container).Any())
+            Directory.Delete(container);
+    }
+
+    private static async Task<Phase19PublicationResult?> TryReadReusablePublication(string root, string language,
+        string sourceChecksum, IReadOnlyList<string> inputs, CancellationToken ct)
+    {
+        var finalRoot = Path.Combine(root, "19-video-qa", language);
+        var validation = Path.Combine(root, "validation", "phase-19-validation.json");
+        var manifestPath = Path.Combine(finalRoot, "phase19-manifest.json");
+        var diagnostics = Path.Combine(finalRoot, "phase19-authority-diagnostics.json");
+        var report = Path.Combine(finalRoot, "phase19-publication-report.json");
+        if (!File.Exists(manifestPath) || !File.Exists(diagnostics) || !File.Exists(report) || !File.Exists(validation)) return null;
+        try
+        {
+            var manifest = await ReadPlain<Phase19Manifest>(manifestPath, ct);
+            if (manifest.SourcePhase18AuthorityChecksum != sourceChecksum || manifest.QaPolicyVersion != QaPolicy ||
+                !manifest.PublicationCommitted || !manifest.DownstreamReady || manifest.ValidationStatus != "Valid" ||
+                !manifest.TechnicalQaApproved || string.IsNullOrWhiteSpace(manifest.AuthorityChecksum)) return null;
+            foreach (var path in new[] { diagnostics, report, validation })
+            {
+                using var document = await ReadDocument(path, [], ct);
+                if (String(document.RootElement, "authorityChecksum") != manifest.AuthorityChecksum ||
+                    !Bool(document.RootElement, "publicationCommitted") ||
+                    String(document.RootElement, "validationStatus") != "Valid" ||
+                    !Bool(document.RootElement, "downstreamReady")) return null;
+            }
+            var compatibility = new[] { Path.Combine(root, "review", "qa-report.json"),
+                Path.Combine(root, "review", "video-review.json"),
+                Path.Combine(root, "validation", "phase-19-review-diagnostics.json") };
+            var outputs = new[] { manifestPath, diagnostics, report, validation }.Concat(compatibility.Where(File.Exists)).ToArray();
+            await Write(validation, new { phaseNo = 19, phaseName = "Final Video Technical QA Authority",
+                status = "Succeeded", reasonCode = Phase19ReasonCodes.Accepted, validationPassed = true,
+                technicalQaApproved = true, sourcePhase18AuthorityChecksum = manifest.SourcePhase18AuthorityChecksum,
+                authorityChecksum = manifest.AuthorityChecksum, publicationCommitted = true,
+                committedReadbackPassed = true, committedStateValidationPassed = true,
+                semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true,
+                manifestValidationStatus = "Valid", validationStatus = "Valid", downstreamReady = true,
+                generated = false, reused = true, regenerated = false, replacedExistingAuthority = false,
+                inputFiles = inputs }, ct);
+            return new(inputs, outputs, Phase19ReasonCodes.Accepted,
+                "Phase 19 final-video technical QA authority reused.", manifest.SourcePhase18AuthorityChecksum,
+                manifest.AuthorityChecksum, true, true, true, true, true, true, "Valid", true, true,
+                false, true, false, false);
+        }
+        catch (Exception) { return null; }
     }
 
     private static async Task<ProbeEvidence> Probe(string executable, string path, CancellationToken ct)

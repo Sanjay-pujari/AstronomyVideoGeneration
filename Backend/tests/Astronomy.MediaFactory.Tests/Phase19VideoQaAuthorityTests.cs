@@ -158,4 +158,44 @@ public sealed class Phase19VideoQaAuthorityTests
         Assert.Throws<Phase19AuthorityValidationException>(() =>
             Phase19VideoQaAuthorityPublisher.ValidateSrt(valid.Replace("00:00:01,000 --> 00:00:02,000", "00:00:00,500 --> 00:00:00,400"), []));
     }
+
+    [Fact]
+    public void AcceptedPublicationContractProjectsCommittedGovernanceAndGenerationSemantics()
+    {
+        var result = new Phase19PublicationResult(["phase18-manifest.json"], ["phase19-manifest.json"],
+            Phase19ReasonCodes.Accepted, "accepted", "phase18-checksum", "phase19-checksum",
+            true, true, true, true, true, true, "Valid", true, true, true, false, true, true);
+
+        Assert.Equal("P19_VIDEO_QA_AUTHORITY_ACCEPTED", result.ReasonCode);
+        Assert.True(result is { PublicationCommitted: true, CommittedReadbackPassed: true,
+            CommittedStateValidationPassed: true, SemanticValidationPassed: true,
+            ChecksumValidationPassed: true, ManifestValidationPassed: true, DownstreamReady: true,
+            TechnicalQaApproved: true, Generated: true, Reused: false, Regenerated: true,
+            ReplacedExistingAuthority: true });
+        Assert.NotEmpty(result.InputFiles);
+        Assert.False(string.IsNullOrWhiteSpace(result.AuthorityChecksum));
+        Assert.Equal("phase18-checksum", result.SourcePhase18AuthorityChecksum);
+    }
+
+    [Fact]
+    public void TransactionCleanupRemovesCurrentTransactionAndOnlyEmptyContainer()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"phase19-cleanup-{Guid.NewGuid():N}");
+        var current = Path.Combine(root, ".staging", "current", "en");
+        var other = Path.Combine(root, ".staging", "other", "sentinel.txt");
+        Directory.CreateDirectory(current);
+        Directory.CreateDirectory(Path.GetDirectoryName(other)!);
+        File.WriteAllText(other, "owned by another execution");
+
+        Phase19VideoQaAuthorityPublisher.CleanupTransactionPath(current);
+        Assert.False(Directory.Exists(Path.Combine(root, ".staging", "current")));
+        Assert.True(File.Exists(other));
+
+        Directory.Delete(Path.Combine(root, ".staging", "other"), true);
+        var backup = Path.Combine(root, ".backup", "current", "en");
+        Directory.CreateDirectory(backup);
+        Phase19VideoQaAuthorityPublisher.CleanupTransactionPath(backup);
+        Assert.False(Directory.Exists(Path.Combine(root, ".backup")));
+        Directory.Delete(root, true);
+    }
 }
