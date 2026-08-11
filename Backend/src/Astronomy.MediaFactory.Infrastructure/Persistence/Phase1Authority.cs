@@ -177,7 +177,10 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
         // Phase 18 publishes transactionally to its language-scoped numbered authority. Legacy
         // video paths are individual post-commit projections and are never an owned directory.
         Add(18,Path.Combine(root,"18-video-assembly",phase15Language),canDeleteOnOverwrite:false);
-        Add(19,Path.Combine(root,"video-qa"));
+        // Phase 19 owns transactional replacement of its numbered language authority. The old
+        // video-qa directory is a compatibility projection and is never canonical ownership.
+        Add(19,Path.Combine(root,"19-video-qa",phase15Language),canDeleteOnOverwrite:false);
+        Add(19,Path.Combine(root,"video-qa"),compatibility:true,canDeleteOnOverwrite:false);
         Add(20,Path.Combine(root,"publishing"));
         for(var phase=Math.Max(2,start);phase<=Math.Min(20,end);phase++)Add(phase,Path.Combine(context.ExecutionContext.ValidationRoot!,$"phase-{phase:00}-validation.json"),false,validation:true);
         var comparer=OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal;

@@ -3287,6 +3287,25 @@ Second display cue.
         Assert.True(File.Exists(committed));
     }
 
+    [Fact]
+    public void Phase19CleanupCatalogUsesNumberedLanguageRoot()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]) with { StartPhaseNo = 19, EndPhaseNo = 19 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 19, 19);
+
+        Assert.Contains(targets, x => x.IsAuthority && x.RelativePath == "19-video-qa/en" && !x.CanDeleteOnOverwrite);
+    }
+
+    [Fact]
+    public void Phase19LegacyVideoQaRootIsCompatibilityOnly()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]) with { StartPhaseNo = 19, EndPhaseNo = 19 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 19, 19);
+
+        Assert.DoesNotContain(targets, x => x.IsAuthority && x.RelativePath == "video-qa");
+        Assert.Contains(targets, x => x.IsCompatibility && x.RelativePath == "video-qa" && !x.CanDeleteOnOverwrite);
+    }
+
     [Theory]
     [InlineData(11, "11-hero")]
     [InlineData(10, "10-scene-validation")]

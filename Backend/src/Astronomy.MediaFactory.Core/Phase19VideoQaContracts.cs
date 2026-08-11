@@ -3,6 +3,8 @@ namespace Astronomy.MediaFactory.Core;
 public static class Phase19ReasonCodes
 {
     public const string UpstreamPhase18Invalid = "P19_UPSTREAM_PHASE18_INVALID";
+    public const string SupportAuthorityInvalid = "P19_SUPPORT_AUTHORITY_INVALID";
+    public const string CandidateValidationFailed = "P19_CANDIDATE_VALIDATION_FAILED";
     public const string VideoMissing = "P19_VIDEO_MISSING";
     public const string VideoHashMismatch = "P19_VIDEO_HASH_MISMATCH";
     public const string VideoStreamInvalid = "P19_VIDEO_STREAM_INVALID";
