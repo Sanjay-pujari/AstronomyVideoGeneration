@@ -96,7 +96,8 @@ public sealed partial class ProductionPipelineExecutionService(
     ISceneAssetCertificationService? sceneAssetCertificationService = null,
     IResponsiveHeroAuthorityService? responsiveHeroAuthorityService = null,
     IOptions<AzureOpenAIForImageOptions>? azureImageOptions = null,
-    IAICinematicImageGenerator? azureImageGenerator = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
+    IAICinematicImageGenerator? azureImageGenerator = null,
+    IOptions<PublishingOptions>? publishingOptions = null) : IProductionPipelineExecutionService, IProductionPhaseRunner
 {
     // The action delegate and the generic phase-result writer are deliberately separate.
     // Preserve the publication transaction selected by the Phase 3 action so the stable
@@ -144,6 +145,7 @@ public sealed partial class ProductionPipelineExecutionService(
         ?? throw new ArgumentNullException(nameof(phase6InputAuthorityEvaluator));
     private readonly IPhase7KnowledgeService? _phase7KnowledgeService = phase7KnowledgeService;
     private readonly IPhase7NarrationAuthorityOrchestrator? _phase7NarrationAuthorityOrchestrator = phase7NarrationAuthorityOrchestrator;
+    private readonly PublishingOptions _phase20PublishingOptions = publishingOptions?.Value ?? new PublishingOptions();
     private readonly IDocumentaryNarrativeLifecycleIntegrationService? _documentaryNarrativeLifecycleIntegrationService = documentaryNarrativeLifecycleIntegrationService;
     private const string ValidPhase6ReuseReason = "Valid Phase 6 authority was reused; overwriteExisting=false.";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -14512,13 +14514,9 @@ public sealed partial class ProductionPipelineExecutionService(
 
     private async Task<IReadOnlyList<string>> PhaseFinalValidationAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
-        await WriteScenesManifestsAsync(context.OutputRoot, cancellationToken);
-        var copied = await MaterializePlanFolderAsync(context.Request, context.EventId, context.OutputRoot, [], cancellationToken);
-        var validation = await qualityValidator.ValidateFinalOutputAsync(context.ProductionEventIntelligence, context.OutputRoot, cancellationToken, context.Request.RequestedOutputs);
-        if (!validation.IsValid) throw new InvalidOperationException("Final validation failed: " + string.Join("; ", validation.Errors));
-
-        var publishGatePath = await WriteAndValidatePublishGateAsync(context, cancellationToken);
-        return copied.Concat([Path.Combine(context.OutputRoot, "phase-manifest.json"), publishGatePath]).ToArray();
+        return await Phase20PublishingAuthorityPublisher.ExecuteAsync(context.OutputRoot, context.Request.PlanId,
+            ResolvePipelineLanguage(context.Request.Language), context.Request.RequestedOutputs, context.OverwriteExisting,
+            context.PipelineRequest.PublishApproved, _phase20PublishingOptions, cancellationToken);
     }
 
     private static async Task<string> WriteAndValidatePublishGateAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
