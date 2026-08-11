@@ -117,9 +117,9 @@ public sealed class Phase18VideoAssemblyAuthorityTests
     {
         var audio = Phase18VideoAssemblyAuthorityPublisher.AudioPolicy;
         Assert.Equal(("aac", 48_000, 2, 192_000), (audio.Codec, audio.SampleRate, audio.Channels, audio.Bitrate));
-        Assert.Equal(Phase18SubtitleMode.SidecarOnly,
+        Assert.Equal(Phase18SubtitleMode.BurnInAndSidecar,
             Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.EnglishMode);
-        Assert.Equal(Phase18SubtitleMode.SidecarOnly,
+        Assert.Equal(Phase18SubtitleMode.BurnInAndSidecar,
             Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.HindiMode);
         Assert.Equal((34, 22), (Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.ShortFontSize,
             Phase18VideoAssemblyAuthorityPublisher.SubtitlePolicy.LongFontSize));
@@ -160,6 +160,41 @@ public sealed class Phase18VideoAssemblyAuthorityTests
         var relative = "short/captions/en.srt";
         Assert.NotEqual(Path.GetFileNameWithoutExtension("short/final.mp4"), Path.GetFileNameWithoutExtension(relative));
         Assert.Contains("FontSize=34", Phase18VideoAssemblyAuthorityPublisher.BuildSubtitleFilter("captions/en.srt", Phase18ProductionFormat.Short));
+    }
+
+    [Fact]
+    public void Phase18ShortSubtitleUsesConfiguredFontScale()
+    {
+        var style = Phase18VideoAssemblyAuthorityPublisher.ResolveSubtitleStyle(Phase18ProductionFormat.Short, "en", .34, 14);
+        Assert.Equal(34, style.FontSize);
+    }
+
+    [Fact]
+    public void Phase18ShortSubtitleUsesConfiguredBottomMargin()
+    {
+        var style = Phase18VideoAssemblyAuthorityPublisher.ResolveSubtitleStyle(Phase18ProductionFormat.Short, "en", .34, 14);
+        Assert.Equal(269, style.BottomMarginPixels);
+    }
+
+    [Fact]
+    public void Phase18ShortSubtitleAlignmentIsBottomCenter()
+    {
+        var style = Phase18VideoAssemblyAuthorityPublisher.ResolveSubtitleStyle(Phase18ProductionFormat.Short, "en", .34, 14);
+        Assert.Equal(2, style.Alignment);
+    }
+
+    [Fact]
+    public void Phase18BurnInTrueUsesStyledAss()
+    {
+        var filter = Phase18VideoAssemblyAuthorityPublisher.BuildAssFilter(@"C:\render root\captions\en.ass");
+        Assert.StartsWith("ass=filename=", filter);
+        Assert.Contains(@"C\:/render root/captions/en.ass", filter);
+    }
+
+    [Fact]
+    public void Phase18BurnInDoesNotPublishSameBasenameSrtBesideMp4()
+    {
+        Assert.NotEqual(Path.GetFileNameWithoutExtension("final.mp4"), Path.GetFileNameWithoutExtension("captions/en.srt"));
     }
 
     private static Phase17MotionEntry Motion(Phase17MotionType type, Phase17NormalizedTransform start,

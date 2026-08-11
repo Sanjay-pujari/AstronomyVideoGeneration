@@ -128,7 +128,7 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         "yuv420p", 30, "veryfast", 20, 1080, 1920, 1280, 720);
     internal static readonly Phase18AudioPolicy AudioPolicy = new("phase18-audio/1.0", "aac", 48_000, 2, 192_000);
     internal static readonly Phase18SubtitlePolicy SubtitlePolicy = new("phase18-subtitle/1.0",
-        Phase18SubtitleMode.SidecarOnly, Phase18SubtitleMode.SidecarOnly, "Noto Sans");
+        Phase18SubtitleMode.BurnInAndSidecar, Phase18SubtitleMode.BurnInAndSidecar, "Noto Sans");
     internal const string RenderPolicy = "phase18-governed-scene-render/1.0";
     private const string Schema = "phase18.video-assembly/1.0";
     private const long ProbeToleranceMs = 35; // one 30 fps frame plus container rounding
@@ -264,6 +264,17 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
                 subtitleEnabled = assembly.Subtitles.Enabled, subtitleBurnIn = assembly.Subtitles.BurnIn,
                 subtitleGenerateSrt = assembly.Subtitles.GenerateSrt, subtitleGenerateAss = assembly.Subtitles.GenerateAss,
                 assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent,
+                resolvedSubtitleFontFamily = ResolveSubtitleStyle(Phase18ProductionFormat.Short, language, assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent).FontFamily,
+                resolvedSubtitleFontSize = new { @short = ResolveSubtitleStyle(Phase18ProductionFormat.Short, language, assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent).FontSize, @long = ResolveSubtitleStyle(Phase18ProductionFormat.Long, language, assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent).FontSize },
+                resolvedBottomMarginPixels = new { @short = ResolveSubtitleStyle(Phase18ProductionFormat.Short, language, assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent).BottomMarginPixels, @long = ResolveSubtitleStyle(Phase18ProductionFormat.Long, language, assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent).BottomMarginPixels },
+                subtitleBurnPassCount = new { @short = assembly.Subtitles.Enabled && assembly.Subtitles.BurnIn ? 1 : 0, @long = assembly.Subtitles.Enabled && assembly.Subtitles.BurnIn ? 1 : 0 },
+                shortSubtitleSource = srts[0], longSubtitleSource = srts[1],
+                shortAssPath = $"short/captions/{language}.ass", longAssPath = $"long/captions/{language}.ass",
+                shortSrtSidecarPath = $"short/captions/{language}.srt", longSrtSidecarPath = $"long/captions/{language}.srt",
+                sameBasenameSidecarCollision = false, subtitleBurnSucceeded = !assembly.Subtitles.BurnIn || diagnostics.SubtitleBurnCallsThisPhase == 2,
+                styledAssGenerated = assembly.Subtitles.Enabled && assembly.Subtitles.GenerateAss,
+                srtSidecarGenerated = assembly.Subtitles.Enabled && assembly.Subtitles.GenerateSrt,
+                phase16SrtUnmodified = true,
                 subtitleBurnCalls = diagnostics.SubtitleBurnCallsThisPhase,
                 backgroundMusicUsed = music.Enabled, backgroundMusicSha256 = music.Sha256, outroDurationMs = 0,
                 sourcePhase15AuthorityChecksum = p15Checksum, sourcePhase16AuthorityChecksum = p16Checksum,
@@ -359,12 +370,14 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         }
         Log("PHASE18_FORMAT_SCENES_COMPLETE", new { Format = format });
         if (assembly.Subtitles.Enabled) ValidateSrt(srt);
-        var sidecar = Path.Combine(dir, "captions", $"{language}.srt");
-        Directory.CreateDirectory(Path.GetDirectoryName(sidecar)!);
+        var captionsDirectory = Path.Combine(dir, "captions");
+        var sidecar = Path.Combine(captionsDirectory, $"{language}.srt");
+        var assSidecar = Path.Combine(captionsDirectory, $"{language}.ass");
+        Directory.CreateDirectory(captionsDirectory);
         // Phase16 final.srt is copied byte-for-byte; Phase18 never retimes or recombines its cues.
-        File.Copy(srt, sidecar, true);
+        if (assembly.Subtitles.Enabled && assembly.Subtitles.GenerateSrt) File.Copy(srt, sidecar, true);
         if (assembly.Subtitles.Enabled && assembly.Subtitles.GenerateAss)
-            await WriteAssSidecar(srt, Path.Combine(dir, "captions", $"{language}.ass"), requestedFormat,
+            await WriteAssSidecar(srt, assSidecar, requestedFormat, language,
                 assembly.ShortSubtitleFontScale, assembly.ShortSubtitleBottomMarginPercent, ct);
         var concat = Path.Combine(clips, "concat.txt");
         await File.WriteAllLinesAsync(concat, plan.Entries.Select(x => $"file '{x.Sequence:000}.mp4'"), new UTF8Encoding(false), ct);
@@ -390,18 +403,29 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         Log("PHASE18_FORMAT_CONCAT_COMPLETE", new { Format = format, OutputPath = unburned, backgroundMusicUsed = music.Enabled });
         var final = Path.Combine(dir, "final.mp4");
         var burn = assembly.Subtitles.Enabled && assembly.Subtitles.BurnIn;
-        if (burn) { Log("PHASE18_SUBTITLE_BURN_START", new { Format = format, SidecarPath = sidecar }); diagnostics.SubtitleBurnCallsThisPhase++;
-            await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", BuildSubtitleFilter(sidecar, requestedFormat), "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final],
+        var burnPassCount = 0;
+        if (burn)
+        {
+            var burnSource = assembly.Subtitles.GenerateAss ? assSidecar : srt;
+            Log("PHASE18_SUBTITLE_BURN_START", new { Format = format, SubtitlePath = burnSource });
+            diagnostics.SubtitleBurnCallsThisPhase++; burnPassCount++;
+            var subtitleFilter = assembly.Subtitles.GenerateAss
+                ? BuildAssFilter(burnSource)
+                : BuildSubtitleFilter(burnSource, requestedFormat);
+            await Run(tools.FFmpegExecutable, ["-y", "-i", unburned, "-vf", subtitleFilter, "-c:v", "libx264", "-preset", VideoPolicy.Preset, "-crf", VideoPolicy.Crf.ToString(), "-pix_fmt", "yuv420p", "-c:a", "copy", final],
                 new MediaProcessContext("SubtitleBurn", format), dir, ct);
-            Log("PHASE18_SUBTITLE_BURN_COMPLETE", new { Format = format, OutputPath = final }); }
+            Log("PHASE18_SUBTITLE_BURN_COMPLETE", new { Format = format, OutputPath = final, subtitleBurnPassCount = burnPassCount });
+        }
         else File.Copy(unburned, final, true);
+        if (burn && burnPassCount != 1) Fail(Phase18ReasonCodes.VideoValidationFailed, $"{format} subtitle burn pass count was {burnPassCount}; expected 1.");
+        if (burn && File.Exists(Path.Combine(dir, "final.srt"))) Fail(Phase18ReasonCodes.VideoValidationFailed, $"{format} has a same-basename subtitle collision.");
         var physical = await ProbeDuration(tools.FFprobeExecutable, final, new MediaProcessContext("FinalProbe", format), diagnostics, ct);
         if (Math.Abs(physical - governed) > ProbeToleranceMs) Fail(Phase18ReasonCodes.VideoValidationFailed, $"{format} duration differs by {Math.Abs(physical-governed)}ms.");
         var relativeVideo = $"{format.ToLowerInvariant()}/final.mp4"; var relativeSrt = $"{format.ToLowerInvariant()}/captions/{language}.srt";
         var result = new Phase18MediaEvidence(format, relativeVideo, relativeSrt, governed, physical,
             format == "Short" ? VideoPolicy.ShortWidth : VideoPolicy.LongWidth, format == "Short" ? VideoPolicy.ShortHeight : VideoPolicy.LongHeight,
             "h264", "yuv420p", "aac", 48000, 2, await HashFile(final, ct), new FileInfo(final).Length,
-            await HashFile(sidecar, ct), new FileInfo(sidecar).Length, sourceHashes);
+            await HashFile(srt, ct), new FileInfo(srt).Length, sourceHashes);
         Log("PHASE18_FORMAT_VALIDATION_COMPLETE", new { Format = format, PhysicalDurationMs = physical });
         Directory.Delete(clips, true);
         var intermediateRoot = Path.GetDirectoryName(clips)!;
@@ -798,14 +822,15 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             options.DuckUnderNarration, await HashFile(path, ct));
     }
 
-    private static async Task WriteAssSidecar(string srtPath, string assPath, Phase18ProductionFormat format,
-        double shortScale, double shortBottomMarginPercent, CancellationToken ct)
+    internal static async Task WriteAssSidecar(string srtPath, string assPath, Phase18ProductionFormat format,
+        string language, double shortScale, double shortBottomMarginPercent, CancellationToken ct)
     {
         var portrait = format == Phase18ProductionFormat.Short;
         var width = portrait ? VideoPolicy.ShortWidth : VideoPolicy.LongWidth;
         var height = portrait ? VideoPolicy.ShortHeight : VideoPolicy.LongHeight;
-        var fontSize = portrait ? Math.Max(12, (int)Math.Round(100 * shortScale)) : 22;
-        var margin = portrait ? Math.Max(0, (int)Math.Round(height * shortBottomMarginPercent / 100d)) : 60;
+        var style = ResolveSubtitleStyle(format, language, shortScale, shortBottomMarginPercent);
+        var fontSize = style.FontSize;
+        var margin = style.BottomMarginPixels;
         static string AssTime(string value)
         {
             var time = TimeSpan.ParseExact(value.Trim().Replace(',', '.'), @"hh\:mm\:ss\.fff", CultureInfo.InvariantCulture);
@@ -821,9 +846,30 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             var cue = string.Join(@"\N", lines.Skip(2)).Replace("{", "\\{").Replace("}", "\\}");
             dialogues.Add($"Dialogue: 0,{AssTime(times[0])},{AssTime(times[1])},Default,,0,0,0,,{cue}");
         }
-        var header = $"[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Noto Sans,{fontSize},&H00FFFFFF,&H000000FF,&H80000000,&H40000000,0,0,0,0,100,100,0,0,1,2,1,2,40,40,{margin},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
+        var header = $"[Script Info]\nScriptType: v4.00+\nPlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,{style.FontFamily},{fontSize},&H00FFFFFF,&H000000FF,&H80000000,&H40000000,0,0,0,0,100,100,0,0,1,2,1,2,40,40,{margin},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
         await File.WriteAllTextAsync(assPath, header + string.Join('\n', dialogues) + "\n", new UTF8Encoding(false), ct);
     }
+
+    internal sealed record ResolvedSubtitleStyle(string FontFamily, int FontSize, int BottomMarginPixels, int Alignment);
+
+    // Reuses the established Phase 18 subtitle scale: a 1.0 scale represents the mature
+    // 100px portrait caption size, while landscape retains its independent documentary size.
+    internal static ResolvedSubtitleStyle ResolveSubtitleStyle(Phase18ProductionFormat format, string language,
+        double shortScale, double shortBottomMarginPercent)
+    {
+        var portrait = format == Phase18ProductionFormat.Short;
+        var fontSize = portrait ? Math.Max(12, (int)Math.Round(100 * shortScale)) : SubtitlePolicy.LongFontSize;
+        var margin = portrait
+            ? Math.Max(0, (int)Math.Round(VideoPolicy.ShortHeight * shortBottomMarginPercent / 100d))
+            : SubtitlePolicy.LongMarginBottom;
+        if (portrait && (fontSize > VideoPolicy.ShortHeight * .05 || margin > VideoPolicy.ShortHeight / 3))
+            Fail(Phase18ReasonCodes.SubtitlePhysicalEvidenceInvalid, "Short subtitle style exceeds the restrained lower caption region.");
+        var family = language.Equals("hi", StringComparison.OrdinalIgnoreCase) ? "Noto Sans Devanagari" : SubtitlePolicy.BurnInFontFamily!;
+        return new(family, fontSize, margin, 2);
+    }
+
+    internal static string BuildAssFilter(string absolutePath) =>
+        $"ass=filename='{EscapeSubtitleFilterPath(absolutePath)}'";
 
     private static void ValidateSrt(string path) { var text = File.ReadAllText(path, new UTF8Encoding(false, true)); if (string.IsNullOrWhiteSpace(text) || !text.Contains(" --> ", StringComparison.Ordinal)) Fail(Phase18ReasonCodes.SubtitlePhysicalEvidenceInvalid, "SRT is not valid UTF-8/timed text."); }
     private static string ResolveOwned(string root, string path) { var full = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(root, path)); var owned = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar; if (!full.StartsWith(owned, StringComparison.Ordinal)) Fail(Phase18ReasonCodes.CandidateValidationFailed, "Authority path escapes the execution root."); return full; }
