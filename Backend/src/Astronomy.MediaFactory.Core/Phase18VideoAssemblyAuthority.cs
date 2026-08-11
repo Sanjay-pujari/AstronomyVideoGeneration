@@ -15,6 +15,8 @@ public static class Phase18ReasonCodes
     public const string VideoValidationFailed = "P18_VIDEO_VALIDATION_FAILED";
     public const string CandidateValidationFailed = "P18_CANDIDATE_VALIDATION_FAILED";
     public const string CommitFailed = "P18_COMMIT_FAILED";
+    public const string PublicationFailed = "P18_PUBLICATION_FAILED";
+    public const string PublicationPathTypeInvalid = "P18_PUBLICATION_PATH_TYPE_INVALID";
     public const string CommittedReadbackFailed = "P18_COMMITTED_READBACK_FAILED";
     public const string Accepted = "P18_VIDEO_ASSEMBLY_AUTHORITY_ACCEPTED";
 }
