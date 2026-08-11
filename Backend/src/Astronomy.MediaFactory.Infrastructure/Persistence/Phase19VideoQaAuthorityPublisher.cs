@@ -36,6 +36,7 @@ internal static class Phase19VideoQaAuthorityPublisher
             Path.Combine(validationRoot, "phase-18-validation.json")
         };
         var loaded = new List<string>();
+        var phase18Governed = false;
         try
         {
             var manifest = await Read<Phase18Manifest>(inputs[0], loaded, ct);
@@ -44,6 +45,7 @@ internal static class Phase19VideoQaAuthorityPublisher
             using var validation = await ReadDocument(inputs[3], loaded, ct);
             ValidatePhase18Governance(manifest, diagnostics.RootElement, publication.RootElement,
                 validation.RootElement, language, inputs);
+            phase18Governed = true;
 
             var ffprobe = string.IsNullOrWhiteSpace(rendering.FfprobePath) ? "ffprobe" : rendering.FfprobePath!;
             var ffmpeg = string.IsNullOrWhiteSpace(rendering.FfmpegPath) ? "ffmpeg" : rendering.FfmpegPath;
@@ -60,8 +62,23 @@ internal static class Phase19VideoQaAuthorityPublisher
             // Phase 18 does not carry narration lengths per scene.  This is a lineage-only Phase 15 read;
             // it is never used to discover media and its rows are bound back to Phase 17 audio hashes.
             var timelinePath = ResolveOwned(root, Path.Combine("15-tts", language, "tts-timeline.json"), inputs);
-            var narrationTimeline = (await Read<List<Phase15TimelineEntry>>(timelinePath, loaded, ct))
-                .ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
+            var narrationTimeline = await ReadPhase15Timeline(timelinePath,
+                manifest.SourcePhase15AuthorityChecksum, language, loaded, ct);
+
+            // Support adapters are completed before touching the governed MP4s. Phase 17 supplies
+            // scene windows only; Phase 18 remains the source of formats and final-media identity.
+            var motionPlans = new Dictionary<string, Phase17MotionPlan>(StringComparer.OrdinalIgnoreCase);
+            foreach (var format in requested)
+            {
+                var motionPlanPath = ResolveOwned(root,
+                    Path.Combine("17-motion", language, format.ToLowerInvariant(), "motion-plan.json"), inputs);
+                var plan = await Read<Phase17MotionPlan>(motionPlanPath, loaded, ct);
+                if (!string.Equals(plan.AuthorityChecksum, manifest.SourcePhase17AuthorityChecksum, StringComparison.Ordinal) ||
+                    !string.Equals(plan.Format, format, StringComparison.OrdinalIgnoreCase))
+                    Fail(Phase19ReasonCodes.SupportAuthorityInvalid,
+                        $"Phase17 {format} motion-plan lineage does not match committed Phase18 authority.", loaded);
+                motionPlans.Add(format, plan);
+            }
             var outputs = new List<Phase19FormatQaEvidence>();
             foreach (var format in requested)
             {
@@ -74,12 +91,7 @@ internal static class Phase19VideoQaAuthorityPublisher
                 var probe = await Probe(ffprobe, video, ct);
                 ValidateProbe(probe, declared, mediaPolicy, inputs);
                 var subtitlePassed = await ValidateSubtitles(p18Root, video, language, declared, subtitle, loaded, inputs, ct);
-                var motionPlanPath = ResolveOwned(root,
-                    Path.Combine("17-motion", language, format.ToLowerInvariant(), "motion-plan.json"), inputs);
-                var plan = await Read<Phase17MotionPlan>(motionPlanPath, loaded, ct);
-                if (!string.Equals(plan.AuthorityChecksum, manifest.SourcePhase17AuthorityChecksum, StringComparison.Ordinal) ||
-                    !string.Equals(plan.Format, format, StringComparison.OrdinalIgnoreCase))
-                    Fail(Phase19ReasonCodes.UpstreamPhase18Invalid, $"{format} Phase 17 motion lineage does not match Phase 18.", inputs);
+                var plan = motionPlans[format];
 
                 var scenes = new List<Phase19SceneQaEvidence>();
                 var narrationAll = true;
@@ -89,7 +101,7 @@ internal static class Phase19VideoQaAuthorityPublisher
                     if (!narrationTimeline.TryGetValue(scene.SceneAudioUnitId, out var narration) ||
                         narration.AudioSha256 != scene.AudioSha256 || narration.ActualAudioDurationMs <= 0 ||
                         narration.ActualAudioDurationMs > scene.DurationMs + DurationToleranceMs)
-                        Fail(Phase19ReasonCodes.UpstreamPhase18Invalid,
+                        Fail(Phase19ReasonCodes.SupportAuthorityInvalid,
                             $"{format}/{scene.SceneId} narration-window lineage is invalid.", inputs);
                     var sceneStart = scene.SceneStartMs;
                     var exclusion = Math.Max(scene.TransitionIn.DurationMs, 100);
@@ -153,7 +165,63 @@ internal static class Phase19VideoQaAuthorityPublisher
             return await Publish(root, language, authority, loaded, ct);
         }
         catch (Phase19AuthorityValidationException) { throw; }
-        catch (Exception ex) { throw new Phase19AuthorityValidationException(Phase19ReasonCodes.UpstreamPhase18Invalid, ex.Message, loaded); }
+        catch (Exception ex)
+        {
+            var code = phase18Governed ? Phase19ReasonCodes.CandidateValidationFailed : Phase19ReasonCodes.UpstreamPhase18Invalid;
+            var reason = phase18Governed
+                ? "Phase19 candidate validation failed after committed Phase18 governance passed."
+                : "Phase18 governing authority could not be opened or validated.";
+            throw new Phase19AuthorityValidationException(code, reason, loaded) { Data = { ["rawException"] = ex.ToString() } };
+        }
+    }
+
+    internal static async Task<Dictionary<string, Phase15TimelineEntry>> ReadPhase15Timeline(string path,
+        string expectedAuthorityChecksum, string language, List<string> loaded, CancellationToken ct)
+    {
+        JsonDocument document;
+        try { document = await ReadDocument(path, loaded, ct); }
+        catch (Exception ex) when (ex is JsonException or IOException or InvalidOperationException)
+        {
+            throw SupportFailure(path, "root object containing canonical entries[]", "unreadable", "$", ex, loaded);
+        }
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                throw SupportFailure(path, "root object containing canonical entries[]", root.ValueKind.ToString(), "$", null, loaded);
+            if (!root.TryGetProperty("entries", out var entriesElement) || entriesElement.ValueKind != JsonValueKind.Array)
+                throw SupportFailure(path, "root.entries[]", entriesElement.ValueKind.ToString(), "$.entries", null, loaded);
+            if (!String(root, "authorityChecksum").Equals(expectedAuthorityChecksum, StringComparison.Ordinal))
+                Fail(Phase19ReasonCodes.SupportAuthorityInvalid,
+                    "Phase15 tts-timeline authority checksum does not match committed Phase18 lineage.", loaded);
+            List<Phase15TimelineEntry> entries;
+            try { entries = entriesElement.Deserialize<List<Phase15TimelineEntry>>(Json) ?? []; }
+            catch (JsonException ex)
+            {
+                throw SupportFailure(path, "root.entries[] of canonical Phase15 timeline entries",
+                    entriesElement.ValueKind.ToString(), ex.Path ?? "$.entries", ex, loaded);
+            }
+            foreach (var entry in entries)
+                if (string.IsNullOrWhiteSpace(entry.SceneAudioUnitId) || string.IsNullOrWhiteSpace(entry.SceneId) ||
+                    entry.Sequence <= 0 || string.IsNullOrWhiteSpace(entry.Format) ||
+                    !entry.Language.Equals(language, StringComparison.OrdinalIgnoreCase) ||
+                    string.IsNullOrWhiteSpace(entry.AudioRelativePath) || entry.AudioByteLength <= 0 ||
+                    string.IsNullOrWhiteSpace(entry.AudioSha256) || entry.ActualAudioDurationMs <= 0)
+                    Fail(Phase19ReasonCodes.SupportAuthorityInvalid,
+                        $"Phase15 canonical entry '{entry.SceneAudioUnitId}' has missing required narration-QA fields.", loaded);
+            if (entries.Count == 0 || entries.Select(x => x.SceneAudioUnitId).Distinct(StringComparer.Ordinal).Count() != entries.Count)
+                Fail(Phase19ReasonCodes.SupportAuthorityInvalid, "Phase15 root.entries[] is empty or has duplicate scene audio unit IDs.", loaded);
+            return entries.ToDictionary(x => x.SceneAudioUnitId, StringComparer.Ordinal);
+        }
+    }
+
+    private static Phase19AuthorityValidationException SupportFailure(string artifact, string expected,
+        string actualRootKind, string property, Exception? raw, IReadOnlyList<string> loaded)
+    {
+        var failure = new Phase19AuthorityValidationException(Phase19ReasonCodes.SupportAuthorityInvalid,
+            $"Phase15 tts-timeline '{artifact}' expected {expected}; actual root kind '{actualRootKind}', failing property '{property}'.", loaded);
+        if (raw is not null) failure.Data["rawException"] = raw.ToString();
+        return failure;
     }
 
     internal static void ValidatePhase18Governance(Phase18Manifest manifest, JsonElement diagnostics,
@@ -439,7 +507,7 @@ internal static class Phase19VideoQaAuthorityPublisher
     }
 
     private sealed record ProbeEvidence(long ContainerDurationMs, Phase19StreamEvidence Video, Phase19StreamEvidence Audio);
-    private sealed record Phase15TimelineEntry(string SceneAudioUnitId, string SceneId, int Sequence, string Format,
+    internal sealed record Phase15TimelineEntry(string SceneAudioUnitId, string SceneId, int Sequence, string Format,
         string Language, string AudioRelativePath, long AudioByteLength, string AudioSha256, string TextChecksum,
         long ActualAudioDurationMs);
     private sealed record ProcessResult(int ExitCode, string Output, string Error);

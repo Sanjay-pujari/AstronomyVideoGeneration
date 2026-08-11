@@ -7,6 +7,49 @@ namespace Astronomy.MediaFactory.Tests;
 public sealed class Phase19VideoQaAuthorityTests
 {
     [Fact]
+    public async Task Phase15CanonicalReaderReadsRootEntriesAndIgnoresCompatibilityItems()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"phase19-p15-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(path, """
+            {
+              "schemaVersion":"phase15/1.0", "language":"en", "authorityChecksum":"p15-checksum",
+              "entries":[{"sceneAudioUnitId":"audio-1","sceneId":"scene-1","sequence":1,"format":"Short",
+                "language":"en","audioRelativePath":"audio/one.mp3","audioByteLength":12,
+                "audioSha256":"abc","textChecksum":"text","actualAudioDurationMs":800}],
+              "short":{"items":[{"deliberately":"wrong"}]}, "long":{"items":null}
+            }
+            """);
+        try
+        {
+            var loaded = new List<string>();
+            var entries = await Phase19VideoQaAuthorityPublisher.ReadPhase15Timeline(
+                path, "p15-checksum", "en", loaded, CancellationToken.None);
+
+            Assert.Equal("scene-1", Assert.Single(entries).Value.SceneId);
+            Assert.Equal([path], loaded);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task Phase15CanonicalReaderRejectsRootArrayWithStructuredSupportReason()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"phase19-p15-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(path, "[]");
+        try
+        {
+            var exception = await Assert.ThrowsAsync<Phase19AuthorityValidationException>(() =>
+                Phase19VideoQaAuthorityPublisher.ReadPhase15Timeline(
+                    path, "p15-checksum", "en", [], CancellationToken.None));
+
+            Assert.Equal(Phase19ReasonCodes.SupportAuthorityInvalid, exception.ReasonCode);
+            Assert.Contains("root object containing canonical entries[]", exception.Reason);
+            Assert.DoesNotContain("could not be converted", exception.Reason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void ResolveManifestPath_RejectsTraversalAndAbsolutePaths()
     {
         var root = Path.Combine(Path.GetTempPath(), "p19-authority");
