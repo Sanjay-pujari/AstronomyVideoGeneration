@@ -17,9 +17,10 @@ internal static class Phase19VideoQaAuthorityPublisher
 {
     internal const string Schema = "phase19.final-video-qa/1.0";
     internal const string QaPolicy = "phase19-technical-qa/1.0";
-    internal const string MotionMetricPolicy = "MotionQaPolicyV1";
+    internal const string MotionMetricPolicy = "MotionQaPolicyV2";
     internal const string AudioEnergyPolicy = "phase19-window-energy/1.0";
     internal const double MotionThreshold = 1.25;
+    internal static readonly MotionQaPolicyV2 MotionPolicy = new();
     internal const long DurationToleranceMs = 35;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -81,6 +82,7 @@ internal static class Phase19VideoQaAuthorityPublisher
                 motionPlans.Add(format, plan);
             }
             var outputs = new List<Phase19FormatQaEvidence>();
+            var motionFailures = new List<string>();
             foreach (var format in requested)
             {
                 var declared = manifest.Outputs.Single(o => string.Equals(o.Format, format, StringComparison.OrdinalIgnoreCase));
@@ -112,23 +114,31 @@ internal static class Phase19VideoQaAuthorityPublisher
                     if (usableEnd - usableStart < 300)
                         Fail(Phase19ReasonCodes.MotionQaFailed, $"{format}/{scene.SceneId} has no interior QA window.", inputs);
                     var times = InteriorTimes(usableStart, usableEnd);
-                    var frames = new List<byte[]>();
-                    foreach (var time in times) frames.Add(await ExtractLuma(ffmpeg, video, time, subtitle.MaskBottomFraction(format), ct));
-                    var metrics = new[] { MeanAbsoluteDifference(frames[0], frames[1]),
-                        MeanAbsoluteDifference(frames[1], frames[2]), MeanAbsoluteDifference(frames[0], frames[2]) };
+                    var frames = new List<LumaFrame>();
+                    foreach (var time in times) frames.Add(await ExtractLumaFrame(ffmpeg, video, time, subtitle.MaskBottomFraction(format), ct));
+                    var comparisons = new[] { Compare(frames[0], frames[1], MotionPolicy),
+                        Compare(frames[1], frames[2], MotionPolicy), Compare(frames[0], frames[2], MotionPolicy) };
+                    var metrics = comparisons.Select(x => x.GlobalMad).ToArray();
                     var moving = scene.MotionType is not (Phase17MotionType.Static or Phase17MotionType.Hold);
                     var phase17Matched = HasValidMotionAuthority(scene, format);
                     var executionFilter = Phase18VideoAssemblyAuthorityPublisher.BuildMotionFilter(scene,
                         declared.Width, declared.Height);
                     var phase18Matched = phase17Matched && !string.IsNullOrWhiteSpace(executionFilter);
-                    var materialMotion = IsMaterialMotionDetected(moving, metrics, MotionThreshold);
-                    // MotionQaPolicyV1 deliberately keeps pixel-direction inference non-blocking. Phase 17 owns
+                    var materialMotion = IsMaterialMotionDetectedV2(moving, comparisons, MotionPolicy);
+                    // MotionQaPolicyV2 deliberately keeps pixel-direction inference non-blocking. Phase 17 owns
                     // the semantic instruction, Phase 18's deterministic governed filter corroborates execution,
                     // and the encoded MP4 must independently provide material-change/stability evidence.
                     const string inferredDirection = "Unknown";
                     var motionPassed = phase17Matched && phase18Matched && materialMotion;
-                    if (!motionPassed) Fail(Phase19ReasonCodes.MotionQaFailed,
-                        MotionFailure(format, scene, phase17Matched, phase18Matched, materialMotion), inputs);
+                    if (!motionPassed)
+                        motionFailures.Add(MotionFailure(format, scene, phase17Matched, phase18Matched, materialMotion) +
+                            $" samples=[{string.Join(',', times)}]; globalMad=[{Numbers(metrics)}]; " +
+                            $"changedPixelRatio=[{Numbers(comparisons.Select(x => x.ChangedPixelRatio))}]; " +
+                            $"edgeDifference=[{Numbers(comparisons.Select(x => x.EdgeDifferenceMean))}]; " +
+                            $"edgeChangedRatio=[{Numbers(comparisons.Select(x => x.EdgeChangedRatio))}]; " +
+                            $"thresholds=(globalMad={MotionPolicy.GlobalMadThreshold:0.####},pixelNoiseFloor={MotionPolicy.PixelNoiseFloor}," +
+                            $"changedPixelRatio={MotionPolicy.ChangedPixelRatioThreshold:0.####},edgeDifference={MotionPolicy.EdgeDifferenceThreshold:0.####}," +
+                            $"edgeChangedRatio={MotionPolicy.EdgeChangedRatioThreshold:0.####}).");
                     var narrationTime = sceneStart + Math.Min(narration.ActualAudioDurationMs / 2,
                         Math.Max(100, narration.ActualAudioDurationMs - 200));
                     var narrationEnergy = await ProbeEnergy(ffmpeg, video, narrationTime, 350, ct);
@@ -164,7 +174,11 @@ internal static class Phase19VideoQaAuthorityPublisher
                         exclusion, endExclusion, scene.StartTransform.Scale, scene.EndTransform.Scale,
                         scene.StartTransform.TranslateX, scene.EndTransform.TranslateX,
                         scene.StartTransform.TranslateY, scene.EndTransform.TranslateY, executionFilter,
-                        narrationPassed, fadePassed, transitionPassed));
+                        narrationPassed, fadePassed, transitionPassed, MotionMetricPolicy,
+                        comparisons.Select(x => x.ChangedPixelRatio).ToArray(),
+                        comparisons.Select(x => x.EdgeDifferenceMean).ToArray(),
+                        comparisons.Select(x => x.EdgeChangedRatio).ToArray(), subtitle.MaskBottomFraction(format) > 0,
+                        frames[0].Height, frames[0].Pixels.Length, true, true));
                 }
                 if (music.Enabled && !musicAll)
                     Fail(Phase19ReasonCodes.MusicQaFailed, $"{format} has no background-bed evidence in the final MP4.", inputs);
@@ -172,6 +186,9 @@ internal static class Phase19VideoQaAuthorityPublisher
                     declared.GovernedDurationMs, probe.ContainerDurationMs, probe.Video, probe.Audio,
                     subtitlePassed, narrationAll, musicAll, scenes, true));
             }
+            if (motionFailures.Count > 0)
+                Fail(Phase19ReasonCodes.MotionQaFailed,
+                    $"failedSceneCount={motionFailures.Count}. {string.Join(" ", motionFailures)}", inputs);
 
             var identity = Hash(JsonSerializer.Serialize(new { manifest.AuthorityChecksum, requested, outputs, QaPolicy }, Json));
             var authority = new Phase19Manifest(Schema, language, manifest.AuthorityChecksum, requested, QaPolicy,
@@ -422,14 +439,17 @@ internal static class Phase19VideoQaAuthorityPublisher
         return new(duration, video, audio);
     }
 
-    private static async Task<byte[]> ExtractLuma(string ffmpeg, string video, long ms, double maskBottom, CancellationToken ct)
+    private static async Task<LumaFrame> ExtractLumaFrame(string ffmpeg, string video, long ms, double maskBottom, CancellationToken ct)
     {
         var height = Math.Max(1, (int)Math.Round(36 * (1 - maskBottom)));
         var result = await RunBinary(ffmpeg, ["-v", "error", "-ss", Sec(ms), "-i", video, "-frames:v", "1",
             "-vf", $"scale=64:36:flags=area,crop=64:{height}:0:0,format=gray", "-f", "rawvideo", "pipe:1"], ct);
         if (result.ExitCode != 0 || result.Output.Length != 64 * height) throw new InvalidOperationException("Frame extraction failed: " + result.Error);
-        return result.Output;
+        return new(result.Output, 64, height);
     }
+
+    private static async Task<byte[]> ExtractLuma(string ffmpeg, string video, long ms, double maskBottom, CancellationToken ct) =>
+        (await ExtractLumaFrame(ffmpeg, video, ms, maskBottom, ct)).Pixels;
 
     private static async Task<double> ProbeEnergy(string ffmpeg, string video, long startMs, long durationMs, CancellationToken ct)
     {
@@ -472,6 +492,65 @@ internal static class Phase19VideoQaAuthorityPublisher
         return total / (double)first.Length;
     }
 
+    internal sealed record LumaFrame(byte[] Pixels, int Width, int Height);
+    internal sealed record MotionPairMetrics(double GlobalMad, double ChangedPixelRatio,
+        double EdgeDifferenceMean, double EdgeChangedRatio);
+
+    /// <summary>Versioned astronomy-aware policy for encoded, sparse star fields.</summary>
+    internal sealed record MotionQaPolicyV2(
+        double GlobalMadThreshold = MotionThreshold,
+        int PixelNoiseFloor = 2,
+        double ChangedPixelRatioThreshold = .01,
+        double EdgeDifferenceThreshold = .08,
+        double EdgeChangedRatioThreshold = .005,
+        int EdgeNoiseFloor = 2);
+
+    internal static MotionPairMetrics Compare(LumaFrame first, LumaFrame second, MotionQaPolicyV2 policy)
+    {
+        if (first.Width != second.Width || first.Height != second.Height ||
+            first.Pixels.Length != first.Width * first.Height || second.Pixels.Length != first.Pixels.Length)
+            throw new ArgumentException("Luma frames must have equal, valid dimensions.");
+        long difference = 0;
+        var changed = 0;
+        double edgeDifference = 0;
+        var changedEdges = 0;
+        var edgeCount = 0;
+        for (var y = 0; y < first.Height; y++)
+        for (var x = 0; x < first.Width; x++)
+        {
+            var i = y * first.Width + x;
+            var delta = Math.Abs(first.Pixels[i] - second.Pixels[i]);
+            difference += delta;
+            if (delta > policy.PixelNoiseFloor) changed++;
+            if (x + 1 >= first.Width || y + 1 >= first.Height) continue;
+            var edgeA = Math.Abs(first.Pixels[i + 1] - first.Pixels[i]) +
+                        Math.Abs(first.Pixels[i + first.Width] - first.Pixels[i]);
+            var edgeB = Math.Abs(second.Pixels[i + 1] - second.Pixels[i]) +
+                        Math.Abs(second.Pixels[i + second.Width] - second.Pixels[i]);
+            var edgeDelta = Math.Abs(edgeA - edgeB);
+            edgeDifference += edgeDelta;
+            if (edgeDelta > policy.EdgeNoiseFloor) changedEdges++;
+            edgeCount++;
+        }
+        return new(difference / (double)first.Pixels.Length, changed / (double)first.Pixels.Length,
+            edgeDifference / edgeCount, changedEdges / (double)edgeCount);
+    }
+
+    internal static bool IsMaterialMotionDetectedV2(bool physicalMotionExpected,
+        IReadOnlyList<MotionPairMetrics> pairs, MotionQaPolicyV2? policy = null)
+    {
+        policy ??= MotionPolicy;
+        if (pairs.Count != 3) throw new ArgumentException("MotionQaPolicyV2 requires three frame pairs.");
+        bool Evidence(MotionPairMetrics x) => x.GlobalMad >= policy.GlobalMadThreshold ||
+            (x.ChangedPixelRatio >= policy.ChangedPixelRatioThreshold &&
+             x.EdgeDifferenceMean >= policy.EdgeDifferenceThreshold) ||
+            (x.EdgeDifferenceMean >= policy.EdgeDifferenceThreshold * 2 &&
+             x.EdgeChangedRatio >= policy.EdgeChangedRatioThreshold);
+        var evidence = pairs.Select(Evidence).ToArray();
+        // Persistence: two pairs, necessarily including either two adjacent intervals or an endpoint plus support.
+        return physicalMotionExpected ? evidence.Count(x => x) >= 2 : evidence.All(x => !x);
+    }
+
     internal static bool IsMaterialMotionDetected(bool physicalMotionExpected,
         IReadOnlyList<double> pairDifferences, double threshold = MotionThreshold)
     {
@@ -511,9 +590,12 @@ internal static class Phase19VideoQaAuthorityPublisher
                 "Phase 18 diagnostics do not certify the governed motion execution envelope.", inputs);
     }
 
-    private static long[] InteriorTimes(long start, long end) => [start, start + (end - start) / 2, end];
+    // Both arguments are global final-MP4 times. Keep samples away from transition/fade boundaries.
+    internal static long[] InteriorTimes(long start, long end) =>
+        [start + (end - start) / 5, start + (end - start) / 2, start + 4 * (end - start) / 5];
     private static double Mean(byte[] values) => values.Average(x => (double)x);
     private static string Sec(long ms) => (ms / 1000d).ToString("0.###", CultureInfo.InvariantCulture);
+    private static string Numbers(IEnumerable<double> values) => string.Join(',', values.Select(x => x.ToString("0.######", CultureInfo.InvariantCulture)));
     private static double Rational(string text) { var p = text.Split('/'); return p.Length == 2 && double.TryParse(p[0], out var n) && double.TryParse(p[1], out var d) && d != 0 ? n / d : 0; }
     private static long SecondsToMs(string value) => double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var x) ? (long)Math.Round(x * 1000) : 0;
     private static int Int(JsonElement x, string p) => x.TryGetProperty(p, out var v) && v.TryGetInt32(out var n) ? n : 0;

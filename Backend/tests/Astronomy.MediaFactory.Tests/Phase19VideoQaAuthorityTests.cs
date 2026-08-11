@@ -106,7 +106,7 @@ public sealed class Phase19VideoQaAuthorityTests
     {
         Assert.False(Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetected(true, [.10, .12, .15]));
         Assert.True(Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetected(true, [1.30, .20, 1.45]));
-        Assert.Equal("MotionQaPolicyV1", Phase19VideoQaAuthorityPublisher.MotionMetricPolicy);
+        Assert.Equal("MotionQaPolicyV2", Phase19VideoQaAuthorityPublisher.MotionMetricPolicy);
     }
 
     [Fact]
@@ -115,6 +115,40 @@ public sealed class Phase19VideoQaAuthorityTests
         Assert.Throws<ArgumentException>(() =>
             Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetected(true, [2, 3]));
     }
+
+    [Fact]
+    public void MotionQaPolicyV2_DetectsPersistentSparseStructuralMotionButRejectsStatic()
+    {
+        static Phase19VideoQaAuthorityPublisher.LumaFrame Frame(params (int X, int Y)[] stars)
+        {
+            var pixels = new byte[64 * 30];
+            foreach (var (x, y) in stars) pixels[y * 64 + x] = 220;
+            return new(pixels, 64, 30);
+        }
+        var a = Frame((10, 8), (22, 12), (45, 20));
+        var b = Frame((11, 8), (23, 12), (46, 20));
+        var c = Frame((12, 8), (24, 12), (47, 20));
+        var policy = new Phase19VideoQaAuthorityPublisher.MotionQaPolicyV2(
+            ChangedPixelRatioThreshold: .001, EdgeDifferenceThreshold: .01, EdgeChangedRatioThreshold: .001);
+        var moving = new[] { Phase19VideoQaAuthorityPublisher.Compare(a, b, policy),
+            Phase19VideoQaAuthorityPublisher.Compare(b, c, policy),
+            Phase19VideoQaAuthorityPublisher.Compare(a, c, policy) };
+        var frozen = Enumerable.Repeat(Phase19VideoQaAuthorityPublisher.Compare(a, a, policy), 3).ToArray();
+
+        Assert.True(Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetectedV2(true, moving, policy));
+        Assert.False(Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetectedV2(true, frozen, policy));
+        Assert.True(Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetectedV2(false, frozen, policy));
+        Assert.Equal("MotionQaPolicyV2", Phase19VideoQaAuthorityPublisher.MotionMetricPolicy);
+    }
+
+    [Theory]
+    [InlineData(0, 30000, 6000, 15000, 24000)]
+    [InlineData(30000, 60000, 36000, 45000, 54000)]
+    [InlineData(60000, 90000, 66000, 75000, 84000)]
+    [InlineData(90000, 120000, 96000, 105000, 114000)]
+    public void InteriorTimes_UseGlobalTimelineAndInteriorTwentyFiftyEightyPercent(
+        long start, long end, long early, long middle, long late) =>
+        Assert.Equal([early, middle, late], Phase19VideoQaAuthorityPublisher.InteriorTimes(start, end));
 
     [Fact]
     public void ValidateSrt_RejectsOverlappingOrReversedCues()
