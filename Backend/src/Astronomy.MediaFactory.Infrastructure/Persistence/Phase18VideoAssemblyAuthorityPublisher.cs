@@ -39,6 +39,9 @@ internal sealed class Phase18RenderDiagnostics
     internal int ConcatCallsThisPhase { get; set; }
     internal int SubtitleBurnCallsThisPhase { get; set; }
     internal int ProbeCallsThisPhase { get; set; }
+    internal bool RenderCompleted { get; set; }
+    internal bool CandidateFormatsValidated { get; set; }
+    internal IReadOnlyList<string> CandidateFiles { get; set; } = [];
 }
 
 /// <summary>One portable resolution boundary for both native executables used by Phase 18.</summary>
@@ -150,9 +153,10 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         {
             var authority = ex as Phase18AuthorityValidationException;
             var inputs = authority?.LoadedAuthorityArtifacts.Count > 0 ? authority.LoadedAuthorityArtifacts : ExistingInputs(root, language);
-            var code = authority?.ReasonCode ?? Phase18ReasonCodes.RenderFailed;
+            var code = authority?.ReasonCode ??
+                (ex.Data["publicationOperation"] is null ? Phase18ReasonCodes.RenderFailed : Phase18ReasonCodes.PublicationFailed);
             var reason = authority?.Reason ?? ex.Message;
-            var result = FailedResult(inputs, code, reason);
+            var result = FailedResult(inputs, code, reason, diagnostics);
             await Write(Path.Combine(root, "validation", "phase-18-validation.json"), FailureValidation(result,
                 ffmpegResolved: ex.Data["ffmpegResolved"] as bool? ?? false,
                 ffprobeResolved: ex.Data["ffprobeResolved"] as bool? ?? false,
@@ -240,6 +244,19 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             for (var f = 0; f < requested.Length; f++)
                 evidence.Add(await RenderFormat(root, stage, language, requested[f], motion[f], calibrated, audio,
                     srts[f], tools, rendering, assembly, music, diagnostics, ct));
+            diagnostics.RenderCompleted = true;
+            Log("PHASE18_CANDIDATE_VALIDATION_START", new { CandidateRoot = stage, CanonicalRoot = finalRoot });
+            try
+            {
+                RequireDirectory(stage, "candidateRoot");
+                if (!await OutputsValid(stage, evidence, ct))
+                    Fail(Phase18ReasonCodes.CandidateValidationFailed, "Candidate readback failed.");
+                diagnostics.CandidateFormatsValidated = true;
+                Log("PHASE18_CANDIDATE_VALIDATION_COMPLETE", new { CandidateRoot = stage, CanonicalRoot = finalRoot });
+            }
+            catch (Exception ex) { throw PublicationFailure(ex, "CandidateValidation", stage, finalRoot, stage, null); }
+
+            Log("PHASE18_MANIFEST_BUILD_START", new { CandidateRoot = stage, CanonicalRoot = finalRoot });
             var authorityChecksum = Hash(JsonSerializer.Serialize(new { identity, outputs = evidence }, Json));
             var manifest = new Phase18Manifest(Schema, language, requested, p15Checksum, p16Checksum, p17Checksum,
                 RenderPolicy, VideoPolicy.Version, AudioPolicy.Version, SubtitlePolicy.Version, toolchain, evidence,
@@ -280,13 +297,22 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
                 sourcePhase15AuthorityChecksum = p15Checksum, sourcePhase16AuthorityChecksum = p16Checksum,
                 sourcePhase17AuthorityChecksum = p17Checksum, authorityChecksum }, ct);
             await Write(Path.Combine(stage, "phase18-publication-report.json"), Publication(authorityChecksum), ct);
-            if (!await OutputsValid(stage, evidence, ct)) Fail(Phase18ReasonCodes.CandidateValidationFailed, "Candidate readback failed.");
-            await Phase16DurationCalibrationPublisher.ReplaceCommittedDirectoryAsync(stage, finalRoot, backup, async () =>
+            var candidateFiles = EnumeratePublicationFiles(stage);
+            diagnostics.CandidateFiles = candidateFiles;
+            Log("PHASE18_MANIFEST_BUILD_COMPLETE", new { CandidateRoot = stage, CanonicalRoot = finalRoot,
+                CandidateFileCount = candidateFiles.Count });
+            Log("PHASE18_PUBLICATION_COMMIT_START", new { CandidateRoot = stage, CanonicalRoot = finalRoot });
+            try { await Phase16DurationCalibrationPublisher.ReplaceCommittedDirectoryAsync(stage, finalRoot, backup, async () =>
             {
+                Log("PHASE18_COMMITTED_READBACK_START", new { CandidateRoot = stage, CanonicalRoot = finalRoot });
+                RequireDirectory(finalRoot, "canonicalRoot");
                 var committed = await Read<Phase18Manifest>(existingManifestPath, ct);
                 if (committed.AuthorityChecksum != authorityChecksum || !await OutputsValid(finalRoot, committed.Outputs, ct))
                     Fail(Phase18ReasonCodes.CommittedReadbackFailed, "Committed media differs from the candidate.");
-            });
+                Log("PHASE18_COMMITTED_READBACK_COMPLETE", new { CandidateRoot = stage, CanonicalRoot = finalRoot });
+            }); }
+            catch (Exception ex) { throw PublicationFailure(ex, "Commit", stage, finalRoot, stage, finalRoot); }
+            Log("PHASE18_PUBLICATION_COMMIT_COMPLETE", new { CandidateRoot = stage, CanonicalRoot = finalRoot });
             var validation = Path.Combine(root, "validation", "phase-18-validation.json");
             var result = Result(inputs, Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories).Append(validation).ToArray(),
                 true, false, replaced, p15Checksum, p16Checksum, p17Checksum, authorityChecksum);
@@ -296,6 +322,8 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
         }
         catch (Exception ex)
         {
+            if (diagnostics.RenderCompleted && ex.Data["publicationOperation"] is null)
+                PublicationFailure(ex, "ManifestBuild", stage, finalRoot, stage, null);
             ex.Data["ffmpegResolved"] = true; ex.Data["ffprobeResolved"] = true;
             ex.Data["ffmpegVersion"] = tools.FFmpegVersion; ex.Data["ffprobeVersion"] = tools.FFprobeVersion;
             ex.Data["ffmpegResolutionSource"] = tools.FFmpegResolutionSource;
@@ -883,13 +911,16 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
                 ? Directory.EnumerateFiles(Path.Combine(root, phase, language), "*", SearchOption.AllDirectories)
                 : []).Concat(new[] { 15, 16, 17 }.Select(number => Path.Combine(root, "validation", $"phase-{number}-validation.json"))
                     .Where(File.Exists)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-    private static Phase18PublicationResult FailedResult(IReadOnlyList<string> inputs, string code, string reason) =>
-        new(inputs, [], code, reason, false, false, false, false, false, false, false, false,
+    private static Phase18PublicationResult FailedResult(IReadOnlyList<string> inputs, string code, string reason,
+        Phase18RenderDiagnostics diagnostics) =>
+        new(inputs, [], code, reason, diagnostics.RenderCompleted, false, false,
+            diagnostics.CandidateFormatsValidated, diagnostics.CandidateFormatsValidated, false, false, false,
             "", "", "", "", "Invalid", "Invalid", false, false, false, false);
     private static object FailureValidation(Phase18PublicationResult x, bool ffmpegResolved, bool ffprobeResolved,
         string? ffmpegVersion, string? ffprobeVersion, string? resolutionSource,
         Phase18RenderDiagnostics diagnostics, Exception error) => new { phaseNo = 18, phaseName = "Cinematic Video Assembly V2",
             status = "Failed", x.ReasonCode, x.Reason, inputFiles = x.InputFiles, outputFiles = Array.Empty<string>(),
+            candidateFiles = diagnostics.CandidateFiles,
             x.Generated, x.Reused, x.Regenerated, x.CandidateValidationPassed, x.CandidateReadbackPassed,
             x.PublicationCommitted, x.CommittedReadbackPassed, x.CommittedStateValidationPassed,
             x.ManifestValidationStatus, x.ValidationStatus, x.SemanticValidationPassed,
@@ -901,6 +932,13 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
             ffmpegStderrTail = error.Data["ffmpegStderrTail"], ffmpegStderrHead = error.Data["ffmpegStderrHead"],
             mediaExecutable = error.Data["mediaExecutable"], mediaArguments = error.Data["mediaArguments"],
             mediaWorkingDirectory = error.Data["mediaWorkingDirectory"],
+            publicationOperation = error.Data["publicationOperation"], candidateRoot = error.Data["candidateRoot"],
+            canonicalRoot = error.Data["canonicalRoot"], sourcePath = error.Data["sourcePath"],
+            destinationPath = error.Data["destinationPath"], pathType = error.Data["pathType"],
+            exceptionType = error.GetType().FullName, exceptionStackTrace = error.ToString(),
+            renderCompleted = diagnostics.RenderCompleted,
+            allSceneRendersSucceeded = diagnostics.RenderCompleted && diagnostics.FailedSceneRenderCount == 0,
+            candidateFormatsValidated = diagnostics.CandidateFormatsValidated,
             diagnostics.RenderCallsThisPhase, diagnostics.SuccessfulSceneRenderCount,
             diagnostics.FailedSceneRenderCount, diagnostics.ConcatCallsThisPhase,
             diagnostics.SubtitleBurnCallsThisPhase, diagnostics.ProbeCallsThisPhase };
@@ -910,6 +948,39 @@ internal static class Phase18VideoAssemblyAuthorityPublisher
     private static string String(JsonElement e, string n) => e.TryGetProperty(n, out var v) ? v.GetString() ?? "" : ""; private static bool Bool(JsonElement e, string n) => e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.True;
     private static void RequireFiles(IEnumerable<string> files, string code) { if (files.Any(x => !File.Exists(x))) Fail(code, "A required committed artifact is missing."); }
     private static string Hash(string x) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(x))).ToLowerInvariant(); private static async Task<string> HashFile(string p, CancellationToken ct) { await using var s = File.OpenRead(p); return Convert.ToHexString(await SHA256.HashDataAsync(s, ct)).ToLowerInvariant(); }
+    internal static IReadOnlyList<string> EnumeratePublicationFiles(string root)
+    {
+        RequireDirectory(root, "candidateRoot");
+        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToArray();
+        foreach (var file in files) RequireFile(file, "manifestEntry");
+        return files;
+    }
+    private static void RequireDirectory(string path, string role)
+    {
+        if (Directory.Exists(path)) return;
+        var actual = File.Exists(path) ? "File" : "Missing";
+        throw new Phase18AuthorityValidationException(Phase18ReasonCodes.PublicationPathTypeInvalid,
+            $"{role} must be a Directory but was {actual}: {path}", []);
+    }
+    private static void RequireFile(string path, string role)
+    {
+        if (File.Exists(path)) return;
+        var actual = Directory.Exists(path) ? "Directory" : "Missing";
+        throw new Phase18AuthorityValidationException(Phase18ReasonCodes.PublicationPathTypeInvalid,
+            $"{role} must be a File but was {actual}: {path}", []);
+    }
+    private static Exception PublicationFailure(Exception error, string operation, string candidateRoot,
+        string canonicalRoot, string? sourcePath, string? destinationPath)
+    {
+        error.Data["publicationOperation"] = operation;
+        error.Data["candidateRoot"] = candidateRoot;
+        error.Data["canonicalRoot"] = canonicalRoot;
+        error.Data["sourcePath"] = sourcePath;
+        error.Data["destinationPath"] = destinationPath;
+        var inspected = destinationPath ?? sourcePath;
+        error.Data["pathType"] = inspected is null ? "Unknown" : Directory.Exists(inspected) ? "Directory" : File.Exists(inspected) ? "File" : "Missing";
+        return error;
+    }
     internal static string BuildSubtitleFilter(string absolutePath) =>
         $"subtitles=filename='{EscapeSubtitleFilterPath(absolutePath)}'";
     internal static string BuildSubtitleFilter(string absolutePath, Phase18ProductionFormat format)
