@@ -23,8 +23,16 @@ public sealed record Phase19StreamEvidence(string Codec, int Width, int Height, 
     long? FrameCount);
 public sealed record Phase19MotionSample(long TimestampMs, double MeanAbsoluteLumaDifference);
 public sealed record Phase19SceneQaEvidence(string SceneId, string SceneAudioUnitId, int Sequence,
-    string MotionType, IReadOnlyList<Phase19MotionSample> MotionSamples, double MotionThreshold,
-    bool MotionPassed, bool NarrationPassed, bool FadePassed, bool TransitionPassed);
+    string MotionType, string ExpectedMotionType, bool Phase17MotionAuthorityMatched,
+    bool Phase18ExecutionMotionMatched, bool PhysicalMotionExpected,
+    IReadOnlyList<long> SampleTimestampsMs, double EarlyMiddleDifference,
+    double MiddleLateDifference, double EarlyLateDifference, double MotionThreshold,
+    bool MaterialMotionDetected, string DirectionInferenceMode, string InferredDirection,
+    bool DirectionInferenceBlocking, bool MotionQaPassed, double CaptionMaskBottomFraction,
+    long FadeTransitionStartExclusionMs, long FadeTransitionEndExclusionMs,
+    double ExpectedStartScale, double ExpectedEndScale, double ExpectedStartX, double ExpectedEndX,
+    double ExpectedStartY, double ExpectedEndY, string Phase18ExecutionFilter,
+    bool NarrationPassed, bool FadePassed, bool TransitionPassed);
 public sealed record Phase19FormatQaEvidence(string Format, string VideoRelativePath, string VideoSha256,
     long VideoByteLength, long GovernedDurationMs, long PhysicalDurationMs,
     Phase19StreamEvidence VideoStream, Phase19StreamEvidence AudioStream, bool SubtitlePassed,

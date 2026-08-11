@@ -17,7 +17,7 @@ internal static class Phase19VideoQaAuthorityPublisher
 {
     internal const string Schema = "phase19.final-video-qa/1.0";
     internal const string QaPolicy = "phase19-technical-qa/1.0";
-    internal const string MotionMetricPolicy = "phase19-luma-mad/1.0";
+    internal const string MotionMetricPolicy = "MotionQaPolicyV1";
     internal const string AudioEnergyPolicy = "phase19-window-energy/1.0";
     internal const double MotionThreshold = 1.25;
     internal const long DurationToleranceMs = 35;
@@ -59,6 +59,7 @@ internal static class Phase19VideoQaAuthorityPublisher
             var subtitle = SubtitleAuthority.From(diagnostics.RootElement);
             var music = MusicAuthority.From(diagnostics.RootElement);
             var mediaPolicy = MediaPolicy.From(diagnostics.RootElement, inputs);
+            ValidatePhase18MotionExecutionEnvelope(diagnostics.RootElement, inputs);
             // Phase 18 does not carry narration lengths per scene.  This is a lineage-only Phase 15 read;
             // it is never used to discover media and its rows are bound back to Phase 17 audio hashes.
             var timelinePath = ResolveOwned(root, Path.Combine("15-tts", language, "tts-timeline.json"), inputs);
@@ -113,13 +114,21 @@ internal static class Phase19VideoQaAuthorityPublisher
                     var times = InteriorTimes(usableStart, usableEnd);
                     var frames = new List<byte[]>();
                     foreach (var time in times) frames.Add(await ExtractLuma(ffmpeg, video, time, subtitle.MaskBottomFraction(format), ct));
-                    var metrics = new[] { MeanAbsoluteDifference(frames[0], frames[1]), MeanAbsoluteDifference(frames[1], frames[2]) };
+                    var metrics = new[] { MeanAbsoluteDifference(frames[0], frames[1]),
+                        MeanAbsoluteDifference(frames[1], frames[2]), MeanAbsoluteDifference(frames[0], frames[2]) };
                     var moving = scene.MotionType is not (Phase17MotionType.Static or Phase17MotionType.Hold);
-                    // This metric certifies encoded material change, not exact pan direction. Direction remains
-                    // corroborated by the immutable Phase 17 transforms and is deliberately not overclaimed.
-                    var motionPassed = moving ? metrics.Max() >= MotionThreshold : metrics.Max() < 12.0;
+                    var phase17Matched = HasValidMotionAuthority(scene, format);
+                    var executionFilter = Phase18VideoAssemblyAuthorityPublisher.BuildMotionFilter(scene,
+                        declared.Width, declared.Height);
+                    var phase18Matched = phase17Matched && !string.IsNullOrWhiteSpace(executionFilter);
+                    var materialMotion = IsMaterialMotionDetected(moving, metrics, MotionThreshold);
+                    // MotionQaPolicyV1 deliberately keeps pixel-direction inference non-blocking. Phase 17 owns
+                    // the semantic instruction, Phase 18's deterministic governed filter corroborates execution,
+                    // and the encoded MP4 must independently provide material-change/stability evidence.
+                    const string inferredDirection = "Unknown";
+                    var motionPassed = phase17Matched && phase18Matched && materialMotion;
                     if (!motionPassed) Fail(Phase19ReasonCodes.MotionQaFailed,
-                        $"{format}/{scene.SceneId} encoded motion did not match {scene.MotionType}.", inputs);
+                        MotionFailure(format, scene, phase17Matched, phase18Matched, materialMotion), inputs);
                     var narrationTime = sceneStart + Math.Min(narration.ActualAudioDurationMs / 2,
                         Math.Max(100, narration.ActualAudioDurationMs - 200));
                     var narrationEnergy = await ProbeEnergy(ffmpeg, video, narrationTime, 350, ct);
@@ -149,8 +158,13 @@ internal static class Phase19VideoQaAuthorityPublisher
                                 $"{format}/{scene.SceneId} background bed obviously overwhelms narration.", inputs);
                     }
                     scenes.Add(new(scene.SceneId, scene.SceneAudioUnitId, scene.Sequence, scene.MotionType.ToString(),
-                        [new(times[1], metrics[0]), new(times[2], metrics[1])], MotionThreshold,
-                        motionPassed, narrationPassed, fadePassed, transitionPassed));
+                        scene.MotionType.ToString(), phase17Matched, phase18Matched, moving, times,
+                        metrics[0], metrics[1], metrics[2], MotionThreshold, materialMotion,
+                        "DiagnosticOnly", inferredDirection, false, motionPassed, subtitle.MaskBottomFraction(format),
+                        exclusion, endExclusion, scene.StartTransform.Scale, scene.EndTransform.Scale,
+                        scene.StartTransform.TranslateX, scene.EndTransform.TranslateX,
+                        scene.StartTransform.TranslateY, scene.EndTransform.TranslateY, executionFilter,
+                        narrationPassed, fadePassed, transitionPassed));
                 }
                 if (music.Enabled && !musicAll)
                     Fail(Phase19ReasonCodes.MusicQaFailed, $"{format} has no background-bed evidence in the final MP4.", inputs);
@@ -456,6 +470,45 @@ internal static class Phase19VideoQaAuthorityPublisher
         if (first.Length == 0 || first.Length != second.Length) throw new ArgumentException("Luma planes must have equal non-zero length.");
         long total = 0; for (var i = 0; i < first.Length; i++) total += Math.Abs(first[i] - second[i]);
         return total / (double)first.Length;
+    }
+
+    internal static bool IsMaterialMotionDetected(bool physicalMotionExpected,
+        IReadOnlyList<double> pairDifferences, double threshold = MotionThreshold)
+    {
+        if (pairDifferences.Count != 3 || pairDifferences.Any(x => double.IsNaN(x) || x < 0))
+            throw new ArgumentException("MotionQaPolicyV1 requires early-middle, middle-late, and early-late differences.");
+        // Two independently sampled pairs must clear codec noise. This rejects a frozen scene with one
+        // transient frame while allowing endpoint easing to make either adjacent pair comparatively quiet.
+        var materiallyDifferentPairs = pairDifferences.Count(x => x >= threshold);
+        return physicalMotionExpected ? materiallyDifferentPairs >= 2 : pairDifferences.Max() < threshold;
+    }
+
+    internal static bool HasValidMotionAuthority(Phase17MotionEntry scene, string format) =>
+        !string.IsNullOrWhiteSpace(scene.SceneAudioUnitId) && !string.IsNullOrWhiteSpace(scene.SceneId) &&
+        scene.Sequence > 0 && scene.Format.Equals(format, StringComparison.OrdinalIgnoreCase) &&
+        Enum.IsDefined(scene.MotionType) && scene.StartTransform.Scale >= 1 && scene.EndTransform.Scale >= 1;
+
+    private static string MotionFailure(string format, Phase17MotionEntry scene, bool authority, bool execution,
+        bool physical)
+    {
+        if (!authority) return $"{format}/{scene.SceneId} has invalid Phase17 semantic motion authority.";
+        if (!execution) return $"{format}/{scene.SceneId} Phase18 executed motion differs from Phase17 authority.";
+        var expectation = scene.MotionType is Phase17MotionType.Static or Phase17MotionType.Hold
+            ? "Static/Hold but encoded interior frames exceeded the stability threshold"
+            : $"non-Static {scene.MotionType} but encoded interior frames were below the material-motion threshold";
+        return $"{format}/{scene.SceneId} expected {expectation}.";
+    }
+
+    private static void ValidatePhase18MotionExecutionEnvelope(JsonElement diagnostics,
+        IReadOnlyList<string> inputs)
+    {
+        // Frozen Phase18 diagnostics certify the renderer/toolchain and governed-motion switches. Exact
+        // per-row evidence is reproduced from the same immutable Phase17 row through BuildMotionFilter.
+        if (!Bool(diagnostics, "ffmpegResolved") || !Bool(diagnostics, "candidateValidationPassed") ||
+            !Bool(diagnostics, "candidateReadbackPassed") || !Bool(diagnostics, "renderingConfigLoaded") ||
+            !Bool(diagnostics, "enableKenBurns") || !Bool(diagnostics, "enableDirectionalMotion"))
+            Fail(Phase19ReasonCodes.UpstreamPhase18Invalid,
+                "Phase 18 diagnostics do not certify the governed motion execution envelope.", inputs);
     }
 
     private static long[] InteriorTimes(long start, long end) => [start, start + (end - start) / 2, end];
