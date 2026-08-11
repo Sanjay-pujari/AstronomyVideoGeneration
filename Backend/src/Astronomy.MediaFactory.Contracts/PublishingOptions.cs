@@ -10,4 +10,10 @@ public sealed class PublishingOptions
     public bool PublishLongVideo { get; set; } = true;
     public bool PublishShortVideo { get; set; } = true;
     public bool RequirePrePublishValidation { get; set; } = true;
+    /// <summary>Enables construction of the internal governed package independently of uploads.</summary>
+    public bool PackageEnabled { get; set; } = true;
+    public bool ExternalPublishingEnabled { get; set; }
+    public string PublishingPolicyVersion { get; set; } = "phase20-publishing-policy/1.0";
+    public bool ManualReviewRequired { get; set; } = true;
+    public bool PortableExportEnabled { get; set; }
 }
