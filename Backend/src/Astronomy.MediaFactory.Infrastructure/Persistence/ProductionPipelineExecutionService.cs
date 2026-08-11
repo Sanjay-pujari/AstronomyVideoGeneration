@@ -116,6 +116,7 @@ public sealed partial class ProductionPipelineExecutionService(
     private readonly ConcurrentDictionary<string, Phase16PublicationResult> phase16PublicationResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Phase17PublicationResult> phase17PublicationResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Phase18PublicationResult> phase18PublicationResults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Phase19PublicationResult> phase19PublicationResults = new(StringComparer.OrdinalIgnoreCase);
     // Carries the exact, validated read-back returned by Phase 4 across the in-process
     // phase boundary. Disk is intentionally not consulted by downstream phases in the
     // same run; the authority reader remains the resume/recovery boundary.
@@ -802,16 +803,18 @@ public sealed partial class ProductionPipelineExecutionService(
                 && phase17PublicationResults.TryGetValue(context.OutputRoot, out var acceptedPhase17) ? acceptedPhase17 : null;
             var phase18Authority = phaseNo == 18
                 && phase18PublicationResults.TryGetValue(context.OutputRoot, out var acceptedPhase18) ? acceptedPhase18 : null;
+            var phase19Authority = phaseNo == 19
+                && phase19PublicationResults.TryGetValue(context.OutputRoot, out var acceptedPhase19) ? acceptedPhase19 : null;
             var phase18Failed = phase18Authority is not null && !phase18Authority.DownstreamReady;
             var reason = missing.Length == 0
                 ? phaseNo == 3 ? (context.OverwriteExisting ? "P3_REGENERATED" : "P3_GENERATED")
                     : phaseNo == 8 && IsSceneAssetsV3Enabled(context) ? "Authority scene assets generated, validated, committed and read back."
-                    : phase18Authority?.Reason ?? phase17Authority?.Reason ?? phase16Authority?.Reason ?? phase15Authority?.Reason ?? phase14Authority?.Reason ?? phase9Publication?.Reason ?? phase10Certification?.Reason ?? phase11Authority?.Reason ?? "Validation passed."
+                    : phase19Authority?.Reason ?? phase18Authority?.Reason ?? phase17Authority?.Reason ?? phase16Authority?.Reason ?? phase15Authority?.Reason ?? phase14Authority?.Reason ?? phase9Publication?.Reason ?? phase10Certification?.Reason ?? phase11Authority?.Reason ?? "Validation passed."
                 : BuildPhase7RequiredOutputFailureReason(requiredOutputDiagnostics, missing);
-            var inputFiles = phase18Authority?.InputFiles ?? phase17Authority?.LoadedAuthorityArtifacts ?? phase16Authority?.LoadedAuthorityArtifacts ?? phase15Authority?.LoadedAuthorityArtifacts ?? phase14Authority?.LoadedAuthorityArtifacts ?? phase11Authority?.InputFiles ?? phase10Certification?.InputFiles ?? (phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot));
+            var inputFiles = phase19Authority?.InputFiles ?? phase18Authority?.InputFiles ?? phase17Authority?.LoadedAuthorityArtifacts ?? phase16Authority?.LoadedAuthorityArtifacts ?? phase15Authority?.LoadedAuthorityArtifacts ?? phase14Authority?.LoadedAuthorityArtifacts ?? phase11Authority?.InputFiles ?? phase10Certification?.InputFiles ?? (phase9Publication is null ? Array.Empty<string>() : Phase9AuthorityInputFiles(context.OutputRoot));
             return await WritePhaseValidationAsync(context, phaseNo, phaseName, missing.Length == 0 && !phase18Failed ? ProductionPhaseStatus.Succeeded : ProductionPhaseStatus.Failed, inputFiles, outputs, warnings, phase18Failed ? [reason] : missing, reason, missing.Length > 0 || phase18Failed, cancellationToken, started, phase10TitleDiagnostics,
                 phaseExecutionBegan: true,
-                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase18Authority?.ReasonCode ?? phase17Authority?.ReasonCode ?? phase16Authority?.ReasonCode ?? phase15Authority?.ReasonCode ?? phase14Authority?.ReasonCode ?? phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode ?? phase11Authority?.ReasonCode);
+                reasonCodeOverride: phaseNo == 8 && missing.Length == 0 && IsSceneAssetsV3Enabled(context) ? "P8_SCENE_ASSET_AUTHORITY_ACCEPTED" : phase19Authority?.ReasonCode ?? phase18Authority?.ReasonCode ?? phase17Authority?.ReasonCode ?? phase16Authority?.ReasonCode ?? phase15Authority?.ReasonCode ?? phase14Authority?.ReasonCode ?? phase9Publication?.ReasonCode ?? phase10Certification?.ReasonCode ?? phase11Authority?.ReasonCode);
         }
         catch (Phase17PhysicalEvidenceException ex) when (phaseNo == 17)
         {
@@ -14195,7 +14198,8 @@ public sealed partial class ProductionPipelineExecutionService(
     private async Task<IReadOnlyList<string>> PhaseVideoQaProductionReviewAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
     {
         var result = await Phase19VideoQaAuthorityPublisher.ExecuteAsync(context.OutputRoot,
-            ResolvePipelineLanguage(context.Request.Language), renderingOptions.Value, cancellationToken);
+            ResolvePipelineLanguage(context.Request.Language), renderingOptions.Value, context.OverwriteExisting, cancellationToken);
+        phase19PublicationResults[context.OutputRoot] = result;
         return result.OutputFiles;
     }
 
@@ -15147,6 +15151,8 @@ public sealed partial class ProductionPipelineExecutionService(
             && phase17PublicationResults.TryRemove(context.OutputRoot, out var phase17Result) ? phase17Result : null;
         var phase18Certification = phaseNo == 18
             && phase18PublicationResults.TryRemove(context.OutputRoot, out var phase18Result) ? phase18Result : null;
+        var phase19Certification = phaseNo == 19
+            && phase19PublicationResults.TryRemove(context.OutputRoot, out var phase19Result) ? phase19Result : null;
         if (phase3Certification is { Passed: false })
         {
             status = ProductionPhaseStatus.Failed;
@@ -15242,30 +15248,43 @@ public sealed partial class ProductionPipelineExecutionService(
             errors = errors.Concat([reason]).ToArray();
             canRetry = true;
         }
+        if (phaseNo == 19 && status == ProductionPhaseStatus.Succeeded
+            && (phase19Certification is not { PublicationCommitted: true, CommittedReadbackPassed: true,
+                    CommittedStateValidationPassed: true, ValidationStatus: "Valid", DownstreamReady: true,
+                    TechnicalQaApproved: true }
+                || string.IsNullOrWhiteSpace(phase19Certification.AuthorityChecksum)))
+        {
+            status = ProductionPhaseStatus.Failed;
+            reasonCode = "P19_FINAL_AUTHORITY_INVARIANT_FAILED";
+            reason = "Phase 19 cannot succeed without valid committed technical QA authority readback.";
+            errors = errors.Concat([reason]).ToArray();
+            canRetry = true;
+        }
         var phase12Inputs = new[] { "02-intelligence/production-event-intelligence.json", "02-intelligence/certified-knowledge-context.json" }
             .Select(path => Path.Combine(context.OutputRoot, path)).ToArray();
         if (phaseNo == 12 && inputFiles.Count == 0) inputFiles = phase12Inputs;
         var result = new ProductionPhaseResult(phaseNo, phaseName, status, started, finished, (long)(finished - started).TotalMilliseconds, inputFiles, resultOutputFiles, validationPath, warnings, errors, canRetry, reason)
         {
-            ReasonCode = phase18Certification?.ReasonCode ?? phase17Certification?.ReasonCode ?? phase16Certification?.ReasonCode ?? phase15Certification?.ReasonCode ?? phase14Certification?.ReasonCode ?? reasonCode,
-            Generated = phase18Certification?.Generated ?? phase17Certification?.Generated ?? phase16Certification?.Generated ?? phase15Certification?.Generated ?? false, Reused = phase18Certification?.Reused ?? phase17Certification?.Reused ?? phase16Certification?.Reused ?? phase15Certification?.Reused ?? false, Regenerated = phase18Certification?.Regenerated ?? phase17Certification?.Regenerated ?? phase16Certification?.Regenerated ?? phase15Certification?.Regenerated ?? false,
-            PublicationCommitted = phase18Certification?.PublicationCommitted ?? phase17Certification?.PublicationCommitted ?? phase16Certification?.PublicationCommitted ?? phase15Certification?.PublicationCommitted ?? phase14Certification?.PublicationCommitted ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? false)),
-            CommittedReadbackPassed = phase18Certification?.CommittedReadbackPassed ?? phase17Certification?.CommittedReadbackPassed ?? phase16Certification?.CommittedReadbackPassed ?? phase15Certification?.CommittedReadbackPassed ?? false,
-            CommittedStateValidationPassed = phase18Certification?.CommittedStateValidationPassed ?? phase17Certification?.CommittedStateValidationPassed ?? phase16Certification?.CommittedStateValidationPassed ?? phase15Certification?.CommittedStateValidationPassed ?? phase14Certification?.CommittedStateValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed ?? false)),
+            ReasonCode = phase19Certification?.ReasonCode ?? phase18Certification?.ReasonCode ?? phase17Certification?.ReasonCode ?? phase16Certification?.ReasonCode ?? phase15Certification?.ReasonCode ?? phase14Certification?.ReasonCode ?? reasonCode,
+            Generated = phase19Certification?.Generated ?? phase18Certification?.Generated ?? phase17Certification?.Generated ?? phase16Certification?.Generated ?? phase15Certification?.Generated ?? false, Reused = phase19Certification?.Reused ?? phase18Certification?.Reused ?? phase17Certification?.Reused ?? phase16Certification?.Reused ?? phase15Certification?.Reused ?? false, Regenerated = phase19Certification?.Regenerated ?? phase18Certification?.Regenerated ?? phase17Certification?.Regenerated ?? phase16Certification?.Regenerated ?? phase15Certification?.Regenerated ?? false,
+            PublicationCommitted = phase19Certification?.PublicationCommitted ?? phase18Certification?.PublicationCommitted ?? phase17Certification?.PublicationCommitted ?? phase16Certification?.PublicationCommitted ?? phase15Certification?.PublicationCommitted ?? phase14Certification?.PublicationCommitted ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.PublicationCommitted ?? (phase10Certification is not null ? true : phase9Certification?.PublicationCommitted ?? phase8Certification?.PublicationCommitted ?? false)),
+            CommittedReadbackPassed = phase19Certification?.CommittedReadbackPassed ?? phase18Certification?.CommittedReadbackPassed ?? phase17Certification?.CommittedReadbackPassed ?? phase16Certification?.CommittedReadbackPassed ?? phase15Certification?.CommittedReadbackPassed ?? false,
+            CommittedStateValidationPassed = phase19Certification?.CommittedStateValidationPassed ?? phase18Certification?.CommittedStateValidationPassed ?? phase17Certification?.CommittedStateValidationPassed ?? phase16Certification?.CommittedStateValidationPassed ?? phase15Certification?.CommittedStateValidationPassed ?? phase14Certification?.CommittedStateValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.CommittedStateValidationPassed ?? (phase10Certification is not null ? true : phase9Certification?.CommittedStateValidationPassed ?? phase8Certification?.CommittedStateValidationPassed ?? false)),
             SourcePhase14AuthorityChecksum = phase16Certification?.SourcePhase14AuthorityChecksum ?? phase15Certification?.SourcePhase14AuthorityChecksum,
             SourcePhase16AuthorityChecksum = phase17Certification?.SourcePhase16AuthorityChecksum,
             SourceVisualAuthorityChecksum = phase17Certification?.SourceVisualAuthorityChecksum,
-            AuthorityChecksum = phase18Certification?.AuthorityChecksum ?? phase17Certification?.AuthorityChecksum ?? phase16Certification?.AuthorityChecksum ?? phase15Certification?.AuthorityChecksum ?? phase14Certification?.AuthorityChecksum ?? (phaseNo == 13 ? phase13Checksum : phaseNo == 12 ? phase12Checksum : phase11Certification?.ManifestChecksum),
-            ManifestValidationStatus = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? "Invalid" : phase18Certification?.ManifestValidationStatus ?? phase17Certification?.ValidationStatus ?? phase16Certification?.ManifestValidationStatus ?? phase15Certification?.ManifestValidationStatus ?? phase14Certification?.ManifestValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ManifestValidationStatus),
-            ValidationStatus = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? "Invalid" : phase18Certification?.ValidationStatus ?? phase17Certification?.ValidationStatus ?? phase16Certification?.ValidationStatus ?? phase15Certification?.ValidationStatus ?? phase14Certification?.ValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus),
-            SemanticValidationPassed = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? false : phase18Certification?.SemanticValidationPassed ?? phase17Certification?.SemanticValidationPassed ?? phase16Certification?.SemanticValidationPassed ?? phase15Certification?.SemanticValidationPassed ?? phase14Certification?.SemanticValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed),
-            ChecksumValidationPassed = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? false : phase18Certification?.ChecksumValidationPassed ?? phase17Certification?.ChecksumValidationPassed ?? phase16Certification?.ChecksumValidationPassed ?? phase15Certification?.ChecksumValidationPassed ?? phase14Certification?.ChecksumValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ChecksumValidationPassed),
-            ManifestValidationPassed = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? false : phase18Certification?.ManifestValidationPassed ?? phase17Certification?.ManifestValidationPassed ?? phase16Certification?.ManifestValidationPassed ?? phase15Certification?.ManifestValidationPassed ?? phase14Certification?.ManifestValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ManifestValidationPassed),
-            DownstreamReady = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? false : phase18Certification?.DownstreamReady ?? phase17Certification?.DownstreamReady ?? phase16Certification?.DownstreamReady ?? phase15Certification?.DownstreamReady ?? phase14Certification?.DownstreamReady ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady),
-            TechnicalQaApproved = phaseNo == 19 ? status == ProductionPhaseStatus.Succeeded : null,
+            SourcePhase18AuthorityChecksum = phase19Certification?.SourcePhase18AuthorityChecksum,
+            AuthorityChecksum = phase19Certification?.AuthorityChecksum ?? phase18Certification?.AuthorityChecksum ?? phase17Certification?.AuthorityChecksum ?? phase16Certification?.AuthorityChecksum ?? phase15Certification?.AuthorityChecksum ?? phase14Certification?.AuthorityChecksum ?? (phaseNo == 13 ? phase13Checksum : phaseNo == 12 ? phase12Checksum : phase11Certification?.ManifestChecksum),
+            ManifestValidationStatus = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? "Invalid" : phase19Certification is not null ? "Valid" : phase18Certification?.ManifestValidationStatus ?? phase17Certification?.ValidationStatus ?? phase16Certification?.ManifestValidationStatus ?? phase15Certification?.ManifestValidationStatus ?? phase14Certification?.ManifestValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ManifestValidationStatus),
+            ValidationStatus = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? "Invalid" : phase19Certification?.ValidationStatus ?? phase18Certification?.ValidationStatus ?? phase17Certification?.ValidationStatus ?? phase16Certification?.ValidationStatus ?? phase15Certification?.ValidationStatus ?? phase14Certification?.ValidationStatus ?? (phaseNo == 13 ? phase13Accepted ? "Valid" : "Invalid" : phaseNo == 12 ? phase12Accepted ? "Valid" : "Invalid" : phase11Certification?.ValidationStatus),
+            SemanticValidationPassed = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? false : phase19Certification?.SemanticValidationPassed ?? phase18Certification?.SemanticValidationPassed ?? phase17Certification?.SemanticValidationPassed ?? phase16Certification?.SemanticValidationPassed ?? phase15Certification?.SemanticValidationPassed ?? phase14Certification?.SemanticValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.SemanticValidationPassed),
+            ChecksumValidationPassed = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? false : phase19Certification?.ChecksumValidationPassed ?? phase18Certification?.ChecksumValidationPassed ?? phase17Certification?.ChecksumValidationPassed ?? phase16Certification?.ChecksumValidationPassed ?? phase15Certification?.ChecksumValidationPassed ?? phase14Certification?.ChecksumValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ChecksumValidationPassed),
+            ManifestValidationPassed = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? false : phase19Certification?.ManifestValidationPassed ?? phase18Certification?.ManifestValidationPassed ?? phase17Certification?.ManifestValidationPassed ?? phase16Certification?.ManifestValidationPassed ?? phase15Certification?.ManifestValidationPassed ?? phase14Certification?.ManifestValidationPassed ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.ManifestValidationPassed),
+            DownstreamReady = phaseNo == 19 && status == ProductionPhaseStatus.Failed ? false : phase19Certification?.DownstreamReady ?? phase18Certification?.DownstreamReady ?? phase17Certification?.DownstreamReady ?? phase16Certification?.DownstreamReady ?? phase15Certification?.DownstreamReady ?? phase14Certification?.DownstreamReady ?? (phaseNo == 13 ? phase13Accepted : phaseNo == 12 ? phase12Accepted : phase11Certification?.DownstreamReady),
+            TechnicalQaApproved = phaseNo == 19 ? phase19Certification?.TechnicalQaApproved ?? false : null,
             Phase11HeroDiagnostics = phase11Certification?.HeroAuthorityDiagnostics
         };
-        if (phaseNo is 14 or 16 or 17 or 18 && File.Exists(validationPath))
+        if (phaseNo is 14 or 16 or 17 or 18 or 19 && File.Exists(validationPath))
             return result;
         var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
             ? phase6SceneEnrichmentDiagnostics
@@ -15364,7 +15383,7 @@ public sealed partial class ProductionPipelineExecutionService(
             reason,
             executionKind = phase1Outcome?.Kind.ToString(),
             reasonCode,
-            generated = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.Generated ?? (phaseNo == 13 ? phase13Accepted : phase11Certification is not null ? true : phaseNo == 3 ? phase3Certification?.Generated : phase1Outcome is not null && !phase1Outcome.Reused),
+            generated = phase19Certification?.Generated ?? (phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.Generated ?? (phaseNo == 13 ? phase13Accepted : phase11Certification is not null ? true : phaseNo == 3 ? phase3Certification?.Generated : phase1Outcome is not null && !phase1Outcome.Reused)),
             reused = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.Reused ?? (phaseNo == 13 ? false : phaseNo == 3 ? phase3Certification?.Reused : phase1Outcome?.Reused),
             regenerated = phaseNo == 18 && status == ProductionPhaseStatus.Failed ? false : phase15Certification?.Regenerated ?? (phaseNo == 13 ? phase13Accepted && context.OverwriteExisting : phaseNo == 3 ? phase3Certification?.Regenerated : phase1Outcome?.Kind.ToString().StartsWith("Regenerated",StringComparison.Ordinal) == true),
             materialized = phase9Certification?.Manifest.Images.Count > 0 ? true : (bool?)null,

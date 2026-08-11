@@ -15,7 +15,7 @@ public static class Phase19ReasonCodes
     public const string TransitionQaFailed = "P19_TRANSITION_QA_FAILED";
     public const string NarrationQaFailed = "P19_NARRATION_QA_FAILED";
     public const string MusicQaFailed = "P19_MUSIC_QA_FAILED";
-    public const string Accepted = "P19_FINAL_VIDEO_QA_AUTHORITY_ACCEPTED";
+    public const string Accepted = "P19_VIDEO_QA_AUTHORITY_ACCEPTED";
 }
 
 public sealed record Phase19StreamEvidence(string Codec, int Width, int Height, string PixelFormat,
@@ -49,7 +49,8 @@ public sealed record Phase19PublicationResult(IReadOnlyList<string> InputFiles, 
     string ReasonCode, string Reason, string SourcePhase18AuthorityChecksum, string AuthorityChecksum,
     bool PublicationCommitted, bool CommittedReadbackPassed, bool CommittedStateValidationPassed,
     bool SemanticValidationPassed, bool ChecksumValidationPassed, bool ManifestValidationPassed,
-    string ValidationStatus, bool TechnicalQaApproved, bool DownstreamReady);
+    string ValidationStatus, bool TechnicalQaApproved, bool DownstreamReady,
+    bool Generated, bool Reused, bool Regenerated, bool ReplacedExistingAuthority);
 
 public sealed class Phase19AuthorityValidationException(string reasonCode, string reason,
     IReadOnlyList<string> loadedAuthorityArtifacts) : InvalidOperationException($"{reasonCode}: {reason}")
