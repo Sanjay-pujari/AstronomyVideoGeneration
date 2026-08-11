@@ -87,6 +87,35 @@ public sealed class Phase19VideoQaAuthorityTests
         Assert.Equal(5, Phase19VideoQaAuthorityPublisher.MeanAbsoluteDifference([10, 20], [15, 25]));
     }
 
+    [Theory]
+    [InlineData("Static", false, 0.10, 0.20, 0.15, true)]
+    [InlineData("SlowZoomIn", true, 1.30, 1.40, 2.50, true)]
+    [InlineData("SlowZoomOut", true, 1.26, 0.80, 1.90, true)]
+    [InlineData("ZoomInPanLeft", true, 2.10, 1.60, 3.20, true)]
+    [InlineData("ZoomInPanRight", true, 1.80, 2.00, 3.40, true)]
+    public void MotionQaPolicyV1_CalibratedFixtureMetricsCertifyMaterialChange(
+        string fixture, bool moving, double earlyMiddle, double middleLate, double earlyLate, bool expected)
+    {
+        Assert.Equal(expected, Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetected(moving,
+            [earlyMiddle, middleLate, earlyLate]));
+        Assert.False(string.IsNullOrWhiteSpace(fixture));
+    }
+
+    [Fact]
+    public void MotionQaPolicyV1_FrozenNonStaticFailsClosedAndDoesNotDependOnDirection()
+    {
+        Assert.False(Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetected(true, [.10, .12, .15]));
+        Assert.True(Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetected(true, [1.30, .20, 1.45]));
+        Assert.Equal("MotionQaPolicyV1", Phase19VideoQaAuthorityPublisher.MotionMetricPolicy);
+    }
+
+    [Fact]
+    public void MotionQaPolicyV1_RequiresThreeSamplePairs()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            Phase19VideoQaAuthorityPublisher.IsMaterialMotionDetected(true, [2, 3]));
+    }
+
     [Fact]
     public void ValidateSrt_RejectsOverlappingOrReversedCues()
     {
