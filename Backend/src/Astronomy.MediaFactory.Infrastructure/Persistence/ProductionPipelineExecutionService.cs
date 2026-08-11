@@ -17512,7 +17512,7 @@ public sealed partial class ProductionPipelineExecutionService(
             applicablePhases = context.CleanupApplicablePhases ?? Array.Empty<int>(),
             rebuildPhases = context.CleanupRebuildPhases ?? Array.Empty<int>(),
             ownedOutputRoots = ResolvePhaseOwnedOutputRoots(context, deleteStartPhaseNo, deleteEndPhaseNo)
-                .Where(root => root.IsAuthority && (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(root.OwnerPhase))
+                .Where(root => (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(root.OwnerPhase))
                 .Select(root => NormalizePath(root.Path)).ToArray(),
             canonicalOwnedRoots = (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(19)
                 ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "19-video-qa", ResolvePipelineLanguage(context.Request.Language))) }
