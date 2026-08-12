@@ -4,7 +4,9 @@
       "commandName": "Project",
       "launchBrowser": true,
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Publishing__Enabled": "true",
+        "PublicMediaStorage__Enabled": "true"
       },
       "applicationUrl": "https://localhost:59235;http://localhost:59236",
       "launchUrl": "swagger"
