@@ -31,7 +31,9 @@ public sealed class Rc2PublishingPlanResolver(MediaFactoryDbContext db) : IRc2Pu
 
 public sealed record Phase20PublishingAuthoritySnapshot(string PublishingPackageId, string AuthorityChecksum, string Status,
     bool TechnicalQaApproved, bool PublicationPackageReady, int ArtifactCount,
-    IReadOnlyDictionary<string, int> Roles, IReadOnlyList<Rc2PublishingTarget> Targets);
+    IReadOnlyDictionary<string, int> Roles, IReadOnlyList<Rc2PublishingTarget> Targets,
+    IReadOnlyList<Phase20PublishingArtifact> Artifacts);
+public sealed record Phase20PublishingArtifact(string Role, string Path, long ByteLength, string Sha256, int Order);
 
 public interface IPhase20PublishingAuthorityReader
 {
@@ -231,7 +233,12 @@ public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthori
                 throw Invalid("Committed Phase 20 package contains no artifacts.");
             var roles = artifacts.GroupBy(RoleName).ToDictionary(x => x.Key, x => x.Count(), StringComparer.Ordinal);
             var targets = PackageableTargets(roles);
-            return new(packageId, checksum, Text(report, "status"), true, true, artifacts.Length, roles, targets.Distinct().ToArray());
+            var governedArtifacts = artifacts.Select((artifact, index) => new Phase20PublishingArtifact(RoleName(artifact),
+                Text(artifact, "packageRelativePath") is { Length: > 0 } packagePath
+                    ? Path.Combine("20-publishing", plan.Language, packagePath).Replace('\\', '/')
+                    : Text(artifact, "sourceRelativePath"),
+                Long(artifact, "byteLength"), Text(artifact, "sha256"), Int(artifact, "sequence", index))).ToArray();
+            return new(packageId, checksum, Text(report, "status"), true, true, artifacts.Length, roles, targets.Distinct().ToArray(), governedArtifacts);
         }
         catch (Rc2PublishingControlException) { throw; }
         catch (Exception ex) { throw new Rc2PublishingControlException("RC2_PUBLISH_PHASE20_INVALID", ex.Message); }
@@ -241,6 +248,8 @@ public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthori
     private static Rc2PublishingControlException Invalid(string message) => new("RC2_PUBLISH_PHASE20_INVALID", message);
     private static string Text(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() ?? "" : "";
     private static bool Bool(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.True;
+    private static long Long(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.TryGetInt64(out var result) ? result : -1;
+    private static int Int(JsonElement value, string name, int fallback) => value.TryGetProperty(name, out var property) && property.TryGetInt32(out var result) ? result : fallback;
     private static string RoleName(JsonElement artifact)
     {
         if (!artifact.TryGetProperty("role", out var role)) return "Unknown";
@@ -309,13 +318,19 @@ public sealed class Rc2PublishingControlService(IRc2PublishingPlanResolver resol
         var approved = approval == Rc2PublishingApprovalStatus.Approved;
         var phase19 = await ReadPhase19(plan, ct);
         var availableTargets = authority?.Targets.ToHashSet() ?? [];
+        var publications = await db.Rc2PublishingPublications.AsNoTracking().Where(x => x.PlanId == planId)
+            .OrderByDescending(x => x.UpdatedUtc).ToListAsync(ct);
         var targets = Enum.GetValues<Rc2PublishingTarget>().ToDictionary(x => x, x =>
         {
             var packageAvailable = availableTargets.Contains(x);
+            var publication = publications.FirstOrDefault(p => p.Target == x && (authority == null ||
+                p.PublishingPackageId == authority.PublishingPackageId && p.Phase20AuthorityChecksum == authority.AuthorityChecksum));
             var blockReason = !packageAvailable ? authority is null ? "BlockedPackageMissing" : "BlockedRequiredRoleMissing"
                 : approved ? null : "BlockedApprovalRequired";
             return new Rc2TargetStatus(packageAvailable, false, false, "NotChecked",
-                packageAvailable && approved ? Rc2PublicationState.NotPublished : Rc2PublicationState.Blocked, blockReason);
+                publication?.Status ?? (packageAvailable && approved ? Rc2PublicationState.NotPublished : Rc2PublicationState.Blocked),
+                blockReason, publication?.RemotePublicationId, publication?.RemoteUrl, publication?.FailureCode,
+                publication?.Status == Rc2PublicationState.Failed);
         });
         logger.LogInformation("RC2_PUBLISH_STATUS_READ PlanId={PlanId} Language={Language} ApprovalStatus={ApprovalStatus}", planId, plan.Language, approval);
         return new(planId, plan.Title, plan.Language, plan.RegionId, phase19,

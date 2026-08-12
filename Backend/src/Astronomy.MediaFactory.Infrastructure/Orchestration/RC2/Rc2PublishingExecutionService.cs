@@ -1,0 +1,229 @@
+using System.Security.Cryptography;
+using System.Text;
+using Astronomy.MediaFactory.Contracts;
+using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+
+public sealed class Rc2PublishingExecutionService(
+    IRc2PublishingPlanResolver resolver, IPhase20PublishingAuthorityReader authorityReader,
+    MediaFactoryDbContext db, ITokenHealthService tokenHealth, IYouTubePublishService youTube,
+    IFacebookVideoPublishService facebookVideo, IFacebookReelPublishService facebookReel,
+    IInstagramReelPublishService instagramReel, IOptions<PublishingTargetsOptions> targetOptions,
+    IOptions<MetaPublishingOptions> metaOptions, IConfiguration configuration,
+    ILogger<Rc2PublishingExecutionService> logger) : IRc2PublishingExecutionService
+{
+    private const string PolicyVersion = "rc2-phase20-publish-v1";
+    private static readonly HashSet<Rc2PublishingTarget> VideoTargets =
+        [Rc2PublishingTarget.YouTubeLong, Rc2PublishingTarget.YouTubeShort, Rc2PublishingTarget.FacebookLong,
+         Rc2PublishingTarget.FacebookReel, Rc2PublishingTarget.InstagramReel];
+    private static readonly HashSet<Rc2PublishingTarget> MediaTargets =
+        [Rc2PublishingTarget.InstagramPost, Rc2PublishingTarget.InstagramCarousel,
+         Rc2PublishingTarget.FacebookPost, Rc2PublishingTarget.FacebookCarousel];
+
+    public Task<Rc2PublishingExecutionResponse> PublishVideoAsync(Rc2PublishVideoRequest request, CancellationToken ct)
+    {
+        ValidateTargets(request.Platforms, VideoTargets);
+        if (request.PublishMode != Rc2PublishMode.Now)
+            throw new ArgumentException("Scheduled publishing is not supported (RC2_PUBLISH_MODE_NOT_SUPPORTED).");
+        logger.LogInformation("RC2_PUBLISH_VIDEO_REQUESTED PlanId={PlanId} DryRun={DryRun}", request.PlanId, request.DryRun);
+        return ExecuteAsync(request.PlanId, request.Platforms, "Video", request.DryRun, ct);
+    }
+
+    public Task<Rc2PublishingExecutionResponse> PublishMediaAsync(Rc2PublishMediaRequest request, CancellationToken ct)
+    {
+        ValidateTargets(request.Targets, MediaTargets);
+        if (request.MediaTypes is null || request.MediaTypes.Count == 0 || request.MediaTypes.Contains(Rc2PublishingMediaType.Video) ||
+            request.MediaTypes.Distinct().Count() != request.MediaTypes.Count)
+            throw new ArgumentException("mediaTypes must contain unique Hero and/or Gallery values.");
+        foreach (var target in request.Targets)
+        {
+            var required = target is Rc2PublishingTarget.InstagramCarousel or Rc2PublishingTarget.FacebookCarousel
+                ? Rc2PublishingMediaType.Gallery : Rc2PublishingMediaType.Hero;
+            if (!request.MediaTypes.Contains(required))
+                throw new ArgumentException($"{target} requires mediaTypes to include {required} (RC2_PUBLISH_MEDIA_TYPE_MISMATCH).");
+        }
+        logger.LogInformation("RC2_PUBLISH_MEDIA_REQUESTED PlanId={PlanId} DryRun={DryRun}", request.PlanId, request.DryRun);
+        return ExecuteAsync(request.PlanId, request.Targets, "Media", request.DryRun, ct);
+    }
+
+    private async Task<Rc2PublishingExecutionResponse> ExecuteAsync(Guid planId, IReadOnlyList<Rc2PublishingTarget> targets,
+        string requestType, bool dryRun, CancellationToken ct)
+    {
+        var plan = await resolver.ResolveAsync(planId, ct);
+        var authority = await authorityReader.ReadAsync(plan, ct)
+            ?? throw new Rc2PublishingControlException("RC2_PUBLISH_PACKAGE_NOT_AVAILABLE", "A committed Phase 20 package is required.");
+        var approved = await db.Rc2PublishingApprovals.AsNoTracking().AnyAsync(x => x.PlanId == planId &&
+            x.PublishingPackageId == authority.PublishingPackageId && x.Phase20AuthorityChecksum == authority.AuthorityChecksum &&
+            x.Decision == Rc2PublishingApprovalStatus.Approved, ct);
+        if (!approved)
+            throw new Rc2PublishingControlException("RC2_PUBLISH_APPROVAL_REQUIRED", "The current Phase 20 authority has not been approved.");
+
+        var results = new List<Rc2PublicationResult>();
+        foreach (var target in targets)
+            results.Add(await ExecuteTargetAsync(plan, authority, target, requestType, dryRun, ct));
+        var successful = results.Count(x => x.PublicationState is Rc2PublicationState.Published or Rc2PublicationState.AlreadyPublished || x.DryRunPassed);
+        var overall = successful == results.Count ? "Succeeded" : successful > 0 ? "PartialSuccess" :
+            results.All(x => x.PublicationState == Rc2PublicationState.Blocked) ? "Blocked" : "Failed";
+        return new(planId, authority.PublishingPackageId, authority.AuthorityChecksum, requestType, overall, results);
+    }
+
+    private async Task<Rc2PublicationResult> ExecuteTargetAsync(Rc2PublishingPlan plan,
+        Phase20PublishingAuthoritySnapshot authority, Rc2PublishingTarget target, string requestType, bool dryRun, CancellationToken ct)
+    {
+        IReadOnlyList<Phase20PublishingArtifact> artifacts;
+        try { artifacts = ResolveArtifacts(authority, target); }
+        catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, 0); }
+        var identity = string.Join("|", artifacts.Select(x => $"{x.Role}:{x.Sha256}"));
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{plan.PlanId:D}|{authority.AuthorityChecksum}|{authority.PublishingPackageId}|{target}|{identity}|{PolicyVersion}"))).ToLowerInvariant();
+        logger.LogInformation("RC2_PUBLISH_{RequestType}_TARGET_STARTED PlanId={PlanId} PackageId={PackageId} AuthorityChecksum={Checksum} Target={Target} IdempotencyKey={IdempotencyKey}",
+            requestType.ToUpperInvariant(), plan.PlanId, authority.PublishingPackageId, authority.AuthorityChecksum, target, key);
+
+        var existing = await db.Rc2PublishingPublications.AsNoTracking().SingleOrDefaultAsync(x => x.IdempotencyKey == key, ct);
+        if (existing?.Status == Rc2PublicationState.Published)
+            return Result(existing, Rc2PublicationState.AlreadyPublished, true);
+        if (existing?.Status == Rc2PublicationState.Publishing)
+            return Result(existing, Rc2PublicationState.Blocked, false, "RC2_PUBLISH_ALREADY_IN_PROGRESS", "An identical publication is already in progress.");
+
+        try { await VerifyArtifactsAsync(plan, artifacts, ct); }
+        catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
+        if (!IsEnabled(target)) return Blocked(target, "RC2_PUBLISH_TARGET_DISABLED", $"{target} is not explicitly enabled.", artifacts.Count);
+        var health = target is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.YouTubeShort
+            ? await tokenHealth.CheckYouTubeAsync(ct) : await tokenHealth.CheckMetaAsync(ct);
+        if (!health.IsConfigured || !health.IsValid)
+            return Blocked(target, "RC2_PUBLISH_CREDENTIALS_INVALID", NonSecretHealthMessage(health), artifacts.Count);
+        if (dryRun) return new(target, Rc2PublicationState.NotPublished, null, null, false, existing?.AttemptCount ?? 0,
+            null, null, IsCarousel(target) ? artifacts.Count : null, true);
+
+        var row = existing is null ? new Rc2PublishingPublication
+        {
+            Id = Guid.NewGuid(), PlanId = plan.PlanId, PublishingPackageId = authority.PublishingPackageId,
+            Phase20AuthorityChecksum = authority.AuthorityChecksum, Target = target, RoleOrMediaType = identity,
+            IdempotencyKey = key, CreatedUtc = DateTimeOffset.UtcNow, UpdatedUtc = DateTimeOffset.UtcNow
+        } : await db.Rc2PublishingPublications.SingleAsync(x => x.Id == existing.Id, ct);
+        row.Status = Rc2PublicationState.Publishing; row.AttemptCount++; row.LastAttemptUtc = row.UpdatedUtc = DateTimeOffset.UtcNow;
+        if (existing is null) db.Rc2PublishingPublications.Add(row);
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException)
+        {
+            db.ChangeTracker.Clear();
+            var winner = await db.Rc2PublishingPublications.AsNoTracking().SingleAsync(x => x.IdempotencyKey == key, ct);
+            return Result(winner, winner.Status == Rc2PublicationState.Published ? Rc2PublicationState.AlreadyPublished : Rc2PublicationState.Blocked,
+                winner.Status == Rc2PublicationState.Published, "RC2_PUBLISH_ALREADY_IN_PROGRESS", "An identical publication claimed execution concurrently.");
+        }
+
+        try
+        {
+            var provider = await PublishProviderAsync(plan, target, artifacts, ct);
+            row.Status = provider.Success ? Rc2PublicationState.Published : Rc2PublicationState.Failed;
+            row.RemotePublicationId = provider.Id; row.RemoteUrl = provider.Url;
+            row.FailureCode = provider.Success ? null : "RC2_PUBLISH_PROVIDER_FAILED";
+            row.FailureMessage = provider.Success ? null : provider.Error;
+        }
+        catch (Exception ex)
+        {
+            row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_PROVIDER_FAILED";
+            row.FailureMessage = SafeProviderMessage(ex.Message);
+        }
+        row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        logger.LogInformation("RC2_PUBLISH_{RequestType}_TARGET_COMPLETED PlanId={PlanId} Target={Target} IdempotencyKey={IdempotencyKey} State={State}",
+            requestType.ToUpperInvariant(), plan.PlanId, target, key, row.Status);
+        return Result(row, row.Status, false, row.FailureCode, row.FailureMessage, IsCarousel(target) ? artifacts.Count : null);
+    }
+
+    private async Task<(bool Success, string? Id, string? Url, string? Error)> PublishProviderAsync(
+        Rc2PublishingPlan plan, Rc2PublishingTarget target, IReadOnlyList<Phase20PublishingArtifact> artifacts, CancellationToken ct)
+    {
+        string PathFor(string role) => ResolvePath(plan, artifacts.First(x => x.Role == role).Path);
+        var videoRole = target is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.FacebookLong ? "LongVideo" : "ShortVideo";
+        var thumbRole = target is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.FacebookLong ? "ThumbnailLandscape" : "ThumbnailPortrait";
+        if (target is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.YouTubeShort)
+        {
+            var result = await youTube.PublishAsync(new PublishRequest { PipelineRunId = plan.PlanId, VideoPath = PathFor(videoRole),
+                ThumbnailPath = PathFor(thumbRole), PlatformThumbnailPath = PathFor(thumbRole), Title = plan.Title,
+                Description = plan.Title, AssetType = videoRole, IsShort = videoRole == "ShortVideo", UploadThumbnail = true }, ct);
+            return (result.Success, result.VideoId, result.VideoUrl ?? result.Url, result.Error);
+        }
+        if (target is Rc2PublishingTarget.InstagramPost or Rc2PublishingTarget.InstagramCarousel or Rc2PublishingTarget.FacebookPost or Rc2PublishingTarget.FacebookCarousel)
+            return (false, null, null, "RC2_PUBLISH_CAPABILITY_NOT_SUPPORTED: the existing Meta provider contract does not support governed image posts/carousels.");
+        var request = new MetaPublishRequest { PipelineRunId = plan.PlanId, Platform = target == Rc2PublishingTarget.InstagramReel ? "Instagram" : "Facebook",
+            VideoPath = PathFor(videoRole), PlatformThumbnailPath = PathFor(thumbRole), Caption = plan.Title,
+            ShortTitle = plan.Title, IsReel = target != Rc2PublishingTarget.FacebookLong };
+        MetaPublishResult meta = target switch { Rc2PublishingTarget.FacebookLong => await facebookVideo.PublishVideoAsync(request, ct),
+            Rc2PublishingTarget.FacebookReel => await facebookReel.PublishReelAsync(request, ct),
+            _ => await instagramReel.PublishReelAsync(request, ct) };
+        return (meta.Success, meta.PostId ?? meta.VideoId, meta.Url, meta.Error);
+    }
+
+    internal static IReadOnlyList<Phase20PublishingArtifact> ResolveArtifacts(Phase20PublishingAuthoritySnapshot authority, Rc2PublishingTarget target)
+    {
+        string[] roles = target switch {
+            Rc2PublishingTarget.YouTubeLong => ["LongVideo", "ThumbnailLandscape", "LongCaptionSrt"],
+            Rc2PublishingTarget.YouTubeShort => ["ShortVideo", "ThumbnailPortrait", "ShortCaptionSrt"],
+            Rc2PublishingTarget.FacebookLong => ["LongVideo", "ThumbnailLandscape"],
+            Rc2PublishingTarget.FacebookReel or Rc2PublishingTarget.InstagramReel => ["ShortVideo", "ThumbnailPortrait"],
+            Rc2PublishingTarget.InstagramPost => [authority.Roles.ContainsKey("HeroPortrait") ? "HeroPortrait" : "HeroSquare"],
+            Rc2PublishingTarget.FacebookPost => [authority.Roles.ContainsKey("HeroLandscape") ? "HeroLandscape" : "HeroSquare"],
+            _ => ["GalleryImage"] };
+        var resolved = roles.SelectMany(role => authority.Artifacts.Where(x => x.Role == role).OrderBy(x => x.Order)).ToArray();
+        if (roles.Any(role => resolved.All(x => x.Role != role)))
+            throw new Rc2PublishingControlException("RC2_PUBLISH_REQUIRED_ROLE_MISSING", $"{target} is missing a required governed Phase 20 role.");
+        return resolved;
+    }
+
+    private static async Task VerifyArtifactsAsync(Rc2PublishingPlan plan, IReadOnlyList<Phase20PublishingArtifact> artifacts, CancellationToken ct)
+    {
+        foreach (var artifact in artifacts)
+        {
+            var path = ResolvePath(plan, artifact.Path);
+            if (!File.Exists(path) || (File.GetAttributes(path) & FileAttributes.Directory) != 0)
+                throw new Rc2PublishingControlException("RC2_PUBLISH_ARTIFACT_INVALID", $"Governed role {artifact.Role} is not a regular file.");
+            var info = new FileInfo(path);
+            if (artifact.ByteLength < 0 || info.Length != artifact.ByteLength)
+                throw new Rc2PublishingControlException("RC2_PUBLISH_ARTIFACT_LENGTH_MISMATCH", $"Governed role {artifact.Role} byte length changed.");
+            await using var stream = File.OpenRead(path);
+            var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(artifact.Sha256) || !hash.Equals(artifact.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new Rc2PublishingControlException("RC2_PUBLISH_ARTIFACT_HASH_MISMATCH", $"Governed role {artifact.Role} checksum changed.");
+        }
+    }
+
+    private static string ResolvePath(Rc2PublishingPlan plan, string value)
+    {
+        var path = Path.GetFullPath(Path.IsPathRooted(value) ? value : Path.Combine(plan.PlanOutputRoot, value));
+        var root = Path.GetFullPath(plan.PlanOutputRoot) + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(root, StringComparison.Ordinal)) throw new Rc2PublishingControlException("RC2_PUBLISH_ARTIFACT_INVALID", "Artifact path escapes the governed output root.");
+        return path;
+    }
+    private bool IsEnabled(Rc2PublishingTarget target) => target switch {
+        Rc2PublishingTarget.YouTubeLong => targetOptions.Value.YouTubeLong,
+        Rc2PublishingTarget.YouTubeShort => targetOptions.Value.YouTubeShort,
+        Rc2PublishingTarget.FacebookLong => targetOptions.Value.FacebookLong && metaOptions.Value.Enabled,
+        Rc2PublishingTarget.FacebookReel => targetOptions.Value.FacebookReel && metaOptions.Value.Enabled,
+        Rc2PublishingTarget.InstagramReel => targetOptions.Value.InstagramReel && metaOptions.Value.Enabled,
+        _ => configuration.GetValue<bool>($"PublishingTargets:{target}") && metaOptions.Value.Enabled };
+    private static bool IsCarousel(Rc2PublishingTarget target) => target is Rc2PublishingTarget.InstagramCarousel or Rc2PublishingTarget.FacebookCarousel;
+    private static void ValidateTargets(IReadOnlyList<Rc2PublishingTarget>? targets, HashSet<Rc2PublishingTarget> allowed)
+    {
+        if (targets is null || targets.Count == 0) throw new ArgumentException("At least one explicit target is required.");
+        if (targets.Distinct().Count() != targets.Count) throw new ArgumentException("Duplicate targets are not allowed.");
+        if (targets.Any(x => !Enum.IsDefined(x) || !allowed.Contains(x))) throw new ArgumentException("RC2_PUBLISH_INVALID_TARGET: request contains a target for the wrong endpoint.");
+    }
+    private static Rc2PublicationResult Blocked(Rc2PublishingTarget target, string code, string message, int count) =>
+        new(target, Rc2PublicationState.Blocked, null, null, false, 0, code, message, IsCarousel(target) ? count : null);
+    private static Rc2PublicationResult Result(Rc2PublishingPublication row, Rc2PublicationState state, bool reused,
+        string? code = null, string? message = null, int? count = null) => new(row.Target, state, row.RemotePublicationId,
+            row.RemoteUrl, reused, row.AttemptCount, code ?? row.FailureCode, message ?? row.FailureMessage, count);
+    private static string NonSecretHealthMessage(TokenHealthResult health) => !health.IsConfigured
+        ? $"{health.Platform} credentials are not configured; use the existing OAuth setup flow."
+        : $"{health.Platform} credentials are unhealthy or cannot be refreshed; use the existing OAuth setup flow.";
+    private static string SafeProviderMessage(string? message) => string.IsNullOrWhiteSpace(message) ? "Provider operation failed." :
+        message.Replace("access_token", "credential", StringComparison.OrdinalIgnoreCase)
+            .Replace("refresh_token", "credential", StringComparison.OrdinalIgnoreCase);
+}
