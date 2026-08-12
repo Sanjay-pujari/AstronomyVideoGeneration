@@ -15295,7 +15295,10 @@ public sealed partial class ProductionPipelineExecutionService(
             PublishApproved = phase20Certification is JsonElement p20Approved ? GetJsonBool(p20Approved, "publishApproved") : null,
             Phase11HeroDiagnostics = phase11Certification?.HeroAuthorityDiagnostics
         };
-        if (phaseNo is 14 or 16 or 17 or 18 or 19 && File.Exists(validationPath))
+        // Governed authority publishers own their validation projection. In particular,
+        // Phase 20 writes this file only after committing and reading back the package;
+        // the generic report below must not replace that evidence with its defaults.
+        if (phaseNo is 14 or 16 or 17 or 18 or 19 or 20 && File.Exists(validationPath))
             return result;
         var planetGroupingDiagnostics = phase6SceneEnrichmentDiagnostics?.PlanetGroupingStrategyActivated == true
             ? phase6SceneEnrichmentDiagnostics
