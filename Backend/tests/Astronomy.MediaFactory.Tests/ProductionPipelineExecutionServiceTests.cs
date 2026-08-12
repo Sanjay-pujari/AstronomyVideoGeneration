@@ -3307,6 +3307,28 @@ Second display cue.
     }
 
     [Theory]
+    [InlineData("en", "20-publishing/en")]
+    [InlineData("hi", "20-publishing/hi")]
+    public void Phase20CleanupCatalogUsesNumberedLanguageScopedRoot(string language, string expectedRoot)
+    {
+        var original = CreateContext("Orion", ["LongVideo"]);
+        var context = original with { Request = original.Request with { Language = language }, StartPhaseNo = 20, EndPhaseNo = 20 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 20, 20);
+
+        Assert.Contains(targets, x => x.IsAuthority && x.RelativePath == expectedRoot && !x.CanDeleteOnOverwrite);
+    }
+
+    [Fact]
+    public void Phase20LegacyPublishingRootIsNotCanonicalAuthority()
+    {
+        var context = CreateContext("Orion", ["LongVideo"]) with { StartPhaseNo = 20, EndPhaseNo = 20 };
+        var targets = new PhaseOutputTargetResolver().Resolve(context, 20, 20);
+
+        Assert.DoesNotContain(targets, x => x.IsAuthority && x.RelativePath == "publishing");
+        Assert.Contains(targets, x => x.IsCompatibility && x.RelativePath == "publishing" && !x.CanDeleteOnOverwrite);
+    }
+
+    [Theory]
     [InlineData(11, "11-hero")]
     [InlineData(10, "10-scene-validation")]
     [InlineData(8, "08-scene-assets")]

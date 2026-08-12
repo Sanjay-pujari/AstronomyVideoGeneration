@@ -79,7 +79,11 @@ internal static class Phase20PublishingAuthorityPublisher
             requested, entries, supporting, platformMap, decision.DecisionId, decision.Status, policy.PublishingPolicyVersion,
             policy.ManualReviewRequired, policy.PortableExportEnabled, PlatformMapVersion }, Json));
         var finalRoot = Path.Combine(outputRoot, "20-publishing", language);
-        var stage = Path.Combine(outputRoot, "20-publishing", ".staging", Guid.NewGuid().ToString("N"), language);
+        var transactionId = Guid.NewGuid().ToString("N");
+        var transactionRoot = Path.Combine(outputRoot, "20-publishing", ".staging", transactionId);
+        var backupTransactionRoot = Path.Combine(outputRoot, "20-publishing", ".backup", transactionId);
+        var stage = Path.Combine(transactionRoot, language);
+        var backup = Path.Combine(backupTransactionRoot, language);
         Directory.CreateDirectory(stage);
         try
         {
@@ -106,7 +110,7 @@ internal static class Phase20PublishingAuthorityPublisher
                 publicationCommitted = true, committedReadbackPassed = true, committedStateValidationPassed = true, semanticValidationPassed = true,
                 checksumValidationPassed = true, manifestValidationPassed = true, manifestValidationStatus = "Valid", validationStatus = "Valid",
                 technicalQaApproved = true, publicationPackageReady = true, publishGateChecked = true, publishApproved = approved, downstreamReady = approved }, ct);
-            Commit(stage, finalRoot, overwriteExisting);
+            Commit(stage, finalRoot, backup, overwriteExisting);
             foreach (var name in new[] { "publishing-manifest.json", "publishing-package.json", "phase20-authority-diagnostics.json", "phase20-publication-report.json" })
             { using var committed = await ReadDocument(Path.Combine(finalRoot, name), ct); if (Text(committed.RootElement, "authorityChecksum") != authorityChecksum) throw new Phase20AuthorityException(Phase20ReasonCodes.CommittedReadbackFailed, name); }
             var validation = Path.Combine(outputRoot, "validation", "phase-20-validation.json");
@@ -118,7 +122,13 @@ internal static class Phase20PublishingAuthorityPublisher
                 technicalQaApproved = true, publicationPackageReady = true, publishGateChecked = true, publishApproved = approved, downstreamReady = approved }, ct);
             return Directory.EnumerateFiles(finalRoot, "*", SearchOption.AllDirectories).Append(validation).Order(StringComparer.Ordinal).ToArray();
         }
-        finally { var tx = Directory.GetParent(stage)?.FullName; if (tx is not null && Directory.Exists(tx)) Directory.Delete(tx, true); }
+        finally
+        {
+            DeleteCurrentTransaction(transactionRoot);
+            DeleteCurrentTransaction(backupTransactionRoot);
+            DeleteContainerIfEmpty(Path.Combine(outputRoot, "20-publishing", ".staging"));
+            DeleteContainerIfEmpty(Path.Combine(outputRoot, "20-publishing", ".backup"));
+        }
     }
 
     private static IEnumerable<string> SupportingPaths(string root, int phase, string folder, string manifest, string prefix) =>
@@ -206,7 +216,33 @@ internal static class Phase20PublishingAuthorityPublisher
     private static string NormalizeAuthorityPath(string folder, string path) { var normalized = path.Replace('\\', '/'); var prefix = folder.TrimEnd('/') + "/"; return normalized.StartsWith(prefix, StringComparison.Ordinal) ? normalized[prefix.Length..] : normalized; }
     private static async Task CopyPortable(IEnumerable<PublishingManifestEntry> entries, string root, string stage, CancellationToken ct) { foreach (var e in entries.Where(x => x.PackageRelativePath is not null)) { var source = SafePath(root, e.SourceRelativePath); var target = SafePath(stage, e.PackageRelativePath!); Directory.CreateDirectory(Path.GetDirectoryName(target)!); await using var a = File.OpenRead(source); await using var b = File.Create(target); await a.CopyToAsync(b, ct); } }
     private static string PackagePath(PublishingPackageRole role, string source) { var group = role switch { PublishingPackageRole.ShortVideo => "media/short", PublishingPackageRole.LongVideo => "media/long", PublishingPackageRole.ShortCaptionSrt or PublishingPackageRole.ShortCaptionAss => "captions/short", PublishingPackageRole.LongCaptionSrt or PublishingPackageRole.LongCaptionAss => "captions/long", PublishingPackageRole.ThumbnailLandscape or PublishingPackageRole.ThumbnailPortrait or PublishingPackageRole.ThumbnailSquare => "thumbnails", PublishingPackageRole.HeroLandscape or PublishingPackageRole.HeroPortrait or PublishingPackageRole.HeroSquare => "hero", _ => "gallery" }; return $"{group}/{Path.GetFileName(source)}"; }
-    private static void Commit(string stage, string final, bool overwrite) { if (Directory.Exists(final)) { if (!overwrite) Directory.Delete(final, true); else Directory.Delete(final, true); } Directory.CreateDirectory(Path.GetDirectoryName(final)!); Directory.Move(stage, final); }
+    private static void Commit(string stage, string final, string backup, bool overwrite)
+    {
+        _ = overwrite; // Replacement policy is enforced by the caller; publication is always transactional.
+        Directory.CreateDirectory(Path.GetDirectoryName(final)!);
+        var hadCommittedAuthority = Directory.Exists(final);
+        if (hadCommittedAuthority)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+            Directory.Move(final, backup);
+        }
+        try { Directory.Move(stage, final); }
+        catch
+        {
+            if (hadCommittedAuthority && Directory.Exists(backup) && !Directory.Exists(final)) Directory.Move(backup, final);
+            throw;
+        }
+    }
+    private static void DeleteCurrentTransaction(string transactionRoot)
+    {
+        if (Directory.Exists(transactionRoot)) Directory.Delete(transactionRoot, true);
+    }
+    private static void DeleteContainerIfEmpty(string container)
+    {
+        try { if (Directory.Exists(container) && !Directory.EnumerateFileSystemEntries(container).Any()) Directory.Delete(container); }
+        catch (IOException) { /* A concurrent publisher populated or removed the shared container. */ }
+        catch (UnauthorizedAccessException) { /* A concurrent publisher is changing the shared container. */ }
+    }
     private static string SafePath(string root, string relative) { if (Path.IsPathRooted(relative)) throw new InvalidDataException("Absolute manifest path."); var r = Path.GetFullPath(root) + Path.DirectorySeparatorChar; var p = Path.GetFullPath(Path.Combine(root, relative)); if (!p.StartsWith(r, StringComparison.Ordinal)) throw new InvalidDataException("Manifest traversal path."); return p; }
     private static Task Write(string path, object value, CancellationToken ct) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); return File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, Json), new UTF8Encoding(false), ct); }
     private static async Task<T> Read<T>(string path, CancellationToken ct) => JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(path, ct), Json) ?? throw new InvalidDataException(path);
