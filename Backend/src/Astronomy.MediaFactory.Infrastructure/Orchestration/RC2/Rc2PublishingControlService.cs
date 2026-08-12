@@ -149,6 +149,8 @@ public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthori
                 !Bool(validation, "publicationCommitted") || Text(validation, "validationStatus") != "Valid" ||
                 !Bool(package, "technicalQaApproved") || !Bool(package, "publicationPackageReady")) throw Invalid("Committed Phase 20 governance is invalid.");
             var artifacts = roots[0].GetProperty("artifacts").EnumerateArray().ToArray();
+            if (artifacts.Length == 0)
+                throw Invalid("Committed Phase 20 package contains no artifacts.");
             var roles = artifacts.GroupBy(RoleName).ToDictionary(x => x.Key, x => x.Count(), StringComparer.Ordinal);
             var targets = PackageableTargets(roles);
             return new(packageId, checksum, Text(report, "status"), true, true, artifacts.Length, roles, targets.Distinct().ToArray());
