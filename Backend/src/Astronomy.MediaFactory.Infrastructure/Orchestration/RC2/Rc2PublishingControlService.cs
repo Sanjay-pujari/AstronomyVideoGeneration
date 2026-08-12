@@ -149,8 +149,8 @@ public sealed class Rc2PublishingControlService(IRc2PublishingPlanResolver resol
         logger.LogInformation("RC2_PUBLISH_APPROVAL_REQUESTED PlanId={PlanId} Language={Language} Decision={Decision} PublishingPackageId={PackageId} Phase20AuthorityChecksum={Checksum}", planId, plan.Language, decision, observed.PublishingPackageId, observed.AuthorityChecksum);
         var row = await db.Rc2PublishingApprovals.SingleOrDefaultAsync(x => x.PlanId == planId && x.Phase20AuthorityChecksum == observed.AuthorityChecksum && x.PublishingPackageId == observed.PublishingPackageId, ct);
         var now = DateTimeOffset.UtcNow;
-        if (row is null) db.Rc2PublishingApprovals.Add(row = new Rc2PublishingApproval { Id = Guid.NewGuid(), PlanId = planId, PublishingPackageId = observed.PublishingPackageId, Phase20AuthorityChecksum = observed.AuthorityChecksum, Decision = decision, DecisionUtc = now, DecisionSource = "Rc2PublishingControlApi" });
-        else if (row.Decision != decision) { row.Decision = decision; row.DecisionUtc = now; row.DecisionSource = "Rc2PublishingControlApi"; }
+        if (row is null) db.Rc2PublishingApprovals.Add(row = new Rc2PublishingApproval { Id = Guid.NewGuid(), PlanId = planId, PublishingPackageId = observed.PublishingPackageId, Phase20AuthorityChecksum = observed.AuthorityChecksum, Decision = decision, DecisionUtc = now, DecisionSource = "Rc2PublishingControlApi", CreatedUtc = now, UpdatedUtc = now });
+        else if (row.Decision != decision) { row.Decision = decision; row.DecisionUtc = now; row.DecisionSource = "Rc2PublishingControlApi"; row.UpdatedUtc = now; }
         var current = await reader.ReadAsync(plan, ct);
         if (current is null || current.AuthorityChecksum != observed.AuthorityChecksum || current.PublishingPackageId != observed.PublishingPackageId)
             throw new Rc2PublishingControlException("RC2_PUBLISH_AUTHORITY_CHANGED", "Phase 20 authority changed while approval was being recorded.");

@@ -105,14 +105,7 @@ public sealed class MediaFactoryDbContext : DbContext
         modelBuilder.ApplyConfiguration(new AstronomyQuestionAnswerConfiguration());
         modelBuilder.ApplyConfiguration(new AstronomyQuestionTemplateConfiguration());
         modelBuilder.ApplyConfiguration(new AstronomyAssetProductionJobConfiguration());
-        modelBuilder.Entity<Rc2PublishingApproval>(entity =>
-        {
-            entity.ToTable("rc2_publishing_approvals").HasKey(x => x.Id);
-            entity.HasIndex(x => new { x.PlanId, x.Phase20AuthorityChecksum, x.PublishingPackageId }).IsUnique();
-            entity.Property(x => x.PublishingPackageId).HasMaxLength(128);
-            entity.Property(x => x.Phase20AuthorityChecksum).HasMaxLength(128);
-            entity.Property(x => x.DecisionSource).HasMaxLength(64);
-        });
+        modelBuilder.ApplyConfiguration(new Rc2PublishingApprovalConfiguration());
 
         modelBuilder.Entity<PipelineRun>().ToTable("pipeline_runs").HasKey(x => x.Id);
         modelBuilder.Entity<PipelineRun>().Property(x => x.RegionId).HasColumnName("regionId");

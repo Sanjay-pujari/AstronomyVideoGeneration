@@ -3,6 +3,7 @@ using Astronomy.MediaFactory.Api.Controllers;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Astronomy.MediaFactory.Tests;
 
@@ -83,7 +84,7 @@ public sealed class Phase20PublishingValidationProjectionTests : IDisposable
             new(true, "Succeeded", PackageId, ChecksumA, true, true, false, false,
                 Rc2PublishingApprovalStatus.Pending, 0),
             new Dictionary<string, int>(), [], new Dictionary<Rc2PublishingTarget, Rc2TargetStatus>());
-        var controller = new Rc2PublishingController(new StubControlService(response));
+        var controller = new Rc2PublishingController(new StubControlService(response), NullLogger<Rc2PublishingController>.Instance);
 
         var action = await controller.Status(response.PlanId, CancellationToken.None);
 

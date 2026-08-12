@@ -54,4 +54,6 @@ public sealed class Rc2PublishingApproval
     public Rc2PublishingApprovalStatus Decision { get; set; }
     public DateTimeOffset DecisionUtc { get; set; }
     public required string DecisionSource { get; set; }
+    public DateTimeOffset CreatedUtc { get; set; }
+    public DateTimeOffset UpdatedUtc { get; set; }
 }

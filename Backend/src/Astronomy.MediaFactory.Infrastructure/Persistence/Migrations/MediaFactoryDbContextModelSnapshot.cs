@@ -3255,6 +3255,9 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<DateTimeOffset>("CreatedUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTimeOffset>("DecisionUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -3271,7 +3274,12 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
+                    b.Property<DateTimeOffset>("UpdatedUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("PlanId");
 
                     b.HasIndex("PlanId", "Phase20AuthorityChecksum", "PublishingPackageId")
                         .IsUnique();
@@ -3716,6 +3724,15 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.Navigation("AstronomyContentOpportunity");
 
                     b.Navigation("AstronomyEventIntelligence");
+                });
+
+            modelBuilder.Entity("Astronomy.MediaFactory.Core.Rc2PublishingApproval", b =>
+                {
+                    b.HasOne("Astronomy.MediaFactory.Core.ContentGenerationPlan", null)
+                        .WithMany()
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Astronomy.MediaFactory.Core.ContentVariant", b =>
