@@ -25,7 +25,10 @@ public sealed record YouTubeOAuthTokenFile(
     string ChannelId,
     string ChannelTitle,
     string RefreshToken,
-    DateTimeOffset CreatedUtc);
+    DateTimeOffset CreatedUtc,
+    string? AccessToken = null,
+    DateTimeOffset? AccessTokenExpiresUtc = null,
+    bool ReauthorizationRequired = false);
 
 public sealed record YouTubeOAuthDiagnosticResult(
     string ChannelTitle,

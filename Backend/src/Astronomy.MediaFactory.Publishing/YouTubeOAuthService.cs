@@ -94,7 +94,7 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
         ValidateExpectedChannel(channel);
 
         var createdUtc = DateTimeOffset.UtcNow;
-        var tokenFilePath = await PersistRefreshTokenAsync(channel, token.RefreshToken, createdUtc, cancellationToken);
+        var tokenFilePath = await PersistRefreshTokenAsync(channel, token, createdUtc, cancellationToken);
         await WriteDiagnosticsAsync(channel, createdUtc, refreshTokenGenerated: true, cancellationToken);
 
         return new YouTubeOAuthSetupResult(
@@ -185,13 +185,12 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
         }
     }
 
-    private async Task<string> PersistRefreshTokenAsync(YouTubeChannelInfo channel, string refreshToken, DateTimeOffset createdUtc, CancellationToken cancellationToken)
+    private async Task<string> PersistRefreshTokenAsync(YouTubeChannelInfo channel, TokenResponse token, DateTimeOffset createdUtc, CancellationToken cancellationToken)
     {
-        var payload = new YouTubeOAuthTokenFile(channel.ChannelId, channel.ChannelTitle, refreshToken, createdUtc);
+        var payload = new YouTubeOAuthTokenFile(channel.ChannelId, channel.ChannelTitle, token.RefreshToken!, createdUtc,
+            token.AccessToken, token.ExpiresIn.HasValue ? createdUtc.AddSeconds(token.ExpiresIn.Value) : null);
         var path = ResolveTokenFilePath();
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await using var stream = File.Create(path);
-        await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        await AtomicTokenFile.WriteAsync(path, payload, JsonOptions, cancellationToken);
         return path;
     }
 
@@ -199,8 +198,7 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
     {
         var payload = new YouTubeOAuthDiagnosticResult(channel.ChannelTitle, channel.ChannelId, generatedUtc, refreshTokenGenerated);
         var path = Path.Combine(Path.GetDirectoryName(ResolveTokenFilePath())!, "youtube-oauth-result.json");
-        await using var stream = File.Create(path);
-        await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        await AtomicTokenFile.WriteAsync(path, payload, JsonOptions, cancellationToken);
     }
 
     private string ResolveTokenFilePath()

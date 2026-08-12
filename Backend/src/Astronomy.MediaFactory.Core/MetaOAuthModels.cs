@@ -31,7 +31,9 @@ public sealed record MetaOAuthTokenFile(
     string? InstagramBusinessAccountId,
     string? InstagramUsername,
     string LongLivedUserAccessToken,
-    DateTimeOffset GeneratedUtc);
+    DateTimeOffset GeneratedUtc,
+    DateTimeOffset? ExpiresUtc = null,
+    bool ReauthorizationRequired = false);
 
 public sealed record MetaOAuthDiagnosticResult(
     string SelectedPage,

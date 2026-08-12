@@ -56,7 +56,9 @@ public sealed class TokenHealthService : ITokenHealthService
         var result = new TokenHealthResult
         {
             Platform = "YouTube",
-            CanRefresh = true
+            CanRefresh = true,
+            Status = "Unknown",
+            OAuthStartPath = "/api/youtubeoauth/start"
         };
 
         try
@@ -74,6 +76,7 @@ public sealed class TokenHealthService : ITokenHealthService
 
             if (string.IsNullOrWhiteSpace(refreshToken))
             {
+                result.Status = "MissingInitialAuthorization";
                 result.Error = YouTubeAuthService.MissingRefreshTokenMessage;
                 return result;
             }
@@ -97,6 +100,8 @@ public sealed class TokenHealthService : ITokenHealthService
                 var error = await YouTubeTokenRefreshDiagnostics.ReadAsync(tokenResponse, cancellationToken);
                 YouTubeTokenRefreshDiagnostics.Log(_logger, error);
                 result.Error = error.FriendlyMessage;
+                result.Status = string.Equals(error.GoogleError, "invalid_grant", StringComparison.OrdinalIgnoreCase)
+                    ? "ReauthorizationRequired" : "Invalid";
                 return result;
             }
 
@@ -144,6 +149,7 @@ public sealed class TokenHealthService : ITokenHealthService
             }
 
             result.IsValid = true;
+            result.Status = "Healthy";
             return result;
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidOperationException or IOException)
@@ -156,7 +162,7 @@ public sealed class TokenHealthService : ITokenHealthService
 
     public async Task<TokenHealthResult> CheckMetaAsync(CancellationToken cancellationToken)
     {
-        var result = new TokenHealthResult { Platform = "Meta", CanRefresh = false };
+        var result = new TokenHealthResult { Platform = "Meta", CanRefresh = true, Status = "Unknown", OAuthStartPath = "/api/metaoauth/start" };
 
         try
         {
@@ -164,6 +170,7 @@ public sealed class TokenHealthService : ITokenHealthService
             result.IsConfigured = File.Exists(tokenPath) && !string.IsNullOrWhiteSpace(_metaOptions.AppId) && !string.IsNullOrWhiteSpace(_metaOptions.AppSecret);
             if (!File.Exists(tokenPath))
             {
+                result.Status = "MissingInitialAuthorization";
                 result.Error = "Meta OAuth token file is missing. Run /api/metaoauth/start first.";
                 return result;
             }
@@ -192,6 +199,7 @@ public sealed class TokenHealthService : ITokenHealthService
 
             if (debug.Data?.IsValid != true)
             {
+                result.Status = "ReauthorizationRequired";
                 result.Error = "Meta token debug reported the token is invalid.";
                 return result;
             }
@@ -203,6 +211,7 @@ public sealed class TokenHealthService : ITokenHealthService
                 if (result.ExpiresAtUtc.Value <= DateTime.UtcNow)
                 {
                     result.Error = "Meta long-lived token has expired; re-run /api/metaoauth/start.";
+                    result.Status = "ReauthorizationRequired";
                     return result;
                 }
             }
@@ -280,9 +289,11 @@ public sealed class TokenHealthService : ITokenHealthService
             if (result.ExpiresAtUtc.HasValue && result.ExpiresAtUtc.Value <= DateTime.UtcNow.AddDays(Math.Max(0, _tokenHealthOptions.RefreshBeforeExpiryDays)))
             {
                 AppendWarning(result, MetaExpiryWarning);
+                result.Status = "RefreshRequired";
             }
 
             result.IsValid = true;
+            if (result.Status == "Unknown") result.Status = "Healthy";
             return result;
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidOperationException or IOException)

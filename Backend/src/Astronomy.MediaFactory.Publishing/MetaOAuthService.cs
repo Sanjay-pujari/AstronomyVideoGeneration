@@ -74,15 +74,12 @@ public sealed class MetaOAuthService : IMetaOAuthService
         var instagram = await DiscoverInstagramAccountAsync(selectedPage.Id, longToken.AccessToken, cancellationToken);
         ValidateExpectedInstagram(instagram);
 
-        await PersistTokenFileAsync(selectedPage, instagram, longToken.AccessToken, generatedUtc, cancellationToken);
+        await PersistTokenFileAsync(selectedPage, instagram, longToken.AccessToken, generatedUtc,
+            longToken.ExpiresIn.HasValue ? generatedUtc.AddSeconds(longToken.ExpiresIn.Value) : generatedUtc.AddDays(60), cancellationToken);
         await WriteDiagnosticsAsync(selectedPage, instagram, generatedUtc, longToken.ExpiresIn, cancellationToken);
 
-        _logger.LogInformation(
-            "Meta OAuth completed for page {PageName} ({PageId}); long-lived user token {TokenPreview}; page token {PageTokenPreview}.",
-            selectedPage.Name,
-            selectedPage.Id,
-            MaskToken(longToken.AccessToken),
-            MaskToken(selectedPage.AccessToken));
+        _logger.LogInformation("Meta OAuth completed for page {PageName} ({PageId}); authorization persisted.",
+            selectedPage.Name, selectedPage.Id);
 
         return new MetaOAuthSetupResult(
             Success: true,
@@ -122,7 +119,6 @@ public sealed class MetaOAuthService : IMetaOAuthService
             throw new InvalidOperationException("Meta OAuth token exchange did not return an access token.");
         }
 
-        _logger.LogDebug("Meta short-lived token received: {TokenPreview}.", MaskToken(token.AccessToken));
         return token;
     }
 
@@ -141,7 +137,6 @@ public sealed class MetaOAuthService : IMetaOAuthService
             throw new InvalidOperationException("Meta long-lived token exchange did not return an access token.");
         }
 
-        _logger.LogDebug("Meta long-lived token received: {TokenPreview}.", MaskToken(token.AccessToken));
         return token;
     }
 
@@ -252,13 +247,13 @@ public sealed class MetaOAuthService : IMetaOAuthService
         return payload ?? throw new InvalidOperationException($"{operation} returned an empty response.");
     }
 
-    private async Task PersistTokenFileAsync(MetaOAuthPage page, MetaOAuthInstagramAccount instagram, string longLivedUserToken, DateTimeOffset generatedUtc, CancellationToken cancellationToken)
+    private async Task PersistTokenFileAsync(MetaOAuthPage page, MetaOAuthInstagramAccount instagram, string longLivedUserToken,
+        DateTimeOffset generatedUtc, DateTimeOffset expiresUtc, CancellationToken cancellationToken)
     {
-        var payload = new MetaOAuthTokenFile(page.Id, page.Name, page.AccessToken, instagram.BusinessAccountId, instagram.Username, longLivedUserToken, generatedUtc);
+        var payload = new MetaOAuthTokenFile(page.Id, page.Name, page.AccessToken, instagram.BusinessAccountId, instagram.Username,
+            longLivedUserToken, generatedUtc, expiresUtc);
         var path = ResolveTokenFilePath();
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await using var stream = File.Create(path);
-        await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        await AtomicTokenFile.WriteAsync(path, payload, JsonOptions, cancellationToken);
     }
 
     private async Task WriteDiagnosticsAsync(MetaOAuthPage page, MetaOAuthInstagramAccount instagram, DateTimeOffset generatedUtc, int? expiresIn, CancellationToken cancellationToken)
@@ -266,8 +261,7 @@ public sealed class MetaOAuthService : IMetaOAuthService
         var expirationEstimate = expiresIn.HasValue ? generatedUtc.AddSeconds(expiresIn.Value) : generatedUtc.AddDays(60);
         var payload = new MetaOAuthDiagnosticResult(page.Name, page.Id, instagram.Username, instagram.BusinessAccountId, expirationEstimate, generatedUtc, instagram.Warning);
         var path = Path.Combine(Path.GetDirectoryName(ResolveTokenFilePath())!, "meta-oauth-result.json");
-        await using var stream = File.Create(path);
-        await JsonSerializer.SerializeAsync(stream, payload, JsonOptions, cancellationToken);
+        await AtomicTokenFile.WriteAsync(path, payload, JsonOptions, cancellationToken);
     }
 
     private string ResolveTokenFilePath()
@@ -290,16 +284,6 @@ public sealed class MetaOAuthService : IMetaOAuthService
         };
 
         return builder.Uri.ToString();
-    }
-
-    private static string MaskToken(string? token)
-    {
-        if (string.IsNullOrWhiteSpace(token))
-        {
-            return "***";
-        }
-
-        return token.Length <= 10 ? "***" : $"{token[..Math.Min(6, token.Length)]}...{token[^Math.Min(4, token.Length)..]}";
     }
 
     private sealed class TokenResponse
