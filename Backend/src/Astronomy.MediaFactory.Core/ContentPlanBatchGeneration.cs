@@ -471,6 +471,10 @@ public sealed record ProductionPhaseResult(
     public bool? ManifestValidationPassed { get; init; }
     public bool? DownstreamReady { get; init; }
     public bool? TechnicalQaApproved { get; init; }
+    public string? PublishingPackageId { get; init; }
+    public bool? PublicationPackageReady { get; init; }
+    public bool? PublishGateChecked { get; init; }
+    public bool? PublishApproved { get; init; }
     public JsonElement? Phase11HeroDiagnostics { get; init; }
     public IReadOnlyList<Phase7AuthorityStageResult> InternalStageResults { get; init; } = [];
     public Phase7NarrationAuthorityOrchestrationResult? Phase7NarrationAuthorityResult { get; init; }

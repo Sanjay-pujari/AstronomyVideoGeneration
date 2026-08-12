@@ -24,4 +24,7 @@ public static class Phase20ReasonCodes
     public const string ArtifactMissing = "P20_PACKAGE_ARTIFACT_MISSING";
     public const string ChecksumMismatch = "P20_PACKAGE_CHECKSUM_MISMATCH";
     public const string Accepted = "P20_PUBLISHING_AUTHORITY_ACCEPTED";
+    public const string CandidateValidationFailed = "P20_CANDIDATE_VALIDATION_FAILED";
+    public const string PublicationFailed = "P20_PUBLICATION_FAILED";
+    public const string CommittedReadbackFailed = "P20_COMMITTED_READBACK_FAILED";
 }
