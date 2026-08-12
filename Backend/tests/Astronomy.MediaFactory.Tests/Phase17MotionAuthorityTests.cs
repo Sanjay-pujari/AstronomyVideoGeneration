@@ -1,4 +1,5 @@
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Rendering;
 
 namespace Astronomy.MediaFactory.Tests;
