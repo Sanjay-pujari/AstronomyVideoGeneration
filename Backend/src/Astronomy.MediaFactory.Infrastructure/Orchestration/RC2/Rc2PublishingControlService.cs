@@ -63,10 +63,19 @@ public sealed class Rc2Phase20ExecutionService(MediaFactoryDbContext db, IConten
         var intelligence = plan.AstronomyEventIntelligence
             ?? throw new Rc2PublishingControlException("RC2_PUBLISH_PLAN_NOT_FOUND", "The plan has no production intelligence.");
         var request = mapper.Map(plan, intelligence);
-        var requestedOutputs = await ResolveGovernedRequestedOutputsAsync(
+        var outputResolution = await ResolveGovernedRequestedOutputsWithDiagnosticsAsync(
             publishingPlan.PlanOutputRoot, publishingPlan.Phase20Root, publishingPlan.PlanId,
             request.RequestedOutputs, cancellationToken);
-        request = request with { RequestedOutputs = requestedOutputs };
+        request = request with { RequestedOutputs = outputResolution.Normalized };
+
+        var resolutionPath = Path.Combine(publishingPlan.PlanOutputRoot, "validation", "phase-20-requested-outputs-resolution.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(resolutionPath)!);
+        await File.WriteAllTextAsync(resolutionPath, JsonSerializer.Serialize(new
+        {
+            requestedOutputsResolutionSource = outputResolution.Source,
+            requestedOutputsRaw = outputResolution.Raw,
+            requestedOutputsNormalized = outputResolution.Normalized
+        }, JsonOptions), cancellationToken);
 
         return await pipeline.ExecuteAsync(new ProductionPipelineRequest(request, intelligence.Id,
             publishingPlan.PlanOutputRoot, DryRun: false, OverwriteExisting: overwriteExisting,
@@ -78,9 +87,28 @@ public sealed class Rc2Phase20ExecutionService(MediaFactoryDbContext db, IConten
 
     internal static async Task<IReadOnlyList<string>> ResolveGovernedRequestedOutputsAsync(string outputRoot,
         string phase20Root, Guid planId, IReadOnlyList<string> planRequestedOutputs, CancellationToken cancellationToken)
+        => (await ResolveGovernedRequestedOutputsWithDiagnosticsAsync(outputRoot, phase20Root, planId,
+            planRequestedOutputs, cancellationToken)).Normalized;
+
+    internal sealed record RequestedOutputsResolution(string Source, IReadOnlyList<string> Raw,
+        IReadOnlyList<string> Normalized);
+
+    internal static async Task<RequestedOutputsResolution> ResolveGovernedRequestedOutputsWithDiagnosticsAsync(string outputRoot,
+        string phase20Root, Guid planId, IReadOnlyList<string> planRequestedOutputs, CancellationToken cancellationToken)
     {
-        // Phase 1 is the committed request identity for the production execution. In particular,
-        // it preserves a manual output override that need not alter the semantic plan itself.
+        // The latest validation snapshot is the persisted projection of the exact governed request
+        // that reached Phase 19/20, including manual output overrides not written back to the plan.
+        foreach (var validationName in new[] { "phase-20-validation.json", "phase-19-validation.json" })
+        {
+            var path = Path.Combine(outputRoot, "validation", validationName);
+            var raw = await ReadCurrentEventLockOutputsAsync(path, planId, cancellationToken);
+            var normalized = NormalizeRequestedOutputs(raw);
+            if (normalized.Count > 0)
+                return new("CurrentEventLock", raw, normalized);
+        }
+
+        // Phase 1 is the committed production-request identity. Only use it after the current
+        // event lock, and do not stop merely because its requestedOutputs array is empty.
         var productionRequestPath = Path.Combine(outputRoot, "01-plan", "production-request.json");
         if (File.Exists(productionRequestPath))
         {
@@ -95,29 +123,79 @@ public sealed class Rc2Phase20ExecutionService(MediaFactoryDbContext db, IConten
                 productionRequest.RequestChecksum)
                 throw new Rc2PublishingControlException("RC2_PUBLISH_PRODUCTION_REQUEST_INVALID",
                     "The committed Phase 1 production request checksum is invalid.");
-            if (productionRequest.RequestedOutputs.Count > 0) return productionRequest.RequestedOutputs;
-            throw new Rc2PublishingControlException("RC2_PUBLISH_PRODUCTION_REQUEST_INVALID",
-                "The committed Phase 1 production request has no requested outputs.");
+            var normalized = NormalizeRequestedOutputs(productionRequest.RequestedOutputs);
+            if (normalized.Count > 0)
+                return new("PersistedProductionExecution", productionRequest.RequestedOutputs, normalized);
         }
 
-        if (planRequestedOutputs.Count > 0) return planRequestedOutputs;
-
-        // Compatibility fallback for an older run whose Phase 1 request predates requestedOutputs.
+        // An existing package is reusable intent only when it belongs to the same Phase 19 authority.
         var manifestPath = Path.Combine(phase20Root, "publishing-manifest.json");
-        if (File.Exists(manifestPath))
+        var packagePath = Path.Combine(phase20Root, "publishing-package.json");
+        var phase19Path = Path.Combine(outputRoot, "19-video-qa", Path.GetFileName(phase20Root), "phase19-manifest.json");
+        if (File.Exists(packagePath) && File.Exists(manifestPath) && File.Exists(phase19Path))
         {
-            await using var stream = File.OpenRead(manifestPath);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-            if (document.RootElement.TryGetProperty("requestedOutputs", out var outputs) && outputs.ValueKind == JsonValueKind.Array)
+            using var package = await ReadDocumentAsync(packagePath, cancellationToken);
+            using var phase19 = await ReadDocumentAsync(phase19Path, cancellationToken);
+            var packageAuthority = Text(package.RootElement, "sourcePhase19AuthorityChecksum");
+            var currentAuthority = Text(phase19.RootElement, "authorityChecksum");
+            if (!string.IsNullOrWhiteSpace(packageAuthority) && packageAuthority == currentAuthority)
             {
-                var resolved = outputs.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String)
-                    .Select(x => x.GetString()).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).ToArray();
-                if (resolved.Length > 0) return resolved;
+                var raw = ReadStringArray(package.RootElement, "requestedOutputs");
+                var normalized = NormalizeRequestedOutputs(raw);
+                if (normalized.Count > 0) return new("ExistingPhase20SamePhase19Authority", raw, normalized);
             }
         }
-        throw new Rc2PublishingControlException("RC2_PUBLISH_REQUESTED_OUTPUTS_NOT_AVAILABLE",
-            "No governed requested-output identity is available for the production run.");
+
+        var normalizedPlan = NormalizeRequestedOutputs(planRequestedOutputs);
+        if (normalizedPlan.Count > 0) return new("PlanRequestedOutputs", planRequestedOutputs, normalizedPlan);
+
+        var inferred = InferFromCanonicalAuthorities(outputRoot, Path.GetFileName(phase20Root));
+        if (inferred.Count > 0) return new("CanonicalAuthorityCompatibilityInference", inferred, inferred);
+
+        throw new Phase20AuthorityException(Phase20ReasonCodes.RequestedOutputsUnresolved,
+            "The governed production requested-output intent is empty after exhausting currentEventLock, persisted production execution, same-authority Phase 20, plan, and compatibility sources.");
     }
+
+    internal static IReadOnlyList<string> NormalizeRequestedOutputs(IEnumerable<string> outputs)
+    {
+        var canonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["gallery"] = "Gallery", ["heroasset"] = "HeroAsset", ["longvideo"] = "LongVideo",
+            ["shortvideo"] = "ShortVideo", ["thumbnail"] = "Thumbnail"
+        };
+        return outputs.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim())
+            .Select(x => canonical.TryGetValue(x, out var value) ? value : null).Where(x => x is not null)
+            .Select(x => x!).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static async Task<IReadOnlyList<string>> ReadCurrentEventLockOutputsAsync(string path, Guid planId, CancellationToken ct)
+    {
+        if (!File.Exists(path)) return [];
+        using var document = await ReadDocumentAsync(path, ct);
+        if (!document.RootElement.TryGetProperty("currentEventLock", out var value) || value.ValueKind != JsonValueKind.Object)
+            return [];
+        var lockPlanId = Text(value, "planId");
+        if (!string.IsNullOrWhiteSpace(lockPlanId) && (!Guid.TryParse(lockPlanId, out var parsed) || parsed != planId)) return [];
+        return ReadStringArray(value, "requestedOutputs");
+    }
+
+    private static IReadOnlyList<string> InferFromCanonicalAuthorities(string root, string language)
+    {
+        var outputs = new List<string>();
+        if (File.Exists(Path.Combine(root, "19-video-qa", language, "phase19-manifest.json"))) outputs.AddRange(["ShortVideo", "LongVideo"]);
+        if (File.Exists(Path.Combine(root, "12-thumbnails", "thumbnail-asset-manifest.json"))) outputs.Add("Thumbnail");
+        if (File.Exists(Path.Combine(root, "11-hero", "hero-asset-manifest.json"))) outputs.Add("HeroAsset");
+        if (File.Exists(Path.Combine(root, "13-gallery", "gallery-manifest.json"))) outputs.Add("Gallery");
+        return NormalizeRequestedOutputs(outputs);
+    }
+
+    private static async Task<JsonDocument> ReadDocumentAsync(string path, CancellationToken ct)
+    { await using var stream = File.OpenRead(path); return await JsonDocument.ParseAsync(stream, cancellationToken: ct); }
+    private static string Text(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() ?? "" : "";
+    private static IReadOnlyList<string> ReadStringArray(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var array) && array.ValueKind == JsonValueKind.Array
+            ? array.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString())
+                .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).ToArray() : [];
 }
 
 public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthorityReader
