@@ -33,7 +33,7 @@ public sealed record Phase20PublishingAuthoritySnapshot(string PublishingPackage
     bool TechnicalQaApproved, bool PublicationPackageReady, int ArtifactCount,
     IReadOnlyDictionary<string, int> Roles, IReadOnlyList<Rc2PublishingTarget> Targets,
     IReadOnlyList<Phase20PublishingArtifact> Artifacts);
-public sealed record Phase20PublishingArtifact(string Role, string Path, long ByteLength, string Sha256, int Order);
+public sealed record Phase20PublishingArtifact(string Role, string Path, long ByteLength, string Sha256, int? Sequence);
 
 public interface IPhase20PublishingAuthorityReader
 {
@@ -233,11 +233,7 @@ public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthori
                 throw Invalid("Committed Phase 20 package contains no artifacts.");
             var roles = artifacts.GroupBy(RoleName).ToDictionary(x => x.Key, x => x.Count(), StringComparer.Ordinal);
             var targets = PackageableTargets(roles);
-            var governedArtifacts = artifacts.Select((artifact, index) => new Phase20PublishingArtifact(RoleName(artifact),
-                Text(artifact, "packageRelativePath") is { Length: > 0 } packagePath
-                    ? Path.Combine("20-publishing", plan.Language, packagePath).Replace('\\', '/')
-                    : Text(artifact, "sourceRelativePath"),
-                Long(artifact, "byteLength"), Text(artifact, "sha256"), Int(artifact, "sequence", index))).ToArray();
+            var governedArtifacts = artifacts.Select(artifact => ReadArtifact(artifact, plan)).ToArray();
             return new(packageId, checksum, Text(report, "status"), true, true, artifacts.Length, roles, targets.Distinct().ToArray(), governedArtifacts);
         }
         catch (Rc2PublishingControlException) { throw; }
@@ -245,16 +241,52 @@ public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthori
         finally { foreach (var document in documents) document.Dispose(); }
     }
 
+    private static Phase20PublishingArtifact ReadArtifact(JsonElement artifact, Rc2PublishingPlan plan)
+    {
+        var role = RoleName(artifact);
+        var sequence = NullableInt32(artifact, "sequence", role);
+        if (role == "GalleryImage" && sequence is null or <= 0)
+            throw InvalidProperty(role, "sequence", "a positive Number", PropertyKind(artifact, "sequence"));
+        var byteLength = RequiredInt64(artifact, "byteLength", role);
+        if (byteLength <= 0)
+            throw InvalidProperty(role, "byteLength", "a Number greater than zero", JsonValueKind.Number.ToString());
+        var sha256 = Text(artifact, "sha256");
+        if (string.IsNullOrWhiteSpace(sha256))
+            throw InvalidProperty(role, "sha256", "a non-empty String", PropertyKind(artifact, "sha256"));
+        return new Phase20PublishingArtifact(role,
+                Text(artifact, "packageRelativePath") is { Length: > 0 } packagePath
+                    ? Path.Combine("20-publishing", plan.Language, packagePath).Replace('\\', '/')
+                    : Text(artifact, "sourceRelativePath"),
+                byteLength, sha256, sequence);
+    }
+
     private static Rc2PublishingControlException Invalid(string message) => new("RC2_PUBLISH_PHASE20_INVALID", message);
     private static string Text(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() ?? "" : "";
     private static bool Bool(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.ValueKind is JsonValueKind.True;
-    private static long Long(JsonElement value, string name) => value.TryGetProperty(name, out var property) && property.TryGetInt64(out var result) ? result : -1;
-    private static int Int(JsonElement value, string name, int fallback) => value.TryGetProperty(name, out var property) && property.TryGetInt32(out var result) ? result : fallback;
+    private static long RequiredInt64(JsonElement value, string name, string role)
+    {
+        if (!value.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.Number || !property.TryGetInt64(out var result))
+            throw InvalidProperty(role, name, "Number", property.ValueKind.ToString());
+        return result;
+    }
+
+    private static int? NullableInt32(JsonElement value, string name, string role)
+    {
+        if (!value.TryGetProperty(name, out var property) || property.ValueKind == JsonValueKind.Null) return null;
+        if (property.ValueKind != JsonValueKind.Number || !property.TryGetInt32(out var result))
+            throw InvalidProperty(role, name, "Number or Null", property.ValueKind.ToString());
+        return result;
+    }
+
+    private static Rc2PublishingControlException InvalidProperty(string role, string property, string expected, string actual) =>
+        Invalid($"Phase20 manifest artifact '{role}' has invalid '{property}': expected {expected}, found {actual}.");
+    private static string PropertyKind(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var property) ? property.ValueKind.ToString() : "Missing";
     private static string RoleName(JsonElement artifact)
     {
         if (!artifact.TryGetProperty("role", out var role)) return "Unknown";
         if (role.ValueKind == JsonValueKind.String) return role.GetString() ?? "Unknown";
-        return role.TryGetInt32(out var number) && Enum.IsDefined(typeof(PublishingPackageRole), number)
+        return role.ValueKind == JsonValueKind.Number && role.TryGetInt32(out var number) && Enum.IsDefined(typeof(PublishingPackageRole), number)
             ? ((PublishingPackageRole)number).ToString() : "Unknown";
     }
 
