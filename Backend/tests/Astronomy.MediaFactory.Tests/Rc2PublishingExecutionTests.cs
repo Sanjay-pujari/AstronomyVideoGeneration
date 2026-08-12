@@ -1,11 +1,20 @@
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+using Microsoft.Extensions.Configuration;
 
 namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Rc2PublishingExecutionTests
 {
+    public static TheoryData<Rc2PublishingTarget, Action<PublishingTargetsOptions>> ImageTargetMappings => new()
+    {
+        { Rc2PublishingTarget.InstagramPost, options => options.InstagramPost = true },
+        { Rc2PublishingTarget.InstagramCarousel, options => options.InstagramCarousel = true },
+        { Rc2PublishingTarget.FacebookPost, options => options.FacebookPost = true },
+        { Rc2PublishingTarget.FacebookCarousel, options => options.FacebookCarousel = true }
+    };
+
     public static TheoryData<Rc2PublishingTarget, Action<PublishingTargetsOptions>> TargetMappings => new()
     {
         { Rc2PublishingTarget.YouTubeLong, options => options.YouTubeLong = true },
@@ -90,6 +99,49 @@ public sealed class Rc2PublishingExecutionTests
             new PublishingOptions { Enabled = true }, new YouTubeOptions { PublishingEnabled = true },
             new PublishingTargetsOptions { YouTubeLong = true }, new MetaPublishingOptions(),
             new PlatformPublishingOptions()));
+    }
+
+    [Theory]
+    [MemberData(nameof(ImageTargetMappings))]
+    public void Image_targets_require_only_global_meta_and_their_target_gate(
+        Rc2PublishingTarget target, Action<PublishingTargetsOptions> enable)
+    {
+        var publishing = new PublishingOptions { Enabled = true };
+        var targets = new PublishingTargetsOptions();
+        enable(targets);
+        var meta = new MetaPublishingOptions
+        {
+            Enabled = true,
+            PublishInstagramReel = false,
+            PublishFacebookReel = false
+        };
+
+        Assert.True(Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(target, publishing,
+            new YouTubeOptions(), targets, meta, new PlatformPublishingOptions
+            {
+                InstagramReelsEnabled = false,
+                FacebookEnabled = false
+            }));
+
+        meta.Enabled = false;
+        Assert.False(Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(target, publishing,
+            new YouTubeOptions(), targets, meta, new PlatformPublishingOptions()));
+    }
+
+    [Theory]
+    [MemberData(nameof(ImageTargetMappings))]
+    public void Publishing_targets_section_binds_each_image_target(
+        Rc2PublishingTarget target, Action<PublishingTargetsOptions> _)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"PublishingTargets:{target}"] = "true"
+        }).Build();
+
+        var options = new PublishingTargetsOptions();
+        configuration.GetSection(PublishingTargetsOptions.SectionName).Bind(options);
+
+        Assert.True(Rc2PublishingExecutionService.IsTargetEnabled(target, options));
     }
 
     [Fact]
