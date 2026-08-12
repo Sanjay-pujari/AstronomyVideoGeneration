@@ -69,22 +69,39 @@ public sealed class Phase20PublishingAuthorityContractTests
     }
 
     [Fact]
-    public async Task Certified_phase19_is_accepted_without_publish_or_review_approval()
+    public async Task Empty_requested_outputs_fail_closed_without_committing_an_authority()
     {
         using var fixture = await Phase19Fixture.Create();
-        var outputs = await fixture.Publish();
-        Assert.Contains(outputs, path => path.EndsWith("publishing-package.json", StringComparison.Ordinal));
-        using var package = JsonDocument.Parse(await File.ReadAllTextAsync(outputs.Single(path => path.EndsWith("publishing-package.json", StringComparison.Ordinal))));
-        Assert.Equal("Pending", package.RootElement.GetProperty("decision").GetProperty("status").GetString());
-        Assert.False(package.RootElement.GetProperty("publishApproved").GetBoolean());
-        Assert.False(package.RootElement.GetProperty("downstreamReady").GetBoolean());
+        var error = await Assert.ThrowsAsync<Phase20AuthorityException>(() => fixture.Publish());
+        Assert.Equal(Phase20ReasonCodes.RequestedOutputsUnresolved, error.ReasonCode);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "20-publishing", "en")));
+    }
+
+    [Fact]
+    public void Nonempty_candidate_with_no_entries_fails_as_empty()
+    {
+        var error = Assert.Throws<Phase20AuthorityException>(() =>
+            Phase20PublishingAuthorityPublisher.ValidateCandidate(["HeroAsset"], []));
+        Assert.Equal(Phase20ReasonCodes.PackageEmpty, error.ReasonCode);
+    }
+
+    [Fact]
+    public void Partial_hero_candidate_fails_role_completeness()
+    {
+        var entry = new PublishingManifestEntry(PublishingPackageRole.HeroLandscape, "png", "en", 11,
+            "authority", "11-hero/hero.png", null, "sha", 1, "image/png");
+        var error = Assert.Throws<Phase20AuthorityException>(() =>
+            Phase20PublishingAuthorityPublisher.ValidateCandidate(["HeroAsset"], [entry]));
+        Assert.Equal(Phase20ReasonCodes.CandidateValidationFailed, error.ReasonCode);
+        Assert.Contains("HeroPortrait", error.Message);
+        Assert.Contains("HeroSquare", error.Message);
     }
 
     [Fact]
     public async Task Phase19_checksum_disagreement_has_precise_failure_and_loaded_inputs()
     {
         using var fixture = await Phase19Fixture.Create(validationChecksum: "different");
-        var error = await Assert.ThrowsAsync<Phase20AuthorityException>(() => fixture.Publish());
+        var error = await Assert.ThrowsAsync<Phase20AuthorityException>(() => fixture.Publish(["ShortVideo"]));
         Assert.Equal(Phase20ReasonCodes.UpstreamPhase19Invalid, error.ReasonCode);
         Assert.Contains("validation authority checksum mismatch", error.Message);
         Assert.Equal(4, error.LoadedAuthorityArtifacts.Count);
@@ -94,13 +111,13 @@ public sealed class Phase20PublishingAuthorityContractTests
     public async Task Missing_phase19_validation_does_not_fall_back_to_legacy_evidence()
     {
         using var fixture = await Phase19Fixture.Create(includeValidation: false);
-        var error = await Assert.ThrowsAsync<Phase20AuthorityException>(() => fixture.Publish());
+        var error = await Assert.ThrowsAsync<Phase20AuthorityException>(() => fixture.Publish(["ShortVideo"]));
         Assert.Contains("evidence file missing: phase-19-validation.json", error.Message);
         Assert.Equal(3, error.LoadedAuthorityArtifacts.Count);
     }
 
     [Fact]
-    public async Task Phase20_overwrite_leaves_all_phase19_evidence_byte_identical()
+    public async Task Rejected_empty_candidate_leaves_all_phase19_evidence_byte_identical()
     {
         using var fixture = await Phase19Fixture.Create();
         var before = fixture.Evidence.ToDictionary(path => path, Sha256);
@@ -113,6 +130,7 @@ public sealed class Phase20PublishingAuthorityContractTests
     {
         private const string Checksum = "certified-phase19-authority";
         private readonly string root;
+        public string Root => root;
         public IReadOnlyList<string> Evidence { get; }
         private Phase19Fixture(string root, IReadOnlyList<string> evidence) { this.root = root; Evidence = evidence; }
 
@@ -141,7 +159,7 @@ public sealed class Phase20PublishingAuthorityContractTests
             return new(root, new[] { manifest, diagnostics, report, validation }.Where(File.Exists).ToArray());
         }
 
-        public Task<IReadOnlyList<string>> Publish() => Phase20PublishingAuthorityPublisher.ExecuteAsync(root, Guid.NewGuid(), "en", [], true,
+        public Task<IReadOnlyList<string>> Publish(IReadOnlyList<string>? requested = null) => Phase20PublishingAuthorityPublisher.ExecuteAsync(root, Guid.NewGuid(), "en", requested ?? [], true,
             false, new PublishingOptions { ManualReviewRequired = true }, NullLogger.Instance, CancellationToken.None);
         public void Dispose() { if (Directory.Exists(root)) Directory.Delete(root, true); }
         private static Task Write(string path, object value) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value));

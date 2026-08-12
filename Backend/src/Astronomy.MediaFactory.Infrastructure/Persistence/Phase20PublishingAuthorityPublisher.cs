@@ -20,6 +20,9 @@ internal static class Phase20PublishingAuthorityPublisher
     {
         var requested = requestedOutputs.Where(x => x is "ShortVideo" or "LongVideo" or "Thumbnail" or "HeroAsset" or "Gallery")
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        if (requested.Length == 0)
+            throw new Phase20AuthorityException(Phase20ReasonCodes.RequestedOutputsUnresolved,
+                "The governed production requested-output intent is empty.");
         var p19Root = Path.Combine(outputRoot, "19-video-qa", language);
         var p19Paths = new[] { Path.Combine(p19Root, "phase19-manifest.json"), Path.Combine(p19Root, "phase19-authority-diagnostics.json"),
             Path.Combine(p19Root, "phase19-publication-report.json"), Path.Combine(outputRoot, "validation", "phase-19-validation.json") };
@@ -85,6 +88,7 @@ internal static class Phase20PublishingAuthorityPublisher
         if (requested.Contains("Gallery")) await AddSupporting(outputRoot, language, 13, "13-gallery", "gallery-manifest.json", "phase13", supporting, entries, policy.PortableExportEnabled, ct);
 
         entries = entries.OrderBy(x => x.Role).ThenBy(x => x.Sequence).ThenBy(x => x.SourceRelativePath, StringComparer.Ordinal).ToList();
+        ValidateCandidate(requested, entries);
         var decision = legacyPublishApproved
             ? new PublishingDecision($"legacy-{planId:D}", PublishingDecisionStatus.Approved, policy.PublishingPolicyVersion, null, null, "LegacyRequestCompatibility")
             : new PublishingDecision($"pending-{planId:D}", PublishingDecisionStatus.Pending, policy.PublishingPolicyVersion, null, null, "PublishingPolicy");
@@ -146,6 +150,29 @@ internal static class Phase20PublishingAuthorityPublisher
             DeleteContainerIfEmpty(Path.Combine(outputRoot, "20-publishing", ".staging"));
             DeleteContainerIfEmpty(Path.Combine(outputRoot, "20-publishing", ".backup"));
         }
+    }
+
+    internal static void ValidateCandidate(IReadOnlyCollection<string> requested,
+        IReadOnlyCollection<PublishingManifestEntry> entries)
+    {
+        if (entries.Count == 0)
+            throw new Phase20AuthorityException(Phase20ReasonCodes.PackageEmpty,
+                "The publishing manifest candidate contains no artifacts.");
+
+        bool Has(PublishingPackageRole role) => entries.Any(x => x.Role == role);
+        void Require(string category, params PublishingPackageRole[] roles)
+        {
+            var missing = roles.Where(role => !Has(role)).ToArray();
+            if (missing.Length > 0)
+                throw new Phase20AuthorityException(Phase20ReasonCodes.CandidateValidationFailed,
+                    $"Requested output '{category}' is incomplete; missing governed role(s): {string.Join(", ", missing)}.");
+        }
+
+        if (requested.Contains("ShortVideo")) Require("ShortVideo", PublishingPackageRole.ShortVideo, PublishingPackageRole.ShortCaptionSrt);
+        if (requested.Contains("LongVideo")) Require("LongVideo", PublishingPackageRole.LongVideo, PublishingPackageRole.LongCaptionSrt);
+        if (requested.Contains("Thumbnail")) Require("Thumbnail", PublishingPackageRole.ThumbnailLandscape, PublishingPackageRole.ThumbnailPortrait, PublishingPackageRole.ThumbnailSquare);
+        if (requested.Contains("HeroAsset")) Require("HeroAsset", PublishingPackageRole.HeroLandscape, PublishingPackageRole.HeroPortrait, PublishingPackageRole.HeroSquare);
+        if (requested.Contains("Gallery")) Require("Gallery", PublishingPackageRole.GalleryImage);
     }
 
     private static IEnumerable<string> SupportingPaths(string root, int phase, string folder, string manifest, string prefix) =>

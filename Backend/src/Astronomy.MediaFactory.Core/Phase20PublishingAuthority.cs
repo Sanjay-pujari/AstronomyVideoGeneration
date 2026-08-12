@@ -17,6 +17,8 @@ public sealed record PublishingManifestEntry(PublishingPackageRole Role, string 
 
 public static class Phase20ReasonCodes
 {
+    public const string RequestedOutputsUnresolved = "P20_REQUESTED_OUTPUTS_UNRESOLVED";
+    public const string PackageEmpty = "P20_PACKAGE_EMPTY";
     public const string UpstreamPhase19Invalid = "P20_UPSTREAM_PHASE19_INVALID";
     public const string SupportingAuthorityInvalid = "P20_SUPPORTING_AUTHORITY_INVALID";
     public const string GatePending = "P20_PUBLISH_GATE_PENDING";
