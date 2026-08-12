@@ -39,10 +39,9 @@ internal static class YouTubeTokenRefreshDiagnostics
     public static void Log(ILogger logger, YouTubeTokenRefreshError error)
     {
         logger.LogWarning(
-            "YouTube OAuth token refresh failed with status {StatusCode}. GoogleError={GoogleError}; GoogleErrorDescription={GoogleErrorDescription}",
+            "YouTube OAuth token refresh failed with status {StatusCode}. GoogleError={GoogleError}",
             error.StatusCode,
-            string.IsNullOrWhiteSpace(error.GoogleError) ? "<missing>" : error.GoogleError,
-            string.IsNullOrWhiteSpace(error.GoogleErrorDescription) ? "<missing>" : error.GoogleErrorDescription);
+            string.IsNullOrWhiteSpace(error.GoogleError) ? "<missing>" : error.GoogleError);
     }
 
     public static string? ToFriendlyMessage(HttpStatusCode statusCode, string? googleError)

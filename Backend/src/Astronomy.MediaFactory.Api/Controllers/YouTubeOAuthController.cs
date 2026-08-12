@@ -1,6 +1,7 @@
 using System.Net.Mime;
 using Astronomy.MediaFactory.Core;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Cryptography;
 
 namespace Astronomy.MediaFactory.Api.Controllers;
 
@@ -9,6 +10,7 @@ namespace Astronomy.MediaFactory.Api.Controllers;
 [Route("api/youtubeoauth")]
 public sealed class YouTubeOAuthController : ControllerBase
 {
+    private const string StateCookie = "youtube_oauth_state";
     private readonly IYouTubeOAuthService _youTubeOAuthService;
 
     public YouTubeOAuthController(IYouTubeOAuthService youTubeOAuthService)
@@ -24,7 +26,13 @@ public sealed class YouTubeOAuthController : ControllerBase
     {
         try
         {
-            var authorizationUrl = _youTubeOAuthService.BuildAuthorizationUrl();
+            var state = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+            Response.Cookies.Append(StateCookie, state, new CookieOptions
+            {
+                HttpOnly = true, Secure = Request.IsHttps, SameSite = SameSiteMode.Lax,
+                MaxAge = TimeSpan.FromMinutes(10), IsEssential = true
+            });
+            var authorizationUrl = AppendState(_youTubeOAuthService.BuildAuthorizationUrl(), state);
             if (redirect)
             {
                 return Redirect(authorizationUrl);
@@ -42,7 +50,7 @@ public sealed class YouTubeOAuthController : ControllerBase
     }
 
     [HttpGet("callback")]
-    public async Task<IActionResult> Callback([FromQuery] string? code, [FromQuery] string? error, CancellationToken cancellationToken)
+    public async Task<IActionResult> Callback([FromQuery] string? code, [FromQuery] string? error, [FromQuery] string? state, CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(error))
         {
@@ -53,6 +61,9 @@ public sealed class YouTubeOAuthController : ControllerBase
         {
             return BadRequest(new { success = false, message = "OAuth authorization code is required." });
         }
+        if (!Request.Cookies.TryGetValue(StateCookie, out var expectedState) || !StateEquals(expectedState, state))
+            return BadRequest(new { success = false, message = "OAuth state validation failed." });
+        Response.Cookies.Delete(StateCookie);
 
         try
         {
@@ -68,4 +79,8 @@ public sealed class YouTubeOAuthController : ControllerBase
             return BadRequest(new { success = false, message = ex.Message });
         }
     }
+
+    private static string AppendState(string url, string state) => $"{url}{(url.Contains('?') ? '&' : '?')}state={Uri.EscapeDataString(state)}";
+    private static bool StateEquals(string expected, string? actual) => actual is not null &&
+        CryptographicOperations.FixedTimeEquals(System.Text.Encoding.UTF8.GetBytes(expected), System.Text.Encoding.UTF8.GetBytes(actual));
 }

@@ -15,4 +15,6 @@ public sealed class TokenHealthResult
     public string AccountId { get; set; } = string.Empty;
     public string Warning { get; set; } = string.Empty;
     public string Error { get; set; } = string.Empty;
+    public string Status { get; set; } = "Unknown";
+    public string? OAuthStartPath { get; set; }
 }

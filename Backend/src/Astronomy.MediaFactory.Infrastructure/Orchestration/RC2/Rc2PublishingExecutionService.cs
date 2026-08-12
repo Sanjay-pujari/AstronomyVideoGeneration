@@ -102,7 +102,10 @@ public sealed class Rc2PublishingExecutionService(
         var health = target is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.YouTubeShort
             ? await tokenHealth.CheckYouTubeAsync(ct) : await tokenHealth.CheckMetaAsync(ct);
         if (!health.IsConfigured || !health.IsValid)
-            return Blocked(target, "RC2_PUBLISH_CREDENTIALS_INVALID", NonSecretHealthMessage(health), artifacts.Count);
+            return string.Equals(health.Status, "ReauthorizationRequired", StringComparison.Ordinal)
+                ? Blocked(target, "RC2_PUBLISH_REAUTHORIZATION_REQUIRED",
+                    $"Provider={health.Platform}; OAuthStartPath={health.OAuthStartPath}", artifacts.Count)
+                : Blocked(target, "RC2_PUBLISH_CREDENTIALS_INVALID", NonSecretHealthMessage(health), artifacts.Count);
         if (dryRun) return new(target, Rc2PublicationState.NotPublished, null, null, false, existing?.AttemptCount ?? 0,
             null, null, IsCarousel(target) ? artifacts.Count : null, true);
 
