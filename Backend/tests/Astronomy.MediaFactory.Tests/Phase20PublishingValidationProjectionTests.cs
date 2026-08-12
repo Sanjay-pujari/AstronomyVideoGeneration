@@ -2,6 +2,7 @@ using System.Text.Json;
 using Astronomy.MediaFactory.Api.Controllers;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -38,6 +39,49 @@ public sealed class Phase20PublishingValidationProjectionTests : IDisposable
         Assert.Equal("Succeeded", authority.Status);
         Assert.True(authority.TechnicalQaApproved);
         Assert.True(authority.PublicationPackageReady);
+    }
+
+    [Fact]
+    public async Task Package_requested_outputs_come_from_committed_production_request()
+    {
+        var planId = Guid.NewGuid();
+        var phase1 = Path.Combine(root, "01-plan");
+        Directory.CreateDirectory(phase1);
+        var requestedOutputs = new[] { "ShortVideo", "LongVideo", "Thumbnail", "HeroAsset", "Gallery" };
+        var productionRequest = new Phase1ProductionRequest("test", Guid.NewGuid(), planId, "en", "en", [],
+            requestedOutputs, 1, 20, 1, 20, false, true, false, "Normal", "");
+        productionRequest = productionRequest with
+        {
+            RequestChecksum = Phase1CanonicalJson.Checksum(productionRequest, nameof(Phase1ProductionRequest.RequestChecksum))
+        };
+        await File.WriteAllTextAsync(Path.Combine(phase1, "production-request.json"),
+            Phase1CanonicalJson.Serialize(productionRequest));
+
+        var outputs = await Rc2Phase20ExecutionService.ResolveGovernedRequestedOutputsAsync(root,
+            Path.Combine(root, "20-publishing", "en"), planId,
+            ["ShortVideo", "LongVideo", "Thumbnail"], CancellationToken.None);
+
+        Assert.Equal(["ShortVideo", "LongVideo", "Thumbnail", "HeroAsset", "Gallery"], outputs);
+    }
+
+    [Fact]
+    public void Social_targets_require_actual_hero_and_gallery_roles()
+    {
+        var videoOnly = new Dictionary<string, int> { ["ShortVideo"] = 1, ["LongVideo"] = 1 };
+        var videoTargets = Phase20PublishingAuthorityReader.PackageableTargets(videoOnly);
+        Assert.DoesNotContain(Rc2PublishingTarget.InstagramPost, videoTargets);
+        Assert.DoesNotContain(Rc2PublishingTarget.FacebookPost, videoTargets);
+        Assert.DoesNotContain(Rc2PublishingTarget.InstagramCarousel, videoTargets);
+        Assert.DoesNotContain(Rc2PublishingTarget.FacebookCarousel, videoTargets);
+
+        var complete = new Dictionary<string, int>(videoOnly)
+        {
+            ["HeroPortrait"] = 1,
+            ["HeroLandscape"] = 1,
+            ["GalleryImage"] = 6
+        };
+        var completeTargets = Phase20PublishingAuthorityReader.PackageableTargets(complete);
+        Assert.Equal(9, completeTargets.Count);
     }
 
     [Fact]

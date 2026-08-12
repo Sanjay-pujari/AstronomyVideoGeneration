@@ -52,6 +52,8 @@ public interface IRc2Phase20ExecutionService
 public sealed class Rc2Phase20ExecutionService(MediaFactoryDbContext db, IContentPlanProductionRequestMapper mapper,
     IProductionPipelineExecutionService pipeline) : IRc2Phase20ExecutionService
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     public async Task<ProductionPipelineExecutionResult> ExecuteAsync(Rc2PublishingPlan publishingPlan,
         bool overwriteExisting, CancellationToken cancellationToken)
     {
@@ -61,6 +63,10 @@ public sealed class Rc2Phase20ExecutionService(MediaFactoryDbContext db, IConten
         var intelligence = plan.AstronomyEventIntelligence
             ?? throw new Rc2PublishingControlException("RC2_PUBLISH_PLAN_NOT_FOUND", "The plan has no production intelligence.");
         var request = mapper.Map(plan, intelligence);
+        var requestedOutputs = await ResolveGovernedRequestedOutputsAsync(
+            publishingPlan.PlanOutputRoot, publishingPlan.Phase20Root, publishingPlan.PlanId,
+            request.RequestedOutputs, cancellationToken);
+        request = request with { RequestedOutputs = requestedOutputs };
 
         return await pipeline.ExecuteAsync(new ProductionPipelineRequest(request, intelligence.Id,
             publishingPlan.PlanOutputRoot, DryRun: false, OverwriteExisting: overwriteExisting,
@@ -68,6 +74,49 @@ public sealed class Rc2Phase20ExecutionService(MediaFactoryDbContext db, IConten
             ExecutionMode: overwriteExisting ? ContentPlanExecutionMode.RerunPhase : ContentPlanExecutionMode.Normal,
             RequestedStartPhaseNo: 20, RequestedEndPhaseNo: 20,
             DependencyExpansionMode: DependencyExpansionMode.None), cancellationToken);
+    }
+
+    internal static async Task<IReadOnlyList<string>> ResolveGovernedRequestedOutputsAsync(string outputRoot,
+        string phase20Root, Guid planId, IReadOnlyList<string> planRequestedOutputs, CancellationToken cancellationToken)
+    {
+        // Phase 1 is the committed request identity for the production execution. In particular,
+        // it preserves a manual output override that need not alter the semantic plan itself.
+        var productionRequestPath = Path.Combine(outputRoot, "01-plan", "production-request.json");
+        if (File.Exists(productionRequestPath))
+        {
+            await using var stream = File.OpenRead(productionRequestPath);
+            var productionRequest = await JsonSerializer.DeserializeAsync<Phase1ProductionRequest>(stream, JsonOptions,
+                cancellationToken) ?? throw new Rc2PublishingControlException("RC2_PUBLISH_PRODUCTION_REQUEST_INVALID",
+                "The committed Phase 1 production request could not be read.");
+            if (productionRequest.PlanId != planId)
+                throw new Rc2PublishingControlException("RC2_PUBLISH_PRODUCTION_REQUEST_INVALID",
+                    "The committed Phase 1 production request does not belong to the requested plan.");
+            if (Phase1CanonicalJson.Checksum(productionRequest, nameof(Phase1ProductionRequest.RequestChecksum)) !=
+                productionRequest.RequestChecksum)
+                throw new Rc2PublishingControlException("RC2_PUBLISH_PRODUCTION_REQUEST_INVALID",
+                    "The committed Phase 1 production request checksum is invalid.");
+            if (productionRequest.RequestedOutputs.Count > 0) return productionRequest.RequestedOutputs;
+            throw new Rc2PublishingControlException("RC2_PUBLISH_PRODUCTION_REQUEST_INVALID",
+                "The committed Phase 1 production request has no requested outputs.");
+        }
+
+        if (planRequestedOutputs.Count > 0) return planRequestedOutputs;
+
+        // Compatibility fallback for an older run whose Phase 1 request predates requestedOutputs.
+        var manifestPath = Path.Combine(phase20Root, "publishing-manifest.json");
+        if (File.Exists(manifestPath))
+        {
+            await using var stream = File.OpenRead(manifestPath);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (document.RootElement.TryGetProperty("requestedOutputs", out var outputs) && outputs.ValueKind == JsonValueKind.Array)
+            {
+                var resolved = outputs.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String)
+                    .Select(x => x.GetString()).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).ToArray();
+                if (resolved.Length > 0) return resolved;
+            }
+        }
+        throw new Rc2PublishingControlException("RC2_PUBLISH_REQUESTED_OUTPUTS_NOT_AVAILABLE",
+            "No governed requested-output identity is available for the production run.");
     }
 }
 
@@ -101,9 +150,7 @@ public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthori
                 !Bool(package, "technicalQaApproved") || !Bool(package, "publicationPackageReady")) throw Invalid("Committed Phase 20 governance is invalid.");
             var artifacts = roots[0].GetProperty("artifacts").EnumerateArray().ToArray();
             var roles = artifacts.GroupBy(RoleName).ToDictionary(x => x.Key, x => x.Count(), StringComparer.Ordinal);
-            var targets = new List<Rc2PublishingTarget>();
-            if (package.TryGetProperty("platformAssetMap", out var map) && map.ValueKind == JsonValueKind.Object)
-                foreach (var property in map.EnumerateObject()) if (Enum.TryParse<Rc2PublishingTarget>(property.Name, true, out var target)) targets.Add(target);
+            var targets = PackageableTargets(roles);
             return new(packageId, checksum, Text(report, "status"), true, true, artifacts.Length, roles, targets.Distinct().ToArray());
         }
         catch (Rc2PublishingControlException) { throw; }
@@ -120,6 +167,20 @@ public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthori
         if (role.ValueKind == JsonValueKind.String) return role.GetString() ?? "Unknown";
         return role.TryGetInt32(out var number) && Enum.IsDefined(typeof(PublishingPackageRole), number)
             ? ((PublishingPackageRole)number).ToString() : "Unknown";
+    }
+
+    internal static IReadOnlyList<Rc2PublishingTarget> PackageableTargets(IReadOnlyDictionary<string, int> roles)
+    {
+        bool Has(string role) => roles.TryGetValue(role, out var count) && count > 0;
+        return Enum.GetValues<Rc2PublishingTarget>().Where(target => target switch
+        {
+            Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.FacebookLong => Has("LongVideo"),
+            Rc2PublishingTarget.YouTubeShort or Rc2PublishingTarget.FacebookReel or Rc2PublishingTarget.InstagramReel => Has("ShortVideo"),
+            Rc2PublishingTarget.InstagramPost => Has("HeroPortrait") || Has("HeroSquare"),
+            Rc2PublishingTarget.FacebookPost => Has("HeroLandscape") || Has("HeroSquare"),
+            Rc2PublishingTarget.InstagramCarousel or Rc2PublishingTarget.FacebookCarousel => Has("GalleryImage"),
+            _ => false
+        }).ToArray();
     }
 }
 
@@ -167,10 +228,15 @@ public sealed class Rc2PublishingControlService(IRc2PublishingPlanResolver resol
         var approval = authority is null ? Rc2PublishingApprovalStatus.NotAvailable : await ApprovalAsync(planId, authority, ct);
         var approved = approval == Rc2PublishingApprovalStatus.Approved;
         var phase19 = await ReadPhase19(plan, ct);
-        var targets = authority is null
-            ? Enum.GetValues<Rc2PublishingTarget>().ToDictionary(x => x,
-                _ => new Rc2TargetStatus(false, false, false, "NotChecked", Rc2PublicationState.Blocked, "BlockedPackageMissing"))
-            : authority.Targets.ToDictionary(x => x, x => new Rc2TargetStatus(true, false, false, "NotChecked", approved ? Rc2PublicationState.NotPublished : Rc2PublicationState.Blocked, approved ? null : "BlockedApprovalRequired"));
+        var availableTargets = authority?.Targets.ToHashSet() ?? [];
+        var targets = Enum.GetValues<Rc2PublishingTarget>().ToDictionary(x => x, x =>
+        {
+            var packageAvailable = availableTargets.Contains(x);
+            var blockReason = !packageAvailable ? authority is null ? "BlockedPackageMissing" : "BlockedRequiredRoleMissing"
+                : approved ? null : "BlockedApprovalRequired";
+            return new Rc2TargetStatus(packageAvailable, false, false, "NotChecked",
+                packageAvailable && approved ? Rc2PublicationState.NotPublished : Rc2PublicationState.Blocked, blockReason);
+        });
         logger.LogInformation("RC2_PUBLISH_STATUS_READ PlanId={PlanId} Language={Language} ApprovalStatus={ApprovalStatus}", planId, plan.Language, approval);
         return new(planId, plan.Title, plan.Language, plan.RegionId, phase19,
             new(authority is not null, authority?.Status ?? "NotAvailable", authority?.PublishingPackageId, authority?.AuthorityChecksum,
