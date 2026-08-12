@@ -42,6 +42,62 @@ public sealed class Phase20PublishingValidationProjectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Reader_accepts_nullable_sequence_for_non_gallery_artifacts_and_orders_gallery()
+    {
+        var roles = new[] { "ShortVideo", "LongVideo", "ShortCaptionSrt", "LongCaptionSrt",
+            "ThumbnailLandscape", "ThumbnailPortrait", "ThumbnailSquare", "HeroLandscape", "HeroPortrait", "HeroSquare" };
+        var artifacts = roles.Select((role, index) => Artifact(role, index + 1, null))
+            .Concat(Enumerable.Range(1, 6).Select(sequence => Artifact("GalleryImage", 10 + sequence, sequence))).ToArray();
+
+        var authority = await new Phase20PublishingAuthorityReader().ReadAsync(WriteEvidence(ChecksumA, artifacts), CancellationToken.None);
+
+        Assert.NotNull(authority);
+        Assert.Equal(16, authority.ArtifactCount);
+        Assert.All(authority.Artifacts.Where(x => x.Role != "GalleryImage"), x => Assert.Null(x.Sequence));
+        var carousel = Rc2PublishingExecutionService.ResolveArtifacts(authority, Rc2PublishingTarget.InstagramCarousel);
+        Assert.Equal(Enumerable.Range(1, 6).Select(x => (int?)x), carousel.Select(x => x.Sequence));
+        Assert.Equal(["LongVideo", "ThumbnailLandscape", "LongCaptionSrt"],
+            Rc2PublishingExecutionService.ResolveArtifacts(authority, Rc2PublishingTarget.YouTubeLong).Select(x => x.Role));
+        Assert.Equal(["HeroPortrait"],
+            Rc2PublishingExecutionService.ResolveArtifacts(authority, Rc2PublishingTarget.InstagramPost).Select(x => x.Role));
+    }
+
+    [Fact]
+    public async Task Reader_rejects_null_gallery_sequence_with_governed_diagnostic()
+    {
+        var error = await Assert.ThrowsAsync<Rc2PublishingControlException>(() => new Phase20PublishingAuthorityReader()
+            .ReadAsync(WriteEvidence(ChecksumA, [Artifact("GalleryImage", 1, null)]), CancellationToken.None));
+
+        Assert.Contains("artifact 'GalleryImage'", error.Message);
+        Assert.Contains("'sequence': expected a positive Number, found Null", error.Message);
+    }
+
+    [Fact]
+    public async Task Reader_rejects_null_required_byte_length_with_governed_diagnostic()
+    {
+        var artifact = Artifact("HeroPortrait", 1, null);
+        artifact["byteLength"] = null;
+
+        var error = await Assert.ThrowsAsync<Rc2PublishingControlException>(() => new Phase20PublishingAuthorityReader()
+            .ReadAsync(WriteEvidence(ChecksumA, [artifact]), CancellationToken.None));
+
+        Assert.Contains("artifact 'HeroPortrait'", error.Message);
+        Assert.Contains("'byteLength': expected Number, found Null", error.Message);
+    }
+
+    [Fact]
+    public async Task Reader_rejects_string_sequence_instead_of_coercing_it()
+    {
+        var artifact = Artifact("HeroPortrait", 1, null);
+        artifact["sequence"] = "1";
+
+        var error = await Assert.ThrowsAsync<Rc2PublishingControlException>(() => new Phase20PublishingAuthorityReader()
+            .ReadAsync(WriteEvidence(ChecksumA, [artifact]), CancellationToken.None));
+
+        Assert.Contains("'sequence': expected Number or Null, found String", error.Message);
+    }
+
+    [Fact]
     public async Task Package_requested_outputs_come_from_committed_production_request()
     {
         var planId = Guid.NewGuid();
@@ -224,13 +280,14 @@ public sealed class Phase20PublishingValidationProjectionTests : IDisposable
         Assert.Contains("phase.No is >= 5 and <= 19", source);
     }
 
-    private Rc2PublishingPlan WriteEvidence(string? validationChecksum)
+    private Rc2PublishingPlan WriteEvidence(string? validationChecksum, object[]? artifacts = null)
     {
         var phase20 = Path.Combine(root, "20-publishing", "en");
         var validation = Path.Combine(root, "validation", "phase-20-validation.json");
         Directory.CreateDirectory(phase20);
         Directory.CreateDirectory(Path.GetDirectoryName(validation)!);
-        Write(Path.Combine(phase20, "publishing-manifest.json"), ChecksumA, manifest: true);
+        Write(Path.Combine(phase20, "publishing-manifest.json"), ChecksumA, manifest: true,
+            artifacts: artifacts ?? [Artifact("LongVideo", 1, null)]);
         Write(Path.Combine(phase20, "publishing-package.json"), ChecksumA, package: true);
         Write(Path.Combine(phase20, "phase20-authority-diagnostics.json"), ChecksumA, diagnostics: true);
         Write(Path.Combine(phase20, "phase20-publication-report.json"), ChecksumA, report: true);
@@ -238,15 +295,24 @@ public sealed class Phase20PublishingValidationProjectionTests : IDisposable
         return new(Guid.NewGuid(), "Orion", "en", "global", root, Path.Combine(root, "19-video-qa", "en"), phase20, validation);
     }
 
+    private static Dictionary<string, object?> Artifact(string role, int suffix, int? sequence) => new()
+    {
+        ["role"] = role,
+        ["sourceRelativePath"] = $"artifact-{suffix}.bin",
+        ["byteLength"] = 1L,
+        ["sha256"] = new string('a', 64),
+        ["sequence"] = sequence
+    };
+
     private static void Write(string path, string? checksum, bool manifest = false, bool package = false,
-        bool diagnostics = false, bool report = false, bool validation = false)
+        bool diagnostics = false, bool report = false, bool validation = false, object[]? artifacts = null)
     {
         var value = new Dictionary<string, object?>
         {
             ["publishingPackageId"] = PackageId,
             ["authorityChecksum"] = checksum
         };
-        if (manifest) value["artifacts"] = Array.Empty<object>();
+        if (manifest) value["artifacts"] = artifacts ?? Array.Empty<object>();
         if (package)
         {
             value["technicalQaApproved"] = true;

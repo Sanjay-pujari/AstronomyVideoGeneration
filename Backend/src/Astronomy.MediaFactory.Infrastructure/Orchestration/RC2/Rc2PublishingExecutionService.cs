@@ -171,7 +171,8 @@ public sealed class Rc2PublishingExecutionService(
             Rc2PublishingTarget.InstagramPost => [authority.Roles.ContainsKey("HeroPortrait") ? "HeroPortrait" : "HeroSquare"],
             Rc2PublishingTarget.FacebookPost => [authority.Roles.ContainsKey("HeroLandscape") ? "HeroLandscape" : "HeroSquare"],
             _ => ["GalleryImage"] };
-        var resolved = roles.SelectMany(role => authority.Artifacts.Where(x => x.Role == role).OrderBy(x => x.Order)).ToArray();
+        var resolved = roles.SelectMany(role => authority.Artifacts.Where(x => x.Role == role)
+            .OrderBy(x => x.Sequence ?? int.MaxValue).ThenBy(x => x.Path, StringComparer.Ordinal)).ToArray();
         if (roles.Any(role => resolved.All(x => x.Role != role)))
             throw new Rc2PublishingControlException("RC2_PUBLISH_REQUIRED_ROLE_MISSING", $"{target} is missing a required governed Phase 20 role.");
         return resolved;
