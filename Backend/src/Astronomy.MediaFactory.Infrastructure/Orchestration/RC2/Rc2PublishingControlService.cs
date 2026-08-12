@@ -38,13 +38,46 @@ public interface IPhase20PublishingAuthorityReader
     Task<Phase20PublishingAuthoritySnapshot?> ReadAsync(Rc2PublishingPlan plan, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// The certified execution boundary used by the publishing command.  Unlike the
+/// content-plan orchestrator this boundary does not recover a run or expand its
+/// historical prerequisites: Phase 20 owns validation of its committed inputs.
+/// </summary>
+public interface IRc2Phase20ExecutionService
+{
+    Task<ProductionPipelineExecutionResult> ExecuteAsync(Rc2PublishingPlan publishingPlan, bool overwriteExisting,
+        CancellationToken cancellationToken);
+}
+
+public sealed class Rc2Phase20ExecutionService(MediaFactoryDbContext db, IContentPlanProductionRequestMapper mapper,
+    IProductionPipelineExecutionService pipeline) : IRc2Phase20ExecutionService
+{
+    public async Task<ProductionPipelineExecutionResult> ExecuteAsync(Rc2PublishingPlan publishingPlan,
+        bool overwriteExisting, CancellationToken cancellationToken)
+    {
+        var plan = await db.ContentGenerationPlans
+            .Include(x => x.AstronomyEventIntelligence)!.ThenInclude(x => x!.Objects)
+            .SingleAsync(x => x.Id == publishingPlan.PlanId, cancellationToken);
+        var intelligence = plan.AstronomyEventIntelligence
+            ?? throw new Rc2PublishingControlException("RC2_PUBLISH_PLAN_NOT_FOUND", "The plan has no production intelligence.");
+        var request = mapper.Map(plan, intelligence);
+
+        return await pipeline.ExecuteAsync(new ProductionPipelineRequest(request, intelligence.Id,
+            publishingPlan.PlanOutputRoot, DryRun: false, OverwriteExisting: overwriteExisting,
+            StartPhaseNo: 20, EndPhaseNo: 20,
+            ExecutionMode: overwriteExisting ? ContentPlanExecutionMode.RerunPhase : ContentPlanExecutionMode.Normal,
+            RequestedStartPhaseNo: 20, RequestedEndPhaseNo: 20,
+            DependencyExpansionMode: DependencyExpansionMode.None), cancellationToken);
+    }
+}
+
 public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthorityReader
 {
     public async Task<Phase20PublishingAuthoritySnapshot?> ReadAsync(Rc2PublishingPlan plan, CancellationToken cancellationToken)
     {
         var paths = new[] { "publishing-manifest.json", "publishing-package.json", "phase20-authority-diagnostics.json", "phase20-publication-report.json" }
             .Select(x => Path.Combine(plan.Phase20Root, x)).Append(plan.Phase20ValidationPath).ToArray();
-        if (!File.Exists(paths[0])) return null;
+        if (paths.All(path => !File.Exists(path))) return null;
         if (paths.Any(x => !File.Exists(x))) throw Invalid("Canonical Phase 20 evidence is incomplete.");
         var documents = new List<JsonDocument>();
         try
@@ -91,15 +124,13 @@ public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthori
 }
 
 public sealed class Rc2PublishingControlService(IRc2PublishingPlanResolver resolver, IPhase20PublishingAuthorityReader reader,
-    IContentPlanProductionExecutionService production, MediaFactoryDbContext db, ILogger<Rc2PublishingControlService> logger) : IRc2PublishingControlService
+    IRc2Phase20ExecutionService phase20, MediaFactoryDbContext db, ILogger<Rc2PublishingControlService> logger) : IRc2PublishingControlService
 {
     public async Task<Rc2PublishingPackageResponse> CreateOrRefreshPackageAsync(Guid planId, bool overwriteExisting, CancellationToken ct)
     {
         var plan = await resolver.ResolveAsync(planId, ct);
         logger.LogInformation("RC2_PUBLISH_PACKAGE_REQUESTED PlanId={PlanId} Language={Language}", planId, plan.Language);
-        var result = await production.ExecuteContentPlanWithProductionPipelineAsync(new(planId, false, overwriteExisting,
-            StartPhaseNo: 20, EndPhaseNo: 20, ExecutionMode: overwriteExisting ? ContentPlanExecutionMode.RerunPhase : ContentPlanExecutionMode.Normal,
-            AllowCompletedPlanRerun: true, DependencyExpansionMode: DependencyExpansionMode.ReadOnly), ct);
+        var result = await phase20.ExecuteAsync(plan, overwriteExisting, ct);
         if (!result.Success) throw new Rc2PublishingControlException("RC2_PUBLISH_PACKAGE_GOVERNANCE_FAILED", string.Join("; ", result.Errors));
         plan = await resolver.ResolveAsync(planId, ct);
         var authority = await reader.ReadAsync(plan, ct) ?? throw new Rc2PublishingControlException("RC2_PUBLISH_PHASE20_INVALID", "Phase 20 did not commit a package.");
@@ -136,7 +167,10 @@ public sealed class Rc2PublishingControlService(IRc2PublishingPlanResolver resol
         var approval = authority is null ? Rc2PublishingApprovalStatus.NotAvailable : await ApprovalAsync(planId, authority, ct);
         var approved = approval == Rc2PublishingApprovalStatus.Approved;
         var phase19 = await ReadPhase19(plan, ct);
-        var targets = (authority?.Targets ?? []).ToDictionary(x => x, x => new Rc2TargetStatus(true, false, false, "NotChecked", approved ? Rc2PublicationState.NotPublished : Rc2PublicationState.Blocked, approved ? null : "BlockedApprovalRequired"));
+        var targets = authority is null
+            ? Enum.GetValues<Rc2PublishingTarget>().ToDictionary(x => x,
+                _ => new Rc2TargetStatus(false, false, false, "NotChecked", Rc2PublicationState.Blocked, "BlockedPackageMissing"))
+            : authority.Targets.ToDictionary(x => x, x => new Rc2TargetStatus(true, false, false, "NotChecked", approved ? Rc2PublicationState.NotPublished : Rc2PublicationState.Blocked, approved ? null : "BlockedApprovalRequired"));
         logger.LogInformation("RC2_PUBLISH_STATUS_READ PlanId={PlanId} Language={Language} ApprovalStatus={ApprovalStatus}", planId, plan.Language, approval);
         return new(planId, plan.Title, plan.Language, plan.RegionId, phase19,
             new(authority is not null, authority?.Status ?? "NotAvailable", authority?.PublishingPackageId, authority?.AuthorityChecksum,
