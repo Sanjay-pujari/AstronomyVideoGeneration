@@ -65,6 +65,73 @@ public sealed class Phase20PublishingValidationProjectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Current_event_lock_lowercase_outputs_win_over_empty_plan()
+    {
+        var planId = Guid.NewGuid();
+        var validation = Path.Combine(root, "validation");
+        Directory.CreateDirectory(validation);
+        await File.WriteAllTextAsync(Path.Combine(validation, "phase-20-validation.json"), JsonSerializer.Serialize(new
+        {
+            currentEventLock = new
+            {
+                planId,
+                requestedOutputs = new[] { "gallery", "heroasset", "longvideo", "shortvideo", "thumbnail" }
+            }
+        }));
+
+        var resolution = await Rc2Phase20ExecutionService.ResolveGovernedRequestedOutputsWithDiagnosticsAsync(root,
+            Path.Combine(root, "20-publishing", "en"), planId, [], CancellationToken.None);
+
+        Assert.Equal("CurrentEventLock", resolution.Source);
+        Assert.Equal(["gallery", "heroasset", "longvideo", "shortvideo", "thumbnail"], resolution.Raw);
+        Assert.Equal(["Gallery", "HeroAsset", "LongVideo", "ShortVideo", "Thumbnail"], resolution.Normalized);
+    }
+
+    [Theory]
+    [InlineData("Gallery")]
+    [InlineData("gallery")]
+    [InlineData("GALLERY")]
+    public void Requested_output_normalization_is_case_insensitive(string token)
+    {
+        Assert.Equal(["Gallery"], Rc2Phase20ExecutionService.NormalizeRequestedOutputs([token]));
+    }
+
+    [Fact]
+    public async Task Empty_current_event_lock_falls_through_to_persisted_production_execution()
+    {
+        var planId = Guid.NewGuid();
+        Directory.CreateDirectory(Path.Combine(root, "validation"));
+        await File.WriteAllTextAsync(Path.Combine(root, "validation", "phase-19-validation.json"),
+            JsonSerializer.Serialize(new { currentEventLock = new { planId, requestedOutputs = Array.Empty<string>() } }));
+        var phase1 = Path.Combine(root, "01-plan");
+        Directory.CreateDirectory(phase1);
+        var productionRequest = new Phase1ProductionRequest("test", Guid.NewGuid(), planId, "en", "en", [],
+            ["GALLERY"], 1, 20, 1, 20, false, true, false, "Normal", "");
+        productionRequest = productionRequest with
+        {
+            RequestChecksum = Phase1CanonicalJson.Checksum(productionRequest, nameof(Phase1ProductionRequest.RequestChecksum))
+        };
+        await File.WriteAllTextAsync(Path.Combine(phase1, "production-request.json"), Phase1CanonicalJson.Serialize(productionRequest));
+
+        var resolution = await Rc2Phase20ExecutionService.ResolveGovernedRequestedOutputsWithDiagnosticsAsync(root,
+            Path.Combine(root, "20-publishing", "en"), planId, [], CancellationToken.None);
+
+        Assert.Equal("PersistedProductionExecution", resolution.Source);
+        Assert.Equal(["Gallery"], resolution.Normalized);
+    }
+
+    [Fact]
+    public async Task Requested_outputs_fail_closed_only_after_every_source_is_empty()
+    {
+        var error = await Assert.ThrowsAsync<Phase20AuthorityException>(() =>
+            Rc2Phase20ExecutionService.ResolveGovernedRequestedOutputsWithDiagnosticsAsync(root,
+                Path.Combine(root, "20-publishing", "en"), Guid.NewGuid(), [], CancellationToken.None));
+
+        Assert.Equal(Phase20ReasonCodes.RequestedOutputsUnresolved, error.ReasonCode);
+        Assert.Contains("after exhausting", error.Message);
+    }
+
+    [Fact]
     public void Social_targets_require_actual_hero_and_gallery_roles()
     {
         var videoOnly = new Dictionary<string, int> { ["ShortVideo"] = 1, ["LongVideo"] = 1 };

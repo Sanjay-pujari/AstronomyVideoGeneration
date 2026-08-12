@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -18,8 +19,7 @@ internal static class Phase20PublishingAuthorityPublisher
         IReadOnlyList<string> requestedOutputs, bool overwriteExisting, bool legacyPublishApproved,
         PublishingOptions policy, ILogger logger, CancellationToken ct)
     {
-        var requested = requestedOutputs.Where(x => x is "ShortVideo" or "LongVideo" or "Thumbnail" or "HeroAsset" or "Gallery")
-            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var requested = Rc2Phase20ExecutionService.NormalizeRequestedOutputs(requestedOutputs).ToArray();
         if (requested.Length == 0)
             throw new Phase20AuthorityException(Phase20ReasonCodes.RequestedOutputsUnresolved,
                 "The governed production requested-output intent is empty.");
@@ -96,6 +96,7 @@ internal static class Phase20PublishingAuthorityPublisher
         var reasonCode = approved ? Phase20ReasonCodes.Accepted : decision.Status == PublishingDecisionStatus.Rejected ? Phase20ReasonCodes.GateRejected : Phase20ReasonCodes.GatePending;
         var packageId = Hash(JsonSerializer.Serialize(new { planId, language, requested, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum, supporting, policy.PublishingPolicyVersion }, Json));
         var platformMap = PlatformMap(entries);
+        var resolution = await ReadRequestedOutputsResolution(outputRoot, requestedOutputs, requested, ct);
         var authorityChecksum = Hash(JsonSerializer.Serialize(new { Schema, packageId, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
             requested, entries, supporting, platformMap, decision.DecisionId, decision.Status, policy.PublishingPolicyVersion,
             policy.ManualReviewRequired, policy.PortableExportEnabled, PlatformMapVersion }, Json));
@@ -123,7 +124,9 @@ internal static class Phase20PublishingAuthorityPublisher
             await Write(Path.Combine(stage, "publishing-manifest.json"), manifest, ct);
             await Write(Path.Combine(stage, "publishing-package.json"), package, ct);
             await Write(Path.Combine(stage, "phase20-authority-diagnostics.json"), new { publishingPackageId = packageId, authorityChecksum, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
-                supportingAuthorityChecksums = supporting, requestedOutputs = requested, inputFiles,
+                supportingAuthorityChecksums = supporting, requestedOutputs = requested,
+                requestedOutputsResolutionSource = resolution.Source, requestedOutputsRaw = resolution.Raw,
+                requestedOutputsNormalized = requested, inputFiles,
                 semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true, technicalQaApproved = true,
                 publicationPackageReady = true, publishGateChecked = true, publishApproved = approved, downstreamReady = approved, reasonCode }, ct);
             await Write(Path.Combine(stage, "phase20-publication-report.json"), new { status = "Succeeded", reasonCode, publishingPackageId = packageId,
@@ -136,7 +139,9 @@ internal static class Phase20PublishingAuthorityPublisher
             { using var committed = await ReadDocument(Path.Combine(finalRoot, name), ct); if (Text(committed.RootElement, "authorityChecksum") != authorityChecksum) throw new Phase20AuthorityException(Phase20ReasonCodes.CommittedReadbackFailed, name); }
             var validation = Path.Combine(outputRoot, "validation", "phase-20-validation.json");
             await Write(validation, new { phaseNo = 20, status = "Succeeded", reasonCode, publishingPackageId = packageId, authorityChecksum, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
-                supportingAuthorityChecksums = supporting, inputFiles, generated = true, reused = false, regenerated = overwriteExisting,
+                supportingAuthorityChecksums = supporting, inputFiles,
+                requestedOutputsResolutionSource = resolution.Source, requestedOutputsRaw = resolution.Raw,
+                requestedOutputsNormalized = requested, generated = true, reused = false, regenerated = overwriteExisting,
                 ownedOutputRoots = new[] { $"20-publishing/{language}" }, canonicalOwnedRoots = new[] { $"20-publishing/{language}" },
                 publicationCommitted = true, committedReadbackPassed = true, committedStateValidationPassed = true, semanticValidationPassed = true,
                 checksumValidationPassed = true, manifestValidationPassed = true, manifestValidationStatus = "Valid", validationStatus = "Valid",
@@ -149,6 +154,37 @@ internal static class Phase20PublishingAuthorityPublisher
             DeleteCurrentTransaction(backupTransactionRoot);
             DeleteContainerIfEmpty(Path.Combine(outputRoot, "20-publishing", ".staging"));
             DeleteContainerIfEmpty(Path.Combine(outputRoot, "20-publishing", ".backup"));
+        }
+    }
+
+    private sealed record OutputResolutionProjection(string Source, IReadOnlyList<string> Raw);
+
+    private static async Task<OutputResolutionProjection> ReadRequestedOutputsResolution(string outputRoot,
+        IReadOnlyList<string> rawFallback, IReadOnlyList<string> normalized, CancellationToken ct)
+    {
+        var path = Path.Combine(outputRoot, "validation", "phase-20-requested-outputs-resolution.json");
+        if (!File.Exists(path)) return new("ProductionPipelineRequest", rawFallback);
+        try
+        {
+            using var document = await ReadDocument(path, ct);
+            var root = document.RootElement;
+            var source = Text(root, "requestedOutputsResolutionSource");
+            var raw = root.TryGetProperty("requestedOutputsRaw", out var array) && array.ValueKind == JsonValueKind.Array
+                ? array.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!)
+                    .Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() : [];
+            var projected = root.TryGetProperty("requestedOutputsNormalized", out var projectedArray) && projectedArray.ValueKind == JsonValueKind.Array
+                ? projectedArray.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!)
+                    .Where(x => !string.IsNullOrWhiteSpace(x)).ToArray() : [];
+            if (!Rc2Phase20ExecutionService.NormalizeRequestedOutputs(projected).SequenceEqual(normalized))
+                throw new Phase20AuthorityException(Phase20ReasonCodes.RequestedOutputsUnresolved,
+                    "currentEventLock.requestedOutputs do not match the normalized requested outputs used by the Phase 20 package builder.");
+            return new(string.IsNullOrWhiteSpace(source) ? "ProductionPipelineRequest" : source, raw);
+        }
+        catch (Phase20AuthorityException) { throw; }
+        catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException)
+        {
+            throw new Phase20AuthorityException(Phase20ReasonCodes.RequestedOutputsUnresolved,
+                "The governed requested-output resolution diagnostics are invalid.", inner: ex);
         }
     }
 
