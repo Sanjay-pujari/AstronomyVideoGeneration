@@ -51,6 +51,31 @@ public sealed class Phase20PublishingValidationProjectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Reader_treats_partial_canonical_evidence_as_invalid_not_missing()
+    {
+        var plan = new Rc2PublishingPlan(Guid.NewGuid(), "Orion", "en", "global", root,
+            Path.Combine(root, "19-video-qa", "en"), Path.Combine(root, "20-publishing", "en"),
+            Path.Combine(root, "validation", "phase-20-validation.json"));
+        Directory.CreateDirectory(plan.Phase20Root);
+        File.WriteAllText(Path.Combine(plan.Phase20Root, "publishing-package.json"), "{}");
+
+        var exception = await Assert.ThrowsAsync<Rc2PublishingControlException>(
+            () => new Phase20PublishingAuthorityReader().ReadAsync(plan, CancellationToken.None));
+
+        Assert.Equal("RC2_PUBLISH_PHASE20_INVALID", exception.Code);
+    }
+
+    [Fact]
+    public async Task Reader_returns_missing_when_no_phase20_evidence_exists()
+    {
+        var plan = new Rc2PublishingPlan(Guid.NewGuid(), "Orion", "en", "global", root,
+            Path.Combine(root, "19-video-qa", "en"), Path.Combine(root, "20-publishing", "en"),
+            Path.Combine(root, "validation", "phase-20-validation.json"));
+
+        Assert.Null(await new Phase20PublishingAuthorityReader().ReadAsync(plan, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Status_endpoint_returns_200_for_valid_pending_package()
     {
         var response = new Rc2PublishingStatusResponse(Guid.NewGuid(), "Orion", "en", "global",
@@ -76,6 +101,14 @@ public sealed class Phase20PublishingValidationProjectionTests : IDisposable
         var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs"));
 
         Assert.Contains("phaseNo is 14 or 16 or 17 or 18 or 19 or 20 && File.Exists(validationPath)", source);
+    }
+
+    [Fact]
+    public void Package_execution_boundary_excludes_phase20_from_phase4_recovery()
+    {
+        var source = File.ReadAllText(RepositoryTestPaths.InfrastructureSource("Persistence", "ProductionPipelineExecutionService.cs"));
+
+        Assert.Contains("phase.No is >= 5 and <= 19", source);
     }
 
     private Rc2PublishingPlan WriteEvidence(string? validationChecksum)

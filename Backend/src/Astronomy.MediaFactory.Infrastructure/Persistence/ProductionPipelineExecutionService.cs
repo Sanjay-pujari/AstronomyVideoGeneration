@@ -244,7 +244,10 @@ public sealed partial class ProductionPipelineExecutionService(
                 await WritePhaseManifestAsync(context, phaseResults, cancellationToken);
                 continue;
             }
-            if (phase.No >= 5 && context.ExecutionContext.PublishedDocumentaryBlueprintAggregate is null)
+            // Phase 20's sole primary authority is Phase 19. It performs its own governed
+            // validation of Phase 19 and requested media, so a package-only execution must
+            // never enter the generic Phase 4 resume/recovery path.
+            if (phase.No is >= 5 and <= 19 && context.ExecutionContext.PublishedDocumentaryBlueprintAggregate is null)
             {
                 // A run beginning downstream of Phase 4 is resume/recovery. Only that path
                 // rehydrates authority from the committed publication on disk.
