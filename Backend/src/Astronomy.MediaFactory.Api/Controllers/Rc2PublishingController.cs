@@ -7,7 +7,7 @@ namespace Astronomy.MediaFactory.Api.Controllers;
 [ApiController]
 [Produces(MediaTypeNames.Application.Json)]
 [Route("api/rc2/publishing")]
-public sealed class Rc2PublishingController(IRc2PublishingControlService service) : ControllerBase
+public sealed class Rc2PublishingController(IRc2PublishingControlService service, ILogger<Rc2PublishingController> logger) : ControllerBase
 {
     [HttpPost("package")]
     public async Task<IActionResult> Package([FromBody] Rc2CreatePublishingPackageRequest request, CancellationToken ct)
@@ -35,6 +35,12 @@ public sealed class Rc2PublishingController(IRc2PublishingControlService service
                 _ => StatusCodes.Status500InternalServerError
             };
             return StatusCode(status, new { code = ex.Code, message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "RC2 publishing persistence operation failed.");
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                new { code = "RC2_PUBLISH_PERSISTENCE_FAILED", message = "The publishing approval could not be persisted." });
         }
     }
 }
