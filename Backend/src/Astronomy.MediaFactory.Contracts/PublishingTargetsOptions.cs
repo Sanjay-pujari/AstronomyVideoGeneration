@@ -9,4 +9,8 @@ public sealed class PublishingTargetsOptions
     public bool FacebookLong { get; set; } = true;
     public bool FacebookReel { get; set; } = true;
     public bool InstagramReel { get; set; } = true;
+    public bool InstagramPost { get; set; }
+    public bool InstagramCarousel { get; set; }
+    public bool FacebookPost { get; set; }
+    public bool FacebookCarousel { get; set; }
 }
