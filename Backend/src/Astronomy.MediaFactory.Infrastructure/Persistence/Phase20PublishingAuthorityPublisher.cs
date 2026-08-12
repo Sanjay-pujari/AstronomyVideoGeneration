@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
+using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Infrastructure.Persistence;
 
@@ -15,23 +16,39 @@ internal static class Phase20PublishingAuthorityPublisher
 
     internal static async Task<IReadOnlyList<string>> ExecuteAsync(string outputRoot, Guid planId, string language,
         IReadOnlyList<string> requestedOutputs, bool overwriteExisting, bool legacyPublishApproved,
-        PublishingOptions policy, CancellationToken ct)
+        PublishingOptions policy, ILogger logger, CancellationToken ct)
     {
         var requested = requestedOutputs.Where(x => x is "ShortVideo" or "LongVideo" or "Thumbnail" or "HeroAsset" or "Gallery")
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var p19Root = Path.Combine(outputRoot, "19-video-qa", language);
         var p19Paths = new[] { Path.Combine(p19Root, "phase19-manifest.json"), Path.Combine(p19Root, "phase19-authority-diagnostics.json"),
             Path.Combine(p19Root, "phase19-publication-report.json"), Path.Combine(outputRoot, "validation", "phase-19-validation.json") };
+        var loadedPhase19Files = new List<string>();
         Phase19Manifest p19;
         JsonDocument[] p19Evidence;
         try
         {
+            logger.LogInformation("Phase 20 Phase 19 governing paths: phase19Root={Phase19Root}; phase19ManifestPath={Phase19ManifestPath}; phase19AuthorityDiagnosticsPath={Phase19AuthorityDiagnosticsPath}; phase19PublicationReportPath={Phase19PublicationReportPath}; phase19ValidationPath={Phase19ValidationPath}",
+                p19Root, p19Paths[0], p19Paths[1], p19Paths[2], p19Paths[3]);
+            foreach (var path in p19Paths)
+            {
+                var info = new FileInfo(path);
+                logger.LogInformation("Phase 20 Phase 19 evidence: phase19Root={Phase19Root}; path={EvidencePath}; exists={Exists}; isRegularFile={IsRegularFile}; byteLength={ByteLength}",
+                    p19Root, path, info.Exists, info.Exists && !info.Attributes.HasFlag(FileAttributes.Directory), info.Exists ? info.Length : 0);
+            }
             p19 = await Read<Phase19Manifest>(p19Paths[0], ct);
-            p19Evidence = await Task.WhenAll(p19Paths.Skip(1).Select(x => ReadDocument(x, ct)));
-            ValidatePhase19(p19, p19Evidence.Select(x => x.RootElement), language);
+            loadedPhase19Files.Add(p19Paths[0]);
+            var documents = new List<JsonDocument>();
+            foreach (var path in p19Paths.Skip(1))
+            {
+                documents.Add(await ReadDocument(path, ct));
+                loadedPhase19Files.Add(path);
+            }
+            p19Evidence = documents.ToArray();
+            ValidatePhase19(p19, p19Evidence, language, loadedPhase19Files);
         }
         catch (Exception ex) when (ex is not Phase20AuthorityException)
-        { throw new Phase20AuthorityException(Phase20ReasonCodes.UpstreamPhase19Invalid, "Committed Phase 19 authority is invalid.", ex); }
+        { throw new Phase20AuthorityException(Phase20ReasonCodes.UpstreamPhase19Invalid, PrecisePhase19ReadFailure(ex, p19Paths, loadedPhase19Files), loadedPhase19Files, ex); }
         using var p19EvidenceOwner = new DocumentOwner(p19Evidence);
 
         var p18Path = Path.Combine(outputRoot, "18-video-assembly", language, "phase18-manifest.json");
@@ -59,7 +76,7 @@ internal static class Phase20PublishingAuthorityPublisher
                 }
             }
             catch (Exception ex) when (ex is not Phase20AuthorityException)
-            { throw new Phase20AuthorityException(Phase20ReasonCodes.UpstreamPhase19Invalid, "Phase 19 to Phase 18 media lineage is invalid.", ex); }
+            { throw new Phase20AuthorityException(Phase20ReasonCodes.UpstreamPhase19Invalid, "Phase 19 to Phase 18 media lineage is invalid.", inner: ex); }
         }
 
         var supporting = new SortedDictionary<string, string>(StringComparer.Ordinal);
@@ -135,14 +152,37 @@ internal static class Phase20PublishingAuthorityPublisher
         new[] { Path.Combine(root, folder, manifest), Path.Combine(root, folder, $"{prefix}-authority-diagnostics.json"),
             Path.Combine(root, folder, $"{prefix}-publication-report.json"), Path.Combine(root, "validation", $"phase-{phase}-validation.json") };
 
-    private static void ValidatePhase19(Phase19Manifest m, IEnumerable<JsonElement> evidence, string language)
+    private static void ValidatePhase19(Phase19Manifest m, IReadOnlyList<JsonDocument> evidence, string language,
+        IReadOnlyList<string> loadedFiles)
     {
-        if (!m.Language.Equals(language, StringComparison.OrdinalIgnoreCase) || !m.PublicationCommitted || !m.TechnicalQaApproved ||
-            !m.DownstreamReady || m.ValidationStatus != "Valid" || string.IsNullOrWhiteSpace(m.AuthorityChecksum)) throw new InvalidDataException();
-        foreach (var e in evidence)
-            if (Text(e, "authorityChecksum") != m.AuthorityChecksum || !Bool(e, "publicationCommitted") || !Bool(e, "committedReadbackPassed") ||
-                !Bool(e, "committedStateValidationPassed") || !Bool(e, "semanticValidationPassed") || !Bool(e, "checksumValidationPassed") ||
-                !Bool(e, "manifestValidationPassed") || Text(e, "validationStatus") != "Valid" || !Bool(e, "downstreamReady")) throw new InvalidDataException();
+        void Invalid(string detail) => throw new Phase20AuthorityException(Phase20ReasonCodes.UpstreamPhase19Invalid, detail, loadedFiles);
+        if (!m.Language.Equals(language, StringComparison.OrdinalIgnoreCase)) Invalid("Phase19 language mismatch.");
+        if (string.IsNullOrWhiteSpace(m.AuthorityChecksum)) Invalid("Phase19 authorityChecksum is empty.");
+        if (!m.PublicationCommitted) Invalid("Phase19 publicationCommitted=false.");
+        if (!m.TechnicalQaApproved) Invalid("Phase19 technicalQaApproved=false.");
+        if (!m.DownstreamReady) Invalid("Phase19 downstreamReady=false.");
+        if (m.ValidationStatus != "Valid") Invalid($"Phase19 validationStatus={m.ValidationStatus}.");
+        var labels = new[] { "authority diagnostics", "publication report", "validation" };
+        for (var index = 0; index < evidence.Count; index++)
+        {
+            var e = evidence[index].RootElement;
+            var label = labels[index];
+            if (Text(e, "authorityChecksum") != m.AuthorityChecksum) Invalid($"Phase19 {label} authority checksum mismatch.");
+            foreach (var field in new[] { "publicationCommitted", "committedReadbackPassed", "committedStateValidationPassed",
+                         "semanticValidationPassed", "checksumValidationPassed", "manifestValidationPassed", "downstreamReady" })
+                if (!Bool(e, field)) Invalid($"Phase19 {label} {field}=false.");
+            if (Text(e, "validationStatus") != "Valid") Invalid($"Phase19 {label} validationStatus={Text(e, "validationStatus")}.");
+        }
+        var validation = evidence[2].RootElement;
+        if (Text(validation, "manifestValidationStatus") != "Valid") Invalid($"Phase19 validation manifestValidationStatus={Text(validation, "manifestValidationStatus")}.");
+        if (!Bool(validation, "technicalQaApproved")) Invalid("Phase19 validation technicalQaApproved=false.");
+    }
+
+    private static string PrecisePhase19ReadFailure(Exception exception, IReadOnlyList<string> paths, IReadOnlyList<string> loaded)
+    {
+        var unread = paths.FirstOrDefault(path => !loaded.Contains(path, StringComparer.Ordinal));
+        if (unread is not null && !File.Exists(unread)) return $"Phase19 evidence file missing: {Path.GetFileName(unread)}.";
+        return unread is not null ? $"Phase19 evidence file unreadable: {Path.GetFileName(unread)}." : $"Phase19 evidence unreadable: {exception.GetType().Name}.";
     }
 
     private static async Task<PublishingManifestEntry> Entry(string outputRoot, string authorityRelativeRoot, PublishingPackageRole role,
@@ -180,7 +220,7 @@ internal static class Phase20PublishingAuthorityPublisher
             }
         }
         catch (Exception ex) when (ex is not Phase20AuthorityException { ReasonCode: Phase20ReasonCodes.SupportingAuthorityInvalid })
-        { throw new Phase20AuthorityException(Phase20ReasonCodes.SupportingAuthorityInvalid, $"Requested Phase {phase} authority is invalid.", ex); }
+        { throw new Phase20AuthorityException(Phase20ReasonCodes.SupportingAuthorityInvalid, $"Requested Phase {phase} authority is invalid.", inner: ex); }
     }
 
     private static IEnumerable<(PublishingPackageRole Role,string Format,string Path,string Sha,long Length,string ContentType,int? Sequence)> FindAssets(JsonElement node, int phase, int? sequence = null)
@@ -255,5 +295,5 @@ internal static class Phase20PublishingAuthorityPublisher
     private sealed class DocumentOwner(JsonDocument[] documents) : IDisposable { public void Dispose() { foreach (var d in documents) d.Dispose(); } }
 }
 
-internal sealed class Phase20AuthorityException(string reasonCode, string reason, Exception? inner = null) : InvalidOperationException($"{reasonCode}: {reason}", inner)
-{ internal string ReasonCode { get; } = reasonCode; }
+internal sealed class Phase20AuthorityException(string reasonCode, string reason, IReadOnlyList<string>? loadedAuthorityArtifacts = null, Exception? inner = null) : InvalidOperationException($"{reasonCode}: {reason}", inner)
+{ internal string ReasonCode { get; } = reasonCode; internal IReadOnlyList<string> LoadedAuthorityArtifacts { get; } = loadedAuthorityArtifacts ?? []; }

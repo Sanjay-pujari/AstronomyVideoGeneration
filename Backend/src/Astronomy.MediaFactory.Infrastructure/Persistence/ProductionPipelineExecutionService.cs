@@ -839,6 +839,12 @@ public sealed partial class ProductionPipelineExecutionService(
                 ex.LoadedAuthorityArtifacts, [], [], [ex.Message], ex.Reason, true, cancellationToken, started,
                 reasonCodeOverride: ex.ReasonCode, phaseExecutionBegan: true);
         }
+        catch (Phase20AuthorityException ex) when (phaseNo == 20)
+        {
+            return await WritePhaseValidationAsync(context, phaseNo, phaseName, ProductionPhaseStatus.Failed,
+                ex.LoadedAuthorityArtifacts, [], [], [ex.Message], ex.Message, true, cancellationToken, started,
+                reasonCodeOverride: ex.ReasonCode, phaseExecutionBegan: true);
+        }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
             var phase10TitleDiagnostics = phaseNo == 10
@@ -14519,7 +14525,7 @@ public sealed partial class ProductionPipelineExecutionService(
     {
         return await Phase20PublishingAuthorityPublisher.ExecuteAsync(context.OutputRoot, context.Request.PlanId,
             ResolvePipelineLanguage(context.Request.Language), context.Request.RequestedOutputs, context.OverwriteExisting,
-            context.PipelineRequest.PublishApproved, _phase20PublishingOptions, cancellationToken);
+            context.PipelineRequest.PublishApproved, _phase20PublishingOptions, logger, cancellationToken);
     }
 
     private static async Task<string> WriteAndValidatePublishGateAsync(ProductionPhaseContext context, CancellationToken cancellationToken)
