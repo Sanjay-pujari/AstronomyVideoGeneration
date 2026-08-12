@@ -17544,7 +17544,9 @@ public sealed partial class ProductionPipelineExecutionService(
             ownedOutputRoots = ResolvePhaseOwnedOutputRoots(context, deleteStartPhaseNo, deleteEndPhaseNo)
                 .Where(root => (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(root.OwnerPhase))
                 .Select(root => NormalizePath(root.Path)).ToArray(),
-            canonicalOwnedRoots = (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(19)
+            canonicalOwnedRoots = (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(20)
+                ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "20-publishing", ResolvePipelineLanguage(context.Request.Language))) }
+                : (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(19)
                 ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "19-video-qa", ResolvePipelineLanguage(context.Request.Language))) }
                 : (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(18)
                 ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "18-video-assembly", ResolvePipelineLanguage(context.Request.Language))) }
@@ -17553,7 +17555,9 @@ public sealed partial class ProductionPipelineExecutionService(
                 : (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(15)
                 ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "15-tts", ResolvePipelineLanguage(context.Request.Language))) }
                 : Array.Empty<string>(),
-            compatibilityProjectionPaths = (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(18)
+            compatibilityProjectionPaths = (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(20)
+                ? new[] { NormalizePath(Path.Combine(context.OutputRoot, "publishing", "**")) }
+                : (context.CleanupRebuildPhases ?? Array.Empty<int>()).Contains(18)
                 ? new[]
                 {
                     NormalizePath(Path.Combine(context.OutputRoot, "video-assembly", ResolvePipelineLanguage(context.Request.Language), "short", "final.mp4")),

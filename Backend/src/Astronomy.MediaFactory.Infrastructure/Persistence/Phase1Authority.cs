@@ -181,7 +181,11 @@ public sealed class PhaseOutputTargetResolver:IPhaseOutputTargetResolver
         // video-qa directory is a compatibility projection and is never canonical ownership.
         Add(19,Path.Combine(root,"19-video-qa",phase15Language),canDeleteOnOverwrite:false);
         Add(19,Path.Combine(root,"video-qa"),compatibility:true,canDeleteOnOverwrite:false);
-        Add(20,Path.Combine(root,"publishing"));
+        // Phase 20 publishes transactionally to its numbered, language-scoped authority.
+        // The legacy publishing directory remains a compatibility projection for existing
+        // consumers and is neither canonical nor eligible for generic overwrite deletion.
+        Add(20,Path.Combine(root,"20-publishing",phase15Language),canDeleteOnOverwrite:false);
+        Add(20,Path.Combine(root,"publishing"),compatibility:true,canDeleteOnOverwrite:false);
         for(var phase=Math.Max(2,start);phase<=Math.Min(20,end);phase++)Add(phase,Path.Combine(context.ExecutionContext.ValidationRoot!,$"phase-{phase:00}-validation.json"),false,validation:true);
         var comparer=OperatingSystem.IsWindows()?StringComparer.OrdinalIgnoreCase:StringComparer.Ordinal;
         var deduplicated=targets.GroupBy(x=>x.Path,comparer).Select(g=>g.OrderBy(x=>x.PhaseNo).First()).ToArray();

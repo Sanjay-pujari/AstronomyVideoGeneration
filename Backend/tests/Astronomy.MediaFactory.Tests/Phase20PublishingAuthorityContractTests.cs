@@ -50,4 +50,14 @@ public sealed class Phase20PublishingAuthorityContractTests
         Assert.Contains("CommittedReadbackFailed", Publisher);
         Assert.Contains("canonicalOwnedRoots", Publisher);
     }
+
+    [Fact]
+    public void Successful_publication_cleans_only_its_transaction_staging_and_backup()
+    {
+        Assert.Contains("DeleteCurrentTransaction(transactionRoot)", Publisher);
+        Assert.Contains("DeleteCurrentTransaction(backupTransactionRoot)", Publisher);
+        Assert.Contains("DeleteContainerIfEmpty(Path.Combine(outputRoot, \"20-publishing\", \".staging\"))", Publisher);
+        Assert.Contains("DeleteContainerIfEmpty(Path.Combine(outputRoot, \"20-publishing\", \".backup\"))", Publisher);
+        Assert.Contains("Directory.Move(stage, final)", Publisher);
+    }
 }
