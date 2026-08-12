@@ -3241,6 +3241,44 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.ToTable("published_videos", (string)null);
                 });
 
+            modelBuilder.Entity("Astronomy.MediaFactory.Core.Rc2PublishingApproval", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Decision")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("DecisionSource")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("DecisionUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Phase20AuthorityChecksum")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<Guid>("PlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PublishingPackageId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PlanId", "Phase20AuthorityChecksum", "PublishingPackageId")
+                        .IsUnique();
+
+                    b.ToTable("rc2_publishing_approvals", (string)null);
+                });
+
             modelBuilder.Entity("Astronomy.MediaFactory.Core.PublishingOptimizationRecord", b =>
                 {
                     b.Property<Guid>("Id")
