@@ -74,33 +74,45 @@ internal static class Phase20PublishingAuthorityPublisher
         var approved = !policy.ManualReviewRequired || decision.Status == PublishingDecisionStatus.Approved;
         var reasonCode = approved ? Phase20ReasonCodes.Accepted : decision.Status == PublishingDecisionStatus.Rejected ? Phase20ReasonCodes.GateRejected : Phase20ReasonCodes.GatePending;
         var packageId = Hash(JsonSerializer.Serialize(new { planId, language, requested, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum, supporting, policy.PublishingPolicyVersion }, Json));
-        var authorityChecksum = Hash(JsonSerializer.Serialize(new { Schema, packageId, entries, decision.DecisionId, decision.Status, policy.ManualReviewRequired, policy.PortableExportEnabled, PlatformMapVersion }, Json));
+        var platformMap = PlatformMap(entries);
+        var authorityChecksum = Hash(JsonSerializer.Serialize(new { Schema, packageId, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
+            requested, entries, supporting, platformMap, decision.DecisionId, decision.Status, policy.PublishingPolicyVersion,
+            policy.ManualReviewRequired, policy.PortableExportEnabled, PlatformMapVersion }, Json));
         var finalRoot = Path.Combine(outputRoot, "20-publishing", language);
         var stage = Path.Combine(outputRoot, "20-publishing", ".staging", Guid.NewGuid().ToString("N"), language);
         Directory.CreateDirectory(stage);
         try
         {
             if (policy.PortableExportEnabled) await CopyPortable(entries, outputRoot, stage, ct);
-            var platformMap = PlatformMap(entries);
-            var manifest = new { schemaVersion = Schema, language, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum, authorityChecksum, artifacts = entries };
+            var inputFiles = p19Paths.Concat(requested.Contains("HeroAsset") ? SupportingPaths(outputRoot, 11, "11-hero", "hero-asset-manifest.json", "phase11") : [])
+                .Concat(requested.Contains("Thumbnail") ? SupportingPaths(outputRoot, 12, "12-thumbnails", "thumbnail-asset-manifest.json", "phase12") : [])
+                .Concat(requested.Contains("Gallery") ? SupportingPaths(outputRoot, 13, "13-gallery", "gallery-manifest.json", "phase13") : [])
+                .Concat(entries.Select(x => Path.Combine(outputRoot, x.SourceRelativePath))).Distinct(StringComparer.Ordinal).ToArray();
+            var manifest = new { schemaVersion = Schema, publishingPackageId = packageId, language, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
+                supportingAuthorityChecksums = supporting, authorityChecksum, artifacts = entries };
             var package = new { schemaVersion = Schema, publishingPackageId = packageId, planId, language, requestedOutputs = requested,
-                sourcePhase19AuthorityChecksum = p19.AuthorityChecksum, supportingAuthorityChecksums = supporting, publishingPolicyVersion = policy.PublishingPolicyVersion,
+                sourcePhase19AuthorityChecksum = p19.AuthorityChecksum, supportingAuthorityChecksums = supporting, authorityChecksum, publishingPolicyVersion = policy.PublishingPolicyVersion,
                 packageEnabled = policy.PackageEnabled, externalPublishingEnabled = policy.ExternalPublishingEnabled, manualReviewRequired = policy.ManualReviewRequired,
                 portableExportEnabled = policy.PortableExportEnabled, decision, platformAssetMapVersion = PlatformMapVersion, platformAssetMap = platformMap,
                 technicalQaApproved = true, publicationPackageReady = true, publishGateChecked = true, publishApproved = approved, downstreamReady = approved };
             await Write(Path.Combine(stage, "publishing-manifest.json"), manifest, ct);
             await Write(Path.Combine(stage, "publishing-package.json"), package, ct);
-            await Write(Path.Combine(stage, "phase20-authority-diagnostics.json"), new { authorityChecksum, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
+            await Write(Path.Combine(stage, "phase20-authority-diagnostics.json"), new { publishingPackageId = packageId, authorityChecksum, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
+                supportingAuthorityChecksums = supporting, requestedOutputs = requested, inputFiles,
                 semanticValidationPassed = true, checksumValidationPassed = true, manifestValidationPassed = true, technicalQaApproved = true,
                 publicationPackageReady = true, publishGateChecked = true, publishApproved = approved, downstreamReady = approved, reasonCode }, ct);
-            Commit(stage, finalRoot, overwriteExisting);
-            var reportPath = Path.Combine(finalRoot, "phase20-publication-report.json");
-            await Write(reportPath, new { status = "Succeeded", reasonCode, authorityChecksum, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
+            await Write(Path.Combine(stage, "phase20-publication-report.json"), new { status = "Succeeded", reasonCode, publishingPackageId = packageId,
+                authorityChecksum, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum, supportingAuthorityChecksums = supporting,
                 publicationCommitted = true, committedReadbackPassed = true, committedStateValidationPassed = true, semanticValidationPassed = true,
                 checksumValidationPassed = true, manifestValidationPassed = true, manifestValidationStatus = "Valid", validationStatus = "Valid",
                 technicalQaApproved = true, publicationPackageReady = true, publishGateChecked = true, publishApproved = approved, downstreamReady = approved }, ct);
+            Commit(stage, finalRoot, overwriteExisting);
+            foreach (var name in new[] { "publishing-manifest.json", "publishing-package.json", "phase20-authority-diagnostics.json", "phase20-publication-report.json" })
+            { using var committed = await ReadDocument(Path.Combine(finalRoot, name), ct); if (Text(committed.RootElement, "authorityChecksum") != authorityChecksum) throw new Phase20AuthorityException(Phase20ReasonCodes.CommittedReadbackFailed, name); }
             var validation = Path.Combine(outputRoot, "validation", "phase-20-validation.json");
-            await Write(validation, new { phaseNo = 20, status = "Succeeded", reasonCode, authorityChecksum, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
+            await Write(validation, new { phaseNo = 20, status = "Succeeded", reasonCode, publishingPackageId = packageId, authorityChecksum, sourcePhase19AuthorityChecksum = p19.AuthorityChecksum,
+                supportingAuthorityChecksums = supporting, inputFiles, generated = true, reused = false, regenerated = overwriteExisting,
+                ownedOutputRoots = new[] { $"20-publishing/{language}" }, canonicalOwnedRoots = new[] { $"20-publishing/{language}" },
                 publicationCommitted = true, committedReadbackPassed = true, committedStateValidationPassed = true, semanticValidationPassed = true,
                 checksumValidationPassed = true, manifestValidationPassed = true, manifestValidationStatus = "Valid", validationStatus = "Valid",
                 technicalQaApproved = true, publicationPackageReady = true, publishGateChecked = true, publishApproved = approved, downstreamReady = approved }, ct);
@@ -108,6 +120,10 @@ internal static class Phase20PublishingAuthorityPublisher
         }
         finally { var tx = Directory.GetParent(stage)?.FullName; if (tx is not null && Directory.Exists(tx)) Directory.Delete(tx, true); }
     }
+
+    private static IEnumerable<string> SupportingPaths(string root, int phase, string folder, string manifest, string prefix) =>
+        new[] { Path.Combine(root, folder, manifest), Path.Combine(root, folder, $"{prefix}-authority-diagnostics.json"),
+            Path.Combine(root, folder, $"{prefix}-publication-report.json"), Path.Combine(root, "validation", $"phase-{phase}-validation.json") };
 
     private static void ValidatePhase19(Phase19Manifest m, IEnumerable<JsonElement> evidence, string language)
     {
@@ -147,29 +163,33 @@ internal static class Phase20PublishingAuthorityPublisher
             { var c = Text(e, "authorityChecksum"); if (c.Length > 0 && c != checksum) throw new InvalidDataException(); }
             checksums[$"Phase{phase}"] = checksum;
             foreach (var asset in FindAssets(manifest.RootElement, phase))
-                entries.Add(await Entry(root, folder, asset.Role, asset.Format, language, phase, checksum, asset.Path, asset.Sha, asset.Length, asset.ContentType, portable, ct));
+            {
+                var relative = NormalizeAuthorityPath(folder, asset.Path);
+                var length = asset.Length > 0 ? asset.Length : new FileInfo(SafePath(Path.Combine(root, folder), relative)).Length;
+                entries.Add((await Entry(root, folder, asset.Role, asset.Format, language, phase, checksum, relative, asset.Sha, length, asset.ContentType, portable, ct)) with { Sequence = asset.Sequence });
+            }
         }
         catch (Exception ex) when (ex is not Phase20AuthorityException { ReasonCode: Phase20ReasonCodes.SupportingAuthorityInvalid })
         { throw new Phase20AuthorityException(Phase20ReasonCodes.SupportingAuthorityInvalid, $"Requested Phase {phase} authority is invalid.", ex); }
     }
 
-    private static IEnumerable<(PublishingPackageRole Role,string Format,string Path,string Sha,long Length,string ContentType)> FindAssets(JsonElement node, int phase)
+    private static IEnumerable<(PublishingPackageRole Role,string Format,string Path,string Sha,long Length,string ContentType,int? Sequence)> FindAssets(JsonElement node, int phase, int? sequence = null)
     {
         if (node.ValueKind == JsonValueKind.Object)
         {
-            var path = FirstText(node, "relativePath", "fileRelativePath", "imageRelativePath", "outputRelativePath");
-            var sha = FirstText(node, "sha256", "fileSha256", "imageSha256"); var length = FirstLong(node, "byteLength", "fileSizeBytes");
-            if (path.Length > 0 && sha.Length > 0 && length > 0)
+            var path = FirstText(node, "relativePath", "fileRelativePath", "imageRelativePath", "outputRelativePath", "physicalPath", "path");
+            var sha = FirstText(node, "sha256", "fileSha256", "imageSha256", "physicalSha256"); var length = FirstLong(node, "byteLength", "fileSizeBytes");
+            if (path.Length > 0 && sha.Length > 0)
             {
                 var token = (FirstText(node, "role", "variant", "aspect", "aspectRatio") + " " + path).ToLowerInvariant();
                 var role = phase == 13 ? PublishingPackageRole.GalleryImage : phase == 12
                     ? token.Contains("portrait") ? PublishingPackageRole.ThumbnailPortrait : token.Contains("square") ? PublishingPackageRole.ThumbnailSquare : PublishingPackageRole.ThumbnailLandscape
                     : token.Contains("portrait") ? PublishingPackageRole.HeroPortrait : token.Contains("square") ? PublishingPackageRole.HeroSquare : PublishingPackageRole.HeroLandscape;
-                yield return (role, Path.GetExtension(path).TrimStart('.').ToLowerInvariant(), path, sha, length, FirstText(node, "contentType") is var c && c.Length > 0 ? c : "image/png");
+                yield return (role, Path.GetExtension(path).TrimStart('.').ToLowerInvariant(), path, sha, length, FirstText(node, "contentType", "mimeType") is var c && c.Length > 0 ? c : "image/png", phase == 13 ? sequence : null);
             }
-            foreach (var p in node.EnumerateObject()) foreach (var x in FindAssets(p.Value, phase)) yield return x;
+            foreach (var p in node.EnumerateObject()) foreach (var x in FindAssets(p.Value, phase, sequence)) yield return x;
         }
-        else if (node.ValueKind == JsonValueKind.Array) foreach (var child in node.EnumerateArray()) foreach (var x in FindAssets(child, phase)) yield return x;
+        else if (node.ValueKind == JsonValueKind.Array) { var index = 0; foreach (var child in node.EnumerateArray()) { index++; foreach (var x in FindAssets(child, phase, phase == 13 ? index : sequence)) yield return x; } }
     }
 
     private static object PlatformMap(IEnumerable<PublishingManifestEntry> e) { bool Has(PublishingPackageRole r) => e.Any(x => x.Role == r); return new Dictionary<string, object> {
@@ -177,7 +197,13 @@ internal static class Phase20PublishingAuthorityPublisher
         ["YouTubeShort"] = new { video = Has(PublishingPackageRole.ShortVideo) ? "ShortVideo" : null, thumbnail = Has(PublishingPackageRole.ThumbnailPortrait) ? "ThumbnailPortrait" : null, caption = Has(PublishingPackageRole.ShortCaptionSrt) ? "ShortCaptionSrt" : null },
         ["FacebookLong"] = new { video = Has(PublishingPackageRole.LongVideo) ? "LongVideo" : null, thumbnail = Has(PublishingPackageRole.ThumbnailLandscape) ? "ThumbnailLandscape" : null },
         ["FacebookReel"] = new { video = Has(PublishingPackageRole.ShortVideo) ? "ShortVideo" : null, cover = Has(PublishingPackageRole.ThumbnailPortrait) ? "ThumbnailPortrait" : null },
-        ["InstagramReel"] = new { video = Has(PublishingPackageRole.ShortVideo) ? "ShortVideo" : null, cover = Has(PublishingPackageRole.ThumbnailPortrait) ? "ThumbnailPortrait" : null } }; }
+        ["InstagramReel"] = new { video = Has(PublishingPackageRole.ShortVideo) ? "ShortVideo" : null, cover = Has(PublishingPackageRole.ThumbnailPortrait) ? "ThumbnailPortrait" : null },
+        ["InstagramPost"] = new { asset = Has(PublishingPackageRole.HeroPortrait) ? "HeroPortrait" : Has(PublishingPackageRole.HeroSquare) ? "HeroSquare" : null },
+        ["InstagramCarousel"] = new { images = e.Where(x => x.Role == PublishingPackageRole.GalleryImage).OrderBy(x => x.Sequence).Select(x => "GalleryImage").ToArray() },
+        ["FacebookPost"] = new { asset = Has(PublishingPackageRole.HeroLandscape) ? "HeroLandscape" : Has(PublishingPackageRole.HeroSquare) ? "HeroSquare" : null },
+        ["FacebookCarousel"] = new { images = e.Where(x => x.Role == PublishingPackageRole.GalleryImage).OrderBy(x => x.Sequence).Select(x => "GalleryImage").ToArray() }
+    }; }
+    private static string NormalizeAuthorityPath(string folder, string path) { var normalized = path.Replace('\\', '/'); var prefix = folder.TrimEnd('/') + "/"; return normalized.StartsWith(prefix, StringComparison.Ordinal) ? normalized[prefix.Length..] : normalized; }
     private static async Task CopyPortable(IEnumerable<PublishingManifestEntry> entries, string root, string stage, CancellationToken ct) { foreach (var e in entries.Where(x => x.PackageRelativePath is not null)) { var source = SafePath(root, e.SourceRelativePath); var target = SafePath(stage, e.PackageRelativePath!); Directory.CreateDirectory(Path.GetDirectoryName(target)!); await using var a = File.OpenRead(source); await using var b = File.Create(target); await a.CopyToAsync(b, ct); } }
     private static string PackagePath(PublishingPackageRole role, string source) { var group = role switch { PublishingPackageRole.ShortVideo => "media/short", PublishingPackageRole.LongVideo => "media/long", PublishingPackageRole.ShortCaptionSrt or PublishingPackageRole.ShortCaptionAss => "captions/short", PublishingPackageRole.LongCaptionSrt or PublishingPackageRole.LongCaptionAss => "captions/long", PublishingPackageRole.ThumbnailLandscape or PublishingPackageRole.ThumbnailPortrait or PublishingPackageRole.ThumbnailSquare => "thumbnails", PublishingPackageRole.HeroLandscape or PublishingPackageRole.HeroPortrait or PublishingPackageRole.HeroSquare => "hero", _ => "gallery" }; return $"{group}/{Path.GetFileName(source)}"; }
     private static void Commit(string stage, string final, bool overwrite) { if (Directory.Exists(final)) { if (!overwrite) Directory.Delete(final, true); else Directory.Delete(final, true); } Directory.CreateDirectory(Path.GetDirectoryName(final)!); Directory.Move(stage, final); }
