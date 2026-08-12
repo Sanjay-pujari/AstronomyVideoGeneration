@@ -55,6 +55,7 @@ public sealed class Rc2PublishingApprovalPersistenceTests
     {
         var controller = new Rc2PublishingController(
             new FailingPublishingControlService(),
+            new NonPublishingExecutionService(),
             NullLogger<Rc2PublishingController>.Instance);
 
         var result = await controller.Approve(

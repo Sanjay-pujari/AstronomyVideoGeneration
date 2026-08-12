@@ -10,8 +10,6 @@ namespace Astronomy.MediaFactory.Api.Controllers;
 public sealed class Rc2PublishingController(IRc2PublishingControlService service, IRc2PublishingExecutionService execution,
     ILogger<Rc2PublishingController> logger) : ControllerBase
 {
-    public Rc2PublishingController(IRc2PublishingControlService service, ILogger<Rc2PublishingController> logger)
-        : this(service, new UnavailableExecutionService(), logger) { }
     [HttpPost("package")]
     public async Task<IActionResult> Package([FromBody] Rc2CreatePublishingPackageRequest request, CancellationToken ct)
         => await Invoke(() => service.CreateOrRefreshPackageAsync(request.PlanId, request.OverwriteExisting, ct));
@@ -54,13 +52,5 @@ public sealed class Rc2PublishingController(IRc2PublishingControlService service
             return StatusCode(StatusCodes.Status500InternalServerError,
                 new { code = "RC2_PUBLISH_PERSISTENCE_FAILED", message = "The publishing approval could not be persisted." });
         }
-    }
-
-    private sealed class UnavailableExecutionService : IRc2PublishingExecutionService
-    {
-        public Task<Rc2PublishingExecutionResponse> PublishVideoAsync(Rc2PublishVideoRequest request, CancellationToken ct) =>
-            throw new InvalidOperationException("Publishing execution service is unavailable.");
-        public Task<Rc2PublishingExecutionResponse> PublishMediaAsync(Rc2PublishMediaRequest request, CancellationToken ct) =>
-            throw new InvalidOperationException("Publishing execution service is unavailable.");
     }
 }

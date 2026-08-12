@@ -195,7 +195,8 @@ public sealed class Phase20PublishingValidationProjectionTests : IDisposable
             new(true, "Succeeded", PackageId, ChecksumA, true, true, false, false,
                 Rc2PublishingApprovalStatus.Pending, 0),
             new Dictionary<string, int>(), [], new Dictionary<Rc2PublishingTarget, Rc2TargetStatus>());
-        var controller = new Rc2PublishingController(new StubControlService(response), NullLogger<Rc2PublishingController>.Instance);
+        var controller = new Rc2PublishingController(new StubControlService(response),
+            new NonPublishingExecutionService(), NullLogger<Rc2PublishingController>.Instance);
 
         var action = await controller.Status(response.PlanId, CancellationToken.None);
 
