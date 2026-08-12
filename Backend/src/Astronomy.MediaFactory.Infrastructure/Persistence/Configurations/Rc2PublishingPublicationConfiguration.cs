@@ -19,6 +19,7 @@ public sealed class Rc2PublishingPublicationConfiguration : IEntityTypeConfigura
         entity.Property(x => x.FailureCode).HasMaxLength(128);
         entity.Property(x => x.FailureMessage).HasMaxLength(1024);
         entity.HasIndex(x => x.IdempotencyKey).IsUnique();
+        entity.HasIndex(x => x.PlanId);
         entity.HasIndex(x => new { x.PlanId, x.Target });
         entity.HasOne<ContentGenerationPlan>().WithMany().HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
     }

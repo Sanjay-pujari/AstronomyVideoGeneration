@@ -3287,6 +3287,32 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.ToTable("rc2_publishing_approvals", (string)null);
                 });
 
+            modelBuilder.Entity("Astronomy.MediaFactory.Core.Rc2PublishingPublication", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<int>("AttemptCount").HasColumnType("integer");
+                    b.Property<DateTimeOffset>("CreatedUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("FailureCode").HasMaxLength(128).HasColumnType("character varying(128)");
+                    b.Property<string>("FailureMessage").HasMaxLength(1024).HasColumnType("character varying(1024)");
+                    b.Property<string>("IdempotencyKey").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<DateTimeOffset?>("LastAttemptUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("Phase20AuthorityChecksum").IsRequired().HasMaxLength(128).HasColumnType("character varying(128)");
+                    b.Property<Guid>("PlanId").HasColumnType("uuid");
+                    b.Property<string>("PublishingPackageId").IsRequired().HasMaxLength(128).HasColumnType("character varying(128)");
+                    b.Property<string>("RemotePublicationId").HasMaxLength(256).HasColumnType("character varying(256)");
+                    b.Property<string>("RemoteUrl").HasMaxLength(2048).HasColumnType("character varying(2048)");
+                    b.Property<string>("RoleOrMediaType").IsRequired().HasMaxLength(256).HasColumnType("character varying(256)");
+                    b.Property<int>("Status").HasColumnType("integer");
+                    b.Property<int>("Target").HasColumnType("integer");
+                    b.Property<DateTimeOffset>("UpdatedUtc").HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+                    b.HasIndex("IdempotencyKey").IsUnique();
+                    b.HasIndex("PlanId");
+                    b.HasIndex("PlanId", "Target");
+                    b.ToTable("rc2_publishing_publications", (string)null);
+                });
+
             modelBuilder.Entity("Astronomy.MediaFactory.Core.PublishingOptimizationRecord", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3727,6 +3753,15 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("Astronomy.MediaFactory.Core.Rc2PublishingApproval", b =>
+                {
+                    b.HasOne("Astronomy.MediaFactory.Core.ContentGenerationPlan", null)
+                        .WithMany()
+                        .HasForeignKey("PlanId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Astronomy.MediaFactory.Core.Rc2PublishingPublication", b =>
                 {
                     b.HasOne("Astronomy.MediaFactory.Core.ContentGenerationPlan", null)
                         .WithMany()
