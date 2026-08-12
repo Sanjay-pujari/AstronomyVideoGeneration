@@ -1,3 +1,4 @@
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
@@ -5,6 +6,52 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Rc2PublishingExecutionTests
 {
+    [Fact]
+    public void All_nine_targets_bind_and_honor_their_active_gates()
+    {
+        var publishing = new PublishingOptions { Enabled = true };
+        var youtube = new YouTubeOptions { PublishingEnabled = true };
+        var targets = new PublishingTargetsOptions
+        {
+            YouTubeLong = true, YouTubeShort = true, FacebookLong = true, FacebookReel = true,
+            InstagramReel = true, InstagramPost = true, InstagramCarousel = true,
+            FacebookPost = true, FacebookCarousel = true
+        };
+        var meta = new MetaPublishingOptions
+        {
+            Enabled = true, PublishFacebookLong = true, PublishFacebookFullVideo = true,
+            PublishFacebookReel = true, PublishInstagramReel = true
+        };
+        var platform = new PlatformPublishingOptions
+        {
+            YouTubeShortsEnabled = true, InstagramReelsEnabled = true, FacebookEnabled = true
+        };
+
+        Assert.All(Enum.GetValues<Rc2PublishingTarget>(), target => Assert.True(
+            Rc2PublishingExecutionService.IsEnabled(target, publishing, youtube, targets, meta, platform), target.ToString()));
+
+        publishing.Enabled = false;
+        Assert.All(Enum.GetValues<Rc2PublishingTarget>(), target => Assert.False(
+            Rc2PublishingExecutionService.IsEnabled(target, publishing, youtube, targets, meta, platform), target.ToString()));
+    }
+
+    [Fact]
+    public void Shorts_and_reels_require_platform_capability_but_image_posts_use_the_same_target_section()
+    {
+        var publishing = new PublishingOptions { Enabled = true };
+        var youtube = new YouTubeOptions { PublishingEnabled = true };
+        var targets = new PublishingTargetsOptions { InstagramPost = true };
+        var meta = new MetaPublishingOptions { Enabled = true, PublishInstagramReel = true };
+        var platform = new PlatformPublishingOptions();
+
+        Assert.False(Rc2PublishingExecutionService.IsEnabled(Rc2PublishingTarget.YouTubeShort,
+            publishing, youtube, targets, meta, platform));
+        Assert.False(Rc2PublishingExecutionService.IsEnabled(Rc2PublishingTarget.InstagramReel,
+            publishing, youtube, targets, meta, platform));
+        Assert.True(Rc2PublishingExecutionService.IsEnabled(Rc2PublishingTarget.InstagramPost,
+            publishing, youtube, targets, meta, platform));
+    }
+
     [Fact]
     public void Video_roles_are_resolved_from_governed_authority()
     {

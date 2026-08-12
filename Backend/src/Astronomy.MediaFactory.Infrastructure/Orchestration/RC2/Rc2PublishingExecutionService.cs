@@ -4,7 +4,6 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -15,7 +14,8 @@ public sealed class Rc2PublishingExecutionService(
     MediaFactoryDbContext db, ITokenHealthService tokenHealth, IYouTubePublishService youTube,
     IFacebookVideoPublishService facebookVideo, IFacebookReelPublishService facebookReel,
     IInstagramReelPublishService instagramReel, IOptions<PublishingTargetsOptions> targetOptions,
-    IOptions<MetaPublishingOptions> metaOptions, IConfiguration configuration,
+    IOptions<PublishingOptions> publishingOptions, IOptions<YouTubeOptions> youTubeOptions,
+    IOptions<MetaPublishingOptions> metaOptions, IOptions<PlatformPublishingOptions> platformOptions,
     ILogger<Rc2PublishingExecutionService> logger) : IRc2PublishingExecutionService
 {
     private const string PolicyVersion = "rc2-phase20-publish-v1";
@@ -93,7 +93,9 @@ public sealed class Rc2PublishingExecutionService(
 
         try { await VerifyArtifactsAsync(plan, artifacts, ct); }
         catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
-        if (!IsEnabled(target)) return Blocked(target, "RC2_PUBLISH_TARGET_DISABLED", $"{target} is not explicitly enabled.", artifacts.Count);
+        if (!IsEnabled(target, publishingOptions.Value, youTubeOptions.Value, targetOptions.Value,
+                metaOptions.Value, platformOptions.Value))
+            return Blocked(target, "RC2_PUBLISH_TARGET_DISABLED", $"{target} is not explicitly enabled.", artifacts.Count);
         var health = target is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.YouTubeShort
             ? await tokenHealth.CheckYouTubeAsync(ct) : await tokenHealth.CheckMetaAsync(ct);
         if (!health.IsConfigured || !health.IsValid)
@@ -202,13 +204,20 @@ public sealed class Rc2PublishingExecutionService(
         if (!path.StartsWith(root, StringComparison.Ordinal)) throw new Rc2PublishingControlException("RC2_PUBLISH_ARTIFACT_INVALID", "Artifact path escapes the governed output root.");
         return path;
     }
-    private bool IsEnabled(Rc2PublishingTarget target) => target switch {
-        Rc2PublishingTarget.YouTubeLong => targetOptions.Value.YouTubeLong,
-        Rc2PublishingTarget.YouTubeShort => targetOptions.Value.YouTubeShort,
-        Rc2PublishingTarget.FacebookLong => targetOptions.Value.FacebookLong && metaOptions.Value.Enabled,
-        Rc2PublishingTarget.FacebookReel => targetOptions.Value.FacebookReel && metaOptions.Value.Enabled,
-        Rc2PublishingTarget.InstagramReel => targetOptions.Value.InstagramReel && metaOptions.Value.Enabled,
-        _ => configuration.GetValue<bool>($"PublishingTargets:{target}") && metaOptions.Value.Enabled };
+    internal static bool IsEnabled(Rc2PublishingTarget target, PublishingOptions publishing,
+        YouTubeOptions youTube, PublishingTargetsOptions targets, MetaPublishingOptions meta,
+        PlatformPublishingOptions platform) => publishing.Enabled && target switch {
+        Rc2PublishingTarget.YouTubeLong => youTube.PublishingEnabled && targets.YouTubeLong,
+        Rc2PublishingTarget.YouTubeShort => youTube.PublishingEnabled && targets.YouTubeShort && platform.YouTubeShortsEnabled,
+        Rc2PublishingTarget.FacebookLong => targets.FacebookLong && meta.Enabled && meta.PublishFacebookLong &&
+            meta.PublishFacebookFullVideo && platform.FacebookEnabled,
+        Rc2PublishingTarget.FacebookReel => targets.FacebookReel && meta.Enabled && meta.PublishFacebookReel && platform.FacebookEnabled,
+        Rc2PublishingTarget.InstagramReel => targets.InstagramReel && meta.Enabled && meta.PublishInstagramReel && platform.InstagramReelsEnabled,
+        Rc2PublishingTarget.InstagramPost => targets.InstagramPost && meta.Enabled,
+        Rc2PublishingTarget.InstagramCarousel => targets.InstagramCarousel && meta.Enabled,
+        Rc2PublishingTarget.FacebookPost => targets.FacebookPost && meta.Enabled && platform.FacebookEnabled,
+        Rc2PublishingTarget.FacebookCarousel => targets.FacebookCarousel && meta.Enabled && platform.FacebookEnabled,
+        _ => false };
     private static bool IsCarousel(Rc2PublishingTarget target) => target is Rc2PublishingTarget.InstagramCarousel or Rc2PublishingTarget.FacebookCarousel;
     private static void ValidateTargets(IReadOnlyList<Rc2PublishingTarget>? targets, HashSet<Rc2PublishingTarget> allowed)
     {
@@ -221,7 +230,7 @@ public sealed class Rc2PublishingExecutionService(
     private static Rc2PublicationResult Result(Rc2PublishingPublication row, Rc2PublicationState state, bool reused,
         string? code = null, string? message = null, int? count = null) => new(row.Target, state, row.RemotePublicationId,
             row.RemoteUrl, reused, row.AttemptCount, code ?? row.FailureCode, message ?? row.FailureMessage, count);
-    private static string NonSecretHealthMessage(TokenHealthResult health) => !health.IsConfigured
+    internal static string NonSecretHealthMessage(TokenHealthResult health) => !health.IsConfigured
         ? $"{health.Platform} credentials are not configured; use the existing OAuth setup flow."
         : $"{health.Platform} credentials are unhealthy or cannot be refreshed; use the existing OAuth setup flow.";
     private static string SafeProviderMessage(string? message) => string.IsNullOrWhiteSpace(message) ? "Provider operation failed." :

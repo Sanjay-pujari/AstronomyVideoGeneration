@@ -1,8 +1,10 @@
 using System.Text.Json;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
@@ -306,7 +308,10 @@ public sealed class Phase20PublishingAuthorityReader : IPhase20PublishingAuthori
 }
 
 public sealed class Rc2PublishingControlService(IRc2PublishingPlanResolver resolver, IPhase20PublishingAuthorityReader reader,
-    IRc2Phase20ExecutionService phase20, MediaFactoryDbContext db, ILogger<Rc2PublishingControlService> logger) : IRc2PublishingControlService
+    IRc2Phase20ExecutionService phase20, MediaFactoryDbContext db, ITokenHealthService tokenHealth,
+    IOptions<PublishingOptions> publishingOptions, IOptions<YouTubeOptions> youTubeOptions,
+    IOptions<PublishingTargetsOptions> targetOptions, IOptions<MetaPublishingOptions> metaOptions,
+    IOptions<PlatformPublishingOptions> platformOptions, ILogger<Rc2PublishingControlService> logger) : IRc2PublishingControlService
 {
     public async Task<Rc2PublishingPackageResponse> CreateOrRefreshPackageAsync(Guid planId, bool overwriteExisting, CancellationToken ct)
     {
@@ -352,15 +357,22 @@ public sealed class Rc2PublishingControlService(IRc2PublishingPlanResolver resol
         var availableTargets = authority?.Targets.ToHashSet() ?? [];
         var publications = await db.Rc2PublishingPublications.AsNoTracking().Where(x => x.PlanId == planId)
             .OrderByDescending(x => x.UpdatedUtc).ToListAsync(ct);
+        var youTubeHealth = await tokenHealth.CheckYouTubeAsync(ct);
+        var metaHealth = await tokenHealth.CheckMetaAsync(ct);
         var targets = Enum.GetValues<Rc2PublishingTarget>().ToDictionary(x => x, x =>
         {
             var packageAvailable = availableTargets.Contains(x);
+            var health = x is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.YouTubeShort ? youTubeHealth : metaHealth;
+            var enabled = Rc2PublishingExecutionService.IsEnabled(x, publishingOptions.Value, youTubeOptions.Value,
+                targetOptions.Value, metaOptions.Value, platformOptions.Value);
             var publication = publications.FirstOrDefault(p => p.Target == x && (authority == null ||
                 p.PublishingPackageId == authority.PublishingPackageId && p.Phase20AuthorityChecksum == authority.AuthorityChecksum));
             var blockReason = !packageAvailable ? authority is null ? "BlockedPackageMissing" : "BlockedRequiredRoleMissing"
-                : approved ? null : "BlockedApprovalRequired";
-            return new Rc2TargetStatus(packageAvailable, false, false, "NotChecked",
-                publication?.Status ?? (packageAvailable && approved ? Rc2PublicationState.NotPublished : Rc2PublicationState.Blocked),
+                : !approved ? "BlockedApprovalRequired" : !enabled ? "BlockedTargetDisabled"
+                : !health.IsConfigured || !health.IsValid ? "BlockedCredentialsInvalid" : null;
+            return new Rc2TargetStatus(packageAvailable, true, enabled,
+                health.IsValid ? "Healthy" : Rc2PublishingExecutionService.NonSecretHealthMessage(health),
+                publication?.Status ?? (blockReason is null ? Rc2PublicationState.NotPublished : Rc2PublicationState.Blocked),
                 blockReason, publication?.RemotePublicationId, publication?.RemoteUrl, publication?.FailureCode,
                 publication?.Status == Rc2PublicationState.Failed);
         });
