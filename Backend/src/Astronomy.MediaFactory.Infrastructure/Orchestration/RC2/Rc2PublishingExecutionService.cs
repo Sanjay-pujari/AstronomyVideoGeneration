@@ -230,8 +230,8 @@ public sealed class Rc2PublishingExecutionService(
             meta.PublishFacebookFullVideo && platform.FacebookEnabled,
         Rc2PublishingTarget.FacebookReel => meta.Enabled && meta.PublishFacebookReel && platform.FacebookEnabled,
         Rc2PublishingTarget.InstagramReel => meta.Enabled && meta.PublishInstagramReel && platform.InstagramReelsEnabled,
-        Rc2PublishingTarget.InstagramPost or Rc2PublishingTarget.InstagramCarousel => meta.Enabled,
-        Rc2PublishingTarget.FacebookPost or Rc2PublishingTarget.FacebookCarousel => meta.Enabled && platform.FacebookEnabled,
+        Rc2PublishingTarget.InstagramPost or Rc2PublishingTarget.InstagramCarousel or
+        Rc2PublishingTarget.FacebookPost or Rc2PublishingTarget.FacebookCarousel => meta.Enabled,
         _ => false });
 
     private void LogEnablementConfiguration(Guid planId, Rc2PublishingTarget target)
