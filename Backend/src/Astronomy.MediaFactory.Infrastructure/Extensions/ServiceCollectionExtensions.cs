@@ -677,6 +677,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPhase20PublishingAuthorityReader, Phase20PublishingAuthorityReader>();
         services.AddScoped<IRc2Phase20ExecutionService, Rc2Phase20ExecutionService>();
         services.AddScoped<IRc2PublishingControlService, Rc2PublishingControlService>();
+        services.AddScoped<IRc2PublishingExecutionService, Rc2PublishingExecutionService>();
         services.AddScoped<IProductionRunningRecoveryService, ProductionRunningRecoveryService>();
         services.AddScoped<ContentPlanBatchGenerationService>();
         services.AddScoped<IContentPlanBatchGenerationService>(sp => sp.GetRequiredService<ContentPlanBatchGenerationService>());
