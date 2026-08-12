@@ -363,7 +363,7 @@ public sealed class Rc2PublishingControlService(IRc2PublishingPlanResolver resol
         {
             var packageAvailable = availableTargets.Contains(x);
             var health = x is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.YouTubeShort ? youTubeHealth : metaHealth;
-            var enabled = Rc2PublishingExecutionService.IsEnabled(x, publishingOptions.Value, youTubeOptions.Value,
+            var enabled = Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(x, publishingOptions.Value, youTubeOptions.Value,
                 targetOptions.Value, metaOptions.Value, platformOptions.Value);
             var publication = publications.FirstOrDefault(p => p.Target == x && (authority == null ||
                 p.PublishingPackageId == authority.PublishingPackageId && p.Phase20AuthorityChecksum == authority.AuthorityChecksum));

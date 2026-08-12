@@ -51,7 +51,6 @@ using Path = System.IO.Path;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration
-    .AddJsonFile("appsettings.json", optional: true)
     .AddMediaFactorySecureConfiguration(builder.Environment);
 
 var telemetryOptions = new TelemetryOptions();

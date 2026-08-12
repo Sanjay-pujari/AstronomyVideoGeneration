@@ -6,8 +6,33 @@ namespace Astronomy.MediaFactory.Tests;
 
 public sealed class Rc2PublishingExecutionTests
 {
+    public static TheoryData<Rc2PublishingTarget, Action<PublishingTargetsOptions>> TargetMappings => new()
+    {
+        { Rc2PublishingTarget.YouTubeLong, options => options.YouTubeLong = true },
+        { Rc2PublishingTarget.YouTubeShort, options => options.YouTubeShort = true },
+        { Rc2PublishingTarget.FacebookLong, options => options.FacebookLong = true },
+        { Rc2PublishingTarget.FacebookReel, options => options.FacebookReel = true },
+        { Rc2PublishingTarget.InstagramReel, options => options.InstagramReel = true },
+        { Rc2PublishingTarget.InstagramPost, options => options.InstagramPost = true },
+        { Rc2PublishingTarget.InstagramCarousel, options => options.InstagramCarousel = true },
+        { Rc2PublishingTarget.FacebookPost, options => options.FacebookPost = true },
+        { Rc2PublishingTarget.FacebookCarousel, options => options.FacebookCarousel = true }
+    };
+
+    [Theory]
+    [MemberData(nameof(TargetMappings))]
+    public void Each_target_has_one_deterministic_options_mapping(
+        Rc2PublishingTarget expected, Action<PublishingTargetsOptions> enable)
+    {
+        var targets = new PublishingTargetsOptions();
+        enable(targets);
+
+        Assert.All(Enum.GetValues<Rc2PublishingTarget>(), target => Assert.Equal(target == expected,
+            Rc2PublishingExecutionService.IsTargetEnabled(target, targets)));
+    }
+
     [Fact]
-    public void All_nine_targets_bind_and_honor_their_active_gates()
+    public void Global_gate_blocks_all_targets()
     {
         var publishing = new PublishingOptions { Enabled = true };
         var youtube = new YouTubeOptions { PublishingEnabled = true };
@@ -28,28 +53,43 @@ public sealed class Rc2PublishingExecutionTests
         };
 
         Assert.All(Enum.GetValues<Rc2PublishingTarget>(), target => Assert.True(
-            Rc2PublishingExecutionService.IsEnabled(target, publishing, youtube, targets, meta, platform), target.ToString()));
+            Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(target, publishing, youtube, targets, meta, platform), target.ToString()));
 
         publishing.Enabled = false;
         Assert.All(Enum.GetValues<Rc2PublishingTarget>(), target => Assert.False(
-            Rc2PublishingExecutionService.IsEnabled(target, publishing, youtube, targets, meta, platform), target.ToString()));
+            Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(target, publishing, youtube, targets, meta, platform), target.ToString()));
     }
 
     [Fact]
-    public void Shorts_and_reels_require_platform_capability_but_image_posts_use_the_same_target_section()
+    public void Provider_gates_are_independent_and_youtube_long_does_not_require_shorts_capability()
     {
         var publishing = new PublishingOptions { Enabled = true };
         var youtube = new YouTubeOptions { PublishingEnabled = true };
-        var targets = new PublishingTargetsOptions { InstagramPost = true };
+        var targets = new PublishingTargetsOptions { YouTubeLong = true, YouTubeShort = true, InstagramPost = true };
         var meta = new MetaPublishingOptions { Enabled = true, PublishInstagramReel = true };
         var platform = new PlatformPublishingOptions();
 
-        Assert.False(Rc2PublishingExecutionService.IsEnabled(Rc2PublishingTarget.YouTubeShort,
+        Assert.True(Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(Rc2PublishingTarget.YouTubeLong,
             publishing, youtube, targets, meta, platform));
-        Assert.False(Rc2PublishingExecutionService.IsEnabled(Rc2PublishingTarget.InstagramReel,
+        Assert.False(Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(Rc2PublishingTarget.YouTubeShort,
             publishing, youtube, targets, meta, platform));
-        Assert.True(Rc2PublishingExecutionService.IsEnabled(Rc2PublishingTarget.InstagramPost,
+        youtube.PublishingEnabled = false;
+        Assert.False(Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(Rc2PublishingTarget.YouTubeLong,
             publishing, youtube, targets, meta, platform));
+        Assert.True(Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(Rc2PublishingTarget.InstagramPost,
+            publishing, youtube, targets, meta, platform));
+        meta.Enabled = false;
+        Assert.False(Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(Rc2PublishingTarget.InstagramPost,
+            publishing, youtube, targets, meta, platform));
+    }
+
+    [Fact]
+    public void Explicit_target_enablement_has_no_scheduler_dependency()
+    {
+        Assert.True(Rc2PublishingExecutionService.IsTargetEffectivelyEnabled(Rc2PublishingTarget.YouTubeLong,
+            new PublishingOptions { Enabled = true }, new YouTubeOptions { PublishingEnabled = true },
+            new PublishingTargetsOptions { YouTubeLong = true }, new MetaPublishingOptions(),
+            new PlatformPublishingOptions()));
     }
 
     [Fact]

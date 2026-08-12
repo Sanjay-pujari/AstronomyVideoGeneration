@@ -4,6 +4,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -16,6 +17,7 @@ public sealed class Rc2PublishingExecutionService(
     IInstagramReelPublishService instagramReel, IOptions<PublishingTargetsOptions> targetOptions,
     IOptions<PublishingOptions> publishingOptions, IOptions<YouTubeOptions> youTubeOptions,
     IOptions<MetaPublishingOptions> metaOptions, IOptions<PlatformPublishingOptions> platformOptions,
+    IOptions<PublicMediaStorageOptions> publicMediaStorageOptions, IConfiguration configuration,
     ILogger<Rc2PublishingExecutionService> logger) : IRc2PublishingExecutionService
 {
     private const string PolicyVersion = "rc2-phase20-publish-v1";
@@ -93,7 +95,8 @@ public sealed class Rc2PublishingExecutionService(
 
         try { await VerifyArtifactsAsync(plan, artifacts, ct); }
         catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
-        if (!IsEnabled(target, publishingOptions.Value, youTubeOptions.Value, targetOptions.Value,
+        LogEnablementConfiguration(plan.PlanId, target);
+        if (!IsTargetEffectivelyEnabled(target, publishingOptions.Value, youTubeOptions.Value, targetOptions.Value,
                 metaOptions.Value, platformOptions.Value))
             return Blocked(target, "RC2_PUBLISH_TARGET_DISABLED", $"{target} is not explicitly enabled.", artifacts.Count);
         var health = target is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.YouTubeShort
@@ -204,20 +207,57 @@ public sealed class Rc2PublishingExecutionService(
         if (!path.StartsWith(root, StringComparison.Ordinal)) throw new Rc2PublishingControlException("RC2_PUBLISH_ARTIFACT_INVALID", "Artifact path escapes the governed output root.");
         return path;
     }
-    internal static bool IsEnabled(Rc2PublishingTarget target, PublishingOptions publishing,
+    internal static bool IsTargetEnabled(Rc2PublishingTarget target, PublishingTargetsOptions targets) => target switch
+    {
+        Rc2PublishingTarget.YouTubeLong => targets.YouTubeLong,
+        Rc2PublishingTarget.YouTubeShort => targets.YouTubeShort,
+        Rc2PublishingTarget.FacebookLong => targets.FacebookLong,
+        Rc2PublishingTarget.FacebookReel => targets.FacebookReel,
+        Rc2PublishingTarget.InstagramReel => targets.InstagramReel,
+        Rc2PublishingTarget.InstagramPost => targets.InstagramPost,
+        Rc2PublishingTarget.InstagramCarousel => targets.InstagramCarousel,
+        Rc2PublishingTarget.FacebookPost => targets.FacebookPost,
+        Rc2PublishingTarget.FacebookCarousel => targets.FacebookCarousel,
+        _ => false
+    };
+
+    internal static bool IsTargetEffectivelyEnabled(Rc2PublishingTarget target, PublishingOptions publishing,
         YouTubeOptions youTube, PublishingTargetsOptions targets, MetaPublishingOptions meta,
-        PlatformPublishingOptions platform) => publishing.Enabled && target switch {
-        Rc2PublishingTarget.YouTubeLong => youTube.PublishingEnabled && targets.YouTubeLong,
-        Rc2PublishingTarget.YouTubeShort => youTube.PublishingEnabled && targets.YouTubeShort && platform.YouTubeShortsEnabled,
-        Rc2PublishingTarget.FacebookLong => targets.FacebookLong && meta.Enabled && meta.PublishFacebookLong &&
+        PlatformPublishingOptions platform) => publishing.Enabled && IsTargetEnabled(target, targets) && (target switch {
+        Rc2PublishingTarget.YouTubeLong => youTube.PublishingEnabled,
+        Rc2PublishingTarget.YouTubeShort => youTube.PublishingEnabled && platform.YouTubeShortsEnabled,
+        Rc2PublishingTarget.FacebookLong => meta.Enabled && meta.PublishFacebookLong &&
             meta.PublishFacebookFullVideo && platform.FacebookEnabled,
-        Rc2PublishingTarget.FacebookReel => targets.FacebookReel && meta.Enabled && meta.PublishFacebookReel && platform.FacebookEnabled,
-        Rc2PublishingTarget.InstagramReel => targets.InstagramReel && meta.Enabled && meta.PublishInstagramReel && platform.InstagramReelsEnabled,
-        Rc2PublishingTarget.InstagramPost => targets.InstagramPost && meta.Enabled,
-        Rc2PublishingTarget.InstagramCarousel => targets.InstagramCarousel && meta.Enabled,
-        Rc2PublishingTarget.FacebookPost => targets.FacebookPost && meta.Enabled && platform.FacebookEnabled,
-        Rc2PublishingTarget.FacebookCarousel => targets.FacebookCarousel && meta.Enabled && platform.FacebookEnabled,
-        _ => false };
+        Rc2PublishingTarget.FacebookReel => meta.Enabled && meta.PublishFacebookReel && platform.FacebookEnabled,
+        Rc2PublishingTarget.InstagramReel => meta.Enabled && meta.PublishInstagramReel && platform.InstagramReelsEnabled,
+        Rc2PublishingTarget.InstagramPost or Rc2PublishingTarget.InstagramCarousel => meta.Enabled,
+        Rc2PublishingTarget.FacebookPost or Rc2PublishingTarget.FacebookCarousel => meta.Enabled && platform.FacebookEnabled,
+        _ => false });
+
+    private void LogEnablementConfiguration(Guid planId, Rc2PublishingTarget target)
+    {
+        var publishing = publishingOptions.Value;
+        var youtube = youTubeOptions.Value;
+        var targets = targetOptions.Value;
+        var meta = metaOptions.Value;
+        var storage = publicMediaStorageOptions.Value;
+        var platform = platformOptions.Value;
+        logger.LogInformation("RC2_PUBLISH_TARGET_CONFIGURATION PlanId={PlanId} Target={Target} PublishingEnabled={PublishingEnabled} YouTubePublishingEnabled={YouTubePublishingEnabled} YouTubeLong={YouTubeLong} YouTubeShort={YouTubeShort} FacebookLong={FacebookLong} FacebookReel={FacebookReel} InstagramReel={InstagramReel} InstagramPost={InstagramPost} InstagramCarousel={InstagramCarousel} FacebookPost={FacebookPost} FacebookCarousel={FacebookCarousel} MetaPublishingEnabled={MetaPublishingEnabled} PublicMediaStorageEnabled={PublicMediaStorageEnabled} YouTubeShortsEnabled={YouTubeShortsEnabled} InstagramReelsEnabled={InstagramReelsEnabled} FacebookEnabled={FacebookEnabled} YouTubeLongSource={YouTubeLongSource} ConfigurationProviders={ConfigurationProviders}",
+            planId, target, publishing.Enabled, youtube.PublishingEnabled, targets.YouTubeLong, targets.YouTubeShort,
+            targets.FacebookLong, targets.FacebookReel, targets.InstagramReel, targets.InstagramPost,
+            targets.InstagramCarousel, targets.FacebookPost, targets.FacebookCarousel, meta.Enabled, storage.Enabled,
+            platform.YouTubeShortsEnabled, platform.InstagramReelsEnabled, platform.FacebookEnabled,
+            EffectiveSource("PublishingTargets:YouTubeLong"), ProviderNames());
+    }
+
+    private string EffectiveSource(string key)
+    {
+        if (configuration is not IConfigurationRoot root) return "Unavailable";
+        return root.Providers.Reverse().FirstOrDefault(provider => provider.TryGet(key, out _))?.ToString() ?? "Default";
+    }
+
+    private string ProviderNames() => configuration is IConfigurationRoot root
+        ? string.Join(" -> ", root.Providers.Select(provider => provider.ToString())) : "Unavailable";
     private static bool IsCarousel(Rc2PublishingTarget target) => target is Rc2PublishingTarget.InstagramCarousel or Rc2PublishingTarget.FacebookCarousel;
     private static void ValidateTargets(IReadOnlyList<Rc2PublishingTarget>? targets, HashSet<Rc2PublishingTarget> allowed)
     {
