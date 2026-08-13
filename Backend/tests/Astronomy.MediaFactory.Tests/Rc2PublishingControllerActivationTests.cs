@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Api.Controllers;
 using Astronomy.MediaFactory.Core;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Tests;
 
