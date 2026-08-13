@@ -79,6 +79,36 @@ public sealed class YouTubeCredentialManagerTests
     }
 
     [Fact]
+    public async Task MissingCaptionScope_MarksCredentialAndFailsBeforeTokenRefresh()
+    {
+        using var workspace = new Workspace();
+        await workspace.WriteAsync("refresh", "access", DateTimeOffset.UtcNow.AddHours(1),
+            string.Join(" ", YouTubeOAuthScopes.VideoPublishing));
+        var handler = new RefreshHandler();
+
+        var error = await Assert.ThrowsAsync<YouTubeScopeUpgradeRequiredException>(() =>
+            workspace.Create(handler).EnsurePublishingScopesAsync(captionsRequired: true, default));
+
+        Assert.Contains("ReauthorizationRequiredForScopeUpgrade", error.Message);
+        Assert.True((await workspace.ReadAsync()).ReauthorizationRequired);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task UpgradedCredential_PassesCaptionScopePreflight()
+    {
+        using var workspace = new Workspace();
+        await workspace.WriteAsync("refresh", "access", DateTimeOffset.UtcNow.AddHours(1),
+            string.Join(" ", YouTubeOAuthScopes.VideoAndCaptionPublishing));
+        var handler = new RefreshHandler();
+
+        await workspace.Create(handler).EnsurePublishingScopesAsync(captionsRequired: true, default);
+
+        Assert.False((await workspace.ReadAsync()).ReauthorizationRequired);
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
     public async Task TenConcurrentExpiredRequests_PerformOneRefresh()
     {
         using var workspace = new Workspace();
@@ -97,9 +127,11 @@ public sealed class YouTubeCredentialManagerTests
         private readonly string directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "youtube-credential-tests-" + Guid.NewGuid().ToString("N"));
         public string Path => System.IO.Path.Combine(directory, "youtube-oauth-token.json");
         public Workspace() => Directory.CreateDirectory(directory);
-        public Task WriteAsync(string refresh, string access, DateTimeOffset expiry) => File.WriteAllTextAsync(Path,
-            JsonSerializer.Serialize(new YouTubeOAuthTokenFile("UC-expected", "AstroPulse", refresh, DateTimeOffset.UtcNow, access, expiry)));
-        public async Task<YouTubeOAuthTokenFile> ReadAsync() => JsonSerializer.Deserialize<YouTubeOAuthTokenFile>(await File.ReadAllTextAsync(Path))!;
+        public Task WriteAsync(string refresh, string access, DateTimeOffset expiry, string? scopes = null) => File.WriteAllTextAsync(Path,
+            JsonSerializer.Serialize(new YouTubeOAuthTokenFile("UC-expected", "AstroPulse", refresh, DateTimeOffset.UtcNow, access, expiry,
+                GrantedScopes: scopes ?? string.Join(" ", YouTubeOAuthScopes.VideoAndCaptionPublishing))));
+        public async Task<YouTubeOAuthTokenFile> ReadAsync() => JsonSerializer.Deserialize<YouTubeOAuthTokenFile>(
+            await File.ReadAllTextAsync(Path), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
         public YouTubeAuthService Create(HttpMessageHandler handler) => new(new HttpClient(handler), Options.Create(new YouTubeOptions
         {
             ClientId = "client", ClientSecret = "secret", TokenFilePath = Path

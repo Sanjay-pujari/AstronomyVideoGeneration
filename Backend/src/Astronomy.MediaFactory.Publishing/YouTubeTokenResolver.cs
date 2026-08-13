@@ -62,11 +62,11 @@ public static class YouTubeTokenResolver
         {
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
-            var refreshToken = GetStringProperty(root, "refreshToken", "refresh_token");
+            var refreshToken = GetStringProperty(root, "refreshToken", "refresh_token", "RefreshToken");
             return new YouTubeTokenFileDetails(
                 RefreshToken: refreshToken,
-                ChannelId: GetStringProperty(root, "channelId", "channel_id"),
-                ChannelTitle: GetStringProperty(root, "channelTitle", "channel_title"));
+                ChannelId: GetStringProperty(root, "channelId", "channel_id", "ChannelId"),
+                ChannelTitle: GetStringProperty(root, "channelTitle", "channel_title", "ChannelTitle"));
         }
         catch (JsonException ex)
         {

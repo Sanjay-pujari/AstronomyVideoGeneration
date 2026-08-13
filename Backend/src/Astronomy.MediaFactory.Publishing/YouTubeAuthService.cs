@@ -29,6 +29,18 @@ public sealed class YouTubeAuthService : IYouTubeAuthService
     public async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
         => await GetAccessTokenAsync(false, cancellationToken);
 
+    public async Task EnsurePublishingScopesAsync(bool captionsRequired, CancellationToken cancellationToken)
+    {
+        var path = YouTubeTokenResolver.ResolveTokenFilePath(_options);
+        var stored = await ReadTokenFileAsync(path, cancellationToken);
+        if (stored is not null && YouTubeOAuthScopes.Missing(stored.GrantedScopes, captionsRequired).Count == 0)
+            return;
+
+        if (stored is not null && !stored.ReauthorizationRequired)
+            await AtomicTokenFile.WriteAsync(path, stored with { ReauthorizationRequired = true }, JsonOptions, cancellationToken);
+        throw new YouTubeScopeUpgradeRequiredException();
+    }
+
     public async Task<string> GetAccessTokenAsync(bool forceRefresh, CancellationToken cancellationToken)
     {
         await RefreshLock.WaitAsync(cancellationToken);
@@ -125,4 +137,10 @@ public sealed class YouTubeReauthorizationRequiredException : InvalidOperationEx
 {
     public YouTubeReauthorizationRequiredException()
         : base("YouTube authorization was revoked or expired; interactive reauthorization is required at /api/youtubeoauth/start.") { }
+}
+
+public sealed class YouTubeScopeUpgradeRequiredException : InvalidOperationException
+{
+    public YouTubeScopeUpgradeRequiredException()
+        : base("ReauthorizationRequiredForScopeUpgrade: YouTube publishing credentials lack a mandatory OAuth scope; complete one-time authorization at /api/youtubeoauth/start.") { }
 }
