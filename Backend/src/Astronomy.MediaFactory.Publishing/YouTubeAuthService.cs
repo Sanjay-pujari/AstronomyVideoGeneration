@@ -27,6 +27,9 @@ public sealed class YouTubeAuthService : IYouTubeAuthService
     }
 
     public async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken)
+        => await GetAccessTokenAsync(false, cancellationToken);
+
+    public async Task<string> GetAccessTokenAsync(bool forceRefresh, CancellationToken cancellationToken)
     {
         await RefreshLock.WaitAsync(cancellationToken);
         try
@@ -42,7 +45,7 @@ public sealed class YouTubeAuthService : IYouTubeAuthService
         var stored = await ReadTokenFileAsync(path, cancellationToken);
         if (stored?.ReauthorizationRequired == true)
             throw new YouTubeReauthorizationRequiredException();
-        if (!string.IsNullOrWhiteSpace(stored?.AccessToken)
+        if (!forceRefresh && !string.IsNullOrWhiteSpace(stored?.AccessToken)
             && stored.AccessTokenExpiresUtc > DateTimeOffset.UtcNow.Add(AccessTokenSafetyWindow))
             return stored.AccessToken;
 
