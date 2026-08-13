@@ -36,5 +36,8 @@ public sealed class Rc2PublishingPublicationPersistenceTests
         Assert.Equal(typeof(int), entity.FindProperty(nameof(Rc2PublishingPublication.Target))!
             .GetTypeMapping().Converter!.ProviderClrType);
         Assert.Equal(DeleteBehavior.Restrict, Assert.Single(entity.GetForeignKeys()).DeleteBehavior);
+        Assert.Null(entity.FindProperty(nameof(Rc2PublishingPublication.FailureMessage))!.GetMaxLength());
+        Assert.Equal("text", entity.FindProperty(nameof(Rc2PublishingPublication.FailureMessage))!.GetColumnType());
+        Assert.Equal(128, entity.FindProperty(nameof(Rc2PublishingPublication.FailureCode))!.GetMaxLength());
     }
 }

@@ -129,6 +129,75 @@ public sealed class Rc2YouTubeLongCheckpointTests
     }
 
     [Fact]
+    public async Task Failure_message_longer_than_legacy_limit_persists_without_changing_checkpoints()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var diagnostic = "caption processing failed: " + new string('x', 2_000);
+        fixture.Row.Status = Rc2PublicationState.Failed;
+        fixture.Row.RemotePublicationId = VideoId;
+        fixture.Row.VideoUploadCompleted = true;
+        fixture.Row.ThumbnailCompleted = true;
+        fixture.Row.FailureCode = "RC2_PUBLISH_PROVIDER_FAILED";
+        fixture.Row.FailureMessage = diagnostic;
+
+        await fixture.Service.PersistFailureAsync(fixture.Row, CancellationToken.None);
+
+        fixture.Db.ChangeTracker.Clear();
+        var saved = await fixture.Db.Rc2PublishingPublications.SingleAsync();
+        Assert.Equal(diagnostic, saved.FailureMessage);
+        Assert.Equal(Rc2PublicationState.Failed, saved.Status);
+        Assert.Equal(VideoId, saved.RemotePublicationId);
+        Assert.True(saved.VideoUploadCompleted && saved.ThumbnailCompleted);
+    }
+
+    [Fact]
+    public void Pathological_provider_diagnostic_is_redacted_bounded_and_api_response_is_concise()
+    {
+        var diagnostic = "status=400 reason=captionFailed Authorization: Bearer top-secret " +
+            "access_token=also-secret client_secret=never-log " + new string('z', 100_000);
+
+        var stored = Rc2PublishingExecutionService.NormalizeProviderFailure(diagnostic);
+        var api = Rc2PublishingExecutionService.ConciseApiFailureMessage(stored)!;
+
+        Assert.Contains("status=400 reason=captionFailed", stored);
+        Assert.DoesNotContain("top-secret", stored);
+        Assert.DoesNotContain("also-secret", stored);
+        Assert.DoesNotContain("never-log", stored);
+        Assert.True(stored.Length <= Rc2PublishingExecutionService.MaximumStoredProviderDiagnosticLength + 23);
+        Assert.True(api.Length <= Rc2PublishingExecutionService.MaximumApiFailureMessageLength + 20);
+    }
+
+    [Fact]
+    public async Task Detailed_failure_save_falls_back_without_losing_remote_checkpoint()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.Db.Database.ExecuteSqlRawAsync("""
+            CREATE TRIGGER reject_large_failure BEFORE UPDATE ON rc2_publishing_publications
+            WHEN length(NEW.FailureMessage) > 1024
+            BEGIN SELECT RAISE(ABORT, 'simulated diagnostic serialization failure'); END;
+            """);
+        fixture.Row.Status = Rc2PublicationState.Failed;
+        fixture.Row.RemotePublicationId = VideoId;
+        fixture.Row.RemoteUrl = $"https://www.youtube.com/watch?v={VideoId}";
+        fixture.Row.VideoUploadCompleted = true;
+        fixture.Row.ThumbnailCompleted = true;
+        fixture.Row.LastCompletedStep = Rc2PublicationStep.ThumbnailCompleted;
+        fixture.Row.FailureCode = "RC2_PUBLISH_PROVIDER_FAILED";
+        fixture.Row.FailureMessage = new string('d', 2_000);
+
+        await fixture.Service.PersistFailureAsync(fixture.Row, CancellationToken.None);
+
+        fixture.Db.ChangeTracker.Clear();
+        var saved = await fixture.Db.Rc2PublishingPublications.SingleAsync();
+        Assert.Equal(Rc2PublishingExecutionService.FailureDiagnosticFallback, saved.FailureMessage);
+        Assert.Equal(Rc2PublicationState.Failed, saved.Status);
+        Assert.Equal(VideoId, saved.RemotePublicationId);
+        Assert.True(saved.VideoUploadCompleted && saved.ThumbnailCompleted);
+        Assert.False(saved.CaptionCompleted || saved.RemoteVerificationCompleted);
+        Assert.Equal(Rc2PublicationStep.ThumbnailCompleted, saved.LastCompletedStep);
+    }
+
+    [Fact]
     public async Task Caption_validation_rejects_invalid_utf8_and_invalid_srt_structure()
     {
         var path = Path.GetTempFileName();

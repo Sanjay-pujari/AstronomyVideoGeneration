@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
@@ -22,6 +23,9 @@ public sealed class Rc2PublishingExecutionService(
     ILogger<Rc2PublishingExecutionService> logger) : IRc2PublishingExecutionService
 {
     private const string PolicyVersion = "rc2-phase20-publish-v1";
+    internal const int MaximumStoredProviderDiagnosticLength = 16_384;
+    internal const int MaximumApiFailureMessageLength = 512;
+    internal const string FailureDiagnosticFallback = "Provider operation failed; detailed diagnostic could not be persisted.";
     private static readonly HashSet<Rc2PublishingTarget> VideoTargets =
         [Rc2PublishingTarget.YouTubeLong, Rc2PublishingTarget.YouTubeShort, Rc2PublishingTarget.FacebookLong,
          Rc2PublishingTarget.FacebookReel, Rc2PublishingTarget.InstagramReel];
@@ -146,23 +150,47 @@ public sealed class Rc2PublishingExecutionService(
                 row.Status = provider.Success ? Rc2PublicationState.Published : Rc2PublicationState.Failed;
                 row.RemotePublicationId = provider.Id; row.RemoteUrl = provider.Url;
                 row.FailureCode = provider.Success ? null : "RC2_PUBLISH_PROVIDER_FAILED";
-                row.FailureMessage = provider.Success ? null : provider.Error;
+                row.FailureMessage = provider.Success ? null : NormalizeProviderFailure(provider.Error);
             }
         }
         catch (YouTubeCreateOutcomeUnknownException ex)
         {
             row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN";
-            row.FailureMessage = SafeProviderMessage(ex.Message);
+            row.FailureMessage = NormalizeProviderFailure(ex.Message);
         }
         catch (Exception ex)
         {
             row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_PROVIDER_FAILED";
-            row.FailureMessage = SafeProviderMessage(ex.Message);
+            row.FailureMessage = NormalizeProviderFailure(ex.Message);
         }
-        row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        row.UpdatedUtc = DateTimeOffset.UtcNow;
+        if (row.Status == Rc2PublicationState.Failed)
+            await PersistFailureAsync(row, ct);
+        else
+            await db.SaveChangesAsync(ct);
         logger.LogInformation("RC2_PUBLISH_{RequestType}_TARGET_COMPLETED PlanId={PlanId} Target={Target} IdempotencyKey={IdempotencyKey} State={State}",
             requestType.ToUpperInvariant(), plan.PlanId, target, key, row.Status);
-        return Result(row, row.Status, false, row.FailureCode, row.FailureMessage, IsCarousel(target) ? artifacts.Count : null);
+        return Result(row, row.Status, false, row.FailureCode, ConciseApiFailureMessage(row.FailureMessage), IsCarousel(target) ? artifacts.Count : null);
+    }
+
+    internal async Task PersistFailureAsync(Rc2PublishingPublication row, CancellationToken ct)
+    {
+        row.FailureMessage = NormalizeProviderFailure(row.FailureMessage);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception detailedFailure) when (detailedFailure is not OperationCanceledException)
+        {
+            logger.LogError(detailedFailure,
+                "RC2 provider diagnostic persistence failed; saving compact failure. PublicationId={PublicationId}", row.Id);
+            // Do not clear/reload the entity: the durable remote identity and checkpoint values on
+            // this tracked publication are safety-critical and must survive the fallback update.
+            row.Status = Rc2PublicationState.Failed;
+            row.FailureMessage = FailureDiagnosticFallback;
+            row.UpdatedUtc = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(ct);
+        }
     }
 
     internal async Task PublishYouTubeLongAsync(Rc2PublishingPublication row, Rc2PublishingPlan plan,
@@ -415,7 +443,27 @@ public sealed class Rc2PublishingExecutionService(
     internal static string NonSecretHealthMessage(TokenHealthResult health) => !health.IsConfigured
         ? $"{health.Platform} credentials are not configured; use the existing OAuth setup flow."
         : $"{health.Platform} credentials are unhealthy or cannot be refreshed; use the existing OAuth setup flow.";
-    private static string SafeProviderMessage(string? message) => string.IsNullOrWhiteSpace(message) ? "Provider operation failed." :
-        message.Replace("access_token", "credential", StringComparison.OrdinalIgnoreCase)
-            .Replace("refresh_token", "credential", StringComparison.OrdinalIgnoreCase);
+    internal static string NormalizeProviderFailure(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return "Provider operation failed.";
+
+        var safe = message.Replace('\0', ' ').Trim();
+        safe = Regex.Replace(safe, @"(?i)\b(authorization)\s*:\s*(?:bearer\s+)?[^\s,;\r\n]+", "$1: [REDACTED]");
+        safe = Regex.Replace(safe,
+            "(?i)([\\\"']?(?:access[_-]?token|refresh[_-]?token|client[_-]?secret)[\\\"']?\\s*[:=]\\s*[\\\"']?)[^\\s,;\\\"'&}]+",
+            "$1[REDACTED]");
+        safe = Regex.Replace(safe, @"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]");
+        return safe.Length <= MaximumStoredProviderDiagnosticLength
+            ? safe
+            : safe[..MaximumStoredProviderDiagnosticLength] + " [diagnostic truncated]";
+    }
+
+    internal static string? ConciseApiFailureMessage(string? message)
+    {
+        if (message is null) return null;
+        var safe = NormalizeProviderFailure(message);
+        return safe.Length <= MaximumApiFailureMessageLength
+            ? safe
+            : safe[..MaximumApiFailureMessageLength] + " [details truncated]";
+    }
 }
