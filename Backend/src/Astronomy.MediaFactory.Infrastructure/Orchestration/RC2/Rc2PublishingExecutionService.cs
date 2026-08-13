@@ -13,6 +13,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 public sealed class Rc2PublishingExecutionService(
     IRc2PublishingPlanResolver resolver, IPhase20PublishingAuthorityReader authorityReader,
     MediaFactoryDbContext db, ITokenHealthService tokenHealth, IYouTubePublishService youTube,
+    IYouTubeAuthService youTubeAuth, IYouTubeApiClient youTubeApi,
     IFacebookVideoPublishService facebookVideo, IFacebookReelPublishService facebookReel,
     IInstagramReelPublishService instagramReel, IOptions<PublishingTargetsOptions> targetOptions,
     IOptions<PublishingOptions> publishingOptions, IOptions<YouTubeOptions> youTubeOptions,
@@ -95,6 +96,11 @@ public sealed class Rc2PublishingExecutionService(
 
         try { await VerifyArtifactsAsync(plan, artifacts, ct); }
         catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
+        if (target == Rc2PublishingTarget.YouTubeLong)
+        {
+            try { ValidateYouTubeMetadata(plan.Title, ResolveYouTubePrivacy(), youTubeOptions.Value.CategoryId); }
+            catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
+        }
         LogEnablementConfiguration(plan.PlanId, target);
         if (!IsTargetEffectivelyEnabled(target, publishingOptions.Value, youTubeOptions.Value, targetOptions.Value,
                 metaOptions.Value, platformOptions.Value))
@@ -108,6 +114,10 @@ public sealed class Rc2PublishingExecutionService(
                 : Blocked(target, "RC2_PUBLISH_CREDENTIALS_INVALID", NonSecretHealthMessage(health), artifacts.Count);
         if (dryRun) return new(target, Rc2PublicationState.NotPublished, null, null, false, existing?.AttemptCount ?? 0,
             null, null, IsCarousel(target) ? artifacts.Count : null, true);
+
+        if (existing?.FailureCode == "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN" && !existing.VideoUploadCompleted)
+            return Result(existing, Rc2PublicationState.Blocked, false, existing.FailureCode,
+                "The remote create outcome requires reconciliation before another upload can be attempted.");
 
         var row = existing is null ? new Rc2PublishingPublication
         {
@@ -128,11 +138,21 @@ public sealed class Rc2PublishingExecutionService(
 
         try
         {
-            var provider = await PublishProviderAsync(plan, target, artifacts, ct);
-            row.Status = provider.Success ? Rc2PublicationState.Published : Rc2PublicationState.Failed;
-            row.RemotePublicationId = provider.Id; row.RemoteUrl = provider.Url;
-            row.FailureCode = provider.Success ? null : "RC2_PUBLISH_PROVIDER_FAILED";
-            row.FailureMessage = provider.Success ? null : provider.Error;
+            if (target == Rc2PublishingTarget.YouTubeLong)
+                await PublishYouTubeLongAsync(row, plan, artifacts, ct);
+            else
+            {
+                var provider = await PublishProviderAsync(plan, target, artifacts, ct);
+                row.Status = provider.Success ? Rc2PublicationState.Published : Rc2PublicationState.Failed;
+                row.RemotePublicationId = provider.Id; row.RemoteUrl = provider.Url;
+                row.FailureCode = provider.Success ? null : "RC2_PUBLISH_PROVIDER_FAILED";
+                row.FailureMessage = provider.Success ? null : provider.Error;
+            }
+        }
+        catch (YouTubeCreateOutcomeUnknownException ex)
+        {
+            row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN";
+            row.FailureMessage = SafeProviderMessage(ex.Message);
         }
         catch (Exception ex)
         {
@@ -144,6 +164,95 @@ public sealed class Rc2PublishingExecutionService(
             requestType.ToUpperInvariant(), plan.PlanId, target, key, row.Status);
         return Result(row, row.Status, false, row.FailureCode, row.FailureMessage, IsCarousel(target) ? artifacts.Count : null);
     }
+
+    private async Task PublishYouTubeLongAsync(Rc2PublishingPublication row, Rc2PublishingPlan plan,
+        IReadOnlyList<Phase20PublishingArtifact> artifacts, CancellationToken ct)
+    {
+        string PathFor(string role) => ResolvePath(plan, artifacts.Single(x => x.Role == role).Path);
+        var privacy = ResolveYouTubePrivacy();
+        var request = new PublishRequest { PipelineRunId = plan.PlanId, VideoPath = PathFor("LongVideo"),
+            ThumbnailPath = PathFor("ThumbnailLandscape"), PlatformThumbnailPath = PathFor("ThumbnailLandscape"),
+            Title = plan.Title.Trim(), Description = plan.Title.Trim(), AssetType = "LongVideo", PrivacyStatus = privacy,
+            IsShort = false, UploadThumbnail = true };
+
+        // Refresh before the non-idempotent create call; an upload exception is deliberately never replayed.
+        var accessToken = await youTubeAuth.GetAccessTokenAsync(true, ct);
+        var channel = await youTubeApi.GetAuthenticatedChannelAsync(accessToken, ct);
+        if (!string.IsNullOrWhiteSpace(youTubeOptions.Value.ExpectedChannelId) &&
+            !string.Equals(channel.ChannelId, youTubeOptions.Value.ExpectedChannelId, StringComparison.Ordinal))
+            throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_CHANNEL_MISMATCH", "Authenticated YouTube channel does not match configuration.");
+
+        if (!row.VideoUploadCompleted)
+        {
+            if (!string.IsNullOrWhiteSpace(row.RemotePublicationId))
+                throw new Rc2PublishingControlException("RC2_PUBLISH_CHECKPOINT_INVALID", "Remote video checkpoint is inconsistent.");
+            string videoId;
+            try { videoId = await youTubeApi.UploadVideoAsync(request, accessToken, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { throw new YouTubeCreateOutcomeUnknownException(ex.Message, ex); }
+            if (string.IsNullOrWhiteSpace(videoId))
+                throw new YouTubeCreateOutcomeUnknownException("YouTube create completed without a confirmed video ID.");
+
+            // Critical durability boundary: no supplementary remote call occurs before this commit succeeds.
+            row.RemotePublicationId = videoId;
+            row.RemoteUrl = $"https://www.youtube.com/watch?v={videoId}";
+            row.VideoCreatedUtc = row.UpdatedUtc = DateTimeOffset.UtcNow;
+            row.VideoUploadCompleted = true;
+            row.LastCompletedStep = Rc2PublicationStep.VideoCreated;
+            await db.SaveChangesAsync(ct);
+        }
+
+        if (!row.ThumbnailCompleted)
+        {
+            await youTubeApi.UploadThumbnailAsync(row.RemotePublicationId!, PathFor("ThumbnailLandscape"), accessToken, ct);
+            row.ThumbnailCompleted = true; row.LastCompletedStep = Rc2PublicationStep.ThumbnailCompleted;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+        if (!row.CaptionCompleted)
+        {
+            var (language, name) = ResolveCaptionLanguage(plan.Language);
+            await youTubeApi.UploadCaptionAsync(row.RemotePublicationId!, PathFor("LongCaptionSrt"), language, name, accessToken, ct);
+            row.CaptionCompleted = true; row.LastCompletedStep = Rc2PublicationStep.CaptionCompleted;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+        if (!row.RemoteVerificationCompleted)
+        {
+            var remote = await youTubeApi.GetVideoPostUploadStatusAsync(row.RemotePublicationId!, accessToken, ct);
+            if (remote is null || remote.VideoId != row.RemotePublicationId || remote.ChannelId != channel.ChannelId ||
+                remote.ChannelId != youTubeOptions.Value.ExpectedChannelId || !string.Equals(remote.PrivacyStatus, privacy, StringComparison.OrdinalIgnoreCase))
+                throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_VERIFICATION_FAILED", "YouTube remote video verification failed closed.");
+            row.RemoteVerificationCompleted = true; row.LastCompletedStep = Rc2PublicationStep.RemoteVerified;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+        if (!row.VideoUploadCompleted || !row.ThumbnailCompleted || !row.CaptionCompleted || !row.RemoteVerificationCompleted)
+            throw new Rc2PublishingControlException("RC2_PUBLISH_CHECKPOINT_INCOMPLETE", "Mandatory YouTube publication steps are incomplete.");
+        row.Status = Rc2PublicationState.Published; row.FailureCode = row.FailureMessage = null;
+    }
+
+    private string ResolveYouTubePrivacy() => publishingOptions.Value.Mode.Equals("Public", StringComparison.OrdinalIgnoreCase)
+        ? "public" : publishingOptions.Value.Mode.Equals("Private", StringComparison.OrdinalIgnoreCase) ? "private"
+        : publishingOptions.Value.DefaultPrivacyStatus.ToLowerInvariant();
+
+    internal static (string Code, string Name) ResolveCaptionLanguage(string language) => language.Trim().ToLowerInvariant() switch
+    {
+        "en" or "eng" or "english" => ("en", "English"),
+        "es" or "spa" or "spanish" => ("es", "Spanish"),
+        "fr" or "fra" or "french" => ("fr", "French"),
+        _ => throw new Rc2PublishingControlException("RC2_PUBLISH_CAPTION_LANGUAGE_INVALID", "Plan language is not mapped to a YouTube caption language.")
+    };
+
+    internal static void ValidateYouTubeMetadata(string title, string privacy, string category)
+    {
+        if (string.IsNullOrWhiteSpace(title) || title.Trim().Length > 100)
+            throw new Rc2PublishingControlException("RC2_PUBLISH_TITLE_INVALID", "YouTube title must contain 1 to 100 characters.");
+        if (title.Length > 5000) // deterministic title fallback is also the governed description source
+            throw new Rc2PublishingControlException("RC2_PUBLISH_DESCRIPTION_INVALID", "YouTube description exceeds 5000 characters.");
+        if (privacy is not ("private" or "public" or "unlisted"))
+            throw new Rc2PublishingControlException("RC2_PUBLISH_PRIVACY_INVALID", "YouTube privacy is invalid.");
+        if (!int.TryParse(category, out var categoryId) || categoryId <= 0)
+            throw new Rc2PublishingControlException("RC2_PUBLISH_CATEGORY_INVALID", "YouTube category is invalid.");
+    }
+
+    private sealed class YouTubeCreateOutcomeUnknownException(string message, Exception? inner = null) : Exception(message, inner);
 
     private async Task<(bool Success, string? Id, string? Url, string? Error)> PublishProviderAsync(
         Rc2PublishingPlan plan, Rc2PublishingTarget target, IReadOnlyList<Phase20PublishingArtifact> artifacts, CancellationToken ct)

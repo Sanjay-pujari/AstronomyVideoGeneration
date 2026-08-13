@@ -82,7 +82,9 @@ public sealed class YouTubePublishService : IYouTubePublishService
                 throw new FileNotFoundException("Final video file is missing.", normalizedRequest.VideoPath);
             }
 
-            var accessToken = await _authService.GetAccessTokenAsync(cancellationToken);
+            // Refresh before the non-idempotent insert. Upload failures are not blindly replayed because
+            // an HTTP/network error can be ambiguous after the provider has accepted the resource.
+            var accessToken = await _authService.GetAccessTokenAsync(true, cancellationToken);
             YouTubeChannelInfo channel;
             try
             {
@@ -96,16 +98,7 @@ public sealed class YouTubePublishService : IYouTubePublishService
             _logger.LogInformation("Publishing to YouTube channel: {ChannelTitle} ({ChannelId})", channel.ChannelTitle, channel.ChannelId);
             await WriteJsonAsync(Path.Combine(outputDirectory, "youtube-channel-info.json"), channel, cancellationToken);
 
-            string videoId;
-            try
-            {
-                videoId = await _apiClient.UploadVideoAsync(normalizedRequest, accessToken, cancellationToken);
-            }
-            catch (GoogleApiException ex) when (ex.HttpStatusCode == System.Net.HttpStatusCode.Unauthorized)
-            {
-                accessToken = await _authService.GetAccessTokenAsync(true, cancellationToken);
-                videoId = await _apiClient.UploadVideoAsync(normalizedRequest, accessToken, cancellationToken);
-            }
+            var videoId = await _apiClient.UploadVideoAsync(normalizedRequest, accessToken, cancellationToken);
             var thumbnailOutcome = await TryUploadThumbnailAsync(normalizedRequest, videoId, accessToken, outputDirectory, cancellationToken);
             var thumbnailUploadAttempted = thumbnailOutcome.UploadAttempted;
             var warnings = new List<string>();

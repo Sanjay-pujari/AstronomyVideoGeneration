@@ -171,6 +171,8 @@ public interface IYouTubeApiClient
     Task<string> UploadVideoAsync(PublishRequest request, string accessToken, CancellationToken cancellationToken);
     Task UploadThumbnailAsync(string videoId, string thumbnailPath, string accessToken, CancellationToken cancellationToken);
     Task<YouTubeVideoPostUploadStatus?> GetVideoPostUploadStatusAsync(string videoId, string accessToken, CancellationToken cancellationToken);
+    Task UploadCaptionAsync(string videoId, string captionPath, string language, string name, string accessToken,
+        CancellationToken cancellationToken) => throw new NotSupportedException("Caption upload is not supported by this client.");
 }
 
 public interface IAzureBlobStorageService { Task<BlobUploadResult> UploadAsync(BlobUploadRequest request, CancellationToken cancellationToken); }
