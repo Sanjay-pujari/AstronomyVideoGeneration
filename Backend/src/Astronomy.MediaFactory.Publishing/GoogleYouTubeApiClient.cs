@@ -94,6 +94,21 @@ public sealed class GoogleYouTubeApiClient : IYouTubeApiClient
         }
     }
 
+    public async Task UploadCaptionAsync(string videoId, string captionPath, string language, string name,
+        string accessToken, CancellationToken cancellationToken)
+    {
+        var youtube = CreateService(accessToken);
+        await using var stream = File.OpenRead(captionPath);
+        var caption = new Caption
+        {
+            Snippet = new CaptionSnippet { VideoId = videoId, Language = language, Name = name }
+        };
+        var upload = youtube.Captions.Insert(caption, "snippet", stream, "application/x-subrip");
+        await upload.UploadAsync(cancellationToken);
+        if (upload.GetProgress().Status != UploadStatus.Completed || string.IsNullOrWhiteSpace(upload.ResponseBody?.Id))
+            throw new InvalidOperationException($"YouTube caption upload did not complete successfully. Status: {upload.GetProgress().Status}");
+    }
+
 
     public async Task<YouTubeVideoPostUploadStatus?> GetVideoPostUploadStatusAsync(string videoId, string accessToken, CancellationToken cancellationToken)
     {
@@ -109,6 +124,8 @@ public sealed class GoogleYouTubeApiClient : IYouTubeApiClient
 
         return new YouTubeVideoPostUploadStatus
         {
+            VideoId = video.Id,
+            ChannelId = video.Snippet?.ChannelId,
             SnippetThumbnailDefault = video.Snippet?.Thumbnails?.Default__,
             SnippetThumbnailMedium = video.Snippet?.Thumbnails?.Medium,
             SnippetThumbnailHigh = video.Snippet?.Thumbnails?.High,

@@ -12,6 +12,8 @@ public enum Rc2PublicationState { NotPublished, Publishing, Published, Failed, A
 public enum Rc2PublishingApprovalStatus { NotAvailable, Pending, Approved, Rejected }
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum Rc2PublishMode { Now, Scheduled }
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum Rc2PublicationStep { None, VideoCreated, ThumbnailCompleted, CaptionCompleted, RemoteVerified }
 
 public sealed record Rc2CreatePublishingPackageRequest(Guid PlanId, bool OverwriteExisting);
 public sealed record Rc2SetPublishingApprovalRequest(Guid PlanId, Rc2PublishingApprovalStatus Decision);
@@ -91,6 +93,12 @@ public sealed class Rc2PublishingPublication
     public DateTimeOffset? LastAttemptUtc { get; set; }
     public string? RemotePublicationId { get; set; }
     public string? RemoteUrl { get; set; }
+    public DateTimeOffset? VideoCreatedUtc { get; set; }
+    public bool VideoUploadCompleted { get; set; }
+    public bool ThumbnailCompleted { get; set; }
+    public bool CaptionCompleted { get; set; }
+    public bool RemoteVerificationCompleted { get; set; }
+    public Rc2PublicationStep LastCompletedStep { get; set; }
     public string? FailureCode { get; set; }
     public string? FailureMessage { get; set; }
     public DateTimeOffset CreatedUtc { get; set; }

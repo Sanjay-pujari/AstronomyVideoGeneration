@@ -97,6 +97,8 @@ public sealed class YouTubeChannelInfo
 
 public sealed class YouTubeVideoPostUploadStatus
 {
+    public string? VideoId { get; init; }
+    public string? ChannelId { get; init; }
     public object? SnippetThumbnailDefault { get; init; }
     public object? SnippetThumbnailMedium { get; init; }
     public object? SnippetThumbnailHigh { get; init; }

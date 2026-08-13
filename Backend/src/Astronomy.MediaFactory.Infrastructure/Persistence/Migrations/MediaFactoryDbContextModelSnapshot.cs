@@ -3291,20 +3291,26 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                 {
                     b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
                     b.Property<int>("AttemptCount").HasColumnType("integer");
+                    b.Property<bool>("CaptionCompleted").HasColumnType("boolean");
                     b.Property<DateTimeOffset>("CreatedUtc").HasColumnType("timestamp with time zone");
                     b.Property<string>("FailureCode").HasMaxLength(128).HasColumnType("character varying(128)");
                     b.Property<string>("FailureMessage").HasMaxLength(1024).HasColumnType("character varying(1024)");
                     b.Property<string>("IdempotencyKey").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
                     b.Property<DateTimeOffset?>("LastAttemptUtc").HasColumnType("timestamp with time zone");
+                    b.Property<int>("LastCompletedStep").HasColumnType("integer");
                     b.Property<string>("Phase20AuthorityChecksum").IsRequired().HasMaxLength(128).HasColumnType("character varying(128)");
                     b.Property<Guid>("PlanId").HasColumnType("uuid");
                     b.Property<string>("PublishingPackageId").IsRequired().HasMaxLength(128).HasColumnType("character varying(128)");
                     b.Property<string>("RemotePublicationId").HasMaxLength(256).HasColumnType("character varying(256)");
                     b.Property<string>("RemoteUrl").HasMaxLength(2048).HasColumnType("character varying(2048)");
+                    b.Property<bool>("RemoteVerificationCompleted").HasColumnType("boolean");
                     b.Property<string>("RoleOrMediaType").IsRequired().HasMaxLength(256).HasColumnType("character varying(256)");
                     b.Property<int>("Status").HasColumnType("integer");
                     b.Property<int>("Target").HasColumnType("integer");
+                    b.Property<bool>("ThumbnailCompleted").HasColumnType("boolean");
                     b.Property<DateTimeOffset>("UpdatedUtc").HasColumnType("timestamp with time zone");
+                    b.Property<DateTimeOffset?>("VideoCreatedUtc").HasColumnType("timestamp with time zone");
+                    b.Property<bool>("VideoUploadCompleted").HasColumnType("boolean");
 
                     b.HasKey("Id");
                     b.HasIndex("IdempotencyKey").IsUnique();
