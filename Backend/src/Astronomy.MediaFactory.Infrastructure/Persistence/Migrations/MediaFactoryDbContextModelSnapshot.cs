@@ -3294,7 +3294,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.Property<bool>("CaptionCompleted").HasColumnType("boolean");
                     b.Property<DateTimeOffset>("CreatedUtc").HasColumnType("timestamp with time zone");
                     b.Property<string>("FailureCode").HasMaxLength(128).HasColumnType("character varying(128)");
-                    b.Property<string>("FailureMessage").HasMaxLength(1024).HasColumnType("character varying(1024)");
+                    b.Property<string>("FailureMessage").HasColumnType("text");
                     b.Property<string>("IdempotencyKey").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
                     b.Property<DateTimeOffset?>("LastAttemptUtc").HasColumnType("timestamp with time zone");
                     b.Property<int>("LastCompletedStep").HasColumnType("integer");

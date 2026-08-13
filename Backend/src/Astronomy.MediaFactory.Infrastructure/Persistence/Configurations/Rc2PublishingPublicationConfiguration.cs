@@ -18,7 +18,9 @@ public sealed class Rc2PublishingPublicationConfiguration : IEntityTypeConfigura
         entity.Property(x => x.RemoteUrl).HasMaxLength(2048);
         entity.Property(x => x.LastCompletedStep).HasConversion<int>();
         entity.Property(x => x.FailureCode).HasMaxLength(128);
-        entity.Property(x => x.FailureMessage).HasMaxLength(1024);
+        // Provider diagnostics are variable length. Their application-level size and redaction
+        // policy is enforced before persistence; the database must not mask a provider failure.
+        entity.Property(x => x.FailureMessage).HasColumnType("text");
         entity.HasIndex(x => x.IdempotencyKey).IsUnique();
         entity.HasIndex(x => x.PlanId);
         entity.HasIndex(x => new { x.PlanId, x.Target });
