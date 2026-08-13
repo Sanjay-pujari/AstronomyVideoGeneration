@@ -13,7 +13,8 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
 {
     public const string YouTubeUploadScope = "https://www.googleapis.com/auth/youtube.upload";
     public const string YouTubeReadonlyScope = "https://www.googleapis.com/auth/youtube.readonly";
-    public const string InsufficientOAuthScopesGuidance = "Google OAuth did not grant the required YouTube scopes. Restart setup at /api/youtubeoauth/start so consent includes both youtube.upload and youtube.readonly access.";
+    public const string YouTubeForceSslScope = "https://www.googleapis.com/auth/youtube.force-ssl";
+    public const string InsufficientOAuthScopesGuidance = "Google OAuth did not grant the required YouTube scopes. Restart setup at /api/youtubeoauth/start for one-time consent including youtube.upload, youtube.readonly, and youtube.force-ssl; refreshing an old token cannot add the caption scope.";
     public const string MissingRefreshTokenGuidance = "Google did not return refresh_token. Remove previous app consent and retry with prompt=consent.";
     public const string ChannelMismatchMessage = "Authenticated channel does not match configured expected channel.";
 
@@ -22,7 +23,7 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
         WriteIndented = true
     };
 
-    private static readonly string[] RequiredAuthorizationScopes = [YouTubeUploadScope, YouTubeReadonlyScope];
+    private static readonly string[] RequiredAuthorizationScopes = [YouTubeUploadScope, YouTubeReadonlyScope, YouTubeForceSslScope];
 
     private readonly HttpClient _httpClient;
     private readonly IYouTubeApiClient _youTubeApiClient;

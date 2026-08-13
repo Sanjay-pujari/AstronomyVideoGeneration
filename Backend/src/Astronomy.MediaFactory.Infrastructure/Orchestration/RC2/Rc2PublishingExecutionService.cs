@@ -210,7 +210,9 @@ public sealed class Rc2PublishingExecutionService(
         if (!row.CaptionCompleted)
         {
             var (language, name) = ResolveCaptionLanguage(plan.Language);
-            await youTubeApi.UploadCaptionAsync(row.RemotePublicationId!, PathFor("LongCaptionSrt"), language, name, accessToken, ct);
+            var captionPath = PathFor("LongCaptionSrt");
+            await ValidateSrtAsync(captionPath, ct);
+            await youTubeApi.UploadCaptionAsync(row.RemotePublicationId!, captionPath, language, name, accessToken, ct);
             row.CaptionCompleted = true; row.LastCompletedStep = Rc2PublicationStep.CaptionCompleted;
             row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
         }
@@ -239,6 +241,34 @@ public sealed class Rc2PublishingExecutionService(
         "fr" or "fra" or "french" => ("fr", "French"),
         _ => throw new Rc2PublishingControlException("RC2_PUBLISH_CAPTION_LANGUAGE_INVALID", "Plan language is not mapped to a YouTube caption language.")
     };
+
+    internal static async Task ValidateSrtAsync(string path, CancellationToken ct)
+    {
+        var info = new FileInfo(path);
+        if (!info.Exists || (info.Attributes & FileAttributes.Directory) != 0 || info.Length == 0)
+            throw new Rc2PublishingControlException("RC2_PUBLISH_CAPTION_INVALID", "The governed SRT must be a non-empty regular file.");
+
+        string text;
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(path, ct);
+            text = new UTF8Encoding(false, true).GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw new Rc2PublishingControlException("RC2_PUBLISH_CAPTION_ENCODING_INVALID", "The governed SRT must be valid UTF-8.");
+        }
+
+        var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var blocks = normalized.Split("\n\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (blocks.Length == 0 || blocks.Any(block =>
+        {
+            var lines = block.Split('\n');
+            return lines.Length < 3 || !int.TryParse(lines[0].TrimStart('\uFEFF'), out _) ||
+                !System.Text.RegularExpressions.Regex.IsMatch(lines[1], @"^\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}$");
+        }))
+            throw new Rc2PublishingControlException("RC2_PUBLISH_CAPTION_STRUCTURE_INVALID", "The governed caption does not have valid SRT blocks.");
+    }
 
     internal static void ValidateYouTubeMetadata(string title, string privacy, string category)
     {
