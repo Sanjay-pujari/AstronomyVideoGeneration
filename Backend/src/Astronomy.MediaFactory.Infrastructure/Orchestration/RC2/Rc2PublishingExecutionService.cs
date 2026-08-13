@@ -165,7 +165,7 @@ public sealed class Rc2PublishingExecutionService(
         return Result(row, row.Status, false, row.FailureCode, row.FailureMessage, IsCarousel(target) ? artifacts.Count : null);
     }
 
-    private async Task PublishYouTubeLongAsync(Rc2PublishingPublication row, Rc2PublishingPlan plan,
+    internal async Task PublishYouTubeLongAsync(Rc2PublishingPublication row, Rc2PublishingPlan plan,
         IReadOnlyList<Phase20PublishingArtifact> artifacts, CancellationToken ct)
     {
         string PathFor(string role) => ResolvePath(plan, artifacts.Single(x => x.Role == role).Path);
