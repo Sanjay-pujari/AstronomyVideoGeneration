@@ -16,6 +16,7 @@ public static class YouTubeTokenResolver
     public static async Task<YouTubeResolvedToken> ResolveAsync(YouTubeOptions options, ILogger logger, CancellationToken cancellationToken)
     {
         var tokenFilePath = ResolveTokenFilePath(options);
+        logger.LogInformation("PublishingReaderTokenPath={PublishingReaderTokenPath}", tokenFilePath);
         var tokenFileExists = File.Exists(tokenFilePath);
         var tokenFile = tokenFileExists
             ? await ReadTokenFileAsync(tokenFilePath, logger, cancellationToken)

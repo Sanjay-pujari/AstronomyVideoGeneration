@@ -5,6 +5,7 @@ using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Core;
 using Google;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 
 namespace Astronomy.MediaFactory.Publishing;
 
@@ -26,12 +27,15 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
     private readonly HttpClient _httpClient;
     private readonly IYouTubeApiClient _youTubeApiClient;
     private readonly YouTubeOptions _options;
+    private readonly ILogger<YouTubeOAuthService> _logger;
 
-    public YouTubeOAuthService(HttpClient httpClient, IYouTubeApiClient youTubeApiClient, IOptions<YouTubeOptions> options)
+    public YouTubeOAuthService(HttpClient httpClient, IYouTubeApiClient youTubeApiClient, IOptions<YouTubeOptions> options,
+        ILogger<YouTubeOAuthService> logger)
     {
         _httpClient = httpClient;
         _youTubeApiClient = youTubeApiClient;
         _options = options.Value;
+        _logger = logger;
     }
 
     public string BuildAuthorizationUrl()
@@ -190,6 +194,7 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
             token.AccessToken, token.ExpiresIn.HasValue ? createdUtc.AddSeconds(token.ExpiresIn.Value) : null,
             GrantedScopes: token.Scope);
         var path = ResolveTokenFilePath();
+        _logger.LogInformation("OAuthWriterTokenPath={OAuthWriterTokenPath}", path);
         await AtomicTokenFile.WriteAsync(path, payload, JsonOptions, cancellationToken);
         return path;
     }
