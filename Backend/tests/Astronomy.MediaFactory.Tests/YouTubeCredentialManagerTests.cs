@@ -37,6 +37,37 @@ public sealed class YouTubeCredentialManagerTests
     }
 
     [Fact]
+    public async Task ExpiredAccessToken_AtomicallyPersistsRotatedRefreshTokenAndExpiry()
+    {
+        using var workspace = new Workspace();
+        await workspace.WriteAsync("old-refresh", "expired", DateTimeOffset.UtcNow.AddMinutes(-1));
+        var handler = new RefreshHandler(body:
+            "{\"access_token\":\"new-access\",\"refresh_token\":\"rotated-refresh\",\"expires_in\":3600}");
+
+        Assert.Equal("new-access", await workspace.Create(handler).GetAccessTokenAsync(default));
+
+        var stored = await workspace.ReadAsync();
+        Assert.Equal("rotated-refresh", stored.RefreshToken);
+        Assert.Equal("new-access", stored.AccessToken);
+        Assert.True(stored.AccessTokenExpiresUtc > DateTimeOffset.UtcNow.AddMinutes(50));
+        Assert.False(stored.ReauthorizationRequired);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public void OAuthWriterAndPublishingReaderResolveSameNormalizedAbsolutePath()
+    {
+        var relativePath = Path.Combine("credentials", "youtube-oauth-token.json");
+        var options = new YouTubeOptions { TokenFilePath = relativePath };
+
+        var writerPath = YouTubeTokenResolver.ResolveTokenFilePath(options);
+        var readerPath = YouTubeTokenResolver.ResolveTokenFilePath(options);
+
+        Assert.True(Path.IsPathFullyQualified(writerPath));
+        Assert.Equal(writerPath, readerPath);
+    }
+
+    [Fact]
     public async Task InvalidGrant_RequiresReauthorization()
     {
         using var workspace = new Workspace();

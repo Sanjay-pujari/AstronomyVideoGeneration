@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -243,7 +244,7 @@ public sealed class YouTubeOAuthSetupTests
             ExpectedChannelId = expectedChannelId
         });
 
-        return new YouTubeOAuthService(httpClient, apiClient, options);
+        return new YouTubeOAuthService(httpClient, apiClient, options, NullLogger<YouTubeOAuthService>.Instance);
     }
 
     private static string TokenJson(
