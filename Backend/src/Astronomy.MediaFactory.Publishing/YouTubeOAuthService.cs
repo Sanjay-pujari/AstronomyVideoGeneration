@@ -74,10 +74,9 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
         ValidateTokenExchangeConfiguration();
 
         var token = await ExchangeCodeAsync(code, cancellationToken);
-        if (string.IsNullOrWhiteSpace(token.RefreshToken))
-        {
-            throw new InvalidOperationException(MissingRefreshTokenGuidance);
-        }
+        var existing = await ReadExistingTokenAsync(cancellationToken);
+        var refreshToken = string.IsNullOrWhiteSpace(token.RefreshToken) ? existing?.RefreshToken : token.RefreshToken;
+        if (string.IsNullOrWhiteSpace(refreshToken)) throw new InvalidOperationException(MissingRefreshTokenGuidance);
 
         ValidateGrantedScopes(token.Scope);
 
@@ -94,16 +93,16 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
         ValidateExpectedChannel(channel);
 
         var createdUtc = DateTimeOffset.UtcNow;
-        var tokenFilePath = await PersistRefreshTokenAsync(channel, token, createdUtc, cancellationToken);
-        await WriteDiagnosticsAsync(channel, createdUtc, refreshTokenGenerated: true, cancellationToken);
+        var tokenFilePath = await PersistRefreshTokenAsync(channel, token, refreshToken, createdUtc, cancellationToken);
+        await WriteDiagnosticsAsync(channel, createdUtc, refreshTokenGenerated: !string.IsNullOrWhiteSpace(token.RefreshToken), cancellationToken);
 
         return new YouTubeOAuthSetupResult(
             Success: true,
             ChannelTitle: channel.ChannelTitle,
             ChannelId: channel.ChannelId,
-            RefreshTokenGenerated: true,
-            Message: "YouTube OAuth completed successfully. Full refresh token was saved to tokenFilePath.",
-            RefreshTokenPreview: MaskRefreshToken(token.RefreshToken),
+            RefreshTokenGenerated: !string.IsNullOrWhiteSpace(token.RefreshToken),
+            Message: "YouTube OAuth completed successfully. Credentials were saved securely to tokenFilePath.",
+            RefreshTokenPreview: null,
             TokenFilePath: tokenFilePath);
     }
 
@@ -185,10 +184,11 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
         }
     }
 
-    private async Task<string> PersistRefreshTokenAsync(YouTubeChannelInfo channel, TokenResponse token, DateTimeOffset createdUtc, CancellationToken cancellationToken)
+    private async Task<string> PersistRefreshTokenAsync(YouTubeChannelInfo channel, TokenResponse token, string refreshToken, DateTimeOffset createdUtc, CancellationToken cancellationToken)
     {
-        var payload = new YouTubeOAuthTokenFile(channel.ChannelId, channel.ChannelTitle, token.RefreshToken!, createdUtc,
-            token.AccessToken, token.ExpiresIn.HasValue ? createdUtc.AddSeconds(token.ExpiresIn.Value) : null);
+        var payload = new YouTubeOAuthTokenFile(channel.ChannelId, channel.ChannelTitle, refreshToken, createdUtc,
+            token.AccessToken, token.ExpiresIn.HasValue ? createdUtc.AddSeconds(token.ExpiresIn.Value) : null,
+            GrantedScopes: token.Scope);
         var path = ResolveTokenFilePath();
         await AtomicTokenFile.WriteAsync(path, payload, JsonOptions, cancellationToken);
         return path;
@@ -204,8 +204,13 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
     private string ResolveTokenFilePath()
         => YouTubeTokenResolver.ResolveTokenFilePath(_options);
 
-    private static string MaskRefreshToken(string refreshToken)
-        => refreshToken.Length <= 10 ? "***" : $"{refreshToken[..Math.Min(10, refreshToken.Length)]}...";
+    private async Task<YouTubeOAuthTokenFile?> ReadExistingTokenAsync(CancellationToken cancellationToken)
+    {
+        var path = ResolveTokenFilePath();
+        if (!File.Exists(path)) return null;
+        await using var stream = File.OpenRead(path);
+        return await JsonSerializer.DeserializeAsync<YouTubeOAuthTokenFile>(stream, JsonOptions, cancellationToken);
+    }
 
     private sealed class TokenResponse
     {

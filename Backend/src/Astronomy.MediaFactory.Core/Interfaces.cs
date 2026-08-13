@@ -149,6 +149,8 @@ public interface ITokenHealthService
 public interface IYouTubeAuthService
 {
     Task<string> GetAccessTokenAsync(CancellationToken cancellationToken);
+    Task<string> GetAccessTokenAsync(bool forceRefresh, CancellationToken cancellationToken)
+        => GetAccessTokenAsync(cancellationToken);
 }
 
 public interface IYouTubeOAuthService

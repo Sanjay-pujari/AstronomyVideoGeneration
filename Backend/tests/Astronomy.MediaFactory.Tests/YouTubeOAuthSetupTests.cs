@@ -64,7 +64,7 @@ public sealed class YouTubeOAuthSetupTests
     }
 
     [Fact]
-    public async Task Callback_WithoutCode_FailsClearly()
+    public async Task Callback_WithoutState_FailsClosed()
     {
         using var app = await CreateCallbackAppAsync(new StubOAuthService("https://example.test"));
 
@@ -72,11 +72,11 @@ public sealed class YouTubeOAuthSetupTests
         var body = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("OAuth authorization code is required", body);
+        Assert.Contains("OAuth state validation failed", body);
     }
 
     [Fact]
-    public async Task Callback_WithGoogleError_FailsClearly()
+    public async Task Callback_WithGoogleErrorButNoState_FailsClosed()
     {
         using var app = await CreateCallbackAppAsync(new StubOAuthService("https://example.test"));
 
@@ -84,7 +84,7 @@ public sealed class YouTubeOAuthSetupTests
         var body = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Contains("Google OAuth returned error: access_denied", body);
+        Assert.Contains("OAuth state validation failed", body);
     }
 
 
@@ -117,8 +117,8 @@ public sealed class YouTubeOAuthSetupTests
         Assert.Equal("Astronomy Channel", result.ChannelTitle);
         Assert.Equal("UC123", result.ChannelId);
         Assert.True(result.RefreshTokenGenerated);
-        Assert.Equal("YouTube OAuth completed successfully. Full refresh token was saved to tokenFilePath.", result.Message);
-        Assert.NotEqual(refreshToken, result.RefreshTokenPreview);
+        Assert.Equal("YouTube OAuth completed successfully. Credentials were saved securely to tokenFilePath.", result.Message);
+        Assert.Null(result.RefreshTokenPreview);
         Assert.Equal(workspace.TokenFilePath, result.TokenFilePath);
         Assert.True(File.Exists(workspace.TokenFilePath));
         var tokenFile = await File.ReadAllTextAsync(workspace.TokenFilePath);
@@ -159,6 +159,24 @@ public sealed class YouTubeOAuthSetupTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CompleteSetupAsync("auth-code", CancellationToken.None));
 
         Assert.Equal(YouTubeOAuthService.MissingRefreshTokenGuidance, ex.Message);
+    }
+
+    [Fact]
+    public async Task CompleteSetup_WhenGoogleOmitsRefreshToken_PreservesExistingRefreshToken()
+    {
+        using var workspace = new TemporaryOAuthWorkspace();
+        const string existingRefreshToken = "1//existing-refresh-token";
+        await File.WriteAllTextAsync(workspace.TokenFilePath, System.Text.Json.JsonSerializer.Serialize(
+            new YouTubeOAuthTokenFile("UC123", "Astronomy Channel", existingRefreshToken, DateTimeOffset.UtcNow)));
+        var service = CreateService(workspace.TokenFilePath, new TrackingYouTubeApiClient(),
+            $"{{\"access_token\":\"replacement-access-token\",\"expires_in\":3600,\"scope\":\"{YouTubeOAuthService.YouTubeUploadScope} {YouTubeOAuthService.YouTubeReadonlyScope}\"}}");
+
+        var result = await service.CompleteSetupAsync("auth-code", CancellationToken.None);
+
+        Assert.False(result.RefreshTokenGenerated);
+        var persisted = await File.ReadAllTextAsync(workspace.TokenFilePath);
+        Assert.Contains(existingRefreshToken, persisted);
+        Assert.Contains("replacement-access-token", persisted);
     }
 
 

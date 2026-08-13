@@ -52,6 +52,10 @@ public sealed class YouTubeOAuthController : ControllerBase
     [HttpGet("callback")]
     public async Task<IActionResult> Callback([FromQuery] string? code, [FromQuery] string? error, [FromQuery] string? state, CancellationToken cancellationToken)
     {
+        if (!Request.Cookies.TryGetValue(StateCookie, out var expectedState) || !StateEquals(expectedState, state))
+            return BadRequest(new { success = false, message = "OAuth state validation failed." });
+        Response.Cookies.Delete(StateCookie);
+
         if (!string.IsNullOrWhiteSpace(error))
         {
             return BadRequest(new { success = false, message = $"Google OAuth returned error: {error}" });
@@ -61,10 +65,6 @@ public sealed class YouTubeOAuthController : ControllerBase
         {
             return BadRequest(new { success = false, message = "OAuth authorization code is required." });
         }
-        if (!Request.Cookies.TryGetValue(StateCookie, out var expectedState) || !StateEquals(expectedState, state))
-            return BadRequest(new { success = false, message = "OAuth state validation failed." });
-        Response.Cookies.Delete(StateCookie);
-
         try
         {
             var result = await _youTubeOAuthService.CompleteSetupAsync(code, cancellationToken);
