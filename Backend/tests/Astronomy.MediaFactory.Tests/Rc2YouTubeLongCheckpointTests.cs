@@ -103,7 +103,43 @@ public sealed class Rc2YouTubeLongCheckpointTests
         Assert.Equal(fixture.CaptionPath, fixture.Api.CaptionPath);
         Assert.Equal("en", fixture.Api.CaptionLanguage);
         Assert.Equal("English", fixture.Api.CaptionName);
-        Assert.Equal("caption-body", await File.ReadAllTextAsync(fixture.Api.CaptionPath!));
+        Assert.Contains("Astronomy caption", await File.ReadAllTextAsync(fixture.Api.CaptionPath!));
+    }
+
+    [Fact]
+    public async Task Failed_checkpoint_with_confirmed_video_skips_video_and_thumbnail_and_resumes_caption_only()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Row.Status = Rc2PublicationState.Failed;
+        fixture.Row.RemotePublicationId = "B7gsJ2toKps";
+        fixture.Row.RemoteUrl = "https://www.youtube.com/watch?v=B7gsJ2toKps";
+        fixture.Row.VideoUploadCompleted = true;
+        fixture.Row.ThumbnailCompleted = true;
+        fixture.Row.LastCompletedStep = Rc2PublicationStep.ThumbnailCompleted;
+        await fixture.Db.SaveChangesAsync();
+
+        await fixture.PublishAsync();
+
+        Assert.Equal(0, fixture.Api.VideoInsertCalls);
+        Assert.Equal(0, fixture.Api.ThumbnailCalls);
+        Assert.Equal(1, fixture.Api.CaptionCalls);
+        Assert.Equal("B7gsJ2toKps", fixture.Api.CaptionVideoId);
+        Assert.Equal(1, fixture.Api.VerificationCalls);
+        Assert.Equal(Rc2PublicationState.Published, (await fixture.Db.Rc2PublishingPublications.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Caption_validation_rejects_invalid_utf8_and_invalid_srt_structure()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllBytesAsync(path, [0xff]);
+            await Assert.ThrowsAsync<Rc2PublishingControlException>(() => Rc2PublishingExecutionService.ValidateSrtAsync(path, CancellationToken.None));
+            await File.WriteAllTextAsync(path, "caption-body");
+            await Assert.ThrowsAsync<Rc2PublishingControlException>(() => Rc2PublishingExecutionService.ValidateSrtAsync(path, CancellationToken.None));
+        }
+        finally { File.Delete(path); }
     }
 
     [Fact]
@@ -135,7 +171,7 @@ public sealed class Rc2YouTubeLongCheckpointTests
         await using var fixture = await Fixture.CreateAsync();
         fixture.Api.ReturnUnconfirmedCreate = true;
 
-        var error = await Assert.ThrowsAsync<Exception>(() => fixture.PublishAsync());
+        var error = await Assert.ThrowsAnyAsync<Exception>(() => fixture.PublishAsync());
 
         Assert.Contains("confirmed video ID", error.Message);
         Assert.Equal(1, fixture.Api.VideoInsertCalls);
@@ -168,11 +204,12 @@ public sealed class Rc2YouTubeLongCheckpointTests
             await connection.OpenAsync();
             var db = new MediaFactoryDbContext(new DbContextOptionsBuilder<MediaFactoryDbContext>().UseSqlite(connection).Options);
             await db.Database.EnsureCreatedAsync();
+            await db.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF;");
             var root = Path.Combine(Path.GetTempPath(), "rc2-youtube-cert-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             await File.WriteAllTextAsync(Path.Combine(root, "long.mp4"), "video");
             await File.WriteAllTextAsync(Path.Combine(root, "landscape.jpg"), "thumbnail");
-            await File.WriteAllTextAsync(Path.Combine(root, "long.srt"), "caption-body");
+            await File.WriteAllTextAsync(Path.Combine(root, "long.srt"), "1\n00:00:00,000 --> 00:00:02,000\nAstronomy caption\n");
             var plan = new Rc2PublishingPlan(Guid.NewGuid(), "Certified astronomy title", "English", "US", root, root, root, "validation.json");
             var row = new Rc2PublishingPublication { Id = Guid.NewGuid(), PlanId = plan.PlanId, PublishingPackageId = "package",
                 Phase20AuthorityChecksum = "authority", Target = Rc2PublishingTarget.YouTubeLong, RoleOrMediaType = "roles",

@@ -90,7 +90,7 @@ public sealed class YouTubeOAuthSetupTests
 
 
     [Fact]
-    public void BuildAuthorizationUrl_IncludesUploadAndReadonlyScopes()
+    public void BuildAuthorizationUrl_IncludesUploadReadonlyAndCaptionScopes()
     {
         using var workspace = new TemporaryOAuthWorkspace();
         var service = CreateService(workspace.TokenFilePath, new TrackingYouTubeApiClient(), TokenJson("1//0gSCOPES"));
@@ -101,6 +101,7 @@ public sealed class YouTubeOAuthSetupTests
         Assert.StartsWith("https://accounts.google.com/o/oauth2/v2/auth", authorizationUrl, StringComparison.Ordinal);
         Assert.Contains(YouTubeOAuthService.YouTubeUploadScope, decodedUrl);
         Assert.Contains(YouTubeOAuthService.YouTubeReadonlyScope, decodedUrl);
+        Assert.Contains(YouTubeOAuthService.YouTubeForceSslScope, decodedUrl);
         Assert.Contains("access_type=offline", decodedUrl);
         Assert.Contains("prompt=consent", decodedUrl);
     }
@@ -170,7 +171,7 @@ public sealed class YouTubeOAuthSetupTests
         await File.WriteAllTextAsync(workspace.TokenFilePath, System.Text.Json.JsonSerializer.Serialize(
             new YouTubeOAuthTokenFile("UC123", "Astronomy Channel", existingRefreshToken, DateTimeOffset.UtcNow)));
         var service = CreateService(workspace.TokenFilePath, new TrackingYouTubeApiClient(),
-            $"{{\"access_token\":\"replacement-access-token\",\"expires_in\":3600,\"scope\":\"{YouTubeOAuthService.YouTubeUploadScope} {YouTubeOAuthService.YouTubeReadonlyScope}\"}}");
+            $"{{\"access_token\":\"replacement-access-token\",\"expires_in\":3600,\"scope\":\"{YouTubeOAuthService.YouTubeUploadScope} {YouTubeOAuthService.YouTubeReadonlyScope} {YouTubeOAuthService.YouTubeForceSslScope}\"}}");
 
         var result = await service.CompleteSetupAsync("auth-code", CancellationToken.None);
 
@@ -193,6 +194,22 @@ public sealed class YouTubeOAuthSetupTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CompleteSetupAsync("auth-code", CancellationToken.None));
 
         Assert.Equal(YouTubeOAuthService.InsufficientOAuthScopesGuidance, ex.Message);
+        Assert.False(File.Exists(workspace.TokenFilePath));
+    }
+
+    [Fact]
+    public async Task CompleteSetup_WhenGoogleOmitsCaptionScope_RequiresOneTimeReauthorization()
+    {
+        using var workspace = new TemporaryOAuthWorkspace();
+        var legacyScopes = YouTubeOAuthService.YouTubeUploadScope + " " + YouTubeOAuthService.YouTubeReadonlyScope;
+        var service = CreateService(workspace.TokenFilePath, new TrackingYouTubeApiClient(),
+            TokenJson("1//0gLEGACY", scope: legacyScopes));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CompleteSetupAsync("auth-code", CancellationToken.None));
+
+        Assert.Equal(YouTubeOAuthService.InsufficientOAuthScopesGuidance, ex.Message);
+        Assert.Contains("refreshing an old token cannot add", ex.Message);
         Assert.False(File.Exists(workspace.TokenFilePath));
     }
 
@@ -250,7 +267,7 @@ public sealed class YouTubeOAuthSetupTests
     private static string TokenJson(
         string refreshToken,
         string accessToken = "access-token-from-google",
-        string scope = YouTubeOAuthService.YouTubeUploadScope + " " + YouTubeOAuthService.YouTubeReadonlyScope)
+        string scope = YouTubeOAuthService.YouTubeUploadScope + " " + YouTubeOAuthService.YouTubeReadonlyScope + " " + YouTubeOAuthService.YouTubeForceSslScope)
         => $"{{\"access_token\":\"{accessToken}\",\"refresh_token\":\"{refreshToken}\",\"expires_in\":3600,\"scope\":\"{scope}\",\"token_type\":\"Bearer\"}}";
 
     private sealed class StubOAuthService : IYouTubeOAuthService

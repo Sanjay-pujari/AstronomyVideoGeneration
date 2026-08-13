@@ -104,9 +104,29 @@ public sealed class GoogleYouTubeApiClient : IYouTubeApiClient
             Snippet = new CaptionSnippet { VideoId = videoId, Language = language, Name = name }
         };
         var upload = youtube.Captions.Insert(caption, "snippet", stream, "application/x-subrip");
-        await upload.UploadAsync(cancellationToken);
+        try
+        {
+            await upload.UploadAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            ThrowCaptionUploadException(upload, ex);
+        }
+
         if (upload.GetProgress().Status != UploadStatus.Completed || string.IsNullOrWhiteSpace(upload.ResponseBody?.Id))
-            throw new InvalidOperationException($"YouTube caption upload did not complete successfully. Status: {upload.GetProgress().Status}");
+            ThrowCaptionUploadException(upload, upload.GetProgress().Exception);
+    }
+
+    private static void ThrowCaptionUploadException(CaptionsResource.InsertMediaUpload upload, Exception? exception)
+    {
+        var progress = upload.GetProgress();
+        var responseBody = upload.ResponseBody is null ? null : JsonSerializer.Serialize(upload.ResponseBody);
+        var httpErrorDetails = BuildHttpErrorDetails(exception ?? progress.Exception);
+        throw new YouTubeCaptionUploadException(
+            $"YouTube caption upload did not complete successfully. Status={progress.Status}; " +
+            $"ExceptionType={(exception ?? progress.Exception)?.GetType().FullName ?? "None"}; " +
+            $"ProviderError={httpErrorDetails ?? "Unavailable"}",
+            progress.Status.ToString(), exception ?? progress.Exception, responseBody, httpErrorDetails);
     }
 
 
