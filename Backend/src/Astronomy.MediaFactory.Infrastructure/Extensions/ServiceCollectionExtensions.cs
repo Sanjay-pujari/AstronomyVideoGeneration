@@ -351,6 +351,7 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(PublishingOptions.SectionName))
             .Validate(options => options.Mode is "Disabled" or "DryRun" or "Private" or "Public", "Publishing:Mode must be Disabled, DryRun, Private, or Public.")
             .Validate(options => string.IsNullOrWhiteSpace(options.DefaultPrivacyStatus) || options.DefaultPrivacyStatus is "private" or "public" or "unlisted", "Publishing:DefaultPrivacyStatus must be private, public, or unlisted.")
+            .Validate(options => options.InProgressLeaseMinutes is >= 1 and <= 1440, "Publishing:InProgressLeaseMinutes must be between 1 and 1440.")
             .ValidateOnStart();
 
         services.AddOptions<MaintenanceOptions>()

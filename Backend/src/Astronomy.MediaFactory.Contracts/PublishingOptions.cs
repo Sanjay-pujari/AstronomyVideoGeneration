@@ -16,4 +16,6 @@ public sealed class PublishingOptions
     public string PublishingPolicyVersion { get; set; } = "phase20-publishing-policy/1.0";
     public bool ManualReviewRequired { get; set; } = true;
     public bool PortableExportEnabled { get; set; }
+    /// <summary>Maximum age of a Publishing claim before another worker may recover it.</summary>
+    public int InProgressLeaseMinutes { get; set; } = 15;
 }

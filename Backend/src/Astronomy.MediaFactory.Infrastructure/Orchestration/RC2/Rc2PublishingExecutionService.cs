@@ -95,7 +95,10 @@ public sealed class Rc2PublishingExecutionService(
         var existing = await db.Rc2PublishingPublications.AsNoTracking().SingleOrDefaultAsync(x => x.IdempotencyKey == key, ct);
         if (existing?.Status == Rc2PublicationState.Published)
             return Result(existing, Rc2PublicationState.AlreadyPublished, true);
-        if (existing?.Status == Rc2PublicationState.Publishing)
+        var now = DateTimeOffset.UtcNow;
+        var leaseCutoff = now.AddMinutes(-publishingOptions.Value.InProgressLeaseMinutes);
+        var stalePublishing = existing is not null && IsPublishingLeaseStale(existing, leaseCutoff);
+        if (existing?.Status == Rc2PublicationState.Publishing && !stalePublishing)
             return Result(existing, Rc2PublicationState.Blocked, false, "RC2_PUBLISH_ALREADY_IN_PROGRESS", "An identical publication is already in progress.");
 
         try { await VerifyArtifactsAsync(plan, artifacts, ct); }
@@ -116,8 +119,10 @@ public sealed class Rc2PublishingExecutionService(
                 ? Blocked(target, "RC2_PUBLISH_REAUTHORIZATION_REQUIRED",
                     $"Provider={health.Platform}; OAuthStartPath={health.OAuthStartPath}", artifacts.Count)
                 : Blocked(target, "RC2_PUBLISH_CREDENTIALS_INVALID", NonSecretHealthMessage(health), artifacts.Count);
-        if (dryRun) return new(target, Rc2PublicationState.NotPublished, null, null, false, existing?.AttemptCount ?? 0,
-            null, null, IsCarousel(target) ? artifacts.Count : null, true);
+        if (dryRun) return new(target, Rc2PublicationState.NotPublished, existing?.RemotePublicationId, existing?.RemoteUrl, false,
+            existing?.AttemptCount ?? 0, stalePublishing ? "RC2_PUBLISH_RECOVERABLE_STALE_PUBLICATION" : null,
+            stalePublishing ? "The abandoned publication is ready for governed recovery; dry-run did not acquire it." : null,
+            IsCarousel(target) ? artifacts.Count : null, true);
 
         if (existing?.FailureCode == "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN" && !existing.VideoUploadCompleted)
             return Result(existing, Rc2PublicationState.Blocked, false, existing.FailureCode,
@@ -128,10 +133,29 @@ public sealed class Rc2PublishingExecutionService(
             Id = Guid.NewGuid(), PlanId = plan.PlanId, PublishingPackageId = authority.PublishingPackageId,
             Phase20AuthorityChecksum = authority.AuthorityChecksum, Target = target, RoleOrMediaType = identity,
             IdempotencyKey = key, CreatedUtc = DateTimeOffset.UtcNow, UpdatedUtc = DateTimeOffset.UtcNow
-        } : await db.Rc2PublishingPublications.SingleAsync(x => x.Id == existing.Id, ct);
-        row.Status = Rc2PublicationState.Publishing; row.AttemptCount++; row.LastAttemptUtc = row.UpdatedUtc = DateTimeOffset.UtcNow;
-        if (existing is null) db.Rc2PublishingPublications.Add(row);
-        try { await db.SaveChangesAsync(ct); }
+        } : null;
+        try
+        {
+            if (existing is null)
+            {
+                row!.Status = Rc2PublicationState.Publishing; row.AttemptCount = 1; row.LastAttemptUtc = row.UpdatedUtc = now;
+                db.Rc2PublishingPublications.Add(row);
+                await db.SaveChangesAsync(ct);
+            }
+            else
+            {
+                // Database compare-and-swap: only one worker observing this exact stale/terminal
+                // version can acquire the next execution lease.
+                if (!await TryAcquireExistingLeaseAsync(existing, now, ct))
+                {
+                    var owner = await db.Rc2PublishingPublications.AsNoTracking().SingleAsync(x => x.Id == existing.Id, ct);
+                    return Result(owner, owner.Status == Rc2PublicationState.Published ? Rc2PublicationState.AlreadyPublished : Rc2PublicationState.Blocked,
+                        owner.Status == Rc2PublicationState.Published, "RC2_PUBLISH_ALREADY_IN_PROGRESS", "An identical publication claimed execution concurrently.");
+                }
+                db.ChangeTracker.Clear();
+                row = await db.Rc2PublishingPublications.SingleAsync(x => x.Id == existing.Id, ct);
+            }
+        }
         catch (DbUpdateException)
         {
             db.ChangeTracker.Clear();
@@ -163,14 +187,45 @@ public sealed class Rc2PublishingExecutionService(
             row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_PROVIDER_FAILED";
             row.FailureMessage = NormalizeProviderFailure(ex.Message);
         }
-        row.UpdatedUtc = DateTimeOffset.UtcNow;
-        if (row.Status == Rc2PublicationState.Failed)
-            await PersistFailureAsync(row, ct);
-        else
-            await db.SaveChangesAsync(ct);
+        finally
+        {
+            // Never depend on graceful shutdown to release a claim. A hard crash is recovered by
+            // lease expiry; every observable exit is moved to a durable terminal state here.
+            if (row.Status == Rc2PublicationState.Publishing)
+            {
+                row.Status = Rc2PublicationState.Failed;
+                row.FailureCode ??= "RC2_PUBLISH_EXECUTION_INTERRUPTED";
+                row.FailureMessage ??= "Publishing execution ended before a terminal state was persisted.";
+            }
+            row.UpdatedUtc = DateTimeOffset.UtcNow;
+            if (row.Status == Rc2PublicationState.Failed)
+                await PersistFailureAsync(row, CancellationToken.None);
+            else
+                await db.SaveChangesAsync(CancellationToken.None);
+        }
         logger.LogInformation("RC2_PUBLISH_{RequestType}_TARGET_COMPLETED PlanId={PlanId} Target={Target} IdempotencyKey={IdempotencyKey} State={State}",
             requestType.ToUpperInvariant(), plan.PlanId, target, key, row.Status);
         return Result(row, row.Status, false, row.FailureCode, ConciseApiFailureMessage(row.FailureMessage), IsCarousel(target) ? artifacts.Count : null);
+    }
+
+    internal static bool IsPublishingLeaseStale(Rc2PublishingPublication row, DateTimeOffset leaseCutoff) =>
+        row.Status == Rc2PublicationState.Publishing && (row.LastAttemptUtc is null || row.LastAttemptUtc <= leaseCutoff);
+
+    internal async Task<bool> TryAcquireExistingLeaseAsync(Rc2PublishingPublication observed, DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var cutoff = now.AddMinutes(-publishingOptions.Value.InProgressLeaseMinutes);
+        if (observed.Status == Rc2PublicationState.Publishing && !IsPublishingLeaseStale(observed, cutoff))
+            return false;
+        var claimed = await db.Rc2PublishingPublications
+            .Where(x => x.Id == observed.Id && x.Status == observed.Status && x.UpdatedUtc == observed.UpdatedUtc &&
+                (x.Status != Rc2PublicationState.Publishing || x.LastAttemptUtc == null || x.LastAttemptUtc <= cutoff))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, Rc2PublicationState.Publishing)
+                .SetProperty(x => x.AttemptCount, x => x.AttemptCount + 1)
+                .SetProperty(x => x.LastAttemptUtc, now)
+                .SetProperty(x => x.UpdatedUtc, now), ct);
+        return claimed == 1;
     }
 
     internal async Task PersistFailureAsync(Rc2PublishingPublication row, CancellationToken ct)

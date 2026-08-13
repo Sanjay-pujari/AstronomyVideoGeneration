@@ -129,6 +129,62 @@ public sealed class Rc2YouTubeLongCheckpointTests
     }
 
     [Fact]
+    public async Task Active_publishing_lease_cannot_be_claimed_and_makes_no_provider_call()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var now = DateTimeOffset.UtcNow;
+        fixture.Row.LastAttemptUtc = fixture.Row.UpdatedUtc = now;
+        await fixture.Db.SaveChangesAsync();
+
+        Assert.False(await fixture.Service.TryAcquireExistingLeaseAsync(fixture.Row, now, CancellationToken.None));
+        Assert.Equal(0, fixture.Api.VideoInsertCalls);
+        Assert.Equal(0, fixture.Api.ThumbnailCalls + fixture.Api.CaptionCalls + fixture.Api.VerificationCalls);
+    }
+
+    [Fact]
+    public async Task Two_callers_observing_stale_lease_have_exactly_one_database_claim_winner()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var now = DateTimeOffset.UtcNow;
+        fixture.Row.LastAttemptUtc = fixture.Row.UpdatedUtc = now.AddMinutes(-16);
+        await fixture.Db.SaveChangesAsync();
+        fixture.Db.ChangeTracker.Clear();
+        var observed = await fixture.Db.Rc2PublishingPublications.AsNoTracking().SingleAsync();
+
+        Assert.True(await fixture.Service.TryAcquireExistingLeaseAsync(observed, now, CancellationToken.None));
+        Assert.False(await fixture.Service.TryAcquireExistingLeaseAsync(observed, now, CancellationToken.None));
+        var claimed = await fixture.Db.Rc2PublishingPublications.AsNoTracking().SingleAsync();
+        Assert.Equal(1, claimed.AttemptCount);
+        Assert.Equal(now, claimed.LastAttemptUtc);
+    }
+
+    [Fact]
+    public async Task Stale_live_checkpoint_claim_resumes_caption_then_verification_without_reupload()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var now = DateTimeOffset.UtcNow;
+        fixture.Row.RemotePublicationId = "B7gsJ2toKps";
+        fixture.Row.RemoteUrl = "https://www.youtube.com/watch?v=B7gsJ2toKps";
+        fixture.Row.VideoUploadCompleted = true;
+        fixture.Row.ThumbnailCompleted = true;
+        fixture.Row.LastCompletedStep = Rc2PublicationStep.ThumbnailCompleted;
+        fixture.Row.LastAttemptUtc = fixture.Row.UpdatedUtc = now.AddMinutes(-16);
+        await fixture.Db.SaveChangesAsync();
+        fixture.Db.ChangeTracker.Clear();
+        var observed = await fixture.Db.Rc2PublishingPublications.AsNoTracking().SingleAsync();
+
+        Assert.True(await fixture.Service.TryAcquireExistingLeaseAsync(observed, now, CancellationToken.None));
+        await fixture.PublishAsync();
+
+        Assert.Equal(0, fixture.Api.VideoInsertCalls);
+        Assert.Equal(0, fixture.Api.ThumbnailCalls);
+        Assert.Equal(1, fixture.Api.CaptionCalls);
+        Assert.Equal(1, fixture.Api.VerificationCalls);
+        Assert.Equal("B7gsJ2toKps", fixture.Api.CaptionVideoId);
+        Assert.Equal(Rc2PublicationState.Published, (await fixture.Db.Rc2PublishingPublications.SingleAsync()).Status);
+    }
+
+    [Fact]
     public async Task Failure_message_longer_than_legacy_limit_persists_without_changing_checkpoints()
     {
         await using var fixture = await Fixture.CreateAsync();
