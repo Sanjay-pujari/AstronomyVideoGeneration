@@ -148,6 +148,7 @@ public interface ITokenHealthService
 
 public interface IYouTubeAuthService
 {
+    Task EnsurePublishingScopesAsync(bool captionsRequired, CancellationToken cancellationToken) => Task.CompletedTask;
     Task<string> GetAccessTokenAsync(CancellationToken cancellationToken);
     Task<string> GetAccessTokenAsync(bool forceRefresh, CancellationToken cancellationToken)
         => GetAccessTokenAsync(cancellationToken);

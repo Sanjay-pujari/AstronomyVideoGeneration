@@ -56,6 +56,26 @@ public sealed class TokenHealthServiceTests
     }
 
     [Fact]
+    public async Task YouTubeRefreshWithoutCaptionScope_RequiresScopeUpgradeBeforeChannelCall()
+    {
+        using var handler = new TokenHealthHandler
+        {
+            YouTubeScopes = string.Join(" ", YouTubeOAuthScopes.VideoPublishing)
+        };
+        var service = CreateService(handler, youtube: new YouTubeOptions
+        {
+            ClientId = "client-id", ClientSecret = "client-secret", RefreshToken = "refresh-secret"
+        });
+
+        var result = await service.CheckYouTubeAsync(CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Equal("ReauthorizationRequiredForScopeUpgrade", result.Status);
+        Assert.Contains(YouTubeOAuthScopes.CaptionManagement, result.Error);
+        Assert.DoesNotContain(handler.RequestUris, uri => uri.AbsolutePath.Contains("/youtube/v3/channels", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task YouTubeInvalidClient_ReturnsFriendlyTokenHealthError()
     {
         using var handler = new TokenHealthHandler
@@ -439,6 +459,7 @@ public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
     public HttpStatusCode YouTubeTokenStatusCode { get; set; } = HttpStatusCode.OK;
     public string? YouTubeTokenError { get; set; }
     public string? YouTubeTokenErrorDescription { get; set; }
+    public string YouTubeScopes { get; set; } = string.Join(" ", YouTubeOAuthScopes.VideoAndCaptionPublishing);
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
@@ -449,7 +470,7 @@ public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
         if (request.RequestUri!.Host == "oauth2.googleapis.com")
         {
             return YouTubeTokenStatusCode == HttpStatusCode.OK
-                ? JsonResponse(new { access_token = "access-token", token_type = "Bearer" })
+                ? JsonResponse(new { access_token = "access-token", token_type = "Bearer", scope = YouTubeScopes })
                 : JsonResponse(new { error = YouTubeTokenError, error_description = YouTubeTokenErrorDescription }, YouTubeTokenStatusCode);
         }
 

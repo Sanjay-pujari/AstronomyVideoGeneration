@@ -2,6 +2,7 @@ using Astronomy.MediaFactory.Core;
 using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Infrastructure.Persistence;
 using Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
+using Astronomy.MediaFactory.Publishing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -126,6 +127,19 @@ public sealed class Rc2YouTubeLongCheckpointTests
         Assert.Equal("B7gsJ2toKps", fixture.Api.CaptionVideoId);
         Assert.Equal(1, fixture.Api.VerificationCalls);
         Assert.Equal(Rc2PublicationState.Published, (await fixture.Db.Rc2PublishingPublications.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task MissingCaptionScope_FailsPreflightBeforeAnyProviderOperation()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Auth.RejectCaptionScope = true;
+
+        var error = await Assert.ThrowsAsync<YouTubeScopeUpgradeRequiredException>(() => fixture.PublishAsync());
+
+        Assert.Contains("ReauthorizationRequiredForScopeUpgrade", error.Message);
+        Assert.Equal(0, fixture.Api.VideoInsertCalls);
+        Assert.Equal(0, fixture.Api.ThumbnailCalls + fixture.Api.CaptionCalls + fixture.Api.VerificationCalls);
     }
 
     [Fact]
@@ -312,16 +326,17 @@ public sealed class Rc2YouTubeLongCheckpointTests
         private readonly string root;
         public MediaFactoryDbContext Db { get; }
         public FakeYouTubeApi Api { get; }
+        public FakeAuth Auth { get; }
         public Rc2PublishingExecutionService Service { get; }
         public Rc2PublishingPlan Plan { get; }
         public Rc2PublishingPublication Row { get; }
         public IReadOnlyList<Phase20PublishingArtifact> Artifacts { get; }
         public string CaptionPath => Path.Combine(root, "long.srt");
 
-        private Fixture(SqliteConnection connection, string root, MediaFactoryDbContext db, FakeYouTubeApi api,
+        private Fixture(SqliteConnection connection, string root, MediaFactoryDbContext db, FakeYouTubeApi api, FakeAuth auth,
             Rc2PublishingExecutionService service, Rc2PublishingPlan plan, Rc2PublishingPublication row,
             IReadOnlyList<Phase20PublishingArtifact> artifacts)
-        { this.connection = connection; this.root = root; Db = db; Api = api; Service = service; Plan = plan; Row = row; Artifacts = artifacts; }
+        { this.connection = connection; this.root = root; Db = db; Api = api; Auth = auth; Service = service; Plan = plan; Row = row; Artifacts = artifacts; }
 
         public static async Task<Fixture> CreateAsync()
         {
@@ -344,12 +359,13 @@ public sealed class Rc2YouTubeLongCheckpointTests
             await db.SaveChangesAsync();
             var artifacts = new[] { Artifact("LongVideo", "long.mp4"), Artifact("ThumbnailLandscape", "landscape.jpg"), Artifact("LongCaptionSrt", "long.srt") };
             var api = new FakeYouTubeApi();
+            var auth = new FakeAuth();
             var youtubeOptions = Options.Create(new YouTubeOptions { ExpectedChannelId = "ASTROPULSE_CHANNEL", CategoryId = "28" });
-            var service = new Rc2PublishingExecutionService(null!, null!, db, null!, null!, new FakeAuth(), api,
+            var service = new Rc2PublishingExecutionService(null!, null!, db, null!, null!, auth, api,
                 null!, null!, null!, Options.Create(new PublishingTargetsOptions()), Options.Create(new PublishingOptions { Mode = "Private" }),
                 youtubeOptions, Options.Create(new MetaPublishingOptions()), Options.Create(new PlatformPublishingOptions()),
                 Options.Create(new PublicMediaStorageOptions()), new ConfigurationBuilder().Build(), NullLogger<Rc2PublishingExecutionService>.Instance);
-            return new(connection, root, db, api, service, plan, row, artifacts);
+            return new(connection, root, db, api, auth, service, plan, row, artifacts);
         }
 
         public async Task PublishAsync()
@@ -366,6 +382,11 @@ public sealed class Rc2YouTubeLongCheckpointTests
 
     private sealed class FakeAuth : IYouTubeAuthService
     {
+        public bool RejectCaptionScope { get; set; }
+        public Task EnsurePublishingScopesAsync(bool captionsRequired, CancellationToken cancellationToken) =>
+            RejectCaptionScope && captionsRequired
+                ? Task.FromException(new YouTubeScopeUpgradeRequiredException())
+                : Task.CompletedTask;
         public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken) => Task.FromResult("mock-token");
         public Task<string> GetAccessTokenAsync(bool forceRefresh, CancellationToken cancellationToken)
         { Assert.True(forceRefresh); return Task.FromResult("mock-refreshed-token"); }

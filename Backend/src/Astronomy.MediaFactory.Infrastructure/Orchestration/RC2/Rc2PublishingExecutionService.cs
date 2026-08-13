@@ -258,6 +258,9 @@ public sealed class Rc2PublishingExecutionService(
             Title = plan.Title.Trim(), Description = plan.Title.Trim(), AssetType = "LongVideo", PrivacyStatus = privacy,
             IsShort = false, UploadThumbnail = true };
 
+        // Scope preflight is deliberately before channel lookup or any provider side effect. This target
+        // always carries LongCaptionSrt, so caption management permission is mandatory even on resume.
+        await youTubeAuth.EnsurePublishingScopesAsync(captionsRequired: true, cancellationToken: ct);
         // Refresh before the non-idempotent create call; an upload exception is deliberately never replayed.
         var accessToken = await youTubeAuth.GetAccessTokenAsync(true, ct);
         var channel = await youTubeApi.GetAuthenticatedChannelAsync(accessToken, ct);

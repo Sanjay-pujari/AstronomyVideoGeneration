@@ -11,9 +11,9 @@ namespace Astronomy.MediaFactory.Publishing;
 
 public sealed class YouTubeOAuthService : IYouTubeOAuthService
 {
-    public const string YouTubeUploadScope = "https://www.googleapis.com/auth/youtube.upload";
-    public const string YouTubeReadonlyScope = "https://www.googleapis.com/auth/youtube.readonly";
-    public const string YouTubeForceSslScope = "https://www.googleapis.com/auth/youtube.force-ssl";
+    public const string YouTubeUploadScope = YouTubeOAuthScopes.Upload;
+    public const string YouTubeReadonlyScope = YouTubeOAuthScopes.Readonly;
+    public const string YouTubeForceSslScope = YouTubeOAuthScopes.CaptionManagement;
     public const string InsufficientOAuthScopesGuidance = "Google OAuth did not grant the required YouTube scopes. Restart setup at /api/youtubeoauth/start for one-time consent including youtube.upload, youtube.readonly, and youtube.force-ssl; refreshing an old token cannot add the caption scope.";
     public const string MissingRefreshTokenGuidance = "Google did not return refresh_token. Remove previous app consent and retry with prompt=consent.";
     public const string ChannelMismatchMessage = "Authenticated channel does not match configured expected channel.";
@@ -22,8 +22,6 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
     {
         WriteIndented = true
     };
-
-    private static readonly string[] RequiredAuthorizationScopes = [YouTubeUploadScope, YouTubeReadonlyScope, YouTubeForceSslScope];
 
     private readonly HttpClient _httpClient;
     private readonly IYouTubeApiClient _youTubeApiClient;
@@ -56,7 +54,7 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
             ["client_id"] = _options.ClientId,
             ["redirect_uri"] = _options.RedirectUri,
             ["response_type"] = "code",
-            ["scope"] = string.Join(" ", RequiredAuthorizationScopes),
+            ["scope"] = string.Join(" ", YouTubeOAuthScopes.VideoAndCaptionPublishing),
             ["access_type"] = "offline",
             ["prompt"] = "consent"
         };
@@ -158,12 +156,12 @@ public sealed class YouTubeOAuthService : IYouTubeOAuthService
     {
         if (string.IsNullOrWhiteSpace(scope))
         {
-            return;
+            throw new InvalidOperationException(InsufficientOAuthScopesGuidance);
         }
 
         var grantedScopes = scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (RequiredAuthorizationScopes.Any(requiredScope => !grantedScopes.Contains(requiredScope)))
+        if (YouTubeOAuthScopes.VideoAndCaptionPublishing.Any(requiredScope => !grantedScopes.Contains(requiredScope)))
         {
             throw new InvalidOperationException(InsufficientOAuthScopesGuidance);
         }

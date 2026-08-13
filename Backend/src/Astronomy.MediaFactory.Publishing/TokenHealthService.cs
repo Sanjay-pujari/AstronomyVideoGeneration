@@ -112,6 +112,17 @@ public sealed class TokenHealthService : ITokenHealthService
                 return result;
             }
 
+            var grantedScopes = string.IsNullOrWhiteSpace(token.Scope)
+                ? await ReadStoredYouTubeScopesAsync(cancellationToken)
+                : token.Scope;
+            var missingScopes = YouTubeOAuthScopes.Missing(grantedScopes, captionsRequired: true);
+            if (missingScopes.Count != 0)
+            {
+                result.Status = "ReauthorizationRequiredForScopeUpgrade";
+                result.Error = $"YouTube token is missing required publishing scopes: {string.Join(", ", missingScopes)}. Complete one-time authorization at /api/youtubeoauth/start.";
+                return result;
+            }
+
             using var channelRequest = new HttpRequestMessage(HttpMethod.Get, YouTubeChannelsEndpoint);
             channelRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token.AccessToken);
             using var channelResponse = await _httpClient.SendAsync(channelRequest, cancellationToken);
@@ -158,6 +169,15 @@ public sealed class TokenHealthService : ITokenHealthService
             result.Error = ToSafeError(ex);
             return result;
         }
+    }
+
+    private async Task<string?> ReadStoredYouTubeScopesAsync(CancellationToken cancellationToken)
+    {
+        var path = YouTubeTokenResolver.ResolveTokenFilePath(_youTubeOptions);
+        if (!File.Exists(path)) return null;
+        await using var stream = File.OpenRead(path);
+        var token = await JsonSerializer.DeserializeAsync<YouTubeOAuthTokenFile>(stream, JsonOptions, cancellationToken);
+        return token?.GrantedScopes;
     }
 
     public async Task<TokenHealthResult> CheckMetaAsync(CancellationToken cancellationToken)
@@ -354,6 +374,8 @@ public sealed class TokenHealthService : ITokenHealthService
     {
         [JsonPropertyName("access_token")]
         public string? AccessToken { get; init; }
+        [JsonPropertyName("scope")]
+        public string? Scope { get; init; }
     }
 
     private sealed class YouTubeChannelsResponse
