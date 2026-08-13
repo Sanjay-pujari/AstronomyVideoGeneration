@@ -103,7 +103,7 @@ public sealed class Rc2PublishingExecutionService(
 
         try { await VerifyArtifactsAsync(plan, artifacts, ct); }
         catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
-        if (target == Rc2PublishingTarget.YouTubeLong)
+        if (target is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.YouTubeShort)
         {
             try { ValidateYouTubeMetadata(plan.Title, ResolveYouTubePrivacy(), youTubeOptions.Value.CategoryId); }
             catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
@@ -168,6 +168,8 @@ public sealed class Rc2PublishingExecutionService(
         {
             if (target == Rc2PublishingTarget.YouTubeLong)
                 await PublishYouTubeLongAsync(row, plan, artifacts, ct);
+            else if (target == Rc2PublishingTarget.YouTubeShort)
+                await PublishYouTubeShortAsync(row, plan, artifacts, ct);
             else
             {
                 var provider = await PublishProviderAsync(plan, target, artifacts, ct);
@@ -307,6 +309,77 @@ public sealed class Rc2PublishingExecutionService(
             var remote = await youTubeApi.GetVideoPostUploadStatusAsync(row.RemotePublicationId!, accessToken, ct);
             if (remote is null || remote.VideoId != row.RemotePublicationId || remote.ChannelId != channel.ChannelId ||
                 remote.ChannelId != youTubeOptions.Value.ExpectedChannelId || !string.Equals(remote.PrivacyStatus, privacy, StringComparison.OrdinalIgnoreCase))
+                throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_VERIFICATION_FAILED", "YouTube remote video verification failed closed.");
+            row.RemoteVerificationCompleted = true; row.LastCompletedStep = Rc2PublicationStep.RemoteVerified;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+        if (!row.VideoUploadCompleted || !row.ThumbnailCompleted || !row.CaptionCompleted || !row.RemoteVerificationCompleted)
+            throw new Rc2PublishingControlException("RC2_PUBLISH_CHECKPOINT_INCOMPLETE", "Mandatory YouTube publication steps are incomplete.");
+        row.Status = Rc2PublicationState.Published; row.FailureCode = row.FailureMessage = null;
+    }
+
+    internal Task PublishYouTubeShortAsync(Rc2PublishingPublication row, Rc2PublishingPlan plan,
+        IReadOnlyList<Phase20PublishingArtifact> artifacts, CancellationToken ct) =>
+        PublishYouTubeCheckpointedAsync(row, plan, artifacts, "ShortVideo", "ThumbnailPortrait", "ShortCaptionSrt", true, ct);
+
+    private async Task PublishYouTubeCheckpointedAsync(Rc2PublishingPublication row, Rc2PublishingPlan plan,
+        IReadOnlyList<Phase20PublishingArtifact> artifacts, string videoRole, string thumbnailRole,
+        string captionRole, bool isShort, CancellationToken ct)
+    {
+        string PathFor(string role) => ResolvePath(plan, artifacts.Single(x => x.Role == role).Path);
+        var privacy = ResolveYouTubePrivacy();
+        var request = new PublishRequest { PipelineRunId = plan.PlanId, VideoPath = PathFor(videoRole),
+            ThumbnailPath = PathFor(thumbnailRole), PlatformThumbnailPath = PathFor(thumbnailRole),
+            Title = plan.Title.Trim(), Description = plan.Title.Trim(), AssetType = videoRole, PrivacyStatus = privacy,
+            IsShort = isShort, UploadThumbnail = true };
+
+        // Phase 20 makes ShortCaptionSrt authoritative for this target, so captions are mandatory.
+        await youTubeAuth.EnsurePublishingScopesAsync(captionsRequired: true, cancellationToken: ct);
+        var accessToken = await youTubeAuth.GetAccessTokenAsync(true, ct);
+        var channel = await youTubeApi.GetAuthenticatedChannelAsync(accessToken, ct);
+        if (!string.IsNullOrWhiteSpace(youTubeOptions.Value.ExpectedChannelId) &&
+            !string.Equals(channel.ChannelId, youTubeOptions.Value.ExpectedChannelId, StringComparison.Ordinal))
+            throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_CHANNEL_MISMATCH", "Authenticated YouTube channel does not match configuration.");
+
+        if (!row.VideoUploadCompleted)
+        {
+            if (!string.IsNullOrWhiteSpace(row.RemotePublicationId))
+                throw new Rc2PublishingControlException("RC2_PUBLISH_CHECKPOINT_INVALID", "Remote video checkpoint is inconsistent.");
+            string videoId;
+            try { videoId = await youTubeApi.UploadVideoAsync(request, accessToken, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { throw new YouTubeCreateOutcomeUnknownException(ex.Message, ex); }
+            if (string.IsNullOrWhiteSpace(videoId))
+                throw new YouTubeCreateOutcomeUnknownException("YouTube create completed without a confirmed video ID.");
+
+            row.RemotePublicationId = videoId;
+            row.RemoteUrl = $"https://www.youtube.com/watch?v={videoId}";
+            row.VideoCreatedUtc = row.UpdatedUtc = DateTimeOffset.UtcNow;
+            row.VideoUploadCompleted = true;
+            row.LastCompletedStep = Rc2PublicationStep.VideoCreated;
+            await db.SaveChangesAsync(ct);
+        }
+
+        if (!row.ThumbnailCompleted)
+        {
+            await youTubeApi.UploadThumbnailAsync(row.RemotePublicationId!, PathFor(thumbnailRole), accessToken, ct);
+            row.ThumbnailCompleted = true; row.LastCompletedStep = Rc2PublicationStep.ThumbnailCompleted;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+        if (!row.CaptionCompleted)
+        {
+            var (language, name) = ResolveCaptionLanguage(plan.Language);
+            var captionPath = PathFor(captionRole);
+            await ValidateSrtAsync(captionPath, ct);
+            await youTubeApi.UploadCaptionAsync(row.RemotePublicationId!, captionPath, language, name, accessToken, ct);
+            row.CaptionCompleted = true; row.LastCompletedStep = Rc2PublicationStep.CaptionCompleted;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+        if (!row.RemoteVerificationCompleted)
+        {
+            var remote = await youTubeApi.GetVideoPostUploadStatusAsync(row.RemotePublicationId!, accessToken, ct);
+            if (remote is null || remote.VideoId != row.RemotePublicationId || remote.ChannelId != channel.ChannelId ||
+                (!string.IsNullOrWhiteSpace(youTubeOptions.Value.ExpectedChannelId) && remote.ChannelId != youTubeOptions.Value.ExpectedChannelId) ||
+                !string.Equals(remote.PrivacyStatus, privacy, StringComparison.OrdinalIgnoreCase))
                 throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_VERIFICATION_FAILED", "YouTube remote video verification failed closed.");
             row.RemoteVerificationCompleted = true; row.LastCompletedStep = Rc2PublicationStep.RemoteVerified;
             row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
