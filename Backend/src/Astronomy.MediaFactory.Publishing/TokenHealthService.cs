@@ -258,41 +258,25 @@ public sealed class TokenHealthService : ITokenHealthService
                 return result;
             }
 
-            var page = await GetGraphAsync<MetaPageResponse>($"/{Uri.EscapeDataString(pageId)}", new Dictionary<string, string>
-            {
-                ["fields"] = "id,name",
-                ["access_token"] = token.LongLivedUserAccessToken
-            }, "Meta Facebook page validation", cancellationToken);
-
-            if (string.IsNullOrWhiteSpace(page.Id))
-            {
-                result.Error = "Meta Facebook page validation did not return a page id.";
-                return result;
-            }
-
-            result.AccountId = page.Id;
-            result.AccountName = page.Name ?? token.FacebookPageName ?? string.Empty;
-
-            if (!string.IsNullOrWhiteSpace(_metaOptions.ExpectedFacebookPageName)
-                && !string.Equals(result.AccountName, _metaOptions.ExpectedFacebookPageName.Trim(), StringComparison.OrdinalIgnoreCase))
-            {
-                result.Error = "Validated Facebook page does not match configured expected page name.";
-                return result;
-            }
-
-            // Re-discover the linked account from the authorized Page instead of trusting the
-            // identifier cached in the credential file. The Page token proves the relationship.
             if (string.IsNullOrWhiteSpace(token.FacebookPageAccessToken))
             {
                 result.Error = "Meta OAuth token file is missing the Page access token required for linked Instagram discovery.";
                 return result;
             }
-            var linked = await GetGraphAsync<MetaPageInstagramResponse>($"/{Uri.EscapeDataString(pageId)}", new Dictionary<string, string>
+            var identity = await new MetaAccountIdentityResolver(_httpClient, _logger).ResolveAsync(pageId,
+                token.FacebookPageAccessToken, token.LongLivedUserAccessToken, cancellationToken);
+            result.AccountId = identity.FacebookPageId;
+            result.AccountName = identity.FacebookPageName ?? token.FacebookPageName ?? string.Empty;
+
+            if (!string.Equals(identity.FacebookPageId, pageId, StringComparison.Ordinal)
+                || (!string.IsNullOrWhiteSpace(_metaOptions.ExpectedFacebookPageName)
+                    && !string.Equals(result.AccountName, _metaOptions.ExpectedFacebookPageName.Trim(), StringComparison.OrdinalIgnoreCase)))
             {
-                ["fields"] = "instagram_business_account",
-                ["access_token"] = token.FacebookPageAccessToken
-            }, "Meta linked Instagram account discovery", cancellationToken);
-            var instagramId = linked.InstagramBusinessAccount?.Id;
+                result.Error = "Validated Facebook page does not match configured expected page identity.";
+                return result;
+            }
+
+            var instagramId = identity.InstagramAccountId;
 
             if (!string.IsNullOrWhiteSpace(instagramId))
             {
@@ -303,20 +287,8 @@ public sealed class TokenHealthService : ITokenHealthService
                     return result;
                 }
 
-                var instagram = await GetGraphAsync<MetaInstagramResponse>($"/{Uri.EscapeDataString(instagramId)}", new Dictionary<string, string>
-                {
-                    ["fields"] = "id,username",
-                    ["access_token"] = token.LongLivedUserAccessToken
-                }, "Meta Instagram account validation", cancellationToken);
-
-                if (string.IsNullOrWhiteSpace(instagram.Id))
-                {
-                    result.Error = "Meta Instagram account validation did not return an account id.";
-                    return result;
-                }
-
                 if (!string.IsNullOrWhiteSpace(_metaOptions.ExpectedInstagramUsername)
-                    && !string.Equals(instagram.Username, _metaOptions.ExpectedInstagramUsername.Trim(), StringComparison.OrdinalIgnoreCase))
+                    && !string.Equals(identity.InstagramUsername, _metaOptions.ExpectedInstagramUsername.Trim(), StringComparison.OrdinalIgnoreCase))
                 {
                     result.Error = "Validated Instagram username does not match configured expected Instagram username.";
                     return result;
@@ -444,33 +416,4 @@ public sealed class TokenHealthService : ITokenHealthService
         public string? UserId { get; init; }
     }
 
-    private sealed class MetaPageResponse
-    {
-        [JsonPropertyName("id")]
-        public string? Id { get; init; }
-
-        [JsonPropertyName("name")]
-        public string? Name { get; init; }
-    }
-
-    private sealed class MetaInstagramResponse
-    {
-        [JsonPropertyName("id")]
-        public string? Id { get; init; }
-
-        [JsonPropertyName("username")]
-        public string? Username { get; init; }
-    }
-
-    private sealed class MetaPageInstagramResponse
-    {
-        [JsonPropertyName("instagram_business_account")]
-        public MetaInstagramBusinessAccount? InstagramBusinessAccount { get; init; }
-    }
-
-    private sealed class MetaInstagramBusinessAccount
-    {
-        [JsonPropertyName("id")]
-        public string? Id { get; init; }
-    }
 }

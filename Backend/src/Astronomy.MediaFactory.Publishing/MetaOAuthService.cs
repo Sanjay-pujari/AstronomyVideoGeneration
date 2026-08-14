@@ -204,29 +204,21 @@ public sealed class MetaOAuthService : IMetaOAuthService
     private async Task<MetaOAuthInstagramAccount> DiscoverInstagramAccountAsync(MetaOAuthPage selectedPage,
         string longLivedUserToken, CancellationToken cancellationToken)
     {
-        var page = await GetJsonAsync<PageInstagramResponse>($"/{Uri.EscapeDataString(selectedPage.Id)}", new Dictionary<string, string>
-        {
-            ["fields"] = "instagram_business_account",
-            // A Page token proves the Page-to-Instagram relationship.
-            ["access_token"] = selectedPage.AccessToken
-        }, "Meta Instagram business account discovery", cancellationToken);
+        // Page identity and linkage use the common TokenHealth projection. Page identity and
+        // Instagram profile reads use the user token; the linkage read uses the Page token.
+        var identity = await new MetaAccountIdentityResolver(_httpClient, _logger).ResolveAsync(
+            selectedPage.Id, selectedPage.AccessToken, longLivedUserToken, cancellationToken);
+        if (!string.Equals(identity.FacebookPageId, selectedPage.Id, StringComparison.Ordinal)
+            || (!string.IsNullOrWhiteSpace(identity.FacebookPageName)
+                && !string.Equals(identity.FacebookPageName, selectedPage.Name, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(PageMismatchMessage);
 
-        var businessId = page.InstagramBusinessAccount?.Id;
-        if (string.IsNullOrWhiteSpace(businessId))
+        if (string.IsNullOrWhiteSpace(identity.InstagramAccountId))
         {
             _logger.LogWarning(InstagramNotLinkedWarning);
             return new MetaOAuthInstagramAccount(null, null, InstagramNotLinkedWarning);
         }
-
-        var instagram = await GetJsonAsync<InstagramUsernameResponse>($"/{Uri.EscapeDataString(businessId)}", new Dictionary<string, string>
-        {
-            ["fields"] = "username,name,account_type",
-            // Instagram object reads use the same long-lived user-token authority as TokenHealth.
-            ["access_token"] = longLivedUserToken
-        }, "Meta Instagram username discovery", cancellationToken);
-
-        return new MetaOAuthInstagramAccount(businessId, instagram.Username, Name: instagram.Name,
-            AccountType: instagram.AccountType);
+        return new MetaOAuthInstagramAccount(identity.InstagramAccountId, identity.InstagramUsername);
     }
 
     private async Task<IReadOnlyList<string>> ReadAndValidateGrantedPermissionsAsync(string userToken, CancellationToken cancellationToken)
@@ -354,30 +346,6 @@ public sealed class MetaOAuthService : IMetaOAuthService
 
         [JsonPropertyName("access_token")]
         public string? AccessToken { get; init; }
-    }
-
-    private sealed class PageInstagramResponse
-    {
-        [JsonPropertyName("instagram_business_account")]
-        public InstagramBusinessAccountResponse? InstagramBusinessAccount { get; init; }
-    }
-
-    private sealed class InstagramBusinessAccountResponse
-    {
-        [JsonPropertyName("id")]
-        public string? Id { get; init; }
-    }
-
-    private sealed class InstagramUsernameResponse
-    {
-        [JsonPropertyName("username")]
-        public string? Username { get; init; }
-
-        [JsonPropertyName("name")]
-        public string? Name { get; init; }
-
-        [JsonPropertyName("account_type")]
-        public string? AccountType { get; init; }
     }
 
     private sealed class DebugTokenResponse { [JsonPropertyName("data")] public DebugTokenData? Data { get; init; } }
