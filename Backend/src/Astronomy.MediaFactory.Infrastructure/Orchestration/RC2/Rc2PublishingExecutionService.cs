@@ -20,7 +20,8 @@ public sealed class Rc2PublishingExecutionService(
     IOptions<PublishingOptions> publishingOptions, IOptions<YouTubeOptions> youTubeOptions,
     IOptions<MetaPublishingOptions> metaOptions, IOptions<PlatformPublishingOptions> platformOptions,
     IOptions<PublicMediaStorageOptions> publicMediaStorageOptions, IConfiguration configuration,
-    ILogger<Rc2PublishingExecutionService> logger) : IRc2PublishingExecutionService
+    ILogger<Rc2PublishingExecutionService> logger, IPublicMediaStorageService? publicMediaStorage = null,
+    IRc2InstagramApiClient? instagramApi = null) : IRc2PublishingExecutionService
 {
     private const string PolicyVersion = "rc2-phase20-publish-v1";
     internal const int MaximumStoredProviderDiagnosticLength = 16_384;
@@ -119,9 +120,10 @@ public sealed class Rc2PublishingExecutionService(
                 ? Blocked(target, "RC2_PUBLISH_REAUTHORIZATION_REQUIRED",
                     $"Provider={health.Platform}; OAuthStartPath={health.OAuthStartPath}", artifacts.Count)
                 : Blocked(target, "RC2_PUBLISH_CREDENTIALS_INVALID", NonSecretHealthMessage(health), artifacts.Count);
+        PreparedProviderMedia? preparedInstagramImage = null;
         if (target == Rc2PublishingTarget.InstagramPost)
         {
-            try { await PrepareInstagramImageAsync(plan, authority, artifacts.Single(), dryRun, ct); }
+            try { preparedInstagramImage = await PrepareInstagramImageAsync(plan, authority, artifacts.Single(), dryRun, ct); }
             catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
         }
         if (dryRun) return new(target, Rc2PublicationState.NotPublished, existing?.RemotePublicationId, existing?.RemoteUrl, false,
@@ -129,7 +131,7 @@ public sealed class Rc2PublishingExecutionService(
             stalePublishing ? "The abandoned publication is ready for governed recovery; dry-run did not acquire it." : null,
             IsCarousel(target) ? artifacts.Count : null, true);
 
-        if (existing?.FailureCode == "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN" && !existing.VideoUploadCompleted)
+        if (existing?.FailureCode == "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN" && string.IsNullOrWhiteSpace(existing.RemotePublicationId))
             return Result(existing, Rc2PublicationState.Blocked, false, existing.FailureCode,
                 "The remote create outcome requires reconciliation before another upload can be attempted.");
 
@@ -175,6 +177,8 @@ public sealed class Rc2PublishingExecutionService(
                 await PublishYouTubeLongAsync(row, plan, artifacts, ct);
             else if (target == Rc2PublishingTarget.YouTubeShort)
                 await PublishYouTubeShortAsync(row, plan, artifacts, ct);
+            else if (target == Rc2PublishingTarget.InstagramPost)
+                await PublishInstagramPostAsync(row, plan, preparedInstagramImage!, ct);
             else
             {
                 var provider = await PublishProviderAsync(plan, target, artifacts, ct);
@@ -185,6 +189,11 @@ public sealed class Rc2PublishingExecutionService(
             }
         }
         catch (YouTubeCreateOutcomeUnknownException ex)
+        {
+            row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN";
+            row.FailureMessage = NormalizeProviderFailure(ex.Message);
+        }
+        catch (InstagramPublishOutcomeUnknownException ex)
         {
             row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN";
             row.FailureMessage = NormalizeProviderFailure(ex.Message);
@@ -447,6 +456,106 @@ public sealed class Rc2PublishingExecutionService(
     }
 
     private sealed class YouTubeCreateOutcomeUnknownException(string message, Exception? inner = null) : Exception(message, inner);
+
+    internal async Task PublishInstagramPostAsync(Rc2PublishingPublication row, Rc2PublishingPlan plan,
+        PreparedProviderMedia prepared, CancellationToken ct)
+    {
+        if (publicMediaStorage is null || instagramApi is null)
+            throw new Rc2PublishingControlException("RC2_PUBLISH_INSTAGRAM_NOT_CONFIGURED", "Instagram image publishing services are not configured.");
+
+        if (!row.MediaPrepared)
+        {
+            row.MediaPrepared = true; row.LastCompletedStep = Rc2PublicationStep.MediaPrepared;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+
+        string? imageUrl = null;
+        if (!row.PublicMediaStaged)
+        {
+            // The provider derivative, never the canonical HeroPortrait, crosses this boundary.
+            var upload = await publicMediaStorage.UploadPublicAssetAsync(prepared.Path, plan.PlanId,
+                $"instagram-{prepared.Sha256}.jpg", "image/jpeg", ct);
+            if (!upload.Success || !Uri.TryCreate(upload.PublicUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+                throw new Rc2PublishingControlException("RC2_PUBLISH_PUBLIC_MEDIA_STAGING_FAILED", upload.Error);
+            imageUrl = upload.PublicUrl;
+            row.PublicMediaBlobName = upload.BlobName; // safe identity only: never persist the SAS URL
+            row.PublicMediaExpiresUtc = upload.ExpiresUtc;
+            row.PublicMediaStaged = true; row.LastCompletedStep = Rc2PublicationStep.PublicMediaStaged;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+
+        if (string.IsNullOrWhiteSpace(row.RemoteContainerId))
+        {
+            if (string.IsNullOrWhiteSpace(imageUrl))
+            {
+                var access = await publicMediaStorage.CreateReadAccessAsync(row.PublicMediaBlobName!, ct);
+                if (!access.Success || !Uri.TryCreate(access.PublicUrl, UriKind.Absolute, out var renewed) || renewed.Scheme != Uri.UriSchemeHttps)
+                    throw new Rc2PublishingControlException("RC2_PUBLISH_STAGING_URL_RECONCILIATION_REQUIRED", access.Error);
+                imageUrl = access.PublicUrl;
+                row.PublicMediaExpiresUtc = access.ExpiresUtc;
+                row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+            }
+            var containerId = await instagramApi.CreateImageContainerAsync(imageUrl, plan.Title.Trim(), ct);
+            if (string.IsNullOrWhiteSpace(containerId))
+                throw new InvalidOperationException("Meta returned no Instagram container ID.");
+            row.RemoteContainerId = containerId;
+            row.LastCompletedStep = Rc2PublicationStep.ContainerCreated;
+            row.UpdatedUtc = DateTimeOffset.UtcNow;
+            // Critical boundary: commit the creation ID before status polling or media_publish.
+            await db.SaveChangesAsync(ct);
+        }
+
+        if (!row.ContainerReady)
+        {
+            var attempts = Math.Max(1, metaOptions.Value.InstagramContainerMaxAttempts);
+            for (var attempt = 1; attempt <= attempts; attempt++)
+            {
+                var status = (await instagramApi.GetContainerStatusAsync(row.RemoteContainerId!, ct)).ToUpperInvariant();
+                if (status is "FINISHED" or "READY")
+                {
+                    row.ContainerReady = true; row.LastCompletedStep = Rc2PublicationStep.ContainerReady;
+                    row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct); break;
+                }
+                if (status is not ("IN_PROGRESS" or "PROCESSING"))
+                    throw new Rc2PublishingControlException("RC2_PUBLISH_INSTAGRAM_CONTAINER_FAILED", $"Instagram container entered terminal state {status}.");
+                if (attempt < attempts && metaOptions.Value.InstagramContainerPollSeconds > 0)
+                    await Task.Delay(TimeSpan.FromSeconds(metaOptions.Value.InstagramContainerPollSeconds), ct);
+            }
+            if (!row.ContainerReady)
+                throw new Rc2PublishingControlException("RC2_PUBLISH_INSTAGRAM_PROCESSING_TIMEOUT", "Instagram container is still processing; retry will resume the same container.");
+        }
+
+        if (string.IsNullOrWhiteSpace(row.RemotePublicationId))
+        {
+            if (row.PublishRequested)
+                throw new InstagramPublishOutcomeUnknownException(
+                    "A prior Instagram media_publish request has no authoritative response; reconciliation is required before retry.");
+            row.PublishRequested = true; row.LastCompletedStep = Rc2PublicationStep.PublishRequested;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+            var mediaId = await instagramApi.PublishContainerAsync(row.RemoteContainerId!, ct);
+            if (string.IsNullOrWhiteSpace(mediaId))
+                throw new InstagramPublishOutcomeUnknownException("Instagram media_publish returned no authoritative media ID.");
+            row.RemotePublicationId = mediaId;
+            row.LastCompletedStep = Rc2PublicationStep.PublishedRemote;
+            row.UpdatedUtc = DateTimeOffset.UtcNow;
+            // Critical boundary: authoritative media identity is durable before verification.
+            await db.SaveChangesAsync(ct);
+        }
+
+        if (!row.RemoteVerificationCompleted)
+        {
+            var media = await instagramApi.GetMediaAsync(row.RemotePublicationId!, ct);
+            var expectedAccount = configuration["Meta:ExpectedInstagramAccountId"];
+            if (media is null || media.Id != row.RemotePublicationId ||
+                (!string.IsNullOrWhiteSpace(expectedAccount) && media.OwnerId != expectedAccount) ||
+                (!string.IsNullOrWhiteSpace(media.MediaType) && media.MediaType is not ("IMAGE" or "CAROUSEL_ALBUM")))
+                throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_VERIFICATION_FAILED", "Instagram remote media verification failed closed.");
+            row.RemoteUrl = media.Permalink;
+            row.RemoteVerificationCompleted = true; row.LastCompletedStep = Rc2PublicationStep.RemoteVerified;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+        row.Status = Rc2PublicationState.Published; row.FailureCode = row.FailureMessage = null;
+    }
 
     private async Task<(bool Success, string? Id, string? Url, string? Error)> PublishProviderAsync(
         Rc2PublishingPlan plan, Rc2PublishingTarget target, IReadOnlyList<Phase20PublishingArtifact> artifacts, CancellationToken ct)

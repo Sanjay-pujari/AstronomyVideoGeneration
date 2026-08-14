@@ -181,7 +181,21 @@ public interface IPublicMediaStorageService
 {
     Task<PublicMediaUploadResult> UploadForInstagramAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken);
     Task<PublicMediaUploadResult> UploadPublicAssetAsync(string localFilePath, Guid pipelineRunId, string assetFileName, string contentType, CancellationToken cancellationToken);
+    Task<PublicMediaUploadResult> CreateReadAccessAsync(string blobName, CancellationToken cancellationToken)
+        => Task.FromResult(new PublicMediaUploadResult { Success = false, Error = "Read-access renewal is not supported." });
 }
+
+public interface IRc2InstagramApiClient
+{
+    Task<string> CreateImageContainerAsync(string imageUrl, string caption, CancellationToken cancellationToken);
+    Task<string> GetContainerStatusAsync(string containerId, CancellationToken cancellationToken);
+    Task<string> PublishContainerAsync(string containerId, CancellationToken cancellationToken);
+    Task<Rc2InstagramMedia?> GetMediaAsync(string mediaId, CancellationToken cancellationToken);
+}
+
+public sealed record Rc2InstagramMedia(string Id, string? MediaType, string? OwnerId, string? Permalink);
+
+public sealed class InstagramPublishOutcomeUnknownException(string message, Exception? inner = null) : Exception(message, inner);
 
 public interface IMetaThumbnailAssetPublisher
 {
