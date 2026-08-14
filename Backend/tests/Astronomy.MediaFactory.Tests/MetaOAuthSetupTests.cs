@@ -162,6 +162,34 @@ public sealed class MetaOAuthSetupTests
         Assert.Equal("ig-123", result.InstagramBusinessAccountId);
         Assert.Equal("astropulse", result.InstagramUsername);
         Assert.Null(result.Warning);
+        Assert.Null(result.InstagramAccountType);
+    }
+
+    [Fact]
+    public async Task CompleteSetup_UsesMinimalSharedInstagramProjectionWithoutAccountType()
+    {
+        using var workspace = new TemporaryMetaOAuthWorkspace();
+        var handler = CreateSuccessHandler();
+        var service = CreateService(workspace.TokenFilePath, handler, expectedPageId: "page-2", expectedInstagramAccountId: "ig-123");
+
+        var result = await service.CompleteSetupAsync("auth-code", CancellationToken.None);
+
+        Assert.True(result.Success);
+        var request = handler.Requests.Single(x => x.AbsolutePath == "/v23.0/ig-123");
+        Assert.Contains("fields=id,username", Uri.UnescapeDataString(request.Query));
+        Assert.DoesNotContain("account_type", Uri.UnescapeDataString(request.Query));
+    }
+
+    [Fact]
+    public async Task CompleteSetup_WhenPageLinkedInstagramDiffersFromExpected_FailsClosedAndDoesNotPersist()
+    {
+        using var workspace = new TemporaryMetaOAuthWorkspace();
+        var service = CreateService(workspace.TokenFilePath, CreateSuccessHandler(), expectedPageId: "page-2", expectedInstagramAccountId: "different-id");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CompleteSetupAsync("auth-code", CancellationToken.None));
+
+        Assert.Contains("linked Instagram account", error.Message);
+        Assert.False(File.Exists(workspace.TokenFilePath));
     }
 
     [Fact]
@@ -173,7 +201,8 @@ public sealed class MetaOAuthSetupTests
 
         await service.CompleteSetupAsync("auth-code", CancellationToken.None);
 
-        var pageRequest = handler.Requests.Single(request => request.AbsolutePath == "/v23.0/page-2");
+        var pageRequest = handler.Requests.Single(request => request.AbsolutePath == "/v23.0/page-2"
+            && Uri.UnescapeDataString(request.Query).Contains("fields=instagram_business_account", StringComparison.Ordinal));
         var instagramRequest = handler.Requests.Single(request => request.AbsolutePath == "/v23.0/ig-123");
         Assert.Contains($"access_token={PageToken}", Uri.UnescapeDataString(pageRequest.Query));
         Assert.Contains($"access_token={LongToken}", Uri.UnescapeDataString(instagramRequest.Query));
@@ -261,6 +290,7 @@ public sealed class MetaOAuthSetupTests
         HttpMessageHandler handler,
         string expectedPageId = "",
         string expectedInstagramUsername = "",
+        string expectedInstagramAccountId = "",
         CapturingLogger<MetaOAuthService>? logger = null)
     {
         var options = Options.Create(new MetaOptions
@@ -270,6 +300,7 @@ public sealed class MetaOAuthSetupTests
             RedirectUri = "https://localhost:59235/api/metaoauth/callback",
             ExpectedFacebookPageId = expectedPageId,
             ExpectedInstagramUsername = expectedInstagramUsername,
+            ExpectedInstagramAccountId = expectedInstagramAccountId,
             TokenFilePath = tokenFilePath
         });
 
@@ -286,9 +317,11 @@ public sealed class MetaOAuthSetupTests
                 "/v23.0/oauth/access_token" when decodedQuery.Contains("grant_type=fb_exchange_token", StringComparison.Ordinal) => $"{{\"access_token\":\"{LongToken}\",\"expires_in\":5184000,\"token_type\":\"bearer\"}}",
                 "/v23.0/debug_token" => "{\"data\":{\"is_valid\":true,\"scopes\":[\"pages_manage_posts\",\"pages_read_engagement\",\"pages_show_list\",\"instagram_basic\",\"instagram_content_publish\"]}}",
                 "/v23.0/me/accounts" => $"{{\"data\":[{{\"id\":\"page-1\",\"name\":\"Other Page\",\"access_token\":\"other-page-token\"}},{{\"id\":\"page-2\",\"name\":\"Expected Astro Page\",\"access_token\":\"{PageToken}\"}}]}}",
+                "/v23.0/page-2" when decodedQuery.Contains("fields=id,name", StringComparison.Ordinal) => "{\"id\":\"page-2\",\"name\":\"Expected Astro Page\"}",
+                "/v23.0/page-1" when decodedQuery.Contains("fields=id,name", StringComparison.Ordinal) => "{\"id\":\"page-1\",\"name\":\"Other Page\"}",
                 "/v23.0/page-2" => "{\"instagram_business_account\":{\"id\":\"ig-123\"}}",
                 "/v23.0/page-1" => "{\"instagram_business_account\":{\"id\":\"ig-123\"}}",
-                "/v23.0/ig-123" => "{\"username\":\"astropulse\",\"name\":\"Astro Pulse\",\"account_type\":\"BUSINESS\"}",
+                "/v23.0/ig-123" => "{\"id\":\"ig-123\",\"username\":\"astropulse\",\"unsupported_optional_profile_field\":\"ignored\"}",
                 _ => throw new InvalidOperationException($"Unexpected request: {uri}")
             };
         });
@@ -358,6 +391,7 @@ public sealed class MetaOAuthSetupTests
                 "/v23.0/oauth/access_token" => $"{{\"access_token\":\"{LongToken}\",\"expires_in\":5184000}}",
                 "/v23.0/debug_token" => "{\"data\":{\"is_valid\":true,\"scopes\":[\"pages_manage_posts\",\"pages_read_engagement\",\"pages_show_list\",\"instagram_basic\",\"instagram_content_publish\"]}}",
                 "/v23.0/me/accounts" => $"{{\"data\":[{{\"id\":\"page-2\",\"name\":\"Expected Astro Page\",\"access_token\":\"{PageToken}\"}}]}}",
+                "/v23.0/page-2" when decodedQuery.Contains("fields=id,name", StringComparison.Ordinal) => "{\"id\":\"page-2\",\"name\":\"Expected Astro Page\"}",
                 "/v23.0/page-2" => "{\"instagram_business_account\":{\"id\":\"ig-123\"}}",
                 _ => throw new InvalidOperationException($"Unexpected request: {uri}")
             };
