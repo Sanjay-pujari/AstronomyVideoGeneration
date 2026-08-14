@@ -34,6 +34,28 @@ public sealed class AzureBlobPublicMediaStorageService : IPublicMediaStorageServ
     public Task<PublicMediaUploadResult> UploadForInstagramAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken)
         => UploadPublicAssetAsync(localFilePath, pipelineRunId, "short-video.mp4", "video/mp4", cancellationToken);
 
+    public Task<PublicMediaUploadResult> CreateReadAccessAsync(string blobName, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_options.Enabled || string.IsNullOrWhiteSpace(_options.ConnectionString) || string.IsNullOrWhiteSpace(_options.ContainerName) || string.IsNullOrWhiteSpace(blobName))
+            return Task.FromResult(Failed("Public media read-access renewal is not configured.", blobName));
+        try
+        {
+            var blob = _blobClientFactory.Create(_options.ConnectionString, _options.ContainerName, blobName);
+            var expiresUtc = DateTime.UtcNow.AddHours(Math.Max(1, _options.SasExpiryHours));
+            var url = BuildPublicUrl(blob, blobName, expiresUtc);
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+                return Task.FromResult(Failed("Public media read access did not produce an HTTPS URL.", blobName, expiresUtc));
+            _logger.LogInformation("Renewed bounded read access for public media blob {BlobName}. PublicUrl={PublicUrlMasked} ExpiresUtc={ExpiresUtc:o}",
+                blobName, MaskSensitiveQuery(url), expiresUtc);
+            return Task.FromResult(new PublicMediaUploadResult { Success = true, PublicUrl = url, BlobName = blobName, ExpiresUtc = expiresUtc });
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Azure.RequestFailedException)
+        {
+            return Task.FromResult(Failed($"Public media read-access renewal failed: {ex.Message}", blobName));
+        }
+    }
+
     public async Task<PublicMediaUploadResult> UploadPublicAssetAsync(string localFilePath, Guid pipelineRunId, string assetFileName, string contentType, CancellationToken cancellationToken)
     {
         if (!_options.Enabled)

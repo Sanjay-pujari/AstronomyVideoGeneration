@@ -13,7 +13,7 @@ public enum Rc2PublishingApprovalStatus { NotAvailable, Pending, Approved, Rejec
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum Rc2PublishMode { Now, Scheduled }
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum Rc2PublicationStep { None, VideoCreated, ThumbnailCompleted, CaptionCompleted, RemoteVerified }
+public enum Rc2PublicationStep { None, VideoCreated, ThumbnailCompleted, CaptionCompleted, MediaPrepared, PublicMediaStaged, ContainerCreated, ContainerReady, PublishRequested, PublishedRemote, RemoteVerified }
 
 public sealed record Rc2CreatePublishingPackageRequest(Guid PlanId, bool OverwriteExisting);
 public sealed record Rc2SetPublishingApprovalRequest(Guid PlanId, Rc2PublishingApprovalStatus Decision);
@@ -92,7 +92,14 @@ public sealed class Rc2PublishingPublication
     public int AttemptCount { get; set; }
     public DateTimeOffset? LastAttemptUtc { get; set; }
     public string? RemotePublicationId { get; set; }
+    public string? RemoteContainerId { get; set; }
     public string? RemoteUrl { get; set; }
+    public string? PublicMediaBlobName { get; set; }
+    public DateTimeOffset? PublicMediaExpiresUtc { get; set; }
+    public bool MediaPrepared { get; set; }
+    public bool PublicMediaStaged { get; set; }
+    public bool ContainerReady { get; set; }
+    public bool PublishRequested { get; set; }
     public DateTimeOffset? VideoCreatedUtc { get; set; }
     public bool VideoUploadCompleted { get; set; }
     public bool ThumbnailCompleted { get; set; }
