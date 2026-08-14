@@ -8,6 +8,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Jpeg;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
@@ -119,6 +121,11 @@ public sealed class Rc2PublishingExecutionService(
                 ? Blocked(target, "RC2_PUBLISH_REAUTHORIZATION_REQUIRED",
                     $"Provider={health.Platform}; OAuthStartPath={health.OAuthStartPath}", artifacts.Count)
                 : Blocked(target, "RC2_PUBLISH_CREDENTIALS_INVALID", NonSecretHealthMessage(health), artifacts.Count);
+        if (target == Rc2PublishingTarget.InstagramPost)
+        {
+            try { await ValidateInstagramImageDryRunPreflightAsync(plan, artifacts.Single(), ct); }
+            catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
+        }
         if (dryRun) return new(target, Rc2PublicationState.NotPublished, existing?.RemotePublicationId, existing?.RemoteUrl, false,
             existing?.AttemptCount ?? 0, stalePublishing ? "RC2_PUBLISH_RECOVERABLE_STALE_PUBLICATION" : null,
             stalePublishing ? "The abandoned publication is ready for governed recovery; dry-run did not acquire it." : null,
@@ -474,7 +481,7 @@ public sealed class Rc2PublishingExecutionService(
             Rc2PublishingTarget.YouTubeShort => ["ShortVideo", "ThumbnailPortrait", "ShortCaptionSrt"],
             Rc2PublishingTarget.FacebookLong => ["LongVideo", "ThumbnailLandscape"],
             Rc2PublishingTarget.FacebookReel or Rc2PublishingTarget.InstagramReel => ["ShortVideo", "ThumbnailPortrait"],
-            Rc2PublishingTarget.InstagramPost => [authority.Roles.ContainsKey("HeroPortrait") ? "HeroPortrait" : "HeroSquare"],
+            Rc2PublishingTarget.InstagramPost => ["HeroPortrait"],
             Rc2PublishingTarget.FacebookPost => [authority.Roles.ContainsKey("HeroLandscape") ? "HeroLandscape" : "HeroSquare"],
             _ => ["GalleryImage"] };
         var resolved = roles.SelectMany(role => authority.Artifacts.Where(x => x.Role == role)
@@ -482,6 +489,32 @@ public sealed class Rc2PublishingExecutionService(
         if (roles.Any(role => resolved.All(x => x.Role != role)))
             throw new Rc2PublishingControlException("RC2_PUBLISH_REQUIRED_ROLE_MISSING", $"{target} is missing a required governed Phase 20 role.");
         return resolved;
+    }
+
+    private async Task ValidateInstagramImageDryRunPreflightAsync(Rc2PublishingPlan plan,
+        Phase20PublishingArtifact artifact, CancellationToken ct)
+    {
+        var storage = publicMediaStorageOptions.Value;
+        if (!metaOptions.Value.PublicMediaUploadEnabled || !storage.Enabled ||
+            !storage.Provider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(storage.ConnectionString) || string.IsNullOrWhiteSpace(storage.ContainerName) ||
+            storage.SasExpiryHours <= 0)
+            throw new Rc2PublishingControlException("RC2_PUBLISH_PUBLIC_MEDIA_CONFIGURATION_INVALID",
+                "PublicMediaStorage must be configured for governed Instagram image staging.");
+
+        var path = ResolvePath(plan, artifact.Path);
+        try
+        {
+            var info = await Image.IdentifyAsync(path, ct);
+            if (info is null || info.Metadata.DecodedImageFormat is not JpegFormat || info.Width < 320 || info.Width > 1440 ||
+                info.Height <= 0 || (double)info.Width / info.Height is < 0.8 or > 1.91)
+                throw new Rc2PublishingControlException("RC2_PUBLISH_PROVIDER_MEDIA_INVALID",
+                    "HeroPortrait must be a provider-compatible JPEG between 320 and 1440 pixels wide with aspect ratio 4:5 through 1.91:1.");
+        }
+        catch (UnknownImageFormatException)
+        {
+            throw new Rc2PublishingControlException("RC2_PUBLISH_PROVIDER_MEDIA_INVALID", "HeroPortrait is not a supported JPEG image.");
+        }
     }
 
     private static async Task VerifyArtifactsAsync(Rc2PublishingPlan plan, IReadOnlyList<Phase20PublishingArtifact> artifacts, CancellationToken ct)

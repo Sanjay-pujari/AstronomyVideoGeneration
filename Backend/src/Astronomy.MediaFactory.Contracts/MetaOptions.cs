@@ -17,7 +17,6 @@ public sealed class MetaOptions
         "pages_read_engagement",
         "pages_show_list",
         "instagram_basic",
-        "instagram_content_publish",
-        "business_management"
+        "instagram_content_publish"
     ];
 }

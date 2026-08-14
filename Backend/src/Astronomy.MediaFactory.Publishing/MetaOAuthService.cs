@@ -68,15 +68,17 @@ public sealed class MetaOAuthService : IMetaOAuthService
 
         var shortToken = await ExchangeCodeAsync(code, cancellationToken);
         var longToken = await ExchangeLongLivedTokenAsync(shortToken.AccessToken, cancellationToken);
+        var grantedPermissions = await ReadAndValidateGrantedPermissionsAsync(longToken.AccessToken, cancellationToken);
         var generatedUtc = DateTimeOffset.UtcNow;
         var pages = await DiscoverPagesAsync(longToken.AccessToken, cancellationToken);
         var selectedPage = SelectExpectedPage(pages);
-        var instagram = await DiscoverInstagramAccountAsync(selectedPage.Id, longToken.AccessToken, cancellationToken);
+        var instagram = await DiscoverInstagramAccountAsync(selectedPage, cancellationToken);
         ValidateExpectedInstagram(instagram);
 
         await PersistTokenFileAsync(selectedPage, instagram, longToken.AccessToken, generatedUtc,
-            longToken.ExpiresIn.HasValue ? generatedUtc.AddSeconds(longToken.ExpiresIn.Value) : generatedUtc.AddDays(60), cancellationToken);
-        await WriteDiagnosticsAsync(selectedPage, instagram, generatedUtc, longToken.ExpiresIn, cancellationToken);
+            longToken.ExpiresIn.HasValue ? generatedUtc.AddSeconds(longToken.ExpiresIn.Value) : generatedUtc.AddDays(60),
+            grantedPermissions, cancellationToken);
+        await WriteDiagnosticsAsync(selectedPage, instagram, generatedUtc, longToken.ExpiresIn, grantedPermissions, cancellationToken);
 
         _logger.LogInformation("Meta OAuth completed for page {PageName} ({PageId}); authorization persisted.",
             selectedPage.Name, selectedPage.Id);
@@ -88,7 +90,10 @@ public sealed class MetaOAuthService : IMetaOAuthService
             InstagramUsername: instagram.Username,
             InstagramBusinessAccountId: instagram.BusinessAccountId,
             LongLivedTokenGenerated: true,
-            Warning: instagram.Warning);
+            Warning: instagram.Warning,
+            InstagramName: instagram.Name,
+            InstagramAccountType: instagram.AccountType,
+            GrantedPermissions: grantedPermissions);
     }
 
     private void ValidateTokenExchangeConfiguration()
@@ -196,12 +201,12 @@ public sealed class MetaOAuthService : IMetaOAuthService
         return selected;
     }
 
-    private async Task<MetaOAuthInstagramAccount> DiscoverInstagramAccountAsync(string pageId, string longLivedUserToken, CancellationToken cancellationToken)
+    private async Task<MetaOAuthInstagramAccount> DiscoverInstagramAccountAsync(MetaOAuthPage selectedPage, CancellationToken cancellationToken)
     {
-        var page = await GetJsonAsync<PageInstagramResponse>($"/{Uri.EscapeDataString(pageId)}", new Dictionary<string, string>
+        var page = await GetJsonAsync<PageInstagramResponse>($"/{Uri.EscapeDataString(selectedPage.Id)}", new Dictionary<string, string>
         {
             ["fields"] = "instagram_business_account",
-            ["access_token"] = longLivedUserToken
+            ["access_token"] = selectedPage.AccessToken
         }, "Meta Instagram business account discovery", cancellationToken);
 
         var businessId = page.InstagramBusinessAccount?.Id;
@@ -213,11 +218,28 @@ public sealed class MetaOAuthService : IMetaOAuthService
 
         var instagram = await GetJsonAsync<InstagramUsernameResponse>($"/{Uri.EscapeDataString(businessId)}", new Dictionary<string, string>
         {
-            ["fields"] = "username",
-            ["access_token"] = longLivedUserToken
+            ["fields"] = "username,name,account_type",
+            ["access_token"] = selectedPage.AccessToken
         }, "Meta Instagram username discovery", cancellationToken);
 
-        return new MetaOAuthInstagramAccount(businessId, instagram.Username);
+        return new MetaOAuthInstagramAccount(businessId, instagram.Username, Name: instagram.Name,
+            AccountType: instagram.AccountType);
+    }
+
+    private async Task<IReadOnlyList<string>> ReadAndValidateGrantedPermissionsAsync(string userToken, CancellationToken cancellationToken)
+    {
+        var debug = await GetJsonAsync<DebugTokenResponse>("/debug_token", new Dictionary<string, string>
+        {
+            ["input_token"] = userToken,
+            ["access_token"] = $"{_options.AppId}|{_options.AppSecret}"
+        }, "Meta granted-permission validation", cancellationToken);
+        if (debug.Data?.IsValid != true)
+            throw new InvalidOperationException("Meta token validation reported an invalid authorization.");
+        var granted = (debug.Data.Scopes ?? []).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        var missing = GetScopes().Except(granted, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (missing.Length > 0)
+            throw new InvalidOperationException($"Meta authorization is missing required permissions: {string.Join(", ", missing)}.");
+        return granted;
     }
 
     private void ValidateExpectedInstagram(MetaOAuthInstagramAccount instagram)
@@ -248,18 +270,21 @@ public sealed class MetaOAuthService : IMetaOAuthService
     }
 
     private async Task PersistTokenFileAsync(MetaOAuthPage page, MetaOAuthInstagramAccount instagram, string longLivedUserToken,
-        DateTimeOffset generatedUtc, DateTimeOffset expiresUtc, CancellationToken cancellationToken)
+        DateTimeOffset generatedUtc, DateTimeOffset expiresUtc, IReadOnlyList<string> grantedPermissions, CancellationToken cancellationToken)
     {
         var payload = new MetaOAuthTokenFile(page.Id, page.Name, page.AccessToken, instagram.BusinessAccountId, instagram.Username,
-            longLivedUserToken, generatedUtc, expiresUtc);
+            longLivedUserToken, generatedUtc, expiresUtc, GrantedPermissions: grantedPermissions,
+            InstagramName: instagram.Name, InstagramAccountType: instagram.AccountType);
         var path = ResolveTokenFilePath();
         await AtomicTokenFile.WriteAsync(path, payload, JsonOptions, cancellationToken);
     }
 
-    private async Task WriteDiagnosticsAsync(MetaOAuthPage page, MetaOAuthInstagramAccount instagram, DateTimeOffset generatedUtc, int? expiresIn, CancellationToken cancellationToken)
+    private async Task WriteDiagnosticsAsync(MetaOAuthPage page, MetaOAuthInstagramAccount instagram, DateTimeOffset generatedUtc,
+        int? expiresIn, IReadOnlyList<string> grantedPermissions, CancellationToken cancellationToken)
     {
         var expirationEstimate = expiresIn.HasValue ? generatedUtc.AddSeconds(expiresIn.Value) : generatedUtc.AddDays(60);
-        var payload = new MetaOAuthDiagnosticResult(page.Name, page.Id, instagram.Username, instagram.BusinessAccountId, expirationEstimate, generatedUtc, instagram.Warning);
+        var payload = new MetaOAuthDiagnosticResult(page.Name, page.Id, instagram.Username, instagram.BusinessAccountId,
+            expirationEstimate, generatedUtc, instagram.Warning, instagram.Name, instagram.AccountType, grantedPermissions);
         var path = Path.Combine(Path.GetDirectoryName(ResolveTokenFilePath())!, "meta-oauth-result.json");
         await AtomicTokenFile.WriteAsync(path, payload, JsonOptions, cancellationToken);
     }
@@ -332,5 +357,18 @@ public sealed class MetaOAuthService : IMetaOAuthService
     {
         [JsonPropertyName("username")]
         public string? Username { get; init; }
+
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+
+        [JsonPropertyName("account_type")]
+        public string? AccountType { get; init; }
+    }
+
+    private sealed class DebugTokenResponse { [JsonPropertyName("data")] public DebugTokenData? Data { get; init; } }
+    private sealed class DebugTokenData
+    {
+        [JsonPropertyName("is_valid")] public bool IsValid { get; init; }
+        [JsonPropertyName("scopes")] public List<string>? Scopes { get; init; }
     }
 }

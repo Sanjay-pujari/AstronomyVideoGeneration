@@ -24,8 +24,7 @@ public sealed class TokenHealthService : ITokenHealthService
         "pages_read_engagement",
         "pages_show_list",
         "instagram_basic",
-        "instagram_content_publish",
-        "business_management"
+        "instagram_content_publish"
     ];
 
     private readonly HttpClient _httpClient;
@@ -182,7 +181,8 @@ public sealed class TokenHealthService : ITokenHealthService
 
     public async Task<TokenHealthResult> CheckMetaAsync(CancellationToken cancellationToken)
     {
-        var result = new TokenHealthResult { Platform = "Meta", CanRefresh = true, Status = "Unknown", OAuthStartPath = "/api/metaoauth/start" };
+        // Meta supplies an extendable long-lived user token, not a Google-style refresh token.
+        var result = new TokenHealthResult { Platform = "Meta", CanRefresh = false, Status = "Unknown", OAuthStartPath = "/api/metaoauth/start" };
 
         try
         {
