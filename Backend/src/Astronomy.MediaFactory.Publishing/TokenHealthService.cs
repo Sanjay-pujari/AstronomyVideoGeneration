@@ -280,9 +280,30 @@ public sealed class TokenHealthService : ITokenHealthService
                 return result;
             }
 
-            if (!string.IsNullOrWhiteSpace(token.InstagramBusinessAccountId))
+            // Re-discover the linked account from the authorized Page instead of trusting the
+            // identifier cached in the credential file. The Page token proves the relationship.
+            if (string.IsNullOrWhiteSpace(token.FacebookPageAccessToken))
             {
-                var instagram = await GetGraphAsync<MetaInstagramResponse>($"/{Uri.EscapeDataString(token.InstagramBusinessAccountId)}", new Dictionary<string, string>
+                result.Error = "Meta OAuth token file is missing the Page access token required for linked Instagram discovery.";
+                return result;
+            }
+            var linked = await GetGraphAsync<MetaPageInstagramResponse>($"/{Uri.EscapeDataString(pageId)}", new Dictionary<string, string>
+            {
+                ["fields"] = "instagram_business_account",
+                ["access_token"] = token.FacebookPageAccessToken
+            }, "Meta linked Instagram account discovery", cancellationToken);
+            var instagramId = linked.InstagramBusinessAccount?.Id;
+
+            if (!string.IsNullOrWhiteSpace(instagramId))
+            {
+                if (!string.IsNullOrWhiteSpace(_metaOptions.ExpectedInstagramAccountId)
+                    && !string.Equals(instagramId, _metaOptions.ExpectedInstagramAccountId.Trim(), StringComparison.Ordinal))
+                {
+                    result.Error = "Linked Instagram account does not match configured expected Instagram account id.";
+                    return result;
+                }
+
+                var instagram = await GetGraphAsync<MetaInstagramResponse>($"/{Uri.EscapeDataString(instagramId)}", new Dictionary<string, string>
                 {
                     ["fields"] = "id,username",
                     ["access_token"] = token.LongLivedUserAccessToken
@@ -439,5 +460,17 @@ public sealed class TokenHealthService : ITokenHealthService
 
         [JsonPropertyName("username")]
         public string? Username { get; init; }
+    }
+
+    private sealed class MetaPageInstagramResponse
+    {
+        [JsonPropertyName("instagram_business_account")]
+        public MetaInstagramBusinessAccount? InstagramBusinessAccount { get; init; }
+    }
+
+    private sealed class MetaInstagramBusinessAccount
+    {
+        [JsonPropertyName("id")]
+        public string? Id { get; init; }
     }
 }

@@ -72,7 +72,7 @@ public sealed class MetaOAuthService : IMetaOAuthService
         var generatedUtc = DateTimeOffset.UtcNow;
         var pages = await DiscoverPagesAsync(longToken.AccessToken, cancellationToken);
         var selectedPage = SelectExpectedPage(pages);
-        var instagram = await DiscoverInstagramAccountAsync(selectedPage, cancellationToken);
+        var instagram = await DiscoverInstagramAccountAsync(selectedPage, longToken.AccessToken, cancellationToken);
         ValidateExpectedInstagram(instagram);
 
         await PersistTokenFileAsync(selectedPage, instagram, longToken.AccessToken, generatedUtc,
@@ -201,11 +201,13 @@ public sealed class MetaOAuthService : IMetaOAuthService
         return selected;
     }
 
-    private async Task<MetaOAuthInstagramAccount> DiscoverInstagramAccountAsync(MetaOAuthPage selectedPage, CancellationToken cancellationToken)
+    private async Task<MetaOAuthInstagramAccount> DiscoverInstagramAccountAsync(MetaOAuthPage selectedPage,
+        string longLivedUserToken, CancellationToken cancellationToken)
     {
         var page = await GetJsonAsync<PageInstagramResponse>($"/{Uri.EscapeDataString(selectedPage.Id)}", new Dictionary<string, string>
         {
             ["fields"] = "instagram_business_account",
+            // A Page token proves the Page-to-Instagram relationship.
             ["access_token"] = selectedPage.AccessToken
         }, "Meta Instagram business account discovery", cancellationToken);
 
@@ -219,7 +221,8 @@ public sealed class MetaOAuthService : IMetaOAuthService
         var instagram = await GetJsonAsync<InstagramUsernameResponse>($"/{Uri.EscapeDataString(businessId)}", new Dictionary<string, string>
         {
             ["fields"] = "username,name,account_type",
-            ["access_token"] = selectedPage.AccessToken
+            // Instagram object reads use the same long-lived user-token authority as TokenHealth.
+            ["access_token"] = longLivedUserToken
         }, "Meta Instagram username discovery", cancellationToken);
 
         return new MetaOAuthInstagramAccount(businessId, instagram.Username, Name: instagram.Name,
@@ -244,6 +247,13 @@ public sealed class MetaOAuthService : IMetaOAuthService
 
     private void ValidateExpectedInstagram(MetaOAuthInstagramAccount instagram)
     {
+        var expectedId = _options.ExpectedInstagramAccountId?.Trim();
+        if (!string.IsNullOrWhiteSpace(expectedId)
+            && !string.Equals(instagram.BusinessAccountId, expectedId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Authenticated linked Instagram account does not match configured expected Instagram account id.");
+        }
+
         var expectedUsername = _options.ExpectedInstagramUsername?.Trim();
         if (string.IsNullOrWhiteSpace(expectedUsername))
         {
@@ -262,7 +272,12 @@ public sealed class MetaOAuthService : IMetaOAuthService
         using var response = await _httpClient.GetAsync(url, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"{operation} failed with status {(int)response.StatusCode}.");
+            var error = await MetaGraphError.ReadAsync(response, cancellationToken);
+            _logger.LogWarning(
+                "{Operation} failed: HTTP {Status}; type={ErrorType}; code={ErrorCode}; subcode={ErrorSubcode}; message={ErrorMessage}; userTitle={UserTitle}; userMessage={UserMessage}; fbtrace_id={TraceId}.",
+                operation, error.HttpStatus, error.Type, error.Code, error.ErrorSubcode, error.Message,
+                error.ErrorUserTitle, error.ErrorUserMessage, error.FbTraceId);
+            throw new InvalidOperationException(error.ToSafeMessage(operation));
         }
 
         var payload = await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken);
