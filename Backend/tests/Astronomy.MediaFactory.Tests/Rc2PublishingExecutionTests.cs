@@ -159,12 +159,12 @@ public sealed class Rc2PublishingExecutionTests
     }
 
     [Fact]
-    public void Hero_fallback_and_gallery_order_are_governed()
+    public void Instagram_post_requires_portrait_hero_and_gallery_order_is_governed()
     {
-        var authority = Authority(Artifact("HeroSquare", "hero.jpg", 0),
+        var authority = Authority(Artifact("HeroPortrait", "hero.jpg", 0),
             Artifact("GalleryImage", "second.jpg", 2), Artifact("GalleryImage", "first.jpg", 1));
 
-        Assert.Equal("HeroSquare", Assert.Single(Rc2PublishingExecutionService.ResolveArtifacts(
+        Assert.Equal("HeroPortrait", Assert.Single(Rc2PublishingExecutionService.ResolveArtifacts(
             authority, Rc2PublishingTarget.InstagramPost)).Role);
         Assert.Equal(new[] { "first.jpg", "second.jpg" }, Rc2PublishingExecutionService.ResolveArtifacts(
             authority, Rc2PublishingTarget.InstagramCarousel).Select(x => x.Path));

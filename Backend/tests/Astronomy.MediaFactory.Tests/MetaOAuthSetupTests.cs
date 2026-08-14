@@ -45,7 +45,7 @@ public sealed class MetaOAuthSetupTests
         Assert.StartsWith("https://www.facebook.com/v23.0/dialog/oauth", authorizationUrl, StringComparison.Ordinal);
         Assert.Contains("client_id=app-id", authorizationUrl);
         Assert.Contains("response_type=code", authorizationUrl);
-        Assert.Contains("scope=pages_manage_posts,pages_read_engagement,pages_show_list,instagram_basic,instagram_content_publish,business_management", authorizationUrl);
+        Assert.Contains("scope=pages_manage_posts,pages_read_engagement,pages_show_list,instagram_basic,instagram_content_publish", authorizationUrl);
         await app.StopAsync();
     }
 
@@ -68,7 +68,7 @@ public sealed class MetaOAuthSetupTests
         Assert.StartsWith("https://www.facebook.com/v23.0/dialog/oauth", location, StringComparison.Ordinal);
         Assert.Contains("client_id=app-id", location);
         Assert.Contains("response_type=code", location);
-        Assert.Contains("scope=pages_manage_posts,pages_read_engagement,pages_show_list,instagram_basic,instagram_content_publish,business_management", location);
+        Assert.Contains("scope=pages_manage_posts,pages_read_engagement,pages_show_list,instagram_basic,instagram_content_publish", location);
         await app.StopAsync();
     }
 
@@ -250,10 +250,11 @@ public sealed class MetaOAuthSetupTests
             {
                 "/v23.0/oauth/access_token" when decodedQuery.Contains("code=auth-code", StringComparison.Ordinal) => $"{{\"access_token\":\"{ShortToken}\",\"expires_in\":3600,\"token_type\":\"bearer\"}}",
                 "/v23.0/oauth/access_token" when decodedQuery.Contains("grant_type=fb_exchange_token", StringComparison.Ordinal) => $"{{\"access_token\":\"{LongToken}\",\"expires_in\":5184000,\"token_type\":\"bearer\"}}",
+                "/v23.0/debug_token" => "{\"data\":{\"is_valid\":true,\"scopes\":[\"pages_manage_posts\",\"pages_read_engagement\",\"pages_show_list\",\"instagram_basic\",\"instagram_content_publish\"]}}",
                 "/v23.0/me/accounts" => $"{{\"data\":[{{\"id\":\"page-1\",\"name\":\"Other Page\",\"access_token\":\"other-page-token\"}},{{\"id\":\"page-2\",\"name\":\"Expected Astro Page\",\"access_token\":\"{PageToken}\"}}]}}",
                 "/v23.0/page-2" => "{\"instagram_business_account\":{\"id\":\"ig-123\"}}",
                 "/v23.0/page-1" => "{\"instagram_business_account\":{\"id\":\"ig-123\"}}",
-                "/v23.0/ig-123" => "{\"username\":\"astropulse\"}",
+                "/v23.0/ig-123" => "{\"username\":\"astropulse\",\"name\":\"Astro Pulse\",\"account_type\":\"BUSINESS\"}",
                 _ => throw new InvalidOperationException($"Unexpected request: {uri}")
             };
         });

@@ -7,7 +7,10 @@ public sealed record MetaOAuthSetupResult(
     string? InstagramUsername,
     string? InstagramBusinessAccountId,
     bool LongLivedTokenGenerated,
-    string? Warning = null);
+    string? Warning = null,
+    string? InstagramName = null,
+    string? InstagramAccountType = null,
+    IReadOnlyList<string>? GrantedPermissions = null);
 
 public sealed record MetaOAuthStartResponse(
     bool Success,
@@ -22,7 +25,9 @@ public sealed record MetaOAuthPage(
 public sealed record MetaOAuthInstagramAccount(
     string? BusinessAccountId,
     string? Username,
-    string? Warning = null);
+    string? Warning = null,
+    string? Name = null,
+    string? AccountType = null);
 
 public sealed record MetaOAuthTokenFile(
     string FacebookPageId,
@@ -33,7 +38,10 @@ public sealed record MetaOAuthTokenFile(
     string LongLivedUserAccessToken,
     DateTimeOffset GeneratedUtc,
     DateTimeOffset? ExpiresUtc = null,
-    bool ReauthorizationRequired = false);
+    bool ReauthorizationRequired = false,
+    IReadOnlyList<string>? GrantedPermissions = null,
+    string? InstagramName = null,
+    string? InstagramAccountType = null);
 
 public sealed record MetaOAuthDiagnosticResult(
     string SelectedPage,
@@ -42,4 +50,7 @@ public sealed record MetaOAuthDiagnosticResult(
     string? InstagramBusinessId,
     DateTimeOffset? TokenExpirationEstimate,
     DateTimeOffset GeneratedUtc,
-    string? Warning = null);
+    string? Warning = null,
+    string? InstagramName = null,
+    string? InstagramAccountType = null,
+    IReadOnlyList<string>? GrantedPermissions = null);
