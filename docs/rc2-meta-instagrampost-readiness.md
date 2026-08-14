@@ -69,39 +69,51 @@ start route followed by the governed dry-run request.
 16. **Path:** obtained only from the committed Phase 20 authority and resolved
     beneath the plan output root. The concrete plan is unavailable in this
     checkout, so no path is fabricated.
-17. **Artifact validation:** the executor checks regular-file existence, exact
-    Phase 20 byte length, and SHA-256 before credential preflight. InstagramPost
-    additionally identifies the unchanged asset as JPEG, width 320–1440, and
-    aspect ratio 4:5 through 1.91:1. Concrete bytes/SHA require the runtime plan.
+17. **Artifact validation and normalization:** the executor checks regular-file
+    existence, exact Phase 20 byte length, and SHA-256 before credential
+    preflight. It then passes the unchanged source to
+    `ProviderMediaPreparationService`. The versioned Instagram feed profile
+    center-crops without stretching, resamples to 1080x1350, and writes a
+    standard quality-90 JPEG. Validation (decodable JPEG, nonzero bytes, width
+    320–1440, ratio 4:5 through 1.91:1) runs on that derivative. Concrete source
+    and derivative bytes/SHA still require the runtime plan, which is unavailable
+    in this checkout.
 18. **Staging:** `AzureBlobPublicMediaStorageService` implements
     `IPublicMediaStorageService`. InstagramPost preflight validates
     `MetaPublishing:PublicMediaUploadEnabled` plus enabled Azure Blob provider,
     connection string, container, SAS lifetime, and provider media compatibility.
-19. **Dry-run staging calls:** zero. Preflight reads configuration and the local
-    governed file only; it never calls `IPublicMediaStorageService`.
+19. **Dry-run staging calls:** zero cloud calls. Dry-run creates/reuses a local,
+    deterministic derivative under
+    `media-output/publishing-staging/{planId}/InstagramPost/`, plus traceability
+    metadata. Its identity binds source SHA, target, and profile version. It does
+    not require cloud storage configuration and never calls
+    `IPublicMediaStorageService` or creates a SAS URL.
 20. **Dry-run container calls:** zero.
 21. **Dry-run Instagram publish calls:** zero (and Facebook calls are zero).
 22. **Dry-run result:** after a successful real OAuth callback and valid runtime
-    Phase 20 artifact/storage configuration, the existing early return produces
+    Phase 20 artifact, the existing early return produces
     HTTP 200, `overallStatus=Succeeded`, `publicationState=NotPublished`, null
     failure fields, and `dryRunPassed=true`. It was not falsely reported as run
     here because credentials and the named plan are absent.
 
 ## Live design and remaining blocker
 
-23. **Retry/checkpoint design:** the intended implementation must use the shared
+23. **Retry/checkpoint design:** live execution must use the shared
     RC2 idempotency key, database compare-and-swap claim, and stale-Publishing
     lease. Sequence: credential preflight; authority/file verification; claim;
-    public staging; create container; immediately persist container ID; bounded,
+    upload only the validated derivative to public staging; create container;
+    immediately persist container ID; bounded,
     configurable polling (`Processing`, `Ready`, `Failed`, or
     `RemoteOutcomeUnknown`); publish; immediately persist returned media/post ID;
     remote verification; `Published`. A retry resumes from either durable remote
     ID and must never recreate solely because local status is `Failed`. Normalized,
     bounded failure persistence remains shared with YouTube.
-24. **Remaining blocker before live InstagramPost:** governed image-post provider
-    execution and its container/media checkpoint schema are intentionally not
-    implemented by this certification; `PublishProviderAsync` still fails closed
-    for image posts. Before any first live operation, implement that sequence,
+24. **Retention and remaining blocker before live InstagramPost:** local cache and
+    public-object cleanup must use the deployment's bounded retention operation;
+    canonical Phase 20 files are never cleanup candidates. Governed image-post
+    provider execution and its container/media checkpoint schema remain
+    intentionally unimplemented; `PublishProviderAsync` still fails closed for
+    image posts. Before any first live operation, implement that sequence,
     complete Meta app review/advanced access, supply storage credentials, run the
     existing OAuth flow, verify the discovered identities, and obtain explicit
     operator approval. No live test is part of this change.

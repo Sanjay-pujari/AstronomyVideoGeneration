@@ -8,8 +8,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
@@ -123,7 +121,7 @@ public sealed class Rc2PublishingExecutionService(
                 : Blocked(target, "RC2_PUBLISH_CREDENTIALS_INVALID", NonSecretHealthMessage(health), artifacts.Count);
         if (target == Rc2PublishingTarget.InstagramPost)
         {
-            try { await ValidateInstagramImageDryRunPreflightAsync(plan, artifacts.Single(), ct); }
+            try { await PrepareInstagramImageAsync(plan, authority, artifacts.Single(), dryRun, ct); }
             catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
         }
         if (dryRun) return new(target, Rc2PublicationState.NotPublished, existing?.RemotePublicationId, existing?.RemoteUrl, false,
@@ -491,30 +489,34 @@ public sealed class Rc2PublishingExecutionService(
         return resolved;
     }
 
-    private async Task ValidateInstagramImageDryRunPreflightAsync(Rc2PublishingPlan plan,
-        Phase20PublishingArtifact artifact, CancellationToken ct)
+    private async Task<PreparedProviderMedia> PrepareInstagramImageAsync(Rc2PublishingPlan plan,
+        Phase20PublishingAuthoritySnapshot authority, Phase20PublishingArtifact artifact, bool dryRun, CancellationToken ct)
     {
         var storage = publicMediaStorageOptions.Value;
-        if (!metaOptions.Value.PublicMediaUploadEnabled || !storage.Enabled ||
+        if (!dryRun && (!metaOptions.Value.PublicMediaUploadEnabled || !storage.Enabled ||
             !storage.Provider.Equals("AzureBlob", StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(storage.ConnectionString) || string.IsNullOrWhiteSpace(storage.ContainerName) ||
-            storage.SasExpiryHours <= 0)
+            storage.SasExpiryHours <= 0))
             throw new Rc2PublishingControlException("RC2_PUBLISH_PUBLIC_MEDIA_CONFIGURATION_INVALID",
                 "PublicMediaStorage must be configured for governed Instagram image staging.");
 
         var path = ResolvePath(plan, artifact.Path);
-        try
-        {
-            var info = await Image.IdentifyAsync(path, ct);
-            if (info is null || info.Metadata.DecodedImageFormat is not JpegFormat || info.Width < 320 || info.Width > 1440 ||
-                info.Height <= 0 || (double)info.Width / info.Height is < 0.8 or > 1.91)
-                throw new Rc2PublishingControlException("RC2_PUBLISH_PROVIDER_MEDIA_INVALID",
-                    "HeroPortrait must be a provider-compatible JPEG between 320 and 1440 pixels wide with aspect ratio 4:5 through 1.91:1.");
-        }
-        catch (UnknownImageFormatException)
-        {
-            throw new Rc2PublishingControlException("RC2_PUBLISH_PROVIDER_MEDIA_INVALID", "HeroPortrait is not a supported JPEG image.");
-        }
+        var outputRoot = FindPublishingStagingRoot(plan.PlanOutputRoot);
+        var prepared = await new ProviderMediaPreparationService().PrepareAsync(plan.PlanId,
+            authority.PublishingPackageId, authority.AuthorityChecksum, artifact, path,
+            Rc2PublishingTarget.InstagramPost, outputRoot, ct);
+        logger.LogInformation("RC2_PROVIDER_MEDIA_PREPARED PlanId={PlanId} Target={Target} SourceSha={SourceSha} DerivativeSha={DerivativeSha} Profile={Profile} Path={Path}",
+            plan.PlanId, Rc2PublishingTarget.InstagramPost, artifact.Sha256, prepared.Sha256, prepared.ProfileVersion, prepared.Path);
+        return prepared;
+    }
+
+    internal static string FindPublishingStagingRoot(string planOutputRoot)
+    {
+        var directory = new DirectoryInfo(Path.GetFullPath(planOutputRoot));
+        for (var current = directory; current is not null; current = current.Parent)
+            if (current.Name.Equals("media-output", StringComparison.OrdinalIgnoreCase))
+                return Path.Combine(current.FullName, "publishing-staging");
+        return Path.Combine(Path.GetTempPath(), "astronomy-media-factory", "publishing-staging");
     }
 
     private static async Task VerifyArtifactsAsync(Rc2PublishingPlan plan, IReadOnlyList<Phase20PublishingArtifact> artifacts, CancellationToken ct)
