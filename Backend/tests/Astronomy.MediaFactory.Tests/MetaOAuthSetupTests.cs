@@ -165,6 +165,40 @@ public sealed class MetaOAuthSetupTests
     }
 
     [Fact]
+    public async Task CompleteSetup_UsesPageTokenForLinkAndLongLivedUserTokenForInstagramIdentity()
+    {
+        using var workspace = new TemporaryMetaOAuthWorkspace();
+        var handler = CreateSuccessHandler();
+        var service = CreateService(workspace.TokenFilePath, handler, expectedPageId: "page-2");
+
+        await service.CompleteSetupAsync("auth-code", CancellationToken.None);
+
+        var pageRequest = handler.Requests.Single(request => request.AbsolutePath == "/v23.0/page-2");
+        var instagramRequest = handler.Requests.Single(request => request.AbsolutePath == "/v23.0/ig-123");
+        Assert.Contains($"access_token={PageToken}", Uri.UnescapeDataString(pageRequest.Query));
+        Assert.Contains($"access_token={LongToken}", Uri.UnescapeDataString(instagramRequest.Query));
+        Assert.DoesNotContain($"access_token={PageToken}", Uri.UnescapeDataString(instagramRequest.Query));
+    }
+
+    [Fact]
+    public async Task CompleteSetup_GraphFailureReturnsSafeStructuredErrorAndRetainsCredential()
+    {
+        using var workspace = new TemporaryMetaOAuthWorkspace();
+        await File.WriteAllTextAsync(workspace.TokenFilePath, "previous-usable-credential");
+        var logger = new CapturingLogger<MetaOAuthService>();
+        var service = CreateService(workspace.TokenFilePath, new InstagramFailureHandler(), expectedPageId: "page-2", logger: logger);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CompleteSetupAsync("auth-code", CancellationToken.None));
+
+        Assert.Contains("HTTP 400; type=OAuthException; code=100; subcode=33", error.Message);
+        Assert.Contains("Unsupported get request", error.Message);
+        Assert.Contains("fbtrace_id=safe-trace", error.Message);
+        Assert.Equal("previous-usable-credential", await File.ReadAllTextAsync(workspace.TokenFilePath));
+        Assert.DoesNotContain(LongToken, string.Join('\n', logger.Messages));
+        Assert.DoesNotContain(PageToken, string.Join('\n', logger.Messages));
+    }
+
+    [Fact]
     public async Task CompleteSetup_WhenExpectedPageMismatch_FailsClearly()
     {
         using var workspace = new TemporaryMetaOAuthWorkspace();
@@ -224,7 +258,7 @@ public sealed class MetaOAuthSetupTests
 
     private static MetaOAuthService CreateService(
         string tokenFilePath,
-        DispatchingJsonHandler handler,
+        HttpMessageHandler handler,
         string expectedPageId = "",
         string expectedInstagramUsername = "",
         CapturingLogger<MetaOAuthService>? logger = null)
@@ -293,6 +327,40 @@ public sealed class MetaOAuthSetupTests
             {
                 Content = new StringContent(_dispatch(uri), Encoding.UTF8, "application/json")
             });
+        }
+    }
+
+    private sealed class InstagramFailureHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var uri = request.RequestUri!;
+            if (uri.AbsolutePath == "/v23.0/ig-123")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent("{\"error\":{\"message\":\"Unsupported get request\",\"type\":\"OAuthException\",\"code\":100,\"error_subcode\":33,\"fbtrace_id\":\"safe-trace\"}}", Encoding.UTF8, "application/json")
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(CreateSuccessHandlerPayload(uri), Encoding.UTF8, "application/json")
+            });
+        }
+
+        private static string CreateSuccessHandlerPayload(Uri uri)
+        {
+            var decodedQuery = Uri.UnescapeDataString(uri.Query);
+            return uri.AbsolutePath switch
+            {
+                "/v23.0/oauth/access_token" when decodedQuery.Contains("code=auth-code", StringComparison.Ordinal) => $"{{\"access_token\":\"{ShortToken}\",\"expires_in\":3600}}",
+                "/v23.0/oauth/access_token" => $"{{\"access_token\":\"{LongToken}\",\"expires_in\":5184000}}",
+                "/v23.0/debug_token" => "{\"data\":{\"is_valid\":true,\"scopes\":[\"pages_manage_posts\",\"pages_read_engagement\",\"pages_show_list\",\"instagram_basic\",\"instagram_content_publish\"]}}",
+                "/v23.0/me/accounts" => $"{{\"data\":[{{\"id\":\"page-2\",\"name\":\"Expected Astro Page\",\"access_token\":\"{PageToken}\"}}]}}",
+                "/v23.0/page-2" => "{\"instagram_business_account\":{\"id\":\"ig-123\"}}",
+                _ => throw new InvalidOperationException($"Unexpected request: {uri}")
+            };
         }
     }
 

@@ -499,6 +499,10 @@ public sealed class TokenHealthHandler : HttpMessageHandler, IDisposable
 
         if (request.RequestUri.AbsolutePath.EndsWith("/page-1", StringComparison.OrdinalIgnoreCase))
         {
+            if (Uri.UnescapeDataString(request.RequestUri.Query).Contains("fields=instagram_business_account", StringComparison.Ordinal))
+            {
+                return JsonResponse(new { instagram_business_account = new { id = "ig-1" } });
+            }
             return JsonResponse(new { id = "page-1", name = "AstroPulse" });
         }
 
