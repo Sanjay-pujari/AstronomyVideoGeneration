@@ -22,6 +22,8 @@ public sealed class MetaPublishingOptions
     public int InstagramContainerMaxAttempts { get; set; } = 18;
     public int InstagramPollAttempts { get; set; } = 20;
     public int InstagramPollDelaySeconds { get; set; } = 15;
+    public int InstagramPermalinkPollAttempts { get; set; } = 6;
+    public int InstagramPermalinkPollDelaySeconds { get; set; } = 10;
     public bool InstagramTreatProcessingTimeoutAsSuccess { get; set; } = true;
     public int GraphRetryMaxAttempts { get; set; } = 4;
     public int GraphRetryBaseDelaySeconds { get; set; } = 2;
