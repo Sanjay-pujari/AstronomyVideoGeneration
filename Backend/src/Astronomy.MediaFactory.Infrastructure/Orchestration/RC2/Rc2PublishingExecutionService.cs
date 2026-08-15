@@ -198,6 +198,11 @@ public sealed class Rc2PublishingExecutionService(
             row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN";
             row.FailureMessage = NormalizeProviderFailure(ex.Message);
         }
+        catch (Rc2PublishingControlException ex)
+        {
+            row.Status = Rc2PublicationState.Failed; row.FailureCode = ex.Code;
+            row.FailureMessage = NormalizeProviderFailure(ex.Message);
+        }
         catch (Exception ex)
         {
             row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_PROVIDER_FAILED";
@@ -544,12 +549,37 @@ public sealed class Rc2PublishingExecutionService(
 
         if (!row.RemoteVerificationCompleted)
         {
-            var media = await instagramApi.GetMediaAsync(row.RemotePublicationId!, ct);
             var expectedAccount = configuration["Meta:ExpectedInstagramAccountId"];
-            if (media is null || media.Id != row.RemotePublicationId ||
-                (!string.IsNullOrWhiteSpace(expectedAccount) && media.OwnerId != expectedAccount) ||
-                (!string.IsNullOrWhiteSpace(media.MediaType) && media.MediaType is not ("IMAGE" or "CAROUSEL_ALBUM")))
-                throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_VERIFICATION_FAILED", "Instagram remote media verification failed closed.");
+            var expectedUsername = configuration["Meta:ExpectedInstagramUsername"];
+            Rc2InstagramMedia? media = null;
+            var attempts = Math.Max(1, metaOptions.Value.InstagramPermalinkPollAttempts);
+            for (var attempt = 1; attempt <= attempts; attempt++)
+            {
+                try { media = await instagramApi.GetMediaAsync(row.RemotePublicationId!, ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_VERIFICATION_FAILED",
+                        $"Instagram remote media query failed; reconciliation is required. {ex.Message}");
+                }
+                if (media is null || media.Id != row.RemotePublicationId ||
+                    string.IsNullOrWhiteSpace(expectedAccount) || media.OwnerId != expectedAccount ||
+                    string.IsNullOrWhiteSpace(expectedUsername) ||
+                    !string.Equals(media.Username, expectedUsername, StringComparison.OrdinalIgnoreCase) ||
+                    media.MediaType != "IMAGE" ||
+                    (!string.IsNullOrWhiteSpace(media.MediaProductType) && media.MediaProductType != "FEED"))
+                    throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_VERIFICATION_FAILED",
+                        "Instagram remote media identity, ownership, or feed image type did not match the governed target.");
+                if (!string.IsNullOrWhiteSpace(media.Permalink)) break;
+                row.RemoteUrl = null;
+                row.LastCompletedStep = Rc2PublicationStep.PublishedRemote;
+                row.UpdatedUtc = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync(ct);
+                if (attempt < attempts && metaOptions.Value.InstagramPermalinkPollDelaySeconds > 0)
+                    await Task.Delay(TimeSpan.FromSeconds(metaOptions.Value.InstagramPermalinkPollDelaySeconds), ct);
+            }
+            if (string.IsNullOrWhiteSpace(media?.Permalink))
+                throw new Rc2PublishingControlException("RC2_PUBLISH_AWAITING_PERMALINK",
+                    "Instagram published the media, but its authoritative permalink is not available; retry will reconcile the same media ID.");
             row.RemoteUrl = media.Permalink;
             row.RemoteVerificationCompleted = true; row.LastCompletedStep = Rc2PublicationStep.RemoteVerified;
             row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);

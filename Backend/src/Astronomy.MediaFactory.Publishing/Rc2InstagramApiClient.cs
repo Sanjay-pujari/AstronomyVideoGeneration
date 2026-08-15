@@ -40,10 +40,15 @@ public sealed class Rc2InstagramApiClient(HttpClient httpClient, IOptions<MetaOp
     public async Task<Rc2InstagramMedia?> GetMediaAsync(string mediaId, CancellationToken ct)
     {
         var token = await LoadTokenAsync(ct);
-        var value = await GetAsync($"{Graph}/{Uri.EscapeDataString(mediaId)}?fields=id,media_type,owner,permalink&access_token={Uri.EscapeDataString(AccessToken(token))}", ct);
+        var value = await GetAsync($"{Graph}/{Uri.EscapeDataString(mediaId)}?fields=id,permalink,media_type,media_product_type,owner,username,timestamp&access_token={Uri.EscapeDataString(AccessToken(token))}", ct);
         var owner = value.TryGetProperty("owner", out var ownerValue) && ownerValue.TryGetProperty("id", out var ownerId) ? ownerId.GetString() : null;
-        return new(value.GetProperty("id").GetString()!, value.TryGetProperty("media_type", out var mt) ? mt.GetString() : null,
-            owner, value.TryGetProperty("permalink", out var url) ? url.GetString() : null);
+        DateTimeOffset? timestamp = value.TryGetProperty("timestamp", out var ts) &&
+            DateTimeOffset.TryParse(ts.GetString(), out var parsed) ? parsed : null;
+        return new(value.GetProperty("id").GetString()!,
+            value.TryGetProperty("media_type", out var mt) ? mt.GetString() : null,
+            value.TryGetProperty("media_product_type", out var product) ? product.GetString() : null,
+            owner, value.TryGetProperty("username", out var username) ? username.GetString() : null, timestamp,
+            value.TryGetProperty("permalink", out var url) ? url.GetString() : null);
     }
 
     private async Task<string> PostForIdAsync(string url, Dictionary<string, string> form, CancellationToken ct, bool ambiguous)

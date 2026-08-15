@@ -193,7 +193,8 @@ public interface IRc2InstagramApiClient
     Task<Rc2InstagramMedia?> GetMediaAsync(string mediaId, CancellationToken cancellationToken);
 }
 
-public sealed record Rc2InstagramMedia(string Id, string? MediaType, string? OwnerId, string? Permalink);
+public sealed record Rc2InstagramMedia(string Id, string? MediaType, string? MediaProductType,
+    string? OwnerId, string? Username, DateTimeOffset? Timestamp, string? Permalink);
 
 public sealed class InstagramPublishOutcomeUnknownException(string message, Exception? inner = null) : Exception(message, inner);
 
