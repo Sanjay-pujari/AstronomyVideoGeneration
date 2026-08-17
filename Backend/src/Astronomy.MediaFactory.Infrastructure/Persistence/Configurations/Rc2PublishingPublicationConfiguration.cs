@@ -15,6 +15,7 @@ public sealed class Rc2PublishingPublicationConfiguration : IEntityTypeConfigura
         entity.Property(x => x.RoleOrMediaType).HasMaxLength(256).IsRequired();
         entity.Property(x => x.IdempotencyKey).HasMaxLength(64).IsRequired();
         entity.Property(x => x.RemotePublicationId).HasMaxLength(256);
+        entity.Property(x => x.RemotePostId).HasMaxLength(256);
         entity.Property(x => x.RemoteContainerId).HasMaxLength(256);
         entity.Property(x => x.PublicMediaBlobName).HasMaxLength(1024);
         entity.Property(x => x.RemoteUrl).HasMaxLength(2048);

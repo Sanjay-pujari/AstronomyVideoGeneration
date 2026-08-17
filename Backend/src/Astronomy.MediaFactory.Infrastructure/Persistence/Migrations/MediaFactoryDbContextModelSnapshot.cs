@@ -3309,6 +3309,7 @@ namespace Astronomy.MediaFactory.Infrastructure.Persistence.Migrations
                     b.Property<bool>("PublishRequested").HasColumnType("boolean");
                     b.Property<string>("RemoteContainerId").HasMaxLength(256).HasColumnType("character varying(256)");
                     b.Property<string>("RemotePublicationId").HasMaxLength(256).HasColumnType("character varying(256)");
+                    b.Property<string>("RemotePostId").HasMaxLength(256).HasColumnType("character varying(256)");
                     b.Property<string>("RemoteUrl").HasMaxLength(2048).HasColumnType("character varying(2048)");
                     b.Property<bool>("RemoteVerificationCompleted").HasColumnType("boolean");
                     b.Property<string>("RoleOrMediaType").IsRequired().HasMaxLength(256).HasColumnType("character varying(256)");

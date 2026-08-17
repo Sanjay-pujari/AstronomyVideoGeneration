@@ -67,6 +67,7 @@ public sealed class Rc2PublishingPublicationPersistenceTests
             [nameof(Rc2PublishingPublication.AttemptCount)] = ("integer", false),
             [nameof(Rc2PublishingPublication.LastAttemptUtc)] = ("timestamp with time zone", true),
             [nameof(Rc2PublishingPublication.RemotePublicationId)] = ("character varying(256)", true),
+            [nameof(Rc2PublishingPublication.RemotePostId)] = ("character varying(256)", true),
             [nameof(Rc2PublishingPublication.RemoteContainerId)] = ("character varying(256)", true),
             [nameof(Rc2PublishingPublication.RemoteUrl)] = ("character varying(2048)", true),
             [nameof(Rc2PublishingPublication.PublicMediaBlobName)] = ("character varying(1024)", true),

@@ -171,6 +171,18 @@ public sealed class Rc2PublishingExecutionTests
     }
 
     [Fact]
+    public void Facebook_post_prefers_governed_landscape_hero_and_has_square_fallback()
+    {
+        var landscape = Authority(Artifact("HeroLandscape", "landscape.jpg", 0), Artifact("HeroSquare", "square.jpg", 1));
+        var squareOnly = Authority(Artifact("HeroSquare", "square.jpg", 0));
+
+        Assert.Equal("HeroLandscape", Assert.Single(Rc2PublishingExecutionService.ResolveArtifacts(
+            landscape, Rc2PublishingTarget.FacebookPost)).Role);
+        Assert.Equal("HeroSquare", Assert.Single(Rc2PublishingExecutionService.ResolveArtifacts(
+            squareOnly, Rc2PublishingTarget.FacebookPost)).Role);
+    }
+
+    [Fact]
     public void Missing_required_role_fails_closed()
     {
         var exception = Assert.Throws<Rc2PublishingControlException>(() =>

@@ -21,7 +21,7 @@ public sealed class Rc2PublishingExecutionService(
     IOptions<MetaPublishingOptions> metaOptions, IOptions<PlatformPublishingOptions> platformOptions,
     IOptions<PublicMediaStorageOptions> publicMediaStorageOptions, IConfiguration configuration,
     ILogger<Rc2PublishingExecutionService> logger, IPublicMediaStorageService? publicMediaStorage = null,
-    IRc2InstagramApiClient? instagramApi = null) : IRc2PublishingExecutionService
+    IRc2InstagramApiClient? instagramApi = null, IRc2FacebookPhotoApiClient? facebookPhotoApi = null) : IRc2PublishingExecutionService
 {
     private const string PolicyVersion = "rc2-phase20-publish-v1";
     internal const int MaximumStoredProviderDiagnosticLength = 16_384;
@@ -104,6 +104,14 @@ public sealed class Rc2PublishingExecutionService(
 
         try { await VerifyArtifactsAsync(plan, artifacts, ct); }
         catch (Rc2PublishingControlException ex) { return Blocked(target, ex.Code, ex.Message, artifacts.Count); }
+        if (target == Rc2PublishingTarget.FacebookPost)
+        {
+            var extension = Path.GetExtension(artifacts.Single().Path);
+            if (extension is not null && !extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
+                !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".png", StringComparison.OrdinalIgnoreCase))
+                return Blocked(target, "RC2_PUBLISH_FACEBOOK_MEDIA_UNSUPPORTED",
+                    "Facebook Page photo publishing accepts governed JPEG or PNG Hero media.", artifacts.Count);
+        }
         if (target is Rc2PublishingTarget.YouTubeLong or Rc2PublishingTarget.YouTubeShort)
         {
             try { ValidateYouTubeMetadata(plan.Title, ResolveYouTubePrivacy(), youTubeOptions.Value.CategoryId); }
@@ -179,6 +187,8 @@ public sealed class Rc2PublishingExecutionService(
                 await PublishYouTubeShortAsync(row, plan, artifacts, ct);
             else if (target == Rc2PublishingTarget.InstagramPost)
                 await PublishInstagramPostAsync(row, plan, preparedInstagramImage!, ct);
+            else if (target == Rc2PublishingTarget.FacebookPost)
+                await PublishFacebookPostAsync(row, plan, artifacts.Single(), ct);
             else
             {
                 var provider = await PublishProviderAsync(plan, target, artifacts, ct);
@@ -194,6 +204,11 @@ public sealed class Rc2PublishingExecutionService(
             row.FailureMessage = NormalizeProviderFailure(ex.Message);
         }
         catch (InstagramPublishOutcomeUnknownException ex)
+        {
+            row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN";
+            row.FailureMessage = NormalizeProviderFailure(ex.Message);
+        }
+        catch (FacebookPhotoCreateOutcomeUnknownException ex)
         {
             row.Status = Rc2PublicationState.Failed; row.FailureCode = "RC2_PUBLISH_REMOTE_OUTCOME_UNKNOWN";
             row.FailureMessage = NormalizeProviderFailure(ex.Message);
@@ -581,6 +596,58 @@ public sealed class Rc2PublishingExecutionService(
                 throw new Rc2PublishingControlException("RC2_PUBLISH_AWAITING_PERMALINK",
                     "Instagram published the media, but its authoritative permalink is not available; retry will reconcile the same media ID.");
             row.RemoteUrl = media.Permalink;
+            row.RemoteVerificationCompleted = true; row.LastCompletedStep = Rc2PublicationStep.RemoteVerified;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+        }
+        row.Status = Rc2PublicationState.Published; row.FailureCode = row.FailureMessage = null;
+    }
+
+    internal async Task PublishFacebookPostAsync(Rc2PublishingPublication row, Rc2PublishingPlan plan,
+        Phase20PublishingArtifact artifact, CancellationToken ct)
+    {
+        if (facebookPhotoApi is null)
+            throw new Rc2PublishingControlException("RC2_PUBLISH_FACEBOOK_NOT_CONFIGURED", "Facebook Page photo publishing is not configured.");
+
+        // Facebook's /photos edge accepts the governed image as multipart binary. Unlike
+        // Instagram, it needs neither a public URL nor a provider derivative/container.
+        if (string.IsNullOrWhiteSpace(row.RemotePublicationId))
+        {
+            if (row.PublishRequested)
+                throw new FacebookPhotoCreateOutcomeUnknownException(
+                    "A prior Facebook Page photo request has no authoritative response; reconciliation is required before retry.");
+            row.PublishRequested = true; row.LastCompletedStep = Rc2PublicationStep.PublishRequested;
+            row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
+            var created = await facebookPhotoApi.CreatePagePhotoAsync(ResolvePath(plan, artifact.Path), plan.Title.Trim(), ct);
+            if (string.IsNullOrWhiteSpace(created.PhotoId))
+                throw new FacebookPhotoCreateOutcomeUnknownException("Facebook Page photo create returned no authoritative photo ID.");
+            row.RemotePublicationId = created.PhotoId;
+            row.RemotePostId = created.PostId;
+            row.LastCompletedStep = Rc2PublicationStep.PublishedRemote;
+            row.UpdatedUtc = DateTimeOffset.UtcNow;
+            // The photo ID is committed before permalink lookup or verification. A retry
+            // after this boundary can only query this object; it cannot create another photo.
+            await db.SaveChangesAsync(ct);
+        }
+
+        if (!row.RemoteVerificationCompleted)
+        {
+            Rc2FacebookPhoto? photo;
+            try { photo = await facebookPhotoApi.GetPhotoAsync(row.RemotePublicationId!, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_VERIFICATION_FAILED",
+                    $"Facebook remote photo query failed; reconciliation is required. {ex.Message}");
+            }
+            var expectedPageId = configuration["Meta:ExpectedFacebookPageId"]?.Trim();
+            var expectedPageName = configuration["Meta:ExpectedFacebookPageName"]?.Trim();
+            if (photo is null || photo.Id != row.RemotePublicationId || !photo.IsPhoto ||
+                string.IsNullOrWhiteSpace(expectedPageId) || photo.PageId != expectedPageId ||
+                (!string.IsNullOrWhiteSpace(expectedPageName) &&
+                 !string.Equals(photo.PageName, expectedPageName, StringComparison.Ordinal)) ||
+                !Uri.TryCreate(photo.PermalinkUrl, UriKind.Absolute, out var permalink) || permalink.Scheme != Uri.UriSchemeHttps)
+                throw new Rc2PublishingControlException("RC2_PUBLISH_REMOTE_VERIFICATION_FAILED",
+                    "Facebook remote identity, Page ownership, photo type, or provider permalink did not match the governed target.");
+            row.RemoteUrl = photo.PermalinkUrl;
             row.RemoteVerificationCompleted = true; row.LastCompletedStep = Rc2PublicationStep.RemoteVerified;
             row.UpdatedUtc = DateTimeOffset.UtcNow; await db.SaveChangesAsync(ct);
         }
