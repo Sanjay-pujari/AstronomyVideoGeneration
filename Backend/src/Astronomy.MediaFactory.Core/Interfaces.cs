@@ -198,6 +198,18 @@ public sealed record Rc2InstagramMedia(string Id, string? MediaType, string? Med
 
 public sealed class InstagramPublishOutcomeUnknownException(string message, Exception? inner = null) : Exception(message, inner);
 
+public interface IRc2FacebookPhotoApiClient
+{
+    Task<Rc2FacebookPhotoCreateResult> CreatePagePhotoAsync(string imagePath, string message,
+        CancellationToken cancellationToken);
+    Task<Rc2FacebookPhoto?> GetPhotoAsync(string photoId, CancellationToken cancellationToken);
+}
+
+public sealed record Rc2FacebookPhotoCreateResult(string PhotoId, string? PostId);
+public sealed record Rc2FacebookPhoto(string Id, string? PageId, string? PageName,
+    string? PermalinkUrl, bool IsPhoto);
+public sealed class FacebookPhotoCreateOutcomeUnknownException(string message, Exception? inner = null) : Exception(message, inner);
+
 public interface IMetaThumbnailAssetPublisher
 {
     Task<PublicMediaUploadResult> UploadThumbnailAsync(string localFilePath, Guid pipelineRunId, CancellationToken cancellationToken);

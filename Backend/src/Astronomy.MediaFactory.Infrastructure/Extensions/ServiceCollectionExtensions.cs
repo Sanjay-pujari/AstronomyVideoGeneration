@@ -585,6 +585,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAzureBlobStorageService, AzureBlobStorageService>();
         services.AddScoped<IPublicMediaStorageService, AzureBlobPublicMediaStorageService>();
         services.AddHttpClient<IRc2InstagramApiClient, Rc2InstagramApiClient>(client => client.Timeout = TimeSpan.FromSeconds(60));
+        services.AddHttpClient<IRc2FacebookPhotoApiClient, Rc2FacebookPhotoApiClient>(client => client.Timeout = TimeSpan.FromSeconds(60));
         services.AddScoped<IMetaThumbnailAssetPublisher, Astronomy.MediaFactory.Publishing.MetaThumbnailAssetPublisher>();
         services.AddScoped<IYouTubePublishingService, YouTubePublishingService>();
         services.AddScoped<IYouTubeThumbnailPublisher>(sp => (IYouTubeThumbnailPublisher)sp.GetRequiredService<IYouTubePublishingService>());

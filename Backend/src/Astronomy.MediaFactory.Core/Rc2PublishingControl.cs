@@ -92,6 +92,7 @@ public sealed class Rc2PublishingPublication
     public int AttemptCount { get; set; }
     public DateTimeOffset? LastAttemptUtc { get; set; }
     public string? RemotePublicationId { get; set; }
+    public string? RemotePostId { get; set; }
     public string? RemoteContainerId { get; set; }
     public string? RemoteUrl { get; set; }
     public string? PublicMediaBlobName { get; set; }
