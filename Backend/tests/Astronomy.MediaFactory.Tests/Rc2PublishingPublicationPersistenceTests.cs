@@ -12,6 +12,8 @@ public sealed class Rc2PublishingPublicationPersistenceTests
 {
     private const string InstagramCheckpointMigrationId =
         "20260814010000_AddRc2InstagramPublicationCheckpoints";
+    private const string FacebookCheckpointMigrationId =
+        "20260817010000_AddRc2FacebookPhotoCheckpoint";
 
     [Fact]
     public void Model_maps_publication_identity_indexes_and_enum_storage()
@@ -121,6 +123,29 @@ public sealed class Rc2PublishingPublicationPersistenceTests
         Assert.Equal(additions.Keys.Order(), removals.Select(operation => operation.Name).Order());
         Assert.All(removals, operation =>
             Assert.Equal("rc2_publishing_publications", operation.Table));
+    }
+
+    [Fact]
+    public void Facebook_checkpoint_migration_adds_nullable_remote_post_id_without_touching_existing_rows()
+    {
+        using var db = CreateNpgsqlContext();
+        var migrations = db.GetService<IMigrationsAssembly>();
+        var migrationType = migrations.Migrations[FacebookCheckpointMigrationId];
+        var migration = migrations.CreateMigration(migrationType, db.Database.ProviderName!);
+
+        var addition = Assert.Single(migration.UpOperations.OfType<AddColumnOperation>());
+        Assert.Equal(nameof(Rc2PublishingPublication.RemotePostId), addition.Name);
+        Assert.Equal("rc2_publishing_publications", addition.Table);
+        Assert.Equal("character varying(256)", addition.ColumnType);
+        Assert.Equal(256, addition.MaxLength);
+        Assert.True(addition.IsNullable);
+        Assert.Null(addition.DefaultValue);
+        Assert.DoesNotContain(migration.UpOperations, operation => operation is UpdateDataOperation);
+        Assert.DoesNotContain(migration.UpOperations, operation => operation is DeleteDataOperation);
+
+        var removal = Assert.Single(migration.DownOperations.OfType<DropColumnOperation>());
+        Assert.Equal(nameof(Rc2PublishingPublication.RemotePostId), removal.Name);
+        Assert.Equal("rc2_publishing_publications", removal.Table);
     }
 
     private static MediaFactoryDbContext CreateNpgsqlContext() =>
