@@ -68,6 +68,8 @@ public sealed class OllamaNarrationPerformer(
             await limiter.Semaphore.WaitAsync(deadline.Token);
             acquired = true;
             digest = await ResolveDigestAsync(deadline.Token);
+            logger.LogInformation("RC2_AI_PROVIDER_SELECTED phase={PhaseNumber} provider={Provider} model={Model} digest={ModelDigest} invocationType={InvocationType} correlationId={CorrelationId}",
+                7, ProviderName, _options.Model, digest, request.Variant, request.ProviderCallId);
             var body = new
             {
                 model = _options.Model,
