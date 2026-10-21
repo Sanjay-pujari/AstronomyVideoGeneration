@@ -219,9 +219,7 @@ public static class ServiceCollectionExtensions
             .Validate(options => !string.IsNullOrWhiteSpace(options.AssetEndpoint), "NasaImages:AssetEndpoint is required.")
             .ValidateOnStart();
 
-        services.AddOptions<AzureOpenAiOptions>()
-            .Bind(configuration.GetSection(AzureOpenAiOptions.SectionName))
-            .ValidateOnStart();
+        services.AddNarrationAI(configuration);
 
         services.AddOptions<AzureOpenAIForImageOptions>()
             .Bind(configuration.GetSection(AzureOpenAIForImageOptions.SectionName))
@@ -241,8 +239,6 @@ public static class ServiceCollectionExtensions
             .Validate(options => options.MaxFramesPerExpandedScene > 0, "WeeklySkyForecast:AssetExpansion:MaxFramesPerExpandedScene must be greater than zero.")
             .Validate(options => options.ExpandedExecutionTimeoutSeconds > 0, "WeeklySkyForecast:AssetExpansion:ExpandedExecutionTimeoutSeconds must be greater than zero.")
             .ValidateOnStart();
-
-        services.AddSingleton<IValidateOptions<AzureOpenAiOptions>, AzureOpenAiOptionsValidator>();
 
         services.AddOptions<AzureSpeechOptions>()
             .Bind(configuration.GetSection(AzureSpeechOptions.SectionName))
@@ -551,12 +547,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPromptBuilder, PromptBuilder>();
         services.AddScoped<IMetadataOptimizationService, MetadataOptimizationService>();
         services.AddScoped<IContentMonetizationService, ContentMonetizationService>();
-        services.AddHttpClient<AzureOpenAiContentGenerationService>();
         services.AddHttpClient<AzureOpenAICinematicImageGenerator>();
         services.AddScoped<IMetadataOptimizationModelClient>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<IShortsScriptGenerationService>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
-        services.AddScoped<INarrationPerformer>(sp => sp.GetRequiredService<AzureOpenAiContentGenerationService>());
         services.AddScoped<ISsmlBuilder, SsmlBuilder>();
         services.AddScoped<IAzureSpeechClient, AzureSpeechClient>();
         services.AddScoped<IFileSystem, PhysicalFileSystem>();

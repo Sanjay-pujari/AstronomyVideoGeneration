@@ -1,0 +1,15 @@
+{
+  "NarrationAI": {
+    "Provider": "Ollama",
+    "Ollama": {
+      "BaseUrl": "http://127.0.0.1:11434",
+      "Model": "qwen2.5:7b-instruct-q4_K_M",
+      "TimeoutSeconds": 180,
+      "MaxConcurrentRequests": 1,
+      "ContextWindow": 8192,
+      "MaxOutputTokens": 4096,
+      "MaxRetries": 2,
+      "RetryDelayMilliseconds": 250
+    }
+  }
+}

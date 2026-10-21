@@ -13,6 +13,7 @@ public sealed class ProductionStartupValidator : IValidateOptions<StartupValidat
     private readonly IOptions<SkyfieldSidecarOptions> _sidecar;
     private readonly IOptions<YouTubeOptions> _youTube;
     private readonly IOptions<PublishingOptions> _publishing;
+    private readonly IOptions<NarrationAIOptions>? _narration;
 
     public ProductionStartupValidator(
         IHostEnvironment environment,
@@ -21,7 +22,8 @@ public sealed class ProductionStartupValidator : IValidateOptions<StartupValidat
         IOptions<AzureBlobOptions> blob,
         IOptions<SkyfieldSidecarOptions> sidecar,
         IOptions<YouTubeOptions> youTube,
-        IOptions<PublishingOptions> publishing)
+        IOptions<PublishingOptions> publishing,
+        IOptions<NarrationAIOptions>? narration = null)
     {
         _environment = environment;
         _openAi = openAi;
@@ -30,6 +32,7 @@ public sealed class ProductionStartupValidator : IValidateOptions<StartupValidat
         _sidecar = sidecar;
         _youTube = youTube;
         _publishing = publishing;
+        _narration = narration;
     }
 
     public ValidateOptionsResult Validate(string? name, StartupValidationOptions options)
@@ -39,7 +42,7 @@ public sealed class ProductionStartupValidator : IValidateOptions<StartupValidat
 
         var errors = new List<string>();
 
-        if (options.RequireAzureOpenAi)
+        if (options.RequireAzureOpenAi && _narration?.Value.IsOllama != true)
             errors.AddRange(AzureConfigurationValidation.ValidateOpenAi(_openAi.Value, requireConfiguration: true));
 
         if (options.RequireAzureSpeech)
