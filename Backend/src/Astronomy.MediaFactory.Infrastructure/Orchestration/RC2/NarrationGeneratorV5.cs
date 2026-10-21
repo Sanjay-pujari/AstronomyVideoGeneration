@@ -5012,7 +5012,8 @@ public static class LanguageProfileResolver
 {
     private static readonly IReadOnlyDictionary<string, string> HindiTerminology = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
-        ["Mercury"] = "बुध", ["Venus"] = "शुक्र", ["Earth"] = "पृथ्वी", ["Mars"] = "मंगल", ["Jupiter"] = "बृहस्पति", ["Saturn"] = "शनि", ["Uranus"] = "अरुण", ["Neptune"] = "वरुण", ["planet"] = "ग्रह", ["western sky"] = "पश्चिमी आकाश", ["after sunset"] = "सूर्यास्त के बाद", ["sunset"] = "सूर्यास्त", ["angular separation"] = "कोणीय दूरी", ["conjunction"] = "ग्रहों की युति", ["horizon"] = "क्षितिज", ["naked eye"] = "नंगी आँखों से", ["binoculars"] = "दूरबीन"
+        ["Mercury"] = "बुध", ["Venus"] = "शुक्र", ["Earth"] = "पृथ्वी", ["Mars"] = "मंगल", ["Jupiter"] = "बृहस्पति", ["Saturn"] = "शनि", ["Uranus"] = "अरुण", ["Neptune"] = "वरुण", ["planet"] = "ग्रह", ["western sky"] = "पश्चिमी आकाश", ["after sunset"] = "सूर्यास्त के बाद", ["sunset"] = "सूर्यास्त", ["angular separation"] = "कोणीय दूरी", ["conjunction"] = "ग्रहों की युति", ["horizon"] = "क्षितिज", ["naked eye"] = "नंगी आँखों से", ["binoculars"] = "दूरबीन",
+        ["constellation"] = "तारामंडल", ["galaxy"] = "आकाशगंगा", ["nebula"] = "नीहारिका"
     };
 
     public static LanguageProfile Resolve(string? requestedLanguage)
@@ -5104,8 +5105,8 @@ public static class LanguageOutputValidator
             : Math.Clamp(100 - rawTs * 40 - internalIds * 40 - templates * 25 - splitDecimals * 20 - missingDegreeUnit * 20, 0, 100);
         var passed = profile.LanguageCode.Equals("hi", StringComparison.OrdinalIgnoreCase)
             ? dev > 0 && devanagariRatio >= 0.55m && englishSentences == 0 && mixed == 0 && rawTs == 0 && internalIds == 0 && templates == 0 && splitDecimals == 0 && missingDegreeUnit == 0 && score >= profile.MinimumComplianceScore
-            : rawTs == 0 && internalIds == 0 && templates == 0 && splitDecimals == 0 && missingDegreeUnit == 0 && score >= profile.MinimumComplianceScore;
-        var detected = profile.LanguageCode.Equals("hi", StringComparison.OrdinalIgnoreCase) && devanagariRatio >= 0.45m ? "hi" : "en";
+            : latin > 0 && latinRatio >= 0.8m && rawTs == 0 && internalIds == 0 && templates == 0 && splitDecimals == 0 && missingDegreeUnit == 0 && score >= profile.MinimumComplianceScore;
+        var detected = devanagariRatio >= 0.45m ? "hi" : latin > 0 ? "en" : "unknown";
         return new(profile.LanguageCode, detected, scripts, devanagariRatio, latinRatio, latinWordRatio, englishSentences, mixed, approved, unapprovedForeign, templates, rawTs, internalIds, splitDecimals, missingDegreeUnit, score, passed);
     }
 }

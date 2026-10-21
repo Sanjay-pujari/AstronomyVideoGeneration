@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../tools/Astronomy.MediaFactory.NarrationCertification/Astronomy.MediaFactory.NarrationCertification.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <Content Include="..\..\..\Knowledge\**\*" Link="Knowledge\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\Astronomy.MediaFactory.Api\assets\fonts\*.ttf" Link="assets\fonts\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\Astronomy.MediaFactory.Contracts\Astronomy.MediaFactory.Contracts.csproj" />
