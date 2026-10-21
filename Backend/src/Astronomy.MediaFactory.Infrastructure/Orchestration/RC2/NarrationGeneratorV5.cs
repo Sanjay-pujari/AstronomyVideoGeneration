@@ -13,6 +13,7 @@ using Astronomy.MediaFactory.Core.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Core.ExecutionContracts;
 using Astronomy.MediaFactory.Core.ExecutionValidation;
 using Astronomy.MediaFactory.ContentGen;
+using Astronomy.MediaFactory.Contracts;
 using Astronomy.MediaFactory.Infrastructure.DocumentaryBlueprint;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Diagnostics;
 using Astronomy.MediaFactory.Infrastructure.Production.Narration.Semantics.Diagnostics;
@@ -36,10 +37,11 @@ using DocumentaryNarrativeCompositionRequest = Astronomy.MediaFactory.Infrastruc
 
 namespace Astronomy.MediaFactory.Infrastructure.Orchestration.RC2;
 
-public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, IRequiredSemanticFactResolver requiredSemanticFactResolver, INarrationRealizer narrationRealizer, IAstronomyFamilyProfileResolver familyProfileResolver, NarrationPromptComposer? promptComposer = null, DocumentaryStyleDirector? styleDirector = null, INarrationPerformer? narrationPerformer = null)
+public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, IRequiredSemanticFactResolver requiredSemanticFactResolver, INarrationRealizer narrationRealizer, IAstronomyFamilyProfileResolver familyProfileResolver, NarrationPromptComposer? promptComposer = null, DocumentaryStyleDirector? styleDirector = null, INarrationPerformer? narrationPerformer = null, Microsoft.Extensions.Options.IOptions<NarrationAIOptions>? narrationOptions = null)
 {
     public NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, NarrationPromptComposer? promptComposer = null, DocumentaryStyleDirector? styleDirector = null)
         : this(logger, SemanticDefaults.RequiredSemanticFactResolver, SemanticDefaults.NarrationRealizer, SemanticDefaults.FamilyProfileResolver, promptComposer, styleDirector) { }
+    internal INarrationPerformer? RuntimeNarrationPerformer => narrationPerformer;
     internal IRequiredSemanticFactResolver RuntimeRequiredSemanticFactResolver => requiredSemanticFactResolver;
     internal INarrationRealizer RuntimeNarrationRealizer => narrationRealizer;
     internal IAstronomyFamilyProfileResolver RuntimeFamilyProfileResolver => familyProfileResolver;
@@ -434,7 +436,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
         var promptComposerOutput = await composer.ComposeAndWriteAsync(new NarrationPromptComposerInput(narrationContext, [narrationContextPath, narrationRealizationDiagnosticsPath], promptPreviewPath, promptDiagnosticsPath, promptQualityPath, LanguageProfile: languageProfile, Realizations: realizationResults), cancellationToken);
         var performerPrompt = BuildPerformerSystemPrompt(languageProfile);
         var userPrompt = BuildPerformerUserPrompt(languageProfile, promptComposerOutput.PromptPreviewMarkdown);
-        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v5", "LLMDocumentaryPerformer", "local-documentary-performer-v1", 0.7m, 0.9m, 1800, languageRequested ?? languageProfile.LanguageCode, languageProfile.Culture, languageProfile.DisplayName, languageProfile.Culture, languageProfile.Script, languageProfile.ProfileId, performerPrompt, userPrompt, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(narrationContextPath)], DateTime.UtcNow);
+        var llmRequest = new NarrationLlmRequestV1("AstroPulse-NarrationLlmRequest-v5", "LLMDocumentaryPerformer", narrationPerformer?.ModelOrDeployment ?? "Unresolved", 0.2m, 1m, narrationPerformer?.ProviderName == NarrationAIOptions.OllamaProvider ? narrationOptions?.Value.Ollama.MaxOutputTokens ?? 4096 : 4096, languageRequested ?? languageProfile.LanguageCode, languageProfile.Culture, languageProfile.DisplayName, languageProfile.Culture, languageProfile.Script, languageProfile.ProfileId, performerPrompt, userPrompt, promptComposerOutput.PromptQuality.OverallPromptScore, [NormalizePath(narrationContextPath)], DateTime.UtcNow);
         await WriteAllTextUtf8Async(llmRequestPath, JsonSerializer.Serialize(llmRequest, JsonOptions), cancellationToken);
 
         NarrationV5? narration = null;
@@ -525,7 +527,9 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                     actualUserPrompt = BuildStructuredVariantPrompt(format, contexts, formatPrompt, repairGuidance);
                     requestChecksum = Sha256(actualUserPrompt);
                     var estimatedInputTokens = (performerPrompt.Length + actualUserPrompt.Length + 3) / 4;
-                    var maxOutputTokens = format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 2048 : 4096;
+                    var maxOutputTokens = narrationPerformer.ProviderName == NarrationAIOptions.OllamaProvider
+                        ? NarrationRuntimeBudget.EstimateOutputTokens(contexts, language, narrationOptions?.Value.Ollama ?? new())
+                        : format.Equals("short", StringComparison.OrdinalIgnoreCase) ? 2048 : 4096;
                     var call = new NarrationProviderCall(Guid.NewGuid().ToString("N"), $"{format}-{attempt}", format,
                         performerPrompt, actualUserPrompt, requestChecksum, contexts.Count, estimatedInputTokens, maxOutputTokens);
                     failedRequestCharacterCount = performerPrompt.Length + actualUserPrompt.Length;
@@ -551,6 +555,8 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                         failedVariant = format;
                         failedProviderCallId = call.ProviderCallId;
                         llmRequestCounts[format] = llmRequestCounts.GetValueOrDefault(format) + 1;
+                        logger.LogInformation("RC2_AI_PROVIDER_SELECTED phase={PhaseNumber} provider={Provider} model={Model} digest={ModelDigest} invocationType={InvocationType} correlationId={CorrelationId} estimatedOutputTokens={EstimatedOutputTokens}",
+                            7, narrationPerformer.ProviderName, narrationPerformer.ModelOrDeployment, "NotObserved", format, call.ProviderCallId, maxOutputTokens);
                         var providerTask = narrationPerformer.InvokeAsync(call, cancellationToken);
                         completedCall = await providerTask;
                         parsed = ParseProviderNarration(completedCall.Response, format, contexts.Count);
@@ -574,6 +580,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                             "P7_PROVIDER_OUTPUT_VALIDATION_FAILED", "OutputValidation", ex.Message, true, innerException: ex);
                         lastAttemptFailure = ex;
                         parsed = null;
+                        if (ex is NarrationProviderException { Retryable: false } failure && failure.Category != "OutputValidation") throw;
                         if (attempt == 1)
                         {
                             repairGuidance.AddRange(contentFailures.Select(f => $"Scene {ParseSceneNumber(f.DocumentaryBeatId)} was rejected for internal {DescribeRejectedCategory(f.MatchedPhrase)} wording. Rewrite that scene as plain spoken narration without labels, IDs, or prompt structure."));
@@ -661,7 +668,7 @@ public sealed class NarrationGeneratorV5(ILogger<NarrationGeneratorV5> logger, I
                 invocationStarted = providerFailure.InvocationStarted, invocationCompleted = false,
                 requestCharacterCount = failedRequestCharacterCount, estimatedInputTokens = failedEstimatedInputTokens,
                 maxOutputTokens = failedMaxOutputTokens,
-                responseFormat = "json_object", temperature = 0.2, timeoutSeconds = 90,
+                responseFormat = "json_object", temperature = 0.2, timeoutSeconds = narrationPerformer?.ProviderName == NarrationAIOptions.OllamaProvider ? narrationOptions?.Value.Ollama.TimeoutSeconds ?? 180 : 90,
                 failureCategory = providerFailure.Category, failureReasonCode = providerFailure.ReasonCode,
                 safeFailureMessage = providerFailure.Message, innerExceptionType = providerFailure.InnerException?.GetType().FullName,
                 innerExceptionMessage = providerFailure.InnerException?.Message,

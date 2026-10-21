@@ -10,6 +10,25 @@
       },
       "applicationUrl": "https://localhost:59235;http://localhost:59236",
       "launchUrl": "swagger"
+    },
+    "RC2-Ollama": {
+      "commandName": "Project",
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:59236",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "NarrationAI__Provider": "Ollama",
+        "NarrationAI__Ollama__BaseUrl": "http://127.0.0.1:11434",
+        "NarrationAI__Ollama__Model": "qwen2.5:7b-instruct-q4_K_M",
+        "NarrationAI__Ollama__ExpectedModelDigest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+        "NarrationAI__Ollama__TimeoutSeconds": "3600",
+        "NarrationAI__Ollama__MaxConcurrentRequests": "1",
+        "NarrationAI__Ollama__ContextWindow": "32768",
+        "NarrationAI__Ollama__MaxOutputTokens": "12288",
+        "NarrationAI__Ollama__MaxRetries": "0",
+        "Publishing__Enabled": "false",
+        "PublicMediaStorage__Enabled": "false"
+      }
     }
   }
 }

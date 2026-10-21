@@ -289,7 +289,15 @@ public sealed class OllamaNarrationPerformerTests
     {
         using var fixture = new Fixture(o => o.ExpectedModelDigest = "sha256:" + Digest);
         var result = await fixture.Performer.InvokeAsync(Call, CancellationToken.None);
-        var success = Assert.Single(fixture.Logger.Events);
+        var selected = Assert.Single(fixture.Logger.Events, e => e.ContainsKey("InvocationType"));
+        Assert.Equal(7, selected["PhaseNumber"]);
+        Assert.Equal("Ollama", selected["Provider"]);
+        Assert.Equal(Model, selected["Model"]);
+        Assert.Equal(Digest, selected["ModelDigest"]);
+        Assert.Equal(Call.ProviderCallId, selected["CorrelationId"]);
+        Assert.Equal(Call.Variant, selected["InvocationType"]);
+        Assert.DoesNotContain(Call.SystemPrompt, string.Join(" ", selected.Values));
+        var success = Assert.Single(fixture.Logger.Events, e => e.ContainsKey("OutputValidationResult"));
         Assert.Equal("Ollama", success["Provider"]);
         Assert.Equal(Model, success["Model"]);
         Assert.Equal(Digest, success["ModelDigest"]);
