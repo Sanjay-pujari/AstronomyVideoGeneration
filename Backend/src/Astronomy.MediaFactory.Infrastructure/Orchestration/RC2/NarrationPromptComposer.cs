@@ -139,7 +139,7 @@ public sealed class NarrationPromptComposer : IPromptComposer<NarrationPromptCom
     }
 
     private static string BuildLanguageHeader(LanguageProfile profile)
-        => $"Requested output language: {profile.DisplayName}\nLanguage code: {profile.Culture}\nScript: {profile.Script}\n\n{profile.OutputInstruction}\n\nThe brief below is semantic guidance. Realize its meaning as natural {profile.DisplayName} narration, without copying labels or guidance text.\n\nTerminology policy: {string.Join("; ", profile.Terminology.Select(kv => $"{kv.Key} → {kv.Value}"))}";
+        => $"Requested output language: {profile.DisplayName}\nLanguage code: {profile.Culture}\nScript: {profile.Script}\n\n{profile.OutputInstruction}\n\nThe brief below is semantic guidance. Realize its meaning as natural {profile.DisplayName} narration, without copying labels or guidance text.\n\nTerminology policy: {string.Join("; ", profile.Terminology.Select(kv => $"{kv.Key} → {kv.Value}"))}\n\nScientific fidelity: Preserve the supplied objects, relationships, qualifications and scientific boundaries. Use only the supplied grounded facts; do not invent distances, quantities, dates or visibility claims. A constellation, a galaxy and a nebula are distinct categories; preserve each supplied object's classification. Write complete spoken sentences. If required evidence is absent, do not fill the gap with model knowledge.";
 
     private static string FormatNarrationContext(NarrationContextDocument context)
         => string.Join("\n\n", context.Formats.Select(format => $"Format: {format.Format}\n" + string.Join("\n", format.Beats.Select((beat, index) =>
